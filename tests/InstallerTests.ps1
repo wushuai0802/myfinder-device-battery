@@ -24,7 +24,7 @@ foreach($name in @('Install.Common.ps1','Install-Startup.ps1','Uninstall-Startup
 $arguments=@{SourceRoot=$source;InstallDirectory=$target;DataDirectory=$data;StartupDirectory=$startup;ProgramsDirectory=$programs}
 $correct=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('TXlGaW5kZXIg6K6+5aSH55S16YePLmxuaw=='))
 Assert ((Get-DeviceBatteryShortcutName) -ceq $correct) 'shortcut name is Unicode-correct regardless of PowerShell default encoding'
-$shell=New-Object -ComObject WScript.Shell
+$shell=New-DeviceBatteryShortcutShell
 try {
     $bad=[Text.Encoding]::GetEncoding(936).GetString([Text.Encoding]::UTF8.GetBytes($correct))
     $legacy=$shell.CreateShortcut((Join-Path $startup $bad))
@@ -80,4 +80,4 @@ try {
     Assert (-not (Test-Path -LiteralPath (Join-Path $startup $correct))) 'failed update removes its newly created autostart'
     Assert ([IO.File]::ReadAllText($settings) -ceq '{"keep":"user audio settings"}') 'failed update preserves independent user settings'
     Write-Output ('PASS '+$script:passed+' installer tests on PowerShell '+$PSVersionTable.PSVersion+'; real known folders and registry unchanged')
-} finally {[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+} finally { }

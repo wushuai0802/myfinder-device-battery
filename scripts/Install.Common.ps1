@@ -1,5 +1,75 @@
 $script:DeviceBatteryAppId = 'myfinder-device-battery'
 
+function New-DeviceBatteryShortcutShell {
+    if (-not ('DeviceBatterySetup.ShortcutShell' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+namespace DeviceBatterySetup {
+    [ComImport,Guid("00021401-0000-0000-C000-000000000046")] class ShellLink {}
+    [ComImport,Guid("000214F9-0000-0000-C000-000000000046"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellLinkW {
+        void GetPath([Out,MarshalAs(UnmanagedType.LPWStr)] StringBuilder path,int length,IntPtr findData,uint flags);
+        void GetIDList(out IntPtr list); void SetIDList(IntPtr list);
+        void GetDescription([Out,MarshalAs(UnmanagedType.LPWStr)] StringBuilder value,int length);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string value);
+        void GetWorkingDirectory([Out,MarshalAs(UnmanagedType.LPWStr)] StringBuilder value,int length);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string value);
+        void GetArguments([Out,MarshalAs(UnmanagedType.LPWStr)] StringBuilder value,int length);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string value);
+        void GetHotkey(out short value); void SetHotkey(short value);
+        void GetShowCmd(out int value); void SetShowCmd(int value);
+        void GetIconLocation([Out,MarshalAs(UnmanagedType.LPWStr)] StringBuilder value,int length,out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string value,int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string value,uint reserved);
+        void Resolve(IntPtr window,uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string value);
+    }
+    public sealed class UnicodeShortcut {
+        readonly string path;
+        public string TargetPath {get;set;}
+        public string Arguments {get;set;}
+        public string WorkingDirectory {get;set;}
+        public string Description {get;set;}
+        public string IconLocation {get;set;}
+        public int WindowStyle {get;set;}
+        public UnicodeShortcut(string file) {
+            path=Path.GetFullPath(file);TargetPath="";Arguments="";WorkingDirectory="";Description="";IconLocation="";WindowStyle=1;
+            if(!File.Exists(path))return;
+            object native=new ShellLink();
+            try {
+                ((IPersistFile)native).Load(path,0);var link=(IShellLinkW)native;var value=new StringBuilder(32768);
+                link.GetPath(value,value.Capacity,IntPtr.Zero,4);TargetPath=value.ToString();value.Length=0;
+                link.GetArguments(value,value.Capacity);Arguments=value.ToString();value.Length=0;
+                link.GetWorkingDirectory(value,value.Capacity);WorkingDirectory=value.ToString();value.Length=0;
+                link.GetDescription(value,value.Capacity);Description=value.ToString();value.Length=0;
+                int index;link.GetIconLocation(value,value.Capacity,out index);IconLocation=value.ToString()+","+index;
+                int show;link.GetShowCmd(out show);WindowStyle=show;
+            } finally {Marshal.FinalReleaseComObject(native);}
+        }
+        public void Save() {
+            object native=new ShellLink();
+            try {
+                var link=(IShellLinkW)native;link.SetPath(TargetPath??"");link.SetArguments(Arguments??"");
+                link.SetWorkingDirectory(WorkingDirectory??"");link.SetDescription(Description??"");link.SetShowCmd(WindowStyle);
+                string icon=IconLocation??"";int index=0,comma=icon.LastIndexOf(',');
+                if(comma>=0&&Int32.TryParse(icon.Substring(comma+1),out index))icon=icon.Substring(0,comma);
+                link.SetIconLocation(icon,index);((IPersistFile)native).Save(path,true);
+            } finally {Marshal.FinalReleaseComObject(native);}
+        }
+    }
+    public sealed class ShortcutShell {
+        public UnicodeShortcut CreateShortcut(string path){return new UnicodeShortcut(path);}
+    }
+}
+'@
+    }
+    New-Object DeviceBatterySetup.ShortcutShell
+}
+
 function Get-DeviceBatteryDataDirectory {
     Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'MyFinderDeviceBattery'
 }
@@ -97,7 +167,7 @@ function Install-DeviceBattery {
     $known = @($sourceExe, $exe)
     if ($receipt) { $known += Join-Path $receipt.InstallDirectory 'outputs\AtkMouseBattery.exe' }
     $name = Get-DeviceBatteryShortcutName
-    $shell = New-Object -ComObject WScript.Shell
+    $shell = New-DeviceBatteryShortcutShell
     $undo = New-Object 'System.Collections.Generic.List[object]'
     $temporary = Join-Path ([IO.Path]::GetTempPath()) ('myfinder-install-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $temporary | Out-Null
@@ -178,7 +248,6 @@ function Install-DeviceBattery {
         }
         throw
     } finally {
-        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
         $resolved=[IO.Path]::GetFullPath($temporary)
         if ((Split-Path -Parent $resolved) -ieq ([IO.Path]::GetTempPath()).TrimEnd([char]92) -and (Split-Path -Leaf $resolved) -match '^myfinder-install-[0-9a-f]{32}$') {
             Remove-Item -LiteralPath $resolved -Recurse -Force
@@ -194,7 +263,7 @@ function Uninstall-DeviceBatteryStartup {
     if ($receipt) { $known+=Join-Path $receipt.InstallDirectory 'outputs\AtkMouseBattery.exe' }
     $folders=@($StartupDirectory)
     if ($RemoveStartMenu) { $folders+=$ProgramsDirectory }
-    $shell=New-Object -ComObject WScript.Shell
+    $shell=New-DeviceBatteryShortcutShell
     try {
         foreach ($folder in $folders) {
             foreach ($name in (Get-DeviceBatteryShortcutNames)) {
@@ -206,5 +275,5 @@ function Uninstall-DeviceBatteryStartup {
             }
         }
         [pscustomobject]@{ AutostartDisabled=$true; ManualLauncherPreserved=(-not $RemoveStartMenu.IsPresent); SettingsPreserved=$true }
-    } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
+    } finally { }
 }
