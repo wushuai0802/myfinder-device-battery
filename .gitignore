@@ -1,0 +1,12 @@
+﻿# Local temp and workspace data
+work/
+backups/
+logs/
+tmp/
+snapshots/
+
+# Build and IDE intermediates
+*.obj
+*.pdb
+*.suo
+*.user
