@@ -4,6 +4,12 @@ using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace AtkBattery {
+    public sealed class AudioDeviceChoice {
+        public string Id;
+        public string Name;
+        public string InterfaceName;
+        public int Flow;
+    }
     public sealed class AudioReading {
         public string ActiveOutput = "other";
         public bool? MicrophoneMuted;
@@ -24,6 +30,7 @@ namespace AtkBattery {
         public bool OutputRolesDiffer;
         public bool OperationSucceeded;
         public string[] Endpoints;
+        public AudioDeviceChoice[] Devices = new AudioDeviceChoice[0];
     }
 
     // Windows endpoints describe the receiver's audio interface, not its radio
@@ -114,13 +121,13 @@ namespace AtkBattery {
         }
 
         // This is Windows endpoint mute, not the headset's physical mute state.
-        // It targets the HyperX capture endpoint without changing any defaults.
+        // It targets the configured capture endpoint without changing any defaults.
         public static AudioReading SetHeadsetMicrophoneMute(bool mute) {
             return OnAudioThread(delegate {
                 using (var session = new AudioSession()) {
                     AudioReading before = ReadCore(session);
                     if (String.IsNullOrEmpty(before.MicrophoneId)) {
-                        before.Error = AddError(before.Error, "未找到唯一可用的 HyperX 麦克风，未更改静音状态。");
+                        before.Error = AddError(before.Error, "未找到唯一可用的麦克风，未更改静音状态。");
                         before.OperationSucceeded = false;
                         return before;
                     }
@@ -130,7 +137,7 @@ namespace AtkBattery {
                     bool oldMuteRead = false;
                     bool attempted = false;
                     try {
-                        Check(session.Enumerator.GetDevice(before.MicrophoneId, out microphone), "打开 HyperX 麦克风");
+                        Check(session.Enumerator.GetDevice(before.MicrophoneId, out microphone), "打开麦克风");
                         Guid iid = VolumeInterfaceId;
                         Check(microphone.Activate(ref iid, 23, IntPtr.Zero, out volumeObject), "读取麦克风音量接口");
                         var volume = (IAudioEndpointVolume)volumeObject;
@@ -201,13 +208,14 @@ namespace AtkBattery {
         static AudioReading ReadCore(AudioSession session) {
             var result = new AudioReading { TimestampUtc = DateTime.UtcNow, ActiveOutput = "other" };
             var endpoints = session.Enumerate();
+            var bindings = DeviceSettings.Current;
             bool ambiguous;
-            var speaker = FindEndpoint(endpoints, "speaker", out ambiguous);
-            if (ambiguous) result.Error = AddError(result.Error, "存在多个 Realtek 扬声器端点，未自动选择。");
-            var headset = FindEndpoint(endpoints, "headset", out ambiguous);
-            if (ambiguous) result.Error = AddError(result.Error, "存在多个 HyperX 耳机端点，未自动选择。");
-            var microphone = FindEndpoint(endpoints, "microphone", out ambiguous);
-            if (ambiguous) result.Error = AddError(result.Error, "存在多个 HyperX 麦克风端点，未自动选择。");
+            var speaker = FindEndpoint(endpoints, "speaker", bindings, out ambiguous);
+            if (ambiguous) result.Error = AddError(result.Error, "扬声器端点不唯一，未选择。");
+            var headset = FindEndpoint(endpoints, "headset", bindings, out ambiguous);
+            if (ambiguous) result.Error = AddError(result.Error, "耳机端点不唯一，未选择。");
+            var microphone = FindEndpoint(endpoints, "microphone", bindings, out ambiguous);
+            if (ambiguous) result.Error = AddError(result.Error, "麦克风端点不唯一，未选择。");
             result.SpeakerAvailable = speaker != null;
             result.HeadsetAvailable = headset != null;
             result.MicrophoneAvailable = microphone != null;
@@ -221,14 +229,18 @@ namespace AtkBattery {
             if (speaker != null && SameId(result.ConsoleOutputId, speaker.Id)) result.ActiveOutput = "speaker";
             else if (headset != null && SameId(result.ConsoleOutputId, headset.Id)) result.ActiveOutput = "headset";
             var descriptions = new List<string>();
-            foreach (var endpoint in endpoints)
+            var choices = new List<AudioDeviceChoice>();
+            foreach (var endpoint in endpoints) {
                 descriptions.Add((endpoint.Flow == 0 ? "render" : "capture") + " | " + endpoint.Name + " | " + endpoint.InterfaceName + " | " + endpoint.Id);
+                choices.Add(new AudioDeviceChoice { Id=endpoint.Id, Name=endpoint.Name, InterfaceName=endpoint.InterfaceName, Flow=endpoint.Flow });
+            }
             result.Endpoints = descriptions.ToArray();
+            result.Devices = choices.ToArray();
             if (microphone != null) {
                 IMMDevice device = null;
                 object volumeObject = null;
                 try {
-                    Check(session.Enumerator.GetDevice(microphone.Id, out device), "打开 HyperX 麦克风");
+                    Check(session.Enumerator.GetDevice(microphone.Id, out device), "打开麦克风");
                     Guid iid = VolumeInterfaceId;
                     Check(device.Activate(ref iid, 23, IntPtr.Zero, out volumeObject), "读取麦克风音量接口");
                     bool mute;
@@ -241,8 +253,22 @@ namespace AtkBattery {
         }
 
         internal static AudioEndpointInfo FindEndpoint(IList<AudioEndpointInfo> endpoints, string target, out bool ambiguous) {
+            return FindEndpoint(endpoints,target,new AudioBindings(),out ambiguous);
+        }
+        internal static AudioEndpointInfo FindEndpoint(IList<AudioEndpointInfo> endpoints, string target, AudioBindings bindings, out bool ambiguous) {
             AudioEndpointInfo match = null;
             ambiguous = false;
+            if(target!="speaker"&&target!="headset"&&target!="microphone")return null;
+            string configuredId=bindings.EndpointFor(target);
+            if(!String.IsNullOrEmpty(configuredId)) {
+                int expectedFlow=target=="microphone"?1:0;
+                foreach(var endpoint in endpoints) {
+                    if(endpoint.Flow!=expectedFlow||!SameId(endpoint.Id,configuredId))continue;
+                    if(match!=null){ambiguous=true;return null;}
+                    match=endpoint;
+                }
+                return match;
+            }
             foreach (var endpoint in endpoints) {
                 bool matching;
                 if (target == "speaker") {

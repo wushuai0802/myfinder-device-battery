@@ -5,6 +5,8 @@ logs/
 tmp/
 snapshots/
 outputs/*.json
+outputs/active-ui-render.png
+outputs/releases/
 *.zip
 
 # Build and IDE intermediates

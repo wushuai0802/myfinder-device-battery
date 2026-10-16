@@ -1,0 +1,24 @@
+name: Windows build and regression checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run isolated checks
+        shell: powershell
+        run: ./scripts/Build.ps1 -OutputDirectory "$env:RUNNER_TEMP/device-battery-build"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-build
+          path: |
+            ${{ runner.temp }}/device-battery-build/*.exe
+            ${{ runner.temp }}/device-battery-build/appearance-preview.png
+          if-no-files-found: error

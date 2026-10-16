@@ -1,2 +1,2 @@
 @echo off
-start "" "%~dp0outputs\AtkMouseBattery.exe"
+start "" "%~dp0outputs\AtkMouseBattery.exe" --show

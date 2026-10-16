@@ -62,6 +62,7 @@ namespace AtkBatteryTray {
         public static RectangleF RefreshRect {
             get { return _refreshRect; }
         }
+        public static RectangleF SettingsRect {get {return new RectangleF(208f,16f,26f,26f);}}
 
         /// <summary>
         /// 获取指定索引与总档位数的 DPI 胶囊按钮热区。
@@ -144,7 +145,9 @@ namespace AtkBatteryTray {
             int hoverStage = -1,
             bool hoverRefresh = false,
             float headsetProgress = 1f,
-            int hoverAudio = -1)
+            int hoverAudio = -1,
+            PanelFeedback feedback = null,
+            bool hoverSettings = false)
         {
             if (g == null) return;
             g.SmoothingMode = SmoothingMode.HighQuality;
@@ -169,7 +172,7 @@ namespace AtkBatteryTray {
             Color cardBorder = dark ? Color.FromArgb(22, 255, 255, 255) : Color.FromArgb(232, 234, 238);
             Color fg = dark ? Color.FromArgb(246, 246, 248) : Color.FromArgb(28, 28, 30);
             Color fgSub = dark ? Color.FromArgb(200, 201, 207) : Color.FromArgb(60, 60, 67);
-            Color muted = dark ? Color.FromArgb(142, 142, 147) : Color.FromArgb(136, 136, 142);
+            Color muted = dark ? Color.FromArgb(172, 174, 182) : Color.FromArgb(105, 109, 119);
             Color accentBlue = dark ? Color.FromArgb(10, 132, 255) : Color.FromArgb(0, 122, 255);
             Color accentGreen = dark ? Color.FromArgb(48, 209, 88) : Color.FromArgb(52, 199, 89);
             Color accentAmber = dark ? Color.FromArgb(255, 159, 10) : Color.FromArgb(245, 140, 0);
@@ -182,12 +185,13 @@ namespace AtkBatteryTray {
 
             // 2. 顶部设备标题栏 (Y = 14 ~ 48)
             DrawDeviceIcon(g, 16f, 15f, fg);
-            DrawText(g, "ATK A9 Air+", 13.5f, FontStyle.Bold, fg, new RectangleF(45f, 14f, 185f, 19f), StringAlignment.Near);
-            DrawText(g, "2.4 GHz 无线连接", 10f, FontStyle.Regular, muted, new RectangleF(45f, 33f, 185f, 15f), StringAlignment.Near);
+            DrawText(g, "ATK A9 Air+", 13.5f, FontStyle.Bold, fg, new RectangleF(45f, 14f, 156f, 19f), StringAlignment.Near);
+            DrawText(g, "2.4 GHz 无线连接", 10.5f, FontStyle.Regular, muted, new RectangleF(45f, 33f, 156f, 15f), StringAlignment.Near);
+            DrawSettingsButton(g,SettingsRect,hoverSettings,dark,fg,muted);
 
             // 刷新按钮 (RefreshRect: 240, 16, 26, 26)
             bool showBusy=busy&&current==null&&lastGood==null;
-            DrawRefreshButton(g, _refreshRect, hoverRefresh, showBusy, dark, fg, muted, accentBlue);
+            DrawRefreshButton(g, _refreshRect, hoverRefresh, showBusy||feedback!=null&&feedback.ManualRefreshing, dark, fg, muted, accentBlue);
 
             // 3. 电量核心卡片 (Y = 56, H = 66, Radius = 10)
             RectangleF cardRect = new RectangleF(14f, 56f, 252f, 66f);
@@ -197,10 +201,10 @@ namespace AtkBatteryTray {
             }
 
             // 确定电量显示源与状态
-            BatteryReading shown = current ?? lastGood;
-            bool isStale = (current == null && lastGood != null);
-            int? pct = (shown != null) ? (int?)shown.Percent : null;
-            bool isCharging = (current != null && current.Charging);
+            var mouseView=UiState.Mouse(current,lastGood,DateTime.UtcNow);
+            bool isStale = mouseView.Percent.HasValue&&!mouseView.Fresh;
+            int? pct = mouseView.Percent;
+            bool isCharging = mouseView.Charging;
 
             // 环形电量进度表盘 (X = 26, Y = 68, 42x42)
             DrawHeroBatteryRing(g, new RectangleF(26f, 68f, 42f, 42f), pct, isCharging, isStale, dark, fg, accentBlue, accentGreen, accentAmber);
@@ -216,24 +220,24 @@ namespace AtkBatteryTray {
             if (showBusy) {
                 batteryStatusText = "正在同步电量...";
                 statusColor = accentBlue;
-            } else if (current != null) {
-                if (current.Charging) {
+            } else if (mouseView.Fresh) {
+                if (isCharging) {
                     batteryStatusText = "正在充电";
                     statusColor = accentGreen;
                 } else {
                     batteryStatusText = "使用电池";
                     statusColor = fgSub;
                 }
-            } else if (lastGood != null) {
-                batteryStatusText = "上次确认 · " + lastGood.TimestampUtc.ToLocalTime().ToString("HH:mm");
+            } else if (pct.HasValue) {
+                batteryStatusText = "上次确认 · " + mouseView.TimeText;
                 statusColor = accentAmber;
             } else {
                 batteryStatusText = "等待设备回读";
             }
-            DrawText(g, batteryStatusText, 10f, FontStyle.Regular, statusColor, new RectangleF(79f, 94f, 168f, 16f), StringAlignment.Near);
+            DrawText(g, batteryStatusText, 10.5f, FontStyle.Regular, statusColor, new RectangleF(79f, 94f, 168f, 16f), StringAlignment.Near);
 
             // 右上角连接状态指示胶囊标签
-            DrawConnectionPill(g, new RectangleF(186f, 68f, 70f, 19f), current != null, isStale, dark, accentGreen, accentAmber, muted);
+            DrawConnectionPill(g, new RectangleF(186f, 68f, 70f, 19f), mouseView.Fresh, isStale, dark, accentGreen, accentAmber, muted);
 
             // 4. DPI 区域标题栏 (Y = 132, H = 18)
             DrawDpiHeading(g, fg);
@@ -243,7 +247,7 @@ namespace AtkBatteryTray {
             string dpiStateText;
             Color dpiStateColor = muted;
             if (dpiBusy) {
-                dpiStateText = "切换中...";
+                dpiStateText = feedback!=null&&feedback.PendingStage>=0?"正在切换至档位 "+(feedback.PendingStage+1):"切换中…";
                 dpiStateColor = accentBlue;
             } else if (!dpiReady) {
                 dpiStateText = "等待设备回读";
@@ -257,7 +261,8 @@ namespace AtkBatteryTray {
             } else {
                 dpiStateText = "等待鼠标在线";
             }
-            DrawText(g, dpiStateText, 10f, FontStyle.Regular, dpiStateColor, new RectangleF(90f, 132f, 176f, 18f), StringAlignment.Far);
+            if(feedback!=null&&!String.IsNullOrEmpty(feedback.DpiFailure)){dpiStateText="切换未确认 · 请重试";dpiStateColor=accentAmber;}
+            DrawText(g, dpiStateText, 10.5f, FontStyle.Regular, dpiStateColor, new RectangleF(90f, 132f, 176f, 18f), StringAlignment.Far);
 
             // 5. 真实 DPI 胶囊控制组 (支持 1~8 档、长数值与 X/Y 异步档位)
             int stageCount = dpiReady ? dpi.Stages.Count : 4;
@@ -282,6 +287,7 @@ namespace AtkBatteryTray {
                 }
 
                 DrawDpiPill(g, pillRect, line1, line2, selected, available, hovered, dark, fg, fgSub, muted, accentBlue, pillBg, pillHover, pillBorder);
+                if(feedback!=null&&feedback.PendingStage==i)DrawFocus(g,pillRect,accentBlue);
             }
 
             if (showHeadset && deviceProgress > 0.001f) {
@@ -303,7 +309,7 @@ namespace AtkBatteryTray {
                             layerGraphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                             layerGraphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
                             layerGraphics.ScaleTransform(layerScale, layerScale);
-                            DrawHeadsetSection(layerGraphics, headset, audio, dark, hoverAudio);
+                            DrawHeadsetSection(layerGraphics, headset, audio, dark, hoverAudio,feedback);
                         }
                         using (var attributes = new ImageAttributes()) {
                             var opacity = new ColorMatrix();
@@ -318,6 +324,13 @@ namespace AtkBatteryTray {
                 g.Restore(clipState);
             }
 
+            if(feedback!=null&&feedback.KeyboardFocus>=0) {
+                int focus=feedback.KeyboardFocus;RectangleF rect=RectangleF.Empty;
+                if(focus==0)rect=RefreshRect;else if(focus==1)rect=SettingsRect;
+                else if(focus>=100&&showHeadset&&deviceProgress>.98f)rect=focus==100?SpeakerOutputRectFor(dpi):focus==101?HeadsetOutputRectFor(dpi):MicrophoneMuteRectFor(dpi);
+                else if(focus>=10&&focus<10+stageCount)rect=StageRect(focus-10,stageCount);
+                if(!rect.IsEmpty)DrawFocus(g,rect,accentBlue);
+            }
             g.Restore(state);
         }
 
@@ -328,6 +341,21 @@ namespace AtkBatteryTray {
         private static float ClampProgress(float value) {
             if (float.IsNaN(value) || float.IsInfinity(value)) return 0f;
             return Math.Max(0f, Math.Min(1f, value));
+        }
+        private static void DrawFocus(Graphics g,RectangleF rect,Color color) {
+            rect.Inflate(2f,2f);
+            using(var path=RoundRect(rect.X,rect.Y,rect.Width,rect.Height,9f))
+            using(var pen=new Pen(Color.FromArgb(190,color),1.5f)){pen.DashStyle=DashStyle.Dot;g.DrawPath(pen,path);}
+        }
+        private static void DrawSettingsButton(Graphics g,RectangleF rect,bool hovered,bool dark,Color fg,Color muted) {
+            if(hovered)using(var path=RoundRect(rect.X,rect.Y,rect.Width,rect.Height,7f))
+                using(var fill=new SolidBrush(dark?Color.FromArgb(62,63,70):Color.FromArgb(232,236,242)))g.FillPath(fill,path);
+            float cx=rect.X+rect.Width/2,cy=rect.Y+rect.Height/2;
+            using(var pen=new Pen(hovered?fg:muted,1.3f)) {
+                pen.StartCap=LineCap.Round;pen.EndCap=LineCap.Round;
+                g.DrawEllipse(pen,cx-5f,cy-5f,10f,10f);g.DrawEllipse(pen,cx-1.8f,cy-1.8f,3.6f,3.6f);
+                for(int i=0;i<8;i++){double a=i*Math.PI/4;g.DrawLine(pen,cx+(float)Math.Cos(a)*5,cy+(float)Math.Sin(a)*5,cx+(float)Math.Cos(a)*7,cy+(float)Math.Sin(a)*7);}
+            }
         }
 
         private static void DrawOuterCard(Graphics g, float width, float height, bool dark) {
@@ -369,10 +397,10 @@ namespace AtkBatteryTray {
             }
         }
 
-        private static void DrawHeadsetSection(Graphics g, HeadsetReading headset, AudioReading audio, bool dark, int hoverAudio) {
+        private static void DrawHeadsetSection(Graphics g, HeadsetReading headset, AudioReading audio, bool dark, int hoverAudio,PanelFeedback feedback) {
             Color fg = dark ? Color.FromArgb(246, 246, 248) : Color.FromArgb(28, 28, 30);
             Color fgSub = dark ? Color.FromArgb(200, 201, 207) : Color.FromArgb(60, 60, 67);
-            Color muted = dark ? Color.FromArgb(142, 142, 147) : Color.FromArgb(136, 136, 142);
+            Color muted = dark ? Color.FromArgb(172, 174, 182) : Color.FromArgb(105, 109, 119);
             Color blue = dark ? Color.FromArgb(10, 132, 255) : Color.FromArgb(0, 122, 255);
             Color green = dark ? Color.FromArgb(48, 209, 88) : Color.FromArgb(52, 199, 89);
             Color amber = dark ? Color.FromArgb(255, 159, 10) : Color.FromArgb(245, 140, 0);
@@ -399,15 +427,12 @@ namespace AtkBatteryTray {
                 using (var border = new Pen(cardBorder, 1f)) g.DrawPath(border, cardPath);
             }
 
-            int? percent = headset != null && headset.Percent.HasValue && headset.Percent.Value >= 0 && headset.Percent.Value <= 100
-                ? headset.Percent : null;
+            var view=UiState.Headset(headset,DateTime.UtcNow);
+            int? percent = view.Percent;
             DateTime confirmedAt = headset != null ? headset.BatteryTimestampUtc : DateTime.MinValue;
             bool hasTimestamp = confirmedAt != DateTime.MinValue;
-            bool batteryFresh = hasTimestamp && (DateTime.UtcNow - confirmedAt).TotalSeconds <= 90;
-            bool stale = percent.HasValue && (!radioVerified || !batteryFresh);
-            bool chargeFresh = headset != null && headset.ChargingTimestampUtc != DateTime.MinValue
-                && (DateTime.UtcNow - headset.ChargingTimestampUtc).TotalSeconds <= 90;
-            bool charging = headset != null && radioVerified && chargeFresh && headset.Charging == true;
+            bool stale = percent.HasValue&&!view.Fresh;
+            bool charging = view.Charging;
             DrawHeroBatteryRing(g, new RectangleF(29f, 41f, 36f, 36f), percent,
                 charging, stale, dark, fg, blue, green, amber, true);
             DrawText(g, percent.HasValue ? percent.Value + "%" : "--", 21f, FontStyle.Bold,
@@ -425,7 +450,8 @@ namespace AtkBatteryTray {
                 status = headset.Charging.HasValue ? "使用电池" : "电量已同步";
                 statusColor = fgSub;
             }
-            DrawText(g, status, 10f, FontStyle.Regular, statusColor,
+            if(feedback!=null&&!String.IsNullOrEmpty(feedback.AudioFailure)){status="音频操作未确认 · 请重试";statusColor=amber;}
+            DrawText(g, status, 10.5f, FontStyle.Regular, statusColor,
                 new RectangleF(79f, 63f, 168f, 16f), StringAlignment.Near);
             DrawStatusPill(g, new RectangleF(186f, 40f, 70f, 19f),
                 radioVerified ? "已连接" : radioCached ? "已缓存" : "未确认",
@@ -433,16 +459,17 @@ namespace AtkBatteryTray {
 
             bool speakerAvailable = audio != null && audio.SpeakerAvailable;
             bool headsetAvailable = audio != null && audio.HeadsetAvailable;
-            bool micAvailable = headsetAvailable && audio.MicrophoneMuted.HasValue;
+            bool micAvailable = audio != null && audio.MicrophoneAvailable && audio.MicrophoneMuted.HasValue;
             bool speakerSelected = audio != null && audio.ActiveOutput == "speaker";
             bool headsetSelected = audio != null && audio.ActiveOutput == "headset";
             bool micMuted = audio != null && audio.MicrophoneMuted == true;
-            DrawAudioPill(g, new RectangleF(14f, 94f, 92f, 26f), "Realtek 扬声器", speakerSelected,
-                speakerAvailable, hoverAudio == 0, dark, fg, muted, blue);
-            DrawAudioPill(g, new RectangleF(112f, 94f, 92f, 26f), "HyperX 耳机", headsetSelected,
-                headsetAvailable, hoverAudio == 1, dark, fg, muted, blue);
+            bool speakerPending=feedback!=null&&feedback.PendingOutput=="speaker",headsetPending=feedback!=null&&feedback.PendingOutput=="headset";
+            DrawAudioPill(g, new RectangleF(14f, 94f, 92f, 26f), speakerPending?"切换中…":"扬声器", speakerSelected,
+                speakerAvailable, hoverAudio == 0||speakerPending, dark, fg, muted, blue);
+            DrawAudioPill(g, new RectangleF(112f, 94f, 92f, 26f), headsetPending?"切换中…":"耳机", headsetSelected,
+                headsetAvailable, hoverAudio == 1||headsetPending, dark, fg, muted, blue);
             DrawMicrophonePill(g, new RectangleF(210f, 94f, 56f, 26f), micMuted,
-                micAvailable, hoverAudio == 2, dark, fg, muted, blue);
+                micAvailable, hoverAudio == 2, dark, fg, muted, blue,feedback!=null&&feedback.MicrophonePending);
         }
 
         private static void DrawAudioPill(Graphics g, RectangleF rect, string text, bool selected,
@@ -457,12 +484,12 @@ namespace AtkBatteryTray {
                 using (var brush = new SolidBrush(fill)) g.FillPath(brush, path);
                 using (var pen = new Pen(border, 1f)) g.DrawPath(pen, path);
             }
-            DrawText(g, text, 9.7f, selected ? FontStyle.Bold : FontStyle.Regular,
+            DrawText(g, text, 10.5f, selected ? FontStyle.Bold : FontStyle.Regular,
                 !available ? muted : selected ? Color.White : fg, rect, StringAlignment.Center);
         }
 
         private static void DrawMicrophonePill(Graphics g, RectangleF rect, bool muted,
-            bool available, bool hover, bool dark, Color fg, Color disabled, Color blue) {
+            bool available, bool hover, bool dark, Color fg, Color disabled, Color blue,bool pending=false) {
             Color selected = dark ? Color.FromArgb(255, 105, 97) : Color.FromArgb(216, 60, 55);
             Color fill = muted && available ? dark ? Color.FromArgb(74, 39, 42) : Color.FromArgb(254, 231, 230)
                 : dark ? Color.FromArgb(50, 51, 57) : Color.White;
@@ -484,7 +511,7 @@ namespace AtkBatteryTray {
                 g.DrawLine(pen, x + 1.8f, y + 14f, x + 6.7f, y + 14f);
                 if (muted) g.DrawLine(pen, x - 1f, y + 1f, x + 9f, y + 12f);
             }
-            DrawText(g, muted ? "静音" : "麦克风", 9f, FontStyle.Regular, color,
+            DrawText(g, pending?"处理中":muted ? "静音" : "开启", 10f, FontStyle.Regular, color,
                 new RectangleF(rect.X + 19f, rect.Y, rect.Width - 21f, rect.Height), StringAlignment.Center);
         }
 
