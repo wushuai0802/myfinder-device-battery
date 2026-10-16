@@ -16,6 +16,8 @@ namespace AtkBatteryTray {
     public static class Style {
         public static bool Dark {
             get {
+                var appearance=DeviceSettings.Current.Theme;
+                if(appearance=="dark")return true;if(appearance=="light")return false;
                 using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
                     return key!=null && Convert.ToInt32(key.GetValue("SystemUsesLightTheme",1))==0;
             }
@@ -79,6 +81,18 @@ namespace AtkBatteryTray {
         float dpiScale=1f;
         int keyboardFocus=-1;
         int hoverAudio=-1;
+        readonly PopupNavigation navigation=new PopupNavigation();
+        int hoverAction=-1,pressedAction=-1;
+        PopupControl pressedControl;
+        PopupPage pressedPage;
+        bool draggingVolume;
+        string volumeEndpoint;
+        string lastHoverTip;
+        readonly System.Windows.Forms.Timer feedbackTimer=new System.Windows.Forms.Timer();
+        readonly System.Windows.Forms.Timer pageAnimation=new System.Windows.Forms.Timer();
+        readonly Stopwatch pageClock=new Stopwatch();
+        float pageProgress=1f;
+        int pageStartHeight;
         readonly ToolTip controlTip=new ToolTip {InitialDelay=350,ReshowDelay=100,AutoPopDelay=2000,ShowAlways=true};
         byte frameAlpha=255;
         bool layeredRendering=true;
@@ -107,50 +121,110 @@ namespace AtkBatteryTray {
             ClientSize=UiState.ScaleSize(targetSize,dpiScale);DoubleBuffered=true;Font=new Font("Segoe UI",9);
             animation.Interval=16;animation.Tick+=delegate {AdvanceAnimation();};
             layoutAnimation.Interval=16;layoutAnimation.Tick+=delegate {AdvanceLayout();};
+            feedbackTimer.Interval=285;feedbackTimer.Tick+=delegate {feedbackTimer.Stop();Invalidate();};
+            pageAnimation.Interval=16;pageAnimation.Tick+=delegate {
+                float t=Math.Min(1f,(float)pageClock.Elapsed.TotalMilliseconds/160f);pageProgress=1f-(float)Math.Pow(1-t,3);
+                if(t>=1f){pageProgress=1;pageAnimation.Stop();}UpdateLayoutSize();Invalidate();
+            };
             Deactivate+=delegate {if(!ignoreDeactivate&&!closing)CloseAnimated();};
+            MouseDown+=delegate(object sender,MouseEventArgs e) {
+                if(e.Button!=MouseButtons.Left||closing)return;
+                pressedControl=PopupPages.Hit(ControlsForPage(),PanelPoint(e.Location));pressedPage=navigation.Page;
+                pressedAction=pressedControl==null?-1:pressedControl.Id;
+                if(pressedAction==240&&displayAudio!=null){draggingVolume=true;volumeEndpoint=displayAudio.VolumeEndpointId;navigation.VolumePreview=PopupPages.VolumeAt(pressedControl.Rect,PanelPoint(e.Location).X);Capture=true;}
+                Invalidate();
+            };
             MouseUp+=delegate(object sender,MouseEventArgs e) {
                 if(e.Button!=MouseButtons.Left||closing)return;
-                var point=PanelPoint(e.Location);
-                keyboardFocus=-1;
-                if(VisualDesign.SettingsRect.Contains(point)){owner.ShowSettings();return;}
-                if(VisualDesign.RefreshRect.Contains(point))owner.RefreshBattery();
-                else {
-                    int audio=AudioAtPoint(point);int slot=StageAtPoint(point,owner.Dpi);
-                    if(audio==0)owner.SelectAudioOutput("speaker");
-                    else if(audio==1)owner.SelectAudioOutput("headset");
-                    else if(audio==2)owner.ToggleMicrophoneMute();
-                    else if(slot>=0)owner.SelectDpiStage(slot);
-                }
+                var target=PopupPages.Hit(ControlsForPage(),PanelPoint(e.Location));
+                int selected=pressedAction;pressedAction=-1;keyboardFocus=-1;
+                if(draggingVolume){draggingVolume=false;Capture=false;int value=navigation.VolumePreview;navigation.VolumePreview=-1;owner.SelectOutputVolume(volumeEndpoint,value);}
+                else if(target!=null&&pressedControl!=null&&target.Id==selected&&pressedPage==navigation.Page&&target.Rect==pressedControl.Rect)PerformAction(target);
+                pressedControl=null;
                 Invalidate();
             };
             MouseMove+=delegate(object sender,MouseEventArgs e) {
-                var point=PanelPoint(e.Location);int nextStage=StageAtPoint(point,owner.Dpi);bool nextRefresh=VisualDesign.RefreshRect.Contains(point),nextSettings=VisualDesign.SettingsRect.Contains(point);int nextAudio=AudioAtPoint(point);
-                if(nextStage!=hoverStage||nextRefresh!=hoverRefresh||nextAudio!=hoverAudio||nextSettings!=hoverSettings){
-                    hoverStage=nextStage;hoverRefresh=nextRefresh;hoverAudio=nextAudio;hoverSettings=nextSettings;
-                    string audioTip=nextAudio==2?"切换麦克风静音："+(displayAudio==null?"":displayAudio.MicrophoneName)
-                        :nextAudio==0?"输出到："+(displayAudio==null?"":displayAudio.SpeakerName)
-                        :nextAudio==1?"输出到："+(displayAudio==null?"":displayAudio.HeadsetName):null;
-                    if(audioTip!=null&&displayAudio!=null&&!String.IsNullOrEmpty(displayAudio.Error))audioTip+="\n"+displayAudio.Error;
-                    controlTip.SetToolTip(this,nextSettings?"设置：音源绑定、托盘电量和提醒":nextRefresh?"刷新状态":nextStage>=0&&!String.IsNullOrEmpty(owner.DpiError)?owner.DpiError:audioTip);Invalidate();
+                var point=PanelPoint(e.Location);
+                if(draggingVolume&&pressedControl!=null){navigation.VolumePreview=PopupPages.VolumeAt(pressedControl.Rect,point.X);Invalidate();return;}
+                var controls=ControlsForPage();var target=PopupPages.Hit(controls,point);int next=target==null?-1:target.Id;
+                var tipTarget=target??controls.Find(delegate(PopupControl c){return c.Rect.Contains(point);});
+                string tip=tipTarget==null?null:tipTarget.Text+(String.IsNullOrEmpty(tipTarget.Value)?"":"："+tipTarget.Value)+(String.IsNullOrEmpty(tipTarget.Detail)?"":"\n"+tipTarget.Detail);
+                if(navigation.Page!=PopupPage.Main&&point.Y>targetSize.Height-28){var feedback=owner.GetFeedback();tip=feedback.AudioFailure??feedback.DpiFailure??navigation.Notice;}
+                if(next!=hoverAction||tip!=lastHoverTip){
+                    hoverAction=next;hoverStage=next>=10&&next<18?next-10:-1;hoverAudio=next>=100&&next<=102?next-100:-1;hoverRefresh=next==0;hoverSettings=next==1;
+                    lastHoverTip=tip;controlTip.SetToolTip(this,tip);Invalidate();
                 }
-                Cursor=nextStage>=0||nextRefresh||nextSettings||nextAudio>=0?Cursors.Hand:Cursors.Default;
+                Cursor=target==null?Cursors.Default:Cursors.Hand;
             };
-            MouseLeave+=delegate {hoverStage=-1;hoverRefresh=false;hoverSettings=false;hoverAudio=-1;controlTip.SetToolTip(this,null);Cursor=Cursors.Default;Invalidate();};
+            MouseLeave+=delegate {lastHoverTip=null;hoverAction=-1;hoverStage=-1;hoverRefresh=false;hoverSettings=false;hoverAudio=-1;controlTip.SetToolTip(this,null);Cursor=Cursors.Default;Invalidate();};
+            MouseWheel+=delegate(object sender,MouseEventArgs e) {
+                if(navigation.Page==PopupPage.PickBinding){navigation.Offset=Math.Max(0,navigation.Offset+(e.Delta<0?1:-1));UpdateLayoutSize();Invalidate();}
+            };
+        }
+        List<PopupControl> ControlsForPage(){navigation.VisibleChoices=Math.Max(2,Math.Min(7,(int)((Screen.FromPoint(anchor).WorkingArea.Height/dpiScale-88)/36)-2));return PopupPages.Build(owner,navigation,headsetProgress>.98f);}
+        void Go(PopupPage page) {
+            pageStartHeight=targetSize.Height;navigation.Go(page,keyboardFocus>=0?keyboardFocus:hoverAction);keyboardFocus=-1;StartPageMotion();
+        }
+        public void ShowPreferences(){Go(PopupPage.Preferences);}
+        internal string CurrentPage {get{return navigation.Page.ToString();}}
+        void Back() {pageStartHeight=targetSize.Height;keyboardFocus=navigation.Back();StartPageMotion();}
+        void StartPageMotion(){draggingVolume=false;Capture=false;navigation.VolumePreview=-1;volumeEndpoint=null;pressedControl=null;hoverAction=-1;pressedAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;lastHoverTip=null;controlTip.SetToolTip(this,null);pageProgress=PopupPages.Reduced?1:0;pageClock.Restart();if(pageProgress==0)pageAnimation.Start();UpdateLayoutSize();Invalidate();}
+        void PerformAction(PopupControl control) {
+            int id=control.Id;
+            if(id==0||id==4||id==5){owner.RefreshDevice(id==4?"mouse":id==5?"headset":"all");return;}
+            if(id==1){Go(PopupPage.More);return;}if(id==6){Back();return;}
+            if(id>=10&&id<18){owner.SelectDpiStage(id-10);SchedulePendingHint();return;}
+            if(id==100||id==101){owner.SelectAudioOutput(id==100?"speaker":"headset");SchedulePendingHint();return;}
+            if(id==102){owner.ToggleMicrophoneMute();SchedulePendingHint();return;}
+            if(id==2){Go(PopupPage.Mouse);return;}if(id==3){Go(PopupPage.Headset);return;}
+            if(id==200){Go(PopupPage.Audio);owner.RefreshAudioDevices();return;}if(id==201){Go(PopupPage.Preferences);return;}
+            if(id==202){Go(PopupPage.Diagnostics);return;}if(id==203){Go(PopupPage.Bindings);return;}if(id==204){owner.ExitThread();return;}
+            if(id==205){owner.RefreshAudioDevices();return;}
+            try {
+                var pref=DeviceSettings.Current;
+                if(id==210||id==211||id==213||id==216){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
+                if(id>=400&&id<=432) {
+                    if(id<=402)pref.Theme=id==400?"auto":id==401?"light":"dark";
+                    else if(id>=410&&id<=412)pref.TraySource=id==410?"mouse":id==411?"headset":"lowest";
+                    else if(id>=420&&id<=422)pref.WarningThreshold=id==420?10:id==421?15:20;
+                    else if(id>=430)pref.BackgroundSeconds=id==430?60:id==431?120:300;else return;
+                    DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);Back();return;
+                }
+                else if(id==212)pref.LowBatteryNotifications=!pref.LowBatteryNotifications;
+                else if(id==214)pref.RememberReadings=!pref.RememberReadings;
+                else if(id==215)pref.ReducedMotion=!pref.ReducedMotion;
+                else if(id==220||id==221){EditAlias(id==220);return;}
+                else if(id>=230&&id<=232){navigation.BindingRole=id==230?"speaker":id==231?"headset":"microphone";Go(PopupPage.PickBinding);return;}
+                else if(id==233){DeviceSettings.ResetAudio();owner.ConfigurationChanged();navigation.Notice="已恢复自动识别";Invalidate();return;}
+                else if(id==7||id==8){navigation.Offset=Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
+                else if(id>=300){DeviceSettings.SetEndpoint(navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
+                else if(id==250){Clipboard.SetText(owner.DiagnosticSummary());navigation.Notice="已复制不含设备ID的诊断摘要";Invalidate();return;}
+                else return;
+                DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
+            }catch(Exception error){navigation.Notice="未保存："+error.Message;Invalidate();}
+        }
+        void SchedulePendingHint(){feedbackTimer.Stop();feedbackTimer.Start();}
+        void EditAlias(bool mouse) {
+            bool dark=Style.Dark;var pref=DeviceSettings.Current;
+            using(var dialog=new Form {Text=mouse?"鼠标显示名称":"耳机显示名称",ShowInTaskbar=false,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false,StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(280,106),BackColor=dark?Color.FromArgb(41,45,52):Color.FromArgb(250,251,253),ForeColor=PopupPages.Foreground(dark),Font=new Font("Microsoft YaHei UI",9)})
+            using(var input=new TextBox {Text=mouse?pref.MouseAlias:pref.HeadsetAlias,MaxLength=32,Location=new Point(14,15),Width=252,BackColor=PopupPages.Track(dark),ForeColor=PopupPages.Foreground(dark),BorderStyle=BorderStyle.FixedSingle})
+            using(var save=new Button {Text="保存",DialogResult=DialogResult.OK,Location=new Point(191,62),Size=new Size(75,28)}) {
+                dialog.Controls.Add(input);dialog.Controls.Add(save);dialog.AcceptButton=save;ignoreDeactivate=true;
+                try {if(dialog.ShowDialog(this)==DialogResult.OK){pref=DeviceSettings.Current;if(mouse)pref.MouseAlias=input.Text;else pref.HeadsetAlias=input.Text;DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);}}
+                finally{ignoreDeactivate=false;}
+            }
         }
         PointF PanelPoint(Point point) {return UiState.LogicalPoint(point,dpiScale);}
         protected override bool ProcessCmdKey(ref Message message,Keys keys) {
-            if(keys==Keys.Escape){CloseAnimated();return true;}
-            var targets=new List<int>{0,1};
-            if(owner.Dpi!=null&&owner.Dpi.Stages!=null)for(int i=0;i<owner.Dpi.Stages.Count;i++)targets.Add(10+i);
-            if(headsetProgress>.98f&&displayAudio!=null){if(displayAudio.SpeakerAvailable)targets.Add(100);if(displayAudio.HeadsetAvailable)targets.Add(101);if(displayAudio.MicrophoneAvailable&&displayAudio.MicrophoneMuted.HasValue)targets.Add(102);}
+            if(keys==Keys.Escape){if(navigation.Page==PopupPage.Main)CloseAnimated();else Back();return true;}
+            var controls=ControlsForPage();var targets=new List<int>();foreach(var control in controls)if(control.Id>=0&&control.Enabled&&!control.Information)targets.Add(control.Id);
+            if(keyboardFocus==240&&(keys==Keys.Left||keys==Keys.Right)&&displayAudio!=null&&displayAudio.OutputVolumePercent.HasValue){owner.SelectOutputVolume(displayAudio.VolumeEndpointId,Math.Max(0,Math.Min(100,(owner.DesiredVolume??displayAudio.OutputVolumePercent.Value)+(keys==Keys.Left?-2:2))));return true;}
             if(keys==Keys.Tab||keys==(Keys.Tab|Keys.Shift)||keys==Keys.Right||keys==Keys.Left) {
                 int direction=keys==(Keys.Tab|Keys.Shift)||keys==Keys.Left?-1:1,index=targets.IndexOf(keyboardFocus);
                 keyboardFocus=targets[(index<0?(direction>0?0:targets.Count-1):(index+direction+targets.Count)%targets.Count)];Invalidate();return true;
             }
             if(keys==Keys.Enter||keys==Keys.Space) {
-                if(keyboardFocus==0)owner.RefreshBattery();else if(keyboardFocus==1)owner.ShowSettings();
-                else if(keyboardFocus>=100){if(keyboardFocus==102)owner.ToggleMicrophoneMute();else owner.SelectAudioOutput(keyboardFocus==100?"speaker":"headset");}
-                else if(keyboardFocus>=10)owner.SelectDpiStage(keyboardFocus-10);
+                foreach(var control in controls)if(control.Id==keyboardFocus){PerformAction(control);break;}
                 return true;
             }
             return base.ProcessCmdKey(ref message,keys);
@@ -171,13 +245,18 @@ namespace AtkBatteryTray {
             if(visible||headsetProgress==0f){displayHeadset=owner.Headset;displayAudio=owner.Audio;}
             float next=visible?1f:0f;
             if(next!=layoutTarget) {
-                layoutStart=headsetProgress;layoutTarget=next;layoutClock.Restart();layoutAnimation.Start();
+                layoutStart=headsetProgress;layoutTarget=next;
+                if(PopupPages.Reduced){headsetProgress=next;layoutAnimation.Stop();UpdateLayoutSize();}
+                else{layoutClock.Restart();layoutAnimation.Start();}
             } else UpdateLayoutSize();
+            if(keyboardFocus>=0&&!ControlsForPage().Exists(delegate(PopupControl c){return c.Id==keyboardFocus&&c.Enabled;}))keyboardFocus=navigation.Page==PopupPage.Main?1:6;
             Invalidate();
         }
         void UpdateLayoutSize() {
             Size mouse=VisualDesign.PanelSizeFor(false,owner.Dpi),both=VisualDesign.PanelSizeFor(true,owner.Dpi);
             targetSize=new Size(mouse.Width,mouse.Height+(int)Math.Round((both.Height-mouse.Height)*headsetProgress));
+            if(navigation.Page!=PopupPage.Main)targetSize=PopupPages.SizeFor(ControlsForPage());
+            if(pageProgress<1f)targetSize.Height=(int)Math.Round(pageStartHeight+(targetSize.Height-pageStartHeight)*pageProgress);
             Size physical=UiState.ScaleSize(targetSize,dpiScale);
             if(ClientSize!=physical) {
                 ClientSize=physical;
@@ -186,19 +265,19 @@ namespace AtkBatteryTray {
             PositionForSize((int)Math.Round((1-animationProgress)*6));
         }
         void UpdateFallbackRegion() {
-            Size mouse=VisualDesign.PanelSizeFor(false,owner.Dpi);
             Region mask;
-            using(var shape=Style.Round(new RectangleF(0,0,targetSize.Width,mouse.Height),VisualDesign.PanelRadius))mask=new Region(shape);
-            int headsetTop=mouse.Height+8;
-            if(targetSize.Height>headsetTop) {
-                float height=targetSize.Height-headsetTop;
-                using(var shape=Style.Round(new RectangleF(0,headsetTop,targetSize.Width,height),Math.Min(VisualDesign.PanelRadius,height/2f)))mask.Union(shape);
+            int mouse=VisualDesign.MouseCardHeight(owner.Dpi),headsetTop=mouse+8;
+            using(var shape=Style.Round(new RectangleF(0,0,targetSize.Width,navigation.Page==PopupPage.Main?mouse:targetSize.Height),VisualDesign.PanelRadius))mask=new Region(shape);
+            if(navigation.Page==PopupPage.Main) {
+                float height=Math.Max(1,96*headsetProgress);
+                if(headsetProgress>0f)using(var shape=Style.Round(new RectangleF(0,headsetTop,targetSize.Width,height),Math.Min(VisualDesign.PanelRadius,height/2)))mask.Union(shape);
+                mask.Union(new RectangleF(0,mouse+104*headsetProgress,targetSize.Width,30));
             }
             using(var transform=new Matrix()){transform.Scale(dpiScale,dpiScale);mask.Transform(transform);}
             var previous=Region;Region=mask;if(previous!=null)previous.Dispose();
         }
         void AdvanceLayout() {
-            float elapsed=Math.Min(1f,(float)layoutClock.Elapsed.TotalMilliseconds/190f);
+            float elapsed=Math.Min(1f,(float)layoutClock.Elapsed.TotalMilliseconds/160f);
             float eased=1f-(float)Math.Pow(1f-elapsed,3);
             headsetProgress=layoutStart+(layoutTarget-layoutStart)*eased;
             if(elapsed>=1f){headsetProgress=layoutTarget;layoutAnimation.Stop();layoutClock.Stop();if(headsetProgress==0f){displayHeadset=owner.Headset;displayAudio=owner.Audio;}}
@@ -211,7 +290,7 @@ namespace AtkBatteryTray {
         public void OpenAnimated(bool fromLauncher=false) {
             anchor=Cursor.Position;
             if(fromLauncher){var screen=Screen.FromPoint(anchor).WorkingArea;anchor=new Point(screen.Right-24,screen.Top+16);}
-            dpiScale=NativeDisplay.ScaleAt(anchor);UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;
+            dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;
             frameAlpha=3;PositionForSize(6);Show();Activate();owner.PanelOpened();
             BeginInvoke((MethodInvoker)delegate {ignoreDeactivate=false;});AnimateTo(1f,190f);
         }
@@ -224,6 +303,7 @@ namespace AtkBatteryTray {
             y=Math.Max(screen.Top+margin,Math.Min(y,screen.Bottom-Height-margin));Location=new Point(x,y);
         }
         public void Reveal() {
+            ResetPage();
             if(closing){closing=false;owner.PanelOpened();AnimateTo(1f,190f);}
             Show();Activate();
         }
@@ -231,10 +311,12 @@ namespace AtkBatteryTray {
             if(closing)return;closing=true;owner.PanelClosed();AnimateTo(0f,135f);
         }
         public void ToggleAnimated() {
-            if(closing) { closing=false;owner.PanelOpened();AnimateTo(1f,190f); }
+            if(closing) { ResetPage();closing=false;owner.PanelOpened();AnimateTo(1f,190f); }
             else CloseAnimated();
         }
+        void ResetPage(){navigation.Reset();keyboardFocus=-1;hoverAction=-1;pressedAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;lastHoverTip=null;controlTip.SetToolTip(this,null);pressedControl=null;draggingVolume=false;Capture=false;pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
         void AnimateTo(float target,float durationMs) {
+            if(PopupPages.Reduced){animationProgress=target;frameAlpha=target>0? (byte)255:(byte)0;animation.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
             motionStart=animationProgress;motionTarget=target;
             motionDurationMs=Math.Max(60f,durationMs*Math.Abs(target-animationProgress));
             motionClock.Restart();animation.Start();
@@ -250,7 +332,7 @@ namespace AtkBatteryTray {
             Invalidate();
         }
         protected override void Dispose(bool disposing) {
-            if(disposing){owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();controlTip.Dispose();}
+            if(disposing){owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
             base.Dispose(disposing);
         }
         protected override void OnPaintBackground(PaintEventArgs e) {if(!layeredRendering)base.OnPaintBackground(e);}
@@ -273,10 +355,15 @@ namespace AtkBatteryTray {
                 UpdateFallbackRegion();
                 Opacity=Math.Max(.01,frameAlpha/255d);
             }
-            float sx=ClientSize.Width/(float)targetSize.Width,sy=ClientSize.Height/(float)targetSize.Height;
-            var saved=e.Graphics.Save();e.Graphics.ScaleTransform(sx,sy);
-            VisualDesign.PaintDevicesPanel(e.Graphics,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,Style.Dark,displayHeadset,displayAudio,animationProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,Feedback(),hoverSettings);
+            var saved=e.Graphics.Save();e.Graphics.ScaleTransform(dpiScale,dpiScale);
+            PaintContent(e.Graphics);
             e.Graphics.Restore(saved);
+        }
+        void PaintContent(Graphics g) {
+            var saved=g.Save();
+            if(navigation.Page!=PopupPage.Main){g.TranslateTransform(8*(1-pageProgress),0);PopupPages.Paint(g,owner,navigation,ControlsForPage(),Style.Dark,hoverAction,pressedAction,keyboardFocus);}
+            else VisualDesign.PaintDevicesPanel(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,Style.Dark,displayHeadset,displayAudio,animationProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,Feedback(),hoverSettings);
+            g.Restore(saved);
         }
         bool RenderLayeredFrame() {
             var feedback=Feedback();DateTime now=DateTime.UtcNow;
@@ -293,14 +380,20 @@ namespace AtkBatteryTray {
             if(displayAudio!=null)visible.Append('|').Append(displayAudio.ActiveOutput).Append('|').Append(displayAudio.MicrophoneMuted).Append('|').Append(displayAudio.SpeakerAvailable).Append('|').Append(displayAudio.HeadsetAvailable).Append('|').Append(displayAudio.Error);
             visible.Append('|').Append(hoverAudio);
             visible.Append('|').Append(hoverSettings).Append('|').Append(feedback.Key);
+            var preferences=DeviceSettings.Current;
+            visible.Append('|').Append(navigation.Page).Append('|').Append(navigation.Offset).Append('|').Append(navigation.Notice).Append('|').Append(navigation.VolumePreview).Append('|').Append(pageProgress);
+            visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
+            if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
+            if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name);
+            visible.Append('|').Append(owner.DesiredVolume).Append('|').Append(hoverAction).Append('|').Append(pressedAction);
             visible.Append('|').Append(UiState.Mouse(owner.Current,owner.LastGood,now).Key).Append('|').Append(UiState.Headset(displayHeadset,now).Key);
             if(displayAudio!=null)visible.Append('|').Append(displayAudio.MicrophoneAvailable);
             string key=visible.ToString();
             if(key==lastPresentedKey)return true;
             using(var bitmap=new Bitmap(ClientSize.Width,ClientSize.Height,PixelFormat.Format32bppPArgb)) {
                 using(var g=Graphics.FromImage(bitmap)) {
-                    g.Clear(Color.Transparent);g.ScaleTransform(ClientSize.Width/(float)targetSize.Width,ClientSize.Height/(float)targetSize.Height);
-                    VisualDesign.PaintDevicesPanel(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,Style.Dark,displayHeadset,displayAudio,animationProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,feedback,hoverSettings);
+                    g.Clear(Color.Transparent);g.ScaleTransform(dpiScale,dpiScale);
+                    PaintContent(g);
                 }
                 IntPtr screen=GetDC(IntPtr.Zero),memory=IntPtr.Zero,image=IntPtr.Zero,previous=IntPtr.Zero;
                 try {
@@ -331,7 +424,7 @@ namespace AtkBatteryTray {
                 }
             }
         }
-        PanelFeedback Feedback(){var value=owner.GetFeedback();value.KeyboardFocus=keyboardFocus;return value;}
+        PanelFeedback Feedback(){var value=owner.GetFeedback();value.KeyboardFocus=keyboardFocus;value.HoverAction=hoverAction;value.PressedAction=pressedAction;return value;}
         static RectangleF StageRect(int index,int count) {
             return VisualDesign.StageRect(index,count);
         }
@@ -355,12 +448,12 @@ namespace AtkBatteryTray {
         readonly Func<AudioReading> readAudio;
         readonly Func<string,AudioReading> writeOutput;
         readonly Func<bool,AudioReading> writeMute;
+        readonly Func<string,int,AudioReading> writeVolume;
         readonly ToolStripMenuItem audioSettingsMenu=new ToolStripMenuItem("音源设置");
         readonly System.Windows.Forms.Timer deviceDebounce=new System.Windows.Forms.Timer();
         readonly LowBatteryPolicy lowBattery=new LowBatteryPolicy();
         readonly bool persistStatus;
         DeviceEventsWindow deviceEvents;
-        SettingsForm settingsForm;
         bool pendingHeadsetRefresh,manualRefresh;
         int stageInFlight=-1;
         string audioTargetInFlight,dpiActionFailure,audioActionFailure;
@@ -372,6 +465,9 @@ namespace AtkBatteryTray {
         string pendingAudioOutput;
         bool? pendingMicrophoneMute;
         bool? microphoneTargetInFlight;
+        int? pendingVolume,volumeTargetInFlight;
+        string pendingVolumeEndpoint;
+        DateTime actionRequestedAt;
         Icon icon;Details details;int busy;volatile bool disposed;
         bool switching,panelOpen,pendingRead,pendingBattery;
         int pendingStage=-1;
@@ -388,6 +484,7 @@ namespace AtkBatteryTray {
         public bool IsRefreshing {get{return busy!=0;}}
         public bool IsDpiRefreshing {get{return switching||pendingStage>=0;}}
         public bool IsAudioBusy {get{return audioBusy!=0;}}
+        public int? DesiredVolume {get{return pendingVolume??volumeTargetInFlight;}}
         internal bool DiagnosticsEnabled {get{return persistStatus;}}
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
         static MouseSnapshot ReadWithRetry(bool includeBattery) {
@@ -405,15 +502,15 @@ namespace AtkBatteryTray {
             }
             return result;
         }
-        public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioControl.Read,true,AudioControl.SwitchOutput,AudioControl.SetHeadsetMicrophoneMute) {
+        public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioControl.Read,true,AudioControl.SwitchOutput,AudioControl.SetHeadsetMicrophoneMute,AudioControl.SetOutputVolume) {
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
             deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){deviceDebounce.Stop();deviceDebounce.Start();}});
             try {string path=Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt");if(File.Exists(path)){string text=File.ReadAllText(path);lowBattery.Restore("mouse",text.Contains("mouse=1"));lowBattery.Restore("headset",text.Contains("headset=1"));}}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select) : this(showPanel,read,select,null,null) {}
-        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null) {
+        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null) {
             persistStatus=diagnostics;
-            readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;
+            readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;writeVolume=volumeWriter;
             var unused=dispatch.Handle;
             var menu=new ContextMenuStrip();
             var detail=new ToolStripMenuItem("设备电量与音频");detail.Click+=delegate {ShowDetails();};menu.Items.Add(detail);
@@ -423,8 +520,9 @@ namespace AtkBatteryTray {
             menu.Items.Add(new ToolStripSeparator());
             var exit=new ToolStripMenuItem("\u9000\u51fa");exit.Click+=delegate {ExitThread();};menu.Items.Add(exit);
             tray.ContextMenuStrip=menu;tray.MouseClick+=delegate(object sender,MouseEventArgs e){if(e.Button==MouseButtons.Left)ShowDetails();};
+            if(diagnostics&&DeviceSettings.Current.RememberReadings)ReadingCache.Load(Path.Combine(DeviceSettings.DataDirectory,"readings-cache.json"),out LastGood,out lastKnownHeadset);
             UpdateIcon();tray.Visible=diagnostics;
-            refresh.Interval=60000;refresh.Tick+=delegate {if(!panelOpen){RequestRead(true,false);RequestHeadsetRead(false);RequestAudioRead(false);}};refresh.Start();
+            refresh.Interval=DeviceSettings.Current.BackgroundSeconds*1000;refresh.Tick+=delegate {if(!panelOpen){RequestRead(true,false);RequestHeadsetRead(false);RequestAudioRead(false);}};refresh.Start();
             liveSync.Interval=2000;liveSync.Tick+=delegate {
                 if(!panelOpen||details==null||details.IsDisposed||!details.Visible){liveSync.Stop();return;}
                 bool batteryDue=Current==null||(DateTime.UtcNow-Current.TimestampUtc).TotalSeconds>=30;
@@ -443,19 +541,18 @@ namespace AtkBatteryTray {
             signal.Listen(delegate {if(disposed)return;try {dispatch.BeginInvoke((MethodInvoker)delegate {if(!disposed)ShowDetails(true);});}catch(InvalidOperationException){}});
         }
         public void ShowSettings() {
-            if(settingsForm!=null&&!settingsForm.IsDisposed){settingsForm.Activate();return;}
-            if(details!=null&&!details.IsDisposed)details.CloseAnimated();
-            settingsForm=new SettingsForm(this);settingsForm.Show();
-            RequestAudioRead(true);
+            if(details==null||details.IsDisposed){details=new Details(this);details.OpenAnimated(true);}else details.Reveal();
+            details.ShowPreferences();
         }
         public void RefreshAudioDevices(){RequestAudioRead(true);}
-        public void ConfigurationChanged(){UpdateIcon();RequestAudioRead(true);}
+        public void ConfigurationChanged(bool refreshAudio=true){refresh.Interval=DeviceSettings.Current.BackgroundSeconds*1000;UpdateIcon();if(refreshAudio)RequestAudioRead(true);}
         public PanelFeedback GetFeedback() {
             var now=DateTime.UtcNow;
             return new PanelFeedback {PendingStage=pendingStage>=0?pendingStage:stageInFlight,
                 PendingOutput=pendingAudioOutput??audioTargetInFlight,MicrophonePending=pendingMicrophoneMute.HasValue||microphoneTargetInFlight.HasValue,
                 DpiFailure=(now-dpiFailureAt).TotalSeconds<10?dpiActionFailure:null,
                 AudioFailure=(now-audioFailureAt).TotalSeconds<10?audioActionFailure:null,
+                ShowPendingHints=(now-actionRequestedAt).TotalMilliseconds>=280,
                 ManualRefreshing=manualRefresh&&(busy!=0||headsetBusy!=0||audioBusy!=0||pendingRead)};
         }
         public void PanelOpened() {
@@ -487,8 +584,9 @@ namespace AtkBatteryTray {
         void EvaluateLowBattery(BatteryView mouse,BatteryView headset) {
             bool oldMouse=lowBattery.IsLatched("mouse"),oldHeadset=lowBattery.IsLatched("headset");
             bool allowed=NativeDisplay.MayNotify();var messages=new List<string>();
-            if(lowBattery.Observe("mouse",mouse,allowed))messages.Add("鼠标剩余 "+mouse.Percent+"%");
-            if(lowBattery.Observe("headset",headset,allowed))messages.Add("耳机剩余 "+headset.Percent+"%");
+            int threshold=DeviceSettings.Current.WarningThreshold;
+            if(lowBattery.Observe("mouse",mouse,allowed,threshold))messages.Add("鼠标剩余 "+mouse.Percent+"%");
+            if(lowBattery.Observe("headset",headset,allowed,threshold))messages.Add("耳机剩余 "+headset.Percent+"%");
             if(oldMouse!=lowBattery.IsLatched("mouse")||oldHeadset!=lowBattery.IsLatched("headset"))try {
                 Directory.CreateDirectory(DeviceSettings.DataDirectory);
                 File.WriteAllText(Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt"),"mouse="+(lowBattery.IsLatched("mouse")?1:0)+"\nheadset="+(lowBattery.IsLatched("headset")?1:0));
@@ -499,6 +597,7 @@ namespace AtkBatteryTray {
             if(!persistStatus)return;
             try {
                 Directory.CreateDirectory(DeviceSettings.DataDirectory);
+                if(DeviceSettings.Current.RememberReadings)ReadingCache.Save(Path.Combine(DeviceSettings.DataDirectory,"readings-cache.json"),Current??LastGood,Headset??lastKnownHeadset);
                 string path=Path.Combine(DeviceSettings.DataDirectory,"status.json");
                 string safe=Escape(ErrorMessage);
                 var stages=new StringBuilder("[");
@@ -506,14 +605,14 @@ namespace AtkBatteryTray {
                     if(i>0)stages.Append(',');stages.Append("{\"x\":").Append(Dpi.Stages[i].XDpi).Append(",\"y\":").Append(Dpi.Stages[i].YDpi).Append('}');
                 }
                 stages.Append(']');
-                string json="{\"liveVerified\":"+(Current!=null?"true":"false")+
+                string json="{\"version\":\"1.2.0\",\"page\":\""+(details==null||details.IsDisposed?"closed":details.CurrentPage)+"\",\"liveVerified\":"+(Current!=null?"true":"false")+
                     ",\"percent\":"+(Current!=null?Current.Percent.ToString():"null")+
                     ",\"charging\":"+(Current!=null?Current.Charging.ToString().ToLower():"null")+
                     ",\"dpiLiveVerified\":"+(Dpi!=null&&String.IsNullOrEmpty(DpiError)?"true":"false")+
                     ",\"dpi\":"+(Dpi!=null&&Dpi.Stages!=null&&Dpi.ActiveStage>=0&&Dpi.ActiveStage<Dpi.Stages.Count?Dpi.Stages[Dpi.ActiveStage].XDpi.ToString():"null")+
                     ",\"activeStage\":"+(Dpi!=null?Dpi.ActiveStage.ToString():"null")+
                     ",\"stages\":"+stages+
-                    ",\"panelOpen\":"+panelOpen.ToString().ToLower()+",\"syncIntervalMs\":"+(panelOpen?"2000":"60000")+
+                    ",\"panelOpen\":"+panelOpen.ToString().ToLower()+",\"syncIntervalMs\":"+(panelOpen?"2000":refresh.Interval.ToString())+
                     ",\"busy\":"+(busy!=0?"true":"false")+",\"pendingStage\":"+pendingStage+
                     ",\"completedReads\":"+completedReads+",\"completedSwitches\":"+completedSwitches+
                     ",\"iconUpdates\":"+iconUpdates+
@@ -527,6 +626,7 @@ namespace AtkBatteryTray {
                     ",\"detail\":\""+Escape(Headset==null?"Not yet read":Headset.Detail)+"\"}"+
                     ",\"audio\":{\"activeOutput\":\""+Escape(Audio==null?"unknown":Audio.ActiveOutput)+"\",\"headsetAvailable\":"+(Audio!=null&&Audio.HeadsetAvailable?"true":"false")+
                     ",\"speakerAvailable\":"+(Audio!=null&&Audio.SpeakerAvailable?"true":"false")+
+                    ",\"volumePercent\":"+(Audio!=null&&Audio.OutputVolumePercent.HasValue?Audio.OutputVolumePercent.Value.ToString():"null")+
                     ",\"microphoneMuted\":"+(Audio!=null&&Audio.MicrophoneMuted.HasValue?Audio.MicrophoneMuted.Value.ToString().ToLower():"null")+
                     ",\"error\":\""+Escape(Audio==null?"":Audio.Error)+"\"}}";
                 File.WriteAllText(path,json,new UTF8Encoding(false));
@@ -537,6 +637,19 @@ namespace AtkBatteryTray {
             manualRefresh|=manual;
             RequestRead(true,true);
             RequestHeadsetRead(true);RequestAudioRead(true);
+        }
+        public void RefreshDevice(string device) {
+            manualRefresh=true;
+            if(device=="mouse")RequestRead(true,true);
+            else if(device=="headset")RequestHeadsetRead(true);
+            else RefreshBattery();
+            UpdateIcon();
+        }
+        public string DiagnosticSummary() {
+            var now=DateTime.UtcNow;var mouse=UiState.Mouse(Current,LastGood,now);var headset=UiState.Headset(Headset,now);
+            return "MyFinder Device Battery 1.2.0\r\n鼠标："+mouse.Tooltip+"\r\n耳机："+headset.Tooltip+
+                "\r\n耳机无线："+(ShowHeadset(Headset,Audio)?"已确认连接":"未确认连接")+"\r\n音源："+(Audio==null?"未确认":Audio.ActiveOutput)+
+                "\r\n后台间隔："+DeviceSettings.Current.BackgroundSeconds+"秒\r\n自启："+PopupPages.StartupState();
         }
         internal static bool ShowHeadset(HeadsetReading headset,AudioReading audio) {
             return VisualDesign.ShouldShowHeadset(headset);
@@ -563,12 +676,13 @@ namespace AtkBatteryTray {
                         lastKnownHeadset=result;
                     } else {
                         headsetFailures++;
-                        if(result.ReceiverPresent&&lastKnownHeadset!=null) {
+                        if((result.ReceiverPresent||!result.ReceiverPresenceVerified)&&lastKnownHeadset!=null) {
+                            result.ReceiverPresent=lastKnownHeadset.ReceiverPresent;
                             result.ConnectionTimestampUtc=lastKnownHeadset.ConnectionTimestampUtc;
                             result.Connected=lastKnownHeadset.Connected&&(DateTime.UtcNow-lastKnownHeadset.ConnectionTimestampUtc).TotalSeconds<120;
                             if(result.Connected){result.Percent=lastKnownHeadset.Percent;result.BatteryTimestampUtc=lastKnownHeadset.BatteryTimestampUtc;}
                         }
-                        if(!result.ReceiverPresent)lastKnownHeadset=null;
+                        if(!result.ReceiverPresent&&result.ReceiverPresenceVerified)lastKnownHeadset=null;
                     }
                     Headset=result;UpdateIcon();if(pendingHeadsetRefresh){pendingHeadsetRefresh=false;RequestHeadsetRead(true);}
                 });}catch(ObjectDisposedException){}catch(InvalidOperationException){}
@@ -588,9 +702,9 @@ namespace AtkBatteryTray {
                 if(disposed)return;
                 try {dispatch.BeginInvoke((MethodInvoker)delegate {
                     if(disposed)return;audioBusy=0;
-                    if((audioTargetInFlight!=null||microphoneTargetInFlight.HasValue)&&result!=null&&!result.OperationSucceeded){audioActionFailure=result.Error??"音频操作未确认";audioFailureAt=DateTime.UtcNow;}
-                    microphoneTargetInFlight=null;audioTargetInFlight=null;audioCheckedUtc=DateTime.UtcNow;Audio=result;
-                    if(settingsForm!=null&&!settingsForm.IsDisposed)settingsForm.AudioUpdated();
+                    if((audioTargetInFlight!=null||microphoneTargetInFlight.HasValue||volumeTargetInFlight.HasValue)&&result!=null&&!result.OperationSucceeded){audioActionFailure=result.Error??"音频操作未确认";audioFailureAt=DateTime.UtcNow;}
+                    microphoneTargetInFlight=null;audioTargetInFlight=null;volumeTargetInFlight=null;audioCheckedUtc=DateTime.UtcNow;
+                    if(result!=null&&(!String.IsNullOrEmpty(result.ConsoleOutputId)||Audio==null))Audio=result;
                     UpdateIcon();RunPendingAudio();
                 });}catch(ObjectDisposedException){}catch(InvalidOperationException){}
             });
@@ -598,12 +712,18 @@ namespace AtkBatteryTray {
         public void SelectAudioOutput(string target) {
             if(writeOutput==null||target!="speaker"&&target!="headset")return;
             if(Audio==null||target=="speaker"&&!Audio.SpeakerAvailable||target=="headset"&&!Audio.HeadsetAvailable)return;
-            audioActionFailure=null;pendingAudioOutput=target;RunPendingAudio();
+            if(target==pendingAudioOutput||target==audioTargetInFlight&&pendingAudioOutput==null)return;
+            audioActionFailure=null;actionRequestedAt=DateTime.UtcNow;pendingAudioOutput=target;RunPendingAudio();
             if(details!=null&&!details.IsDisposed)details.Invalidate();
         }
         public void ToggleMicrophoneMute() {
             if(writeMute==null||Audio==null||!Audio.MicrophoneMuted.HasValue)return;
-            audioActionFailure=null;pendingMicrophoneMute=!(pendingMicrophoneMute??microphoneTargetInFlight??Audio.MicrophoneMuted.Value);RunPendingAudio();
+            audioActionFailure=null;actionRequestedAt=DateTime.UtcNow;pendingMicrophoneMute=!(pendingMicrophoneMute??microphoneTargetInFlight??Audio.MicrophoneMuted.Value);RunPendingAudio();
+            if(details!=null&&!details.IsDisposed)details.Invalidate();
+        }
+        public void SelectOutputVolume(string endpoint,int percent) {
+            if(writeVolume==null||Audio==null||String.IsNullOrEmpty(endpoint)||percent<0||percent>100)return;
+            audioActionFailure=null;pendingVolume=percent;pendingVolumeEndpoint=endpoint;RunPendingAudio();
             if(details!=null&&!details.IsDisposed)details.Invalidate();
         }
         void RunPendingAudio() {
@@ -615,6 +735,9 @@ namespace AtkBatteryTray {
                 bool mute=pendingMicrophoneMute.Value;pendingMicrophoneMute=null;
                 microphoneTargetInFlight=mute;
                 RunAudioOperation(delegate {return writeMute(mute);});
+            } else if(pendingVolume.HasValue) {
+                int value=pendingVolume.Value;string endpoint=pendingVolumeEndpoint;pendingVolume=null;pendingVolumeEndpoint=null;volumeTargetInFlight=value;
+                RunAudioOperation(delegate {return writeVolume(endpoint,value);});
             } else if(pendingAudioRefresh) {
                 pendingAudioRefresh=false;RunAudioOperation(readAudio);
             }
@@ -663,7 +786,8 @@ namespace AtkBatteryTray {
         public void SelectDpiStage(int stage) {
             if(disposed||Dpi==null||Dpi.Stages==null||stage<0||stage>=Dpi.Stages.Count)return;
             if(UiState.SkipConfirmedStage(Dpi,DpiError,stage,switching||pendingStage>=0,DateTime.UtcNow))return;
-            dpiActionFailure=null;
+            if(pendingStage==stage||stageInFlight==stage&&pendingStage<0)return;
+            dpiActionFailure=null;actionRequestedAt=DateTime.UtcNow;
             pendingStage=stage;RunNext();if(details!=null&&!details.IsDisposed)details.Invalidate();SaveStatus();
         }
         void RunNext() {
@@ -696,7 +820,6 @@ namespace AtkBatteryTray {
         }
         protected override void ExitThreadCore() {
             disposed=true;refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();tray.Visible=false;
-            if(settingsForm!=null)settingsForm.Close();
             if(details!=null)details.Close();tray.Dispose();if(icon!=null)icon.Dispose();dispatch.Dispose();base.ExitThreadCore();
         }
     }

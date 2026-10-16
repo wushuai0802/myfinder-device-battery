@@ -6,12 +6,12 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force|Out-Null
 $compiler=Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $test=Join-Path $OutputDirectory 'AudioSettingsTests.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /reference:System.Runtime.Serialization.dll "/out:$test" `
-    (Join-Path $root 'scripts\DeviceSettings.cs') (Join-Path $root 'scripts\AudioControl.cs') (Join-Path $PSScriptRoot 'AudioSettingsTests.cs')
+    (Join-Path $root 'scripts\DeviceSettings.cs') (Join-Path $root 'scripts\AudioControl.cs') (Join-Path $root 'scripts\HidBattery.cs') (Join-Path $root 'scripts\HeadsetBattery.cs') (Join-Path $root 'scripts\ReadingCache.cs') (Join-Path $PSScriptRoot 'AudioSettingsTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Audio/settings test build failed.'}
 & $test $OutputDirectory
 if($LASTEXITCODE -ne 0){throw 'Audio/settings tests failed.'}
 $menuTest=Join-Path $OutputDirectory 'AudioMenuTests.exe'
-$menuSources=@('HidBattery.cs','HeadsetBattery.cs','AudioControl.cs','DeviceSettings.cs','VisualDesign.cs','TrayGlyph.cs','TrayApp.cs','UiState.cs','NativeSupport.cs','SettingsForm.cs') |
+$menuSources=@('HidBattery.cs','HeadsetBattery.cs','AudioControl.cs','DeviceSettings.cs','VisualDesign.cs','TrayGlyph.cs','TrayApp.cs','UiState.cs','NativeSupport.cs','SettingsForm.cs','PopupPages.cs','ReadingCache.cs','CompactRenderer.cs') |
     ForEach-Object {Join-Path $root ('scripts\'+$_)}
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:AudioMenuTests /reference:System.Runtime.Serialization.dll `
     /reference:System.Windows.Forms.dll /reference:System.Drawing.dll "/out:$menuTest" $menuSources (Join-Path $PSScriptRoot 'AudioMenuTests.cs')

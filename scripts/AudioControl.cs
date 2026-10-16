@@ -29,6 +29,8 @@ namespace AtkBattery {
         public string CommunicationsOutputId;
         public bool OutputRolesDiffer;
         public bool OperationSucceeded;
+        public int? OutputVolumePercent;
+        public string VolumeEndpointId;
         public string[] Endpoints;
         public AudioDeviceChoice[] Devices = new AudioDeviceChoice[0];
     }
@@ -183,6 +185,32 @@ namespace AtkBattery {
             });
         }
 
+        public static AudioReading SetOutputVolume(string expectedEndpointId,int percent) {
+            if(String.IsNullOrEmpty(expectedEndpointId)||percent<0||percent>100)return FailedReading("无效的音量目标。");
+            return OnAudioThread(delegate {
+                using(var session=new AudioSession()) {
+                    var before=ReadCore(session);
+                    if(!SameId(before.ConsoleOutputId,expectedEndpointId)){before.OperationSucceeded=false;before.Error="输出设备已改变，请重试。";return before;}
+                    IMMDevice device=null;object native=null;float old=0;bool changed=false;
+                    try {
+                        Check(session.Enumerator.GetDevice(expectedEndpointId,out device),"打开输出设备");
+                        Guid iid=VolumeInterfaceId;Check(device.Activate(ref iid,23,IntPtr.Zero,out native),"读取输出音量接口");
+                        var volume=(IAudioEndpointVolume)native;Check(volume.GetMasterVolumeLevelScalar(out old),"读取原音量");
+                        Guid context=ChangeContext;Check(volume.SetMasterVolumeLevelScalar(percent/100f,ref context),"设置输出音量");changed=true;
+                        float actual;Check(volume.GetMasterVolumeLevelScalar(out actual),"核验输出音量");
+                        if(Math.Abs(actual-percent/100f)>.011f)throw new InvalidOperationException("音量读回不一致。");
+                        var after=ReadCore(session);
+                        if(!SameId(after.ConsoleOutputId,expectedEndpointId)||!after.OutputVolumePercent.HasValue||Math.Abs(after.OutputVolumePercent.Value-percent)>1)throw new InvalidOperationException("输出设备或音量已改变。");
+                        after.OperationSucceeded=true;return after;
+                    }catch(Exception error) {
+                        string message=Describe(error);
+                        if(changed&&native!=null)try{Guid context=ChangeContext;Check(((IAudioEndpointVolume)native).SetMasterVolumeLevelScalar(old,ref context),"恢复原音量");}catch(Exception restore){message=AddError(message,Describe(restore));}
+                        var after=ReadCore(session);after.OperationSucceeded=false;after.Error=AddError(after.Error,message);return after;
+                    }finally{ReleaseCom(native);ReleaseCom(device);}
+                }
+            });
+        }
+
         static AudioReading OnAudioThread(Func<AudioReading> operation) {
             AudioReading result = null;
             // Windows thread-pool workers use MTA. A separate queued operation
@@ -236,6 +264,17 @@ namespace AtkBattery {
             }
             result.Endpoints = descriptions.ToArray();
             result.Devices = choices.ToArray();
+            if(!String.IsNullOrEmpty(result.ConsoleOutputId)) {
+                IMMDevice device=null;object native=null;
+                try {
+                    Check(session.Enumerator.GetDevice(result.ConsoleOutputId,out device),"打开当前输出设备");
+                    Guid iid=VolumeInterfaceId;Check(device.Activate(ref iid,23,IntPtr.Zero,out native),"读取输出音量接口");
+                    float scalar;Check(((IAudioEndpointVolume)native).GetMasterVolumeLevelScalar(out scalar),"读取输出音量");
+                    result.OutputVolumePercent=(int)Math.Round(Math.Max(0,Math.Min(1,scalar))*100);
+                    result.VolumeEndpointId=result.ConsoleOutputId;
+                }catch(Exception){result.OutputVolumePercent=null;}
+                finally{ReleaseCom(native);ReleaseCom(device);}
+            }
             if (microphone != null) {
                 IMMDevice device = null;
                 object volumeObject = null;

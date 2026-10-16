@@ -10,9 +10,9 @@ namespace AtkBatteryTray {
     public static class TrayGlyph {
         public static Color LevelColor(int? percent,bool dark) {
             if(!percent.HasValue)return dark?Color.FromArgb(160,166,176):Color.FromArgb(100,108,119);
-            if(percent.Value<20)return dark?Color.FromArgb(255,91,88):Color.FromArgb(200,43,43);
-            if(percent.Value<50)return dark?Color.FromArgb(255,183,64):Color.FromArgb(173,112,0);
-            return dark?Color.FromArgb(54,211,103):Color.FromArgb(31,145,73);
+            if(percent.Value<20)return dark?Color.FromArgb(255,98,91):Color.FromArgb(201,42,34);
+            if(percent.Value<50)return dark?Color.FromArgb(228,201,103):Color.FromArgb(213,180,63);
+            return dark?Color.FromArgb(61,212,135):Color.FromArgb(34,155,90);
         }
         public static Bitmap Render(int? percent,bool charge,bool dark,bool stale,int size) {
             size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
@@ -23,7 +23,7 @@ namespace AtkBatteryTray {
                     // The level color occupies the entire badge so it remains
                     // visible at 16px. Dark digits contrast with all three bands.
                     Color level=LevelColor(percent,true);
-                    Color fill=percent.HasValue?(stale?Color.FromArgb(144,155,150):level):Color.FromArgb(83,94,108);
+                    Color fill=percent.HasValue?(stale?LevelColor(null,true):level):Color.FromArgb(83,94,108);
                     Color fg=percent.HasValue?Color.FromArgb(12,17,21):Color.White;
                     Color halo=Color.Transparent;
                     var badgeRect=new RectangleF(.8f,.8f,30.4f,30.4f);

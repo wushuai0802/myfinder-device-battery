@@ -22,8 +22,10 @@ namespace AtkBatteryTray {
         public int PendingStage=-1;
         public string PendingOutput, DpiFailure, AudioFailure;
         public bool MicrophonePending, ManualRefreshing;
+        public bool ShowPendingHints;
+        public int HoverAction=-1,PressedAction=-1;
         public int KeyboardFocus=-1;
-        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus;}}
+        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction;}}
     }
     public static class UiState {
         public static bool Recent(DateTime timestamp,DateTime now,double seconds) {
@@ -72,10 +74,10 @@ namespace AtkBatteryTray {
         readonly Dictionary<string,bool> notified=new Dictionary<string,bool>();
         public bool IsLatched(string device) {bool value;return notified.TryGetValue(device,out value)&&value;}
         public void Restore(string device,bool value) {notified[device]=value;}
-        public bool Observe(string device,BatteryView battery,bool mayNotify) {
+        public bool Observe(string device,BatteryView battery,bool mayNotify,int threshold=20) {
             if(!battery.Fresh||!battery.Percent.HasValue)return false;
             if(battery.Charging||battery.Percent>=30){notified[device]=false;return false;}
-            if(battery.Percent>20||IsLatched(device)||!mayNotify)return false;
+            if(battery.Percent>threshold||IsLatched(device)||!mayNotify)return false;
             notified[device]=true;return true;
         }
     }

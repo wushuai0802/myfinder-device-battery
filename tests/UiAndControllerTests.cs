@@ -23,17 +23,18 @@ static class UiAndControllerTests {
         foreach(int value in new[]{400,800,1200,1600})result.Stages.Add(new DpiStage {XDpi=value,YDpi=value});
         return result;
     }
-    static AudioReading Audio(string output,bool mute) {
+    static AudioReading Audio(string output,bool mute,int volume=55) {
         return new AudioReading {ActiveOutput=output,MicrophoneMuted=mute,SpeakerAvailable=true,HeadsetAvailable=true,MicrophoneAvailable=true,
-            SpeakerId="speaker",HeadsetId="headset",MicrophoneId="mic",ConsoleOutputId=output,MultimediaOutputId=output,OperationSucceeded=true,
+            SpeakerId="speaker",HeadsetId="headset",MicrophoneId="mic",ConsoleOutputId=output,MultimediaOutputId=output,OperationSucceeded=true,OutputVolumePercent=volume,VolumeEndpointId=output,
+            SpeakerName="扬声器 (USB DAC)",HeadsetName="耳机 (HyperX Cloud Alpha Wireless)",MicrophoneName="麦克风 (HyperX Cloud Alpha Wireless)",
             Devices=new[]{new AudioDeviceChoice {Id="speaker",Name="Speakers (USB DAC)",Flow=0},new AudioDeviceChoice {Id="headset",Name="Headphones (HyperX)",Flow=0},new AudioDeviceChoice {Id="mic",Name="Microphone (HyperX)",Flow=1}}};
     }
-    static Bitmap Render(BatteryReading mouse,HeadsetReading headset,PanelFeedback feedback,bool dark,float scale) {
-        var logical=VisualDesign.PanelSizeFor(headset,Dpi(1));var physical=UiState.ScaleSize(logical,scale);
+    static Bitmap Render(BatteryReading mouse,HeadsetReading headset,PanelFeedback feedback,bool dark,float scale,DpiConfig dpi=null) {
+        dpi=dpi??Dpi(1);var logical=VisualDesign.PanelSizeFor(headset,dpi);var physical=UiState.ScaleSize(logical,scale);
         var bitmap=new Bitmap(physical.Width,physical.Height,PixelFormat.Format32bppPArgb);
         using(var g=Graphics.FromImage(bitmap)) {
             g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);
-            VisualDesign.PaintDevicesPanel(g,mouse,null,null,false,Dpi(1),null,feedback!=null&&feedback.PendingStage>=0,dark,headset,Audio("headset",true),1,-1,false,1,-1,feedback);
+            VisualDesign.PaintDevicesPanel(g,mouse,null,null,false,dpi,null,feedback!=null&&feedback.PendingStage>=0,dark,headset,Audio("headset",true),1,-1,false,1,-1,feedback);
         }
         return bitmap;
     }
@@ -73,16 +74,22 @@ static class UiAndControllerTests {
             low.Percent=30;Check(!policy.Observe("mouse",low,true)&&!policy.IsLatched("mouse"),"recharge rearms notification");
             low.Percent=18;low.Fresh=false;Check(!policy.Observe("mouse",low,true),"cached low battery never sends a warning");
             low.Fresh=true;low.Charging=true;Check(!policy.Observe("mouse",low,true),"charging does not produce a low battery warning");
+            low.Charging=false;low.Percent=18;var customPolicy=new LowBatteryPolicy();Check(!customPolicy.Observe("mouse",low,true,15),"custom threshold defers the notification until it is reached");
             foreach(float scale in new[]{1f,1.25f,1.5f,2f}) {
                 var point=UiState.LogicalPoint(new Point((int)(150*scale),(int)(160*scale)),scale);
                 Check(Math.Abs(point.X-150)<.81&&Math.Abs(point.Y-160)<.81,"hit coordinate maps correctly at "+scale);
                 using(var image=Render(mouse,headset,null,false,scale)) {
-                    Check(image.GetPixel((int)(140*scale),(int)(214*scale)).A==0,"separate cards keep a transparent gap at "+scale);
-                    Check(image.Width==(int)(280*scale)&&image.Height==(int)(348*scale),"layout size matches scale "+scale);
+                    Check(image.GetPixel((int)(130*scale),(int)(100*scale)).A==0,"separate cards keep a transparent gap at "+scale);
+                    Check(image.Width==(int)Math.Round(260*scale)&&image.Height==(int)Math.Round(230*scale),"compact layout size matches scale "+scale);
                     image.Save(Path.Combine(output,"cards-"+scale.ToString(System.Globalization.CultureInfo.InvariantCulture)+".png"));
                 }
             }
-            using(var image=Render(mouse,headset,new PanelFeedback {PendingStage=2,PendingOutput="speaker",MicrophonePending=true,KeyboardFocus=12},true,1.5f))image.Save(Path.Combine(output,"cards-dark-pending.png"));
+            var eight=Dpi(1);foreach(int value in new[]{2400,3200,4800,6400})eight.Stages.Add(new DpiStage {XDpi=value,YDpi=value});
+            Check(VisualDesign.PanelSizeFor(true,eight).Height==260,"eight-stage panel reserves the second DPI row");
+            for(int i=0;i<8;i++)Check(VisualDesign.StageRect(i,8).Bottom<=VisualDesign.MouseCardHeight(eight),"eight-stage hit area stays inside the mouse card");
+            using(var image=Render(mouse,headset,null,false,2,eight))image.Save(Path.Combine(output,"cards-eight-stages.png"));
+            using(var image=Render(new BatteryReading {Percent=100,TimestampUtc=now},null,null,true,2))image.Save(Path.Combine(output,"mouse-only-100.png"));
+            using(var image=Render(mouse,headset,new PanelFeedback {PendingStage=2,PendingOutput="speaker",MicrophonePending=true,KeyboardFocus=12,ShowPendingHints=true},true,1.5f))image.Save(Path.Combine(output,"cards-dark-pending.png"));
             var stale=new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=46,BatteryTimestampUtc=now.AddMinutes(-5)};
             using(var image=Render(mouse,stale,null,false,1f))image.Save(Path.Combine(output,"cards-cached.png"));
             string signalName="Local\\MyFinderBatteryTest-"+Guid.NewGuid().ToString("N");
@@ -95,12 +102,13 @@ static class UiAndControllerTests {
                 typeof(DeviceEventsWindow).GetMethod("WndProc",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{message});
                 Check(events==1,"device change broadcast invokes a refresh callback");
             }
-            int stage=1,writes=0;string active="speaker";bool muted=false,failAudio=false;
+            int stage=1,writes=0,volume=55,volumeWrites=0;string active="speaker";bool muted=false,failAudio=false;
             context=new TrayContext(false,delegate(bool includeBattery){return new MouseSnapshot {Battery=includeBattery?new BatteryReading {Percent=85}:null,Dpi=Dpi(stage)};},
                 delegate(int selected){Interlocked.Increment(ref writes);Thread.Sleep(60);stage=selected;return Dpi(stage);},
-                delegate {return headset;},delegate {return Audio(active,muted);},false,
-                delegate(string target){Thread.Sleep(60);if(failAudio){var failure=Audio(active,muted);failure.OperationSucceeded=false;failure.Error="Test failure";return failure;}active=target;return Audio(active,muted);},
-                delegate(bool target){Thread.Sleep(60);muted=target;return Audio(active,muted);});
+                delegate {return headset;},delegate {return Audio(active,muted,volume);},false,
+                delegate(string target){Thread.Sleep(60);if(failAudio){var failure=Audio(active,muted,volume);failure.OperationSucceeded=false;failure.Error="Test failure";return failure;}active=target;return Audio(active,muted,volume);},
+                delegate(bool target){Thread.Sleep(60);muted=target;return Audio(active,muted,volume);},
+                delegate(string endpoint,int target){Interlocked.Increment(ref volumeWrites);Thread.Sleep(60);if(endpoint!=active){var failure=Audio(active,muted,volume);failure.OperationSucceeded=false;failure.Error="Target changed";return failure;}volume=target;return Audio(active,muted,volume);});
             Pump(delegate {return context.Current!=null&&context.Audio!=null&&!context.IsAudioBusy;});
             context.SelectDpiStage(1);Check(writes==0,"controller skips a confirmed duplicate stage click");
             context.SelectDpiStage(2);context.SelectDpiStage(3);
@@ -113,6 +121,15 @@ static class UiAndControllerTests {
             failAudio=true;context.SelectAudioOutput("speaker");Pump(delegate {return !context.IsAudioBusy;});
             Check(context.GetFeedback().AudioFailure=="Test failure"&&context.Audio.ActiveOutput=="headset","failed audio operation keeps confirmed state and exposes an error");
             context.ToggleMicrophoneMute();Pump(delegate {return !context.IsAudioBusy;});Check(context.Audio.MicrophoneMuted==true,"fake microphone operation is verified");
+            failAudio=false;context.SelectOutputVolume("headset",30);context.SelectOutputVolume("headset",40);context.SelectOutputVolume("headset",50);
+            Check(context.Audio.OutputVolumePercent==55&&context.DesiredVolume==50,"volume preview does not replace the last confirmed reading");
+            Pump(delegate {return !context.IsAudioBusy&&!context.DesiredVolume.HasValue;});Check(context.Audio.OutputVolumePercent==50&&volumeWrites==2,"volume queue merges intermediate requests");
+            context.SelectOutputVolume("speaker",70);Pump(delegate {return !context.IsAudioBusy;});Check(context.Audio.OutputVolumePercent==50&&context.GetFeedback().AudioFailure=="Target changed","stale output volume target does not affect a different endpoint");
+            var originalHeadset=headset;headset=new HeadsetReading {ReceiverPresent=true,Detail="Temporary timeout"};context.RefreshDevice("headset");
+            Pump(delegate{return context.Headset==headset;});Check(VisualDesign.ShouldShowHeadset(context.Headset)&&!UiState.Headset(context.Headset,DateTime.UtcNow).Fresh,"radio timeout keeps the card and labels the reading as cached");
+            headset=new HeadsetReading {ConnectionVerified=true,Connected=false,ReceiverPresent=true};context.RefreshDevice("headset");Pump(delegate{return context.Headset==headset;});Check(!VisualDesign.ShouldShowHeadset(context.Headset),"confirmed radio disconnect collapses the headset card");
+            headset=originalHeadset;context.RefreshDevice("headset");Pump(delegate{return context.Headset==headset;});
+            context.SelectAudioOutput("headset");Pump(delegate{return !context.IsAudioBusy;});
             using(var settings=new SettingsForm(context)) {
                 settings.PerformLayout();CreateHandles(settings);settings.PerformLayout();
                 using(var image=new Bitmap(settings.Width,settings.Height)){settings.DrawToBitmap(image,new Rectangle(Point.Empty,image.Size));image.Save(Path.Combine(output,"settings.png"));}
@@ -125,6 +142,27 @@ static class UiAndControllerTests {
                 var process=typeof(Details).GetMethod("ProcessCmdKey",BindingFlags.Instance|BindingFlags.NonPublic);
                 Check((bool)process.Invoke(details,new object[]{message,Keys.Tab}),"keyboard Tab is handled by the popup");
                 Check((int)typeof(Details).GetField("keyboardFocus",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(details)==0,"keyboard focus starts on refresh");
+                process.Invoke(details,new object[]{message,Keys.Tab});process.Invoke(details,new object[]{message,Keys.Enter});
+                var navigation=(PopupNavigation)typeof(Details).GetField("navigation",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(details);
+                Check(navigation.Page==PopupPage.More,"more action opens the native secondary page");
+                process.Invoke(details,new object[]{message,Keys.Escape});
+                Check(navigation.Page==PopupPage.Main&&(int)typeof(Details).GetField("keyboardFocus",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(details)==1,"return restores focus to its originating control");
+                foreach(PopupPage page in Enum.GetValues(typeof(PopupPage)))if(page!=PopupPage.Main) {
+                    navigation.Page=page;var controls=PopupPages.Build(context,navigation,true);var logical=PopupPages.SizeFor(controls);
+                    foreach(var control in controls)Check(control.Rect.Left>=0&&control.Rect.Right<=logical.Width&&control.Rect.Bottom<=logical.Height,"secondary page bounds "+page);
+                    using(var image=new Bitmap(logical.Width*2,logical.Height*2))using(var graphics=Graphics.FromImage(image)){graphics.Clear(Color.Transparent);graphics.ScaleTransform(2,2);PopupPages.Paint(graphics,context,navigation,controls,false,-1,-1,-1);image.Save(Path.Combine(output,"page-"+page+".png"));}
+                }
+                navigation.Page=PopupPage.Main;
+                var mainControls=PopupPages.Build(context,navigation,true);
+                bool disjoint=true;for(int a=0;a<mainControls.Count;a++)for(int b=a+1;b<mainControls.Count;b++)disjoint&=!mainControls[a].Rect.IntersectsWith(mainControls[b].Rect);
+                Check(disjoint,"expanded click regions do not overlap");
+                float uiScale=(float)typeof(Details).GetField("dpiScale",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(details);
+                var first=VisualDesign.StageRect(0,4);var second=VisualDesign.StageRect(1,4);int beforeWrites=writes;
+                var down=new MouseEventArgs(MouseButtons.Left,1,(int)((first.X+first.Width/2)*uiScale),(int)((first.Y+first.Height/2)*uiScale),0);
+                var up=new MouseEventArgs(MouseButtons.Left,1,(int)((second.X+second.Width/2)*uiScale),(int)((second.Y+second.Height/2)*uiScale),0);
+                typeof(Control).GetMethod("OnMouseDown",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(details,new object[]{down});
+                typeof(Control).GetMethod("OnMouseUp",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(details,new object[]{up});
+                Check(writes==beforeWrites&&!context.IsDpiRefreshing,"pressing one stage and releasing on another never writes to the device");
                 Check((bool)process.Invoke(details,new object[]{message,Keys.Escape}),"Escape closes the popup through the animation controller");
             }
             context.ExitThread();context=null;

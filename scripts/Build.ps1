@@ -13,7 +13,7 @@ $traySource = Join-Path $PSScriptRoot 'TrayGlyph.cs'
 $settingsSource = Join-Path $PSScriptRoot 'DeviceSettings.cs'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ "/out:$(Join-Path $buildOutput 'AtkBatteryProbe.exe')" $hidSource (Join-Path $PSScriptRoot 'Probe.cs') (Join-Path $PSScriptRoot 'Tests.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Probe build failed.' }
-$uiSources=@('UiState.cs','NativeSupport.cs','SettingsForm.cs','AssemblyInfo.cs') | ForEach-Object {Join-Path $PSScriptRoot $_}
+$uiSources=@('UiState.cs','NativeSupport.cs','SettingsForm.cs','AssemblyInfo.cs','PopupPages.cs','ReadingCache.cs','CompactRenderer.cs') | ForEach-Object {Join-Path $PSScriptRoot $_}
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $hidSource $headsetSource $audioSource $settingsSource $visualSource $traySource $uiSources (Join-Path $PSScriptRoot 'TrayApp.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Tray build failed.' }
 & (Join-Path $buildOutput 'AtkBatteryProbe.exe') --self-test

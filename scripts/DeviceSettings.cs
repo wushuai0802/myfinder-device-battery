@@ -12,12 +12,25 @@ namespace AtkBattery {
         [DataMember(Order=3, EmitDefaultValue=false)] public string MicrophoneEndpointId;
         [DataMember(Order=4, EmitDefaultValue=false)] public string TraySource = "mouse";
         [DataMember(Order=5, EmitDefaultValue=false)] public bool LowBatteryNotifications;
+        [DataMember(Order=6)] public string Theme = "auto";
+        [DataMember(Order=7)] public bool ReducedMotion;
+        [DataMember(Order=8)] public bool RememberReadings = true;
+        [DataMember(Order=9)] public int WarningThreshold = 20;
+        [DataMember(Order=10)] public string MouseAlias = "ATK A9 Air+";
+        [DataMember(Order=11)] public string HeadsetAlias = "HyperX Cloud Alpha";
+        [DataMember(Order=12)] public int BackgroundSeconds = 60;
+        [OnDeserializing] void Defaults(StreamingContext context) {
+            Theme="auto";TraySource="mouse";RememberReadings=true;WarningThreshold=20;
+            MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
+        }
 
         public AudioBindings Clone() {
             return new AudioBindings { SchemaVersion=SchemaVersion,
                 SpeakerEndpointId=SpeakerEndpointId, HeadsetEndpointId=HeadsetEndpointId,
                 MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,
-                LowBatteryNotifications=LowBatteryNotifications };
+                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ReducedMotion=ReducedMotion,
+                RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
+                HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds };
         }
         public string EndpointFor(string role) {
             if(role=="speaker")return SpeakerEndpointId;
@@ -38,25 +51,31 @@ namespace AtkBattery {
     public static class DeviceSettings {
         static readonly object Gate=new object();
         static AudioBindings current;
+        static bool usingDefaults;
+        public static bool UsingDefaults {get{lock(Gate)return usingDefaults;}}
         public static string DataDirectory {
             get {return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"MyFinderDeviceBattery");}
         }
         public static string SettingsPath {get{return Path.Combine(DataDirectory,"audio-settings.json");}}
         public static AudioBindings Current {
-            get {lock(Gate){if(current==null)current=LoadBindings(SettingsPath);return current.Clone();}}
+            get {lock(Gate){if(current==null){try{current=LoadBindings(SettingsPath);}
+                catch(InvalidDataException){UseDefaults();}catch(IOException){UseDefaults();}catch(UnauthorizedAccessException){UseDefaults();}catch(SerializationException){UseDefaults();}catch(ArgumentException){UseDefaults();}}
+                return current.Clone();}}
         }
+        static void UseDefaults(){current=new AudioBindings();usingDefaults=true;}
+        static void PreserveUnreadSettings(){if(usingDefaults&&File.Exists(SettingsPath)&&!File.Exists(SettingsPath+".unread.bak"))File.Copy(SettingsPath,SettingsPath+".unread.bak");}
         public static void SetEndpoint(string role,string id) {
             lock(Gate) {
                 var next=Current;next.SetEndpoint(role,id);
-                SaveBindings(SettingsPath,next);current=next;
+                PreserveUnreadSettings();SaveBindings(SettingsPath,next);current=next;usingDefaults=false;
             }
         }
         public static void ResetAudio() {
             lock(Gate){var next=Current;next.SpeakerEndpointId=null;next.HeadsetEndpointId=null;
-                next.MicrophoneEndpointId=null;SaveBindings(SettingsPath,next);current=next;}
+                next.MicrophoneEndpointId=null;PreserveUnreadSettings();SaveBindings(SettingsPath,next);current=next;usingDefaults=false;}
         }
         public static void SaveConfiguration(AudioBindings settings) {
-            lock(Gate){var next=settings.Clone();Validate(next);SaveBindings(SettingsPath,next);current=next;}
+            lock(Gate){var next=settings.Clone();Validate(next);PreserveUnreadSettings();SaveBindings(SettingsPath,next);current=next;usingDefaults=false;}
         }
         static void Validate(AudioBindings settings) {
             if(settings==null||settings.SchemaVersion!=1)throw new InvalidDataException("Unsupported audio settings format");
@@ -64,6 +83,17 @@ namespace AtkBattery {
             if(String.IsNullOrEmpty(settings.TraySource))settings.TraySource="mouse";
             if(settings.TraySource!="mouse"&&settings.TraySource!="headset"&&settings.TraySource!="lowest")
                 throw new InvalidDataException("Unknown tray battery source");
+            if(settings.Theme!="auto"&&settings.Theme!="light"&&settings.Theme!="dark")throw new InvalidDataException("Unknown theme");
+            if(settings.WarningThreshold!=10&&settings.WarningThreshold!=15&&settings.WarningThreshold!=20)throw new InvalidDataException("Invalid notification threshold");
+            if(settings.BackgroundSeconds!=60&&settings.BackgroundSeconds!=120&&settings.BackgroundSeconds!=300)throw new InvalidDataException("Invalid background interval");
+            settings.MouseAlias=CleanAlias(settings.MouseAlias,"ATK A9 Air+");
+            settings.HeadsetAlias=CleanAlias(settings.HeadsetAlias,"HyperX Cloud Alpha");
+        }
+        static string CleanAlias(string value,string fallback) {
+            value=(value??"").Trim();if(value.Length==0)return fallback;
+            if(value.Length>32)throw new InvalidDataException("Device name exceeds 32 characters");
+            foreach(char c in value)if(Char.IsControl(c))throw new InvalidDataException("Device name contains control characters");
+            return value;
         }
         internal static AudioBindings LoadBindings(string path) {
             if(!File.Exists(path))return new AudioBindings();

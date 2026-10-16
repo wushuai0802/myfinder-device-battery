@@ -7,6 +7,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace AtkBattery {
     public sealed class HeadsetReading {
+        public bool ReceiverPresenceVerified;
         public bool Connected;
         public int? Percent;
         public bool? Charging;
@@ -235,6 +236,7 @@ namespace AtkBattery {
             string failures = "";
             try {
                 string path = FindControlPath(reading, budget);
+                reading.ReceiverPresenceVerified=true;
                 if (path == null) {
                     reading.Detail = reading.ReceiverPresent ? "HyperX control collection unavailable" : "HyperX receiver not present";
                     return reading;

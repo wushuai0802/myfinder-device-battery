@@ -15,6 +15,7 @@ static class AudioSettingsTests {
             var defaults=DeviceSettings.LoadBindings(path);
             Check(defaults.EndpointFor("speaker")==null&&defaults.EndpointFor("headset")==null&&defaults.EndpointFor("microphone")==null,"missing file uses automatic bindings");
             Check(defaults.TraySource=="mouse"&&!defaults.LowBatteryNotifications,"new optional features do not change existing defaults");
+            Check(defaults.Theme=="auto"&&defaults.RememberReadings&&defaults.WarningThreshold==20&&defaults.BackgroundSeconds==60,"display preferences have conservative defaults");
             var settings=new AudioBindings();
             settings.SetEndpoint("speaker","{render}.USB-\u626c\u58f0\u5668");
             settings.SetEndpoint("headset","{render}.HDMI");
@@ -67,6 +68,20 @@ static class AudioSettingsTests {
             File.WriteAllText(path,"{\"SchemaVersion\":1,\"SpeakerEndpointId\":\"legacy\"}");
             loaded=DeviceSettings.LoadBindings(path);
             Check(loaded.TraySource=="mouse"&&!loaded.LowBatteryNotifications&&loaded.SpeakerEndpointId=="legacy","old settings migrate without losing endpoint bindings");
+            Check(loaded.Theme=="auto"&&loaded.RememberReadings&&loaded.WarningThreshold==20&&loaded.MouseAlias=="ATK A9 Air+","missing new properties migrate without losing defaults");
+            loaded.Theme="dark";loaded.RememberReadings=false;loaded.ReducedMotion=true;loaded.WarningThreshold=15;loaded.BackgroundSeconds=120;loaded.MouseAlias="办公鼠标";
+            DeviceSettings.SaveBindings(path,loaded);loaded=DeviceSettings.LoadBindings(path);
+            Check(loaded.Theme=="dark"&&!loaded.RememberReadings&&loaded.ReducedMotion&&loaded.WarningThreshold==15&&loaded.BackgroundSeconds==120&&loaded.MouseAlias=="办公鼠标","new preferences roundtrip including explicit false");
+            var invalid=loaded.Clone();invalid.WarningThreshold=0;Reject(delegate{DeviceSettings.SaveBindings(path,invalid);},"invalid warning threshold cannot overwrite settings");
+            invalid=loaded.Clone();invalid.MouseAlias="bad\nname";Reject(delegate{DeviceSettings.SaveBindings(path,invalid);},"alias cannot inject control characters");
+            string cache=Path.Combine(root,"readings-cache.json");var confirmed=DateTime.UtcNow.AddMinutes(-3);
+            ReadingCache.Save(cache,new BatteryReading {Percent=37,TimestampUtc=confirmed},new HeadsetReading {Percent=48,BatteryTimestampUtc=confirmed});
+            BatteryReading savedMouse;HeadsetReading savedHeadset;ReadingCache.Load(cache,out savedMouse,out savedHeadset);
+            Check(savedMouse!=null&&savedMouse.Percent==37&&Math.Abs((savedMouse.TimestampUtc-confirmed).TotalMilliseconds)<1,"cached mouse retains its original confirmation time");
+            Check(savedHeadset!=null&&savedHeadset.Percent==48&&!savedHeadset.ConnectionVerified&&!savedHeadset.ReceiverPresent,"saved battery cannot claim a live headset radio connection");
+            ReadingCache.Save(cache,new BatteryReading {Percent=100,TimestampUtc=DateTime.UtcNow.AddHours(1)},null);ReadingCache.Load(cache,out savedMouse,out savedHeadset);
+            Check(savedMouse==null&&savedHeadset==null,"future-dated readings are not trusted");
+            File.WriteAllText(cache,"{broken");ReadingCache.Load(cache,out savedMouse,out savedHeadset);Check(savedMouse==null&&savedHeadset==null,"corrupt cache does not prevent startup");
             loaded.TraySource="unknown";Reject(delegate {DeviceSettings.SaveBindings(path,loaded);},"invalid tray mode is rejected before saving");
             Console.WriteLine("PASS "+passed+" audio/settings tests; no audio endpoint opened or changed");
             return 0;
