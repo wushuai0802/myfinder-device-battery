@@ -4,6 +4,8 @@ backups/
 logs/
 tmp/
 snapshots/
+outputs/*.json
+*.zip
 
 # Build and IDE intermediates
 *.obj
