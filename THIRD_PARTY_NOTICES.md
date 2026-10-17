@@ -1,5 +1,8 @@
 # Third-party components
 
+Original project code is licensed under the root [MIT license](LICENSE),
+copyright 2026 wushuai0802. Each third-party component retains its own license.
+
 The battery-query modules under `engine/providers` are adapted from
 [HeyOkay/HaloBattery](https://github.com/HeyOkay/HaloBattery), commit
 `2251f0534a8e886c9692ead42056059b4f69d8c0` (MIT).
@@ -9,7 +12,9 @@ Its copyright and permission notice is preserved in
 The upstream application, installer, updater, input hooks, controller mode
 switches and user settings are not included. Provider imports are lazy; the
 native ATK and HyperX adapters retain ownership of their existing device IDs.
-Changes include marking voltage-derived Logitech levels as estimates.
+Local changes include marking voltage-derived Logitech levels as estimates,
+preserving source timestamps and measurement quality, isolating reader calls
+and physical receivers, and binding child process lifetimes to their parent.
 
 Upstream protocol references and model verification notes are retained in
 `engine/upstream-protocols.md`, `engine/upstream-devices.md` and

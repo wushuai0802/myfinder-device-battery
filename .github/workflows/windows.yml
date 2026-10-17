@@ -9,7 +9,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Build and run isolated checks
@@ -19,14 +19,27 @@ jobs:
         shell: powershell
         run: |
           ./scripts/Build-Backend.ps1 -OutputDirectory ./engine/runtime
-          & ./engine/runtime/python.exe -I -B ./tests/test_universal_engine.py
+          & ./engine/runtime/python.exe -I -B -m unittest discover -s ./tests -p 'test_*.py'
           if ($LASTEXITCODE -ne 0) { throw 'Universal engine tests failed.' }
           & ./engine/runtime/python.exe -I -B -m unittest discover -s ./engine/tests -q
           if ($LASTEXITCODE -ne 0) { throw 'Device protocol tests failed.' }
+      - name: Package the validated build without rebuilding
+        shell: powershell
+        run: ./scripts/Package.ps1 -SkipBuild -BuildDirectory "$env:RUNNER_TEMP/device-battery-build" -OutputDirectory "$env:RUNNER_TEMP/device-battery-release"
+      - name: Verify the final ZIP with an isolated real application and reader
+        shell: powershell
+        run: |
+          $zip = Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/device-battery-release" -Filter '*.zip' -File
+          if (@($zip).Count -ne 1) { throw 'Expected exactly one final release ZIP.' }
+          ./tests/PackageSmoke.ps1 -ZipPath $zip.FullName -OutputDirectory "$env:RUNNER_TEMP/device-battery-package-smoke"
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-x64-build
+          name: windows-x64-complete-package
           path: |
-            ${{ runner.temp }}/device-battery-build/*.exe
+            ${{ runner.temp }}/device-battery-release/*.zip
+            ${{ runner.temp }}/device-battery-release/SHA256SUMS.txt
+            ${{ runner.temp }}/device-battery-release/*/package-manifest.json
+            ${{ runner.temp }}/device-battery-release/*/engine/dependencies.lock.json
             ${{ runner.temp }}/device-battery-build/appearance-preview.png
+            ${{ runner.temp }}/device-battery-package-smoke/**/package-smoke-result.json
           if-no-files-found: error

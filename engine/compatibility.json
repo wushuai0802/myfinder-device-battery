@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "levels": {
+    "A": "本项目历史实机验证；本轮状态仍需复验",
+    "B": "上游确切型号有实机证据，待本项目实测",
+    "C": "协议已接入，待本项目实机验证",
+    "D": "已发现设备，尚未取得电量",
+    "E": "当前不支持"
+  },
+  "upstream": {
+    "repository": "https://github.com/HeyOkay/HaloBattery",
+    "commit": "2251f0534a8e886c9692ead42056059b4f69d8c0",
+    "license": "MIT",
+    "notes": "读取器不自动继承上游所有型号的验证等级；未按确切型号单独映射时一律采用C。"
+  },
+  "nativeProfiles": [
+    {
+      "id": "native_atk_a9_air",
+      "provider": "native_atk",
+      "name": "ATK A9 Air+ / 用户已验证接收器变体",
+      "kind": "mouse",
+      "verificationLevel": "A",
+      "compatible": true,
+      "match": {"vendorId": "373B", "productId": "1278", "usagePage": "FF02", "usage": "0002", "inputBytes": 17, "outputBytes": 17},
+      "transport": "2.4G receiver",
+      "capabilities": ["battery", "existing_dpi_stage_read", "verified_existing_dpi_stage_select"],
+      "precision": "设备报告百分比；不预测续航时长",
+      "firmware": "未记录确切固件版本；只限已验证接收器、集合与17字节报文变体",
+      "driverCoexistence": "近期查询超时待在线实机复验；不声称所有厂商驱动均可同时使用",
+      "lastVerifiedVersion": "历史版本，确切构建未记录；不是本次beta.2成功读数证明",
+      "source": "scripts/HidBattery.cs"
+    },
+    {
+      "id": "native_hyperx_cloud_alpha_wireless",
+      "provider": "native_hyperx",
+      "name": "HyperX Cloud Alpha Wireless",
+      "kind": "headset",
+      "verificationLevel": "A",
+      "compatible": true,
+      "match": {"vendorId": "03F0", "productId": "098D", "usagePage": "FF43", "usage": "0202", "inputBytes": 31, "outputBytes": 31, "interface": 3, "collection": 1},
+      "transport": "2.4G receiver",
+      "capabilities": ["battery", "radio_link", "charging_when_reported"],
+      "precision": "设备报告百分比；无线、充电、电量分别确认",
+      "firmware": "未记录确切固件版本；只限03F0:098D对应集合与31字节报文变体",
+      "driverCoexistence": "不声称所有NGENUITY版本均可同时读取；静音和音源按钮属于Windows端点控制",
+      "lastVerifiedVersion": "历史版本，确切构建未记录；本次无线连接另行复验",
+      "source": "scripts/HeadsetBattery.cs"
+    }
+  ],
+  "readers": [
+    {"provider":"razer","name":"Razer 已列明鼠标、耳机与键盘","kinds":["mouse","headset","keyboard"],"verificationLevel":"C","source":"engine/providers/razer.py"},
+    {"provider":"audeze","name":"Audeze Maxwell 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/audeze.py"},
+    {"provider":"wlmouse","name":"WLmouse 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/wlmouse.py"},
+    {"provider":"mchose","name":"MCHOSE 已列明协议与型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/mchose.py"},
+    {"provider":"hyperx_alpha2","name":"HyperX Cloud Alpha 2","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_alpha2.py"},
+    {"provider":"hyperx_cloud3","name":"HyperX Cloud III 与已列明Core变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3.py"},
+    {"provider":"hyperx","name":"HyperX Cloud II 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx.py"},
+    {"provider":"keychron","name":"Keychron M5 / Ultra-Link 8K","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/keychron.py"},
+    {"provider":"pulsar","name":"Pulsar / ATK / VXE / Hitscan 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/pulsar.py"},
+    {"provider":"jbl","name":"JBL Quantum 910 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/jbl.py"},
+    {"provider":"logitech","name":"Logitech HID++ 与已列明G系列耳机","kinds":["mouse","keyboard","headset"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/logitech.py"},
+    {"provider":"steelseries","name":"SteelSeries 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/steelseries.py"},
+    {"provider":"barracuda","name":"Razer Barracuda Pro","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/barracuda.py"},
+    {"provider":"asus","name":"ASUS ROG / TUF 已列明鼠标","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/asus.py"},
+    {"provider":"gwolves","name":"G-Wolves 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/gwolves.py"},
+    {"provider":"lofree","name":"Lofree Hyzen 2.4G","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/lofree.py"},
+    {"provider":"astro","name":"Astro A50 Gen 5","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/astro.py"},
+    {"provider":"corsair","name":"Corsair 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/corsair.py"},
+    {"provider":"lamzu","name":"LAMZU Maya X","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/lamzu.py"},
+    {"provider":"am_infinity","name":"Angry Miao AM Infinity 8K","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/am_infinity.py"},
+    {"provider":"steelseries_elite","name":"SteelSeries Arctis Nova Elite","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/steelseries_elite.py"},
+    {"provider":"logitech_centurion","name":"Logitech G PRO X 2 LIGHTSPEED","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/logitech_centurion.py"},
+    {"provider":"hyperx_cloud3s","name":"HyperX Cloud III S","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3s.py"},
+    {"provider":"nzxt","name":"NZXT Lift Elite Wireless","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/nzxt.py"},
+    {"provider":"bluetooth","name":"Windows 系统蓝牙电量属性","kinds":["mouse","keyboard","headset","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/bluetooth.py","precision":"系统提供的属性，未知设备测量时间"},
+    {"provider":"standard_hid","name":"描述符声明的标准HID电量Feature字段","kinds":["mouse","keyboard","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/standardhid.py","reference":"https://www.usb.org/hid","precision":"依据字段逻辑范围；无充电字段时充电未知"}
+  ],
+  "observedUnsupported": [
+    {
+      "id": "infi75_observed",
+      "name": "INFI75-1.1 / RKGK890",
+      "kind": "keyboard",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"05AC","productId":"024F","productName":"INFI75-1.1"},
+      "transport": "USB接口已发现；有线直连与无线接收器尚未区分验证",
+      "capabilities": [],
+      "firmware": "未记录，不刷写固件或屏幕Flash",
+      "notes": "当前连接方式未取得标准电量。共享VID/PID不是其他键盘命令可用的证据；不发送未经验证的私有命令。"
+    }
+  ]
+}

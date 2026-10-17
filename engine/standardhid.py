@@ -38,8 +38,10 @@ class StandardHidProvider(Provider):
     def __init__(self):
         self._capabilities = {}
         self._paths = None
+        self.candidate_count = 0
 
     def poll(self):
+        self.candidate_count = 0
         if os.name != "nt":
             return []
         kernel = c.WinDLL("kernel32", use_last_error=True)
@@ -105,9 +107,12 @@ class StandardHidProvider(Provider):
                     name = info.get("product_string") or "Wireless HID device"
                     kind = "keyboard" if caps.page == 1 and caps.usage == 6 else "mouse" if caps.page == 1 and caps.usage == 2 else ""
                     results.append(DeviceStatus("standard:"+path, name, level, False, True, self.name,
-                                                approx="coarse" if field.logical_max-field.logical_min < 100 else "", kind=kind))
+                                                approx="coarse" if field.logical_max-field.logical_min < 100 else "", kind=kind,
+                                                charging_known=False))
                     break
                 self._capabilities[path] = found
+                if found:
+                    self.candidate_count += 1
             finally:
                 if data.value:
                     hid.HidD_FreePreparsedData(data)

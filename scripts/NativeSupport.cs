@@ -40,16 +40,22 @@ namespace AtkBatteryTray {
     // A hidden broadcast window, not a polling service or input hook.
     internal sealed class DeviceEventsWindow:NativeWindow,IDisposable {
         readonly Action changed;
-        public DeviceEventsWindow(Action callback) {
-            changed=callback;CreateHandle(new CreateParams {Caption="MyFinder Device Battery Events"});
+        readonly Action appearance;readonly Action<bool> session;
+        [DllImport("wtsapi32.dll")] static extern bool WTSRegisterSessionNotification(IntPtr hwnd,int flags);
+        [DllImport("wtsapi32.dll")] static extern bool WTSUnRegisterSessionNotification(IntPtr hwnd);
+        public DeviceEventsWindow(Action callback,Action appearanceChanged=null,Action<bool> sessionChanged=null) {
+            changed=callback;appearance=appearanceChanged;session=sessionChanged;CreateHandle(new CreateParams {Caption="MyFinder Device Battery Events"});
+            if(session!=null)try{WTSRegisterSessionNotification(Handle,0);}catch(DllNotFoundException){}
         }
         protected override void WndProc(ref Message message) {
             int value=message.WParam.ToInt32();
             if(message.Msg==0x219&&(value==7||value==0x8000||value==0x8004)||
                 message.Msg==0x218&&(value==7||value==18))changed();
+            if(message.Msg==0x001A&&appearance!=null)appearance();
+            if(message.Msg==0x02B1&&session!=null&&(value==7||value==8))session(value==7);
             base.WndProc(ref message);
         }
-        public void Dispose(){DestroyHandle();}
+        public void Dispose(){if(session!=null)try{WTSUnRegisterSessionNotification(Handle);}catch(DllNotFoundException){}DestroyHandle();}
     }
     internal sealed class ShowPanelSignal:IDisposable {
         readonly EventWaitHandle signal;

@@ -21,6 +21,7 @@ namespace AtkBattery {
         [DataMember(Order=11)] public string HeadsetAlias = "HyperX Cloud Alpha";
         [DataMember(Order=12)] public int BackgroundSeconds = 60;
         [DataMember(Order=13)] public Dictionary<string,string> DeviceAliases = new Dictionary<string,string>();
+        [DataMember(Order=14, EmitDefaultValue=false)] public string TrayDeviceId;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";TraySource="mouse";RememberReadings=true;WarningThreshold=20;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
@@ -30,7 +31,7 @@ namespace AtkBattery {
         public AudioBindings Clone() {
             return new AudioBindings { SchemaVersion=SchemaVersion,
                 SpeakerEndpointId=SpeakerEndpointId, HeadsetEndpointId=HeadsetEndpointId,
-                MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,
+                MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,TrayDeviceId=TrayDeviceId,
                 LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ReducedMotion=ReducedMotion,
                 RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
                 HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases) };
@@ -80,12 +81,20 @@ namespace AtkBattery {
         public static void SaveConfiguration(AudioBindings settings) {
             lock(Gate){var next=settings.Clone();Validate(next);PreserveUnreadSettings();SaveBindings(SettingsPath,next);current=next;usingDefaults=false;}
         }
+        internal static void UseTransientConfiguration(AudioBindings settings) {
+            lock(Gate){var next=settings.Clone();Validate(next);current=next;usingDefaults=false;}
+        }
         static void Validate(AudioBindings settings) {
             if(settings==null||settings.SchemaVersion!=1)throw new InvalidDataException("Unsupported audio settings format");
             foreach(string role in new[]{"speaker","headset","microphone"})settings.SetEndpoint(role,settings.EndpointFor(role));
             if(String.IsNullOrEmpty(settings.TraySource))settings.TraySource="mouse";
             if(settings.TraySource!="auto"&&settings.TraySource!="mouse"&&settings.TraySource!="headset"&&settings.TraySource!="keyboard"&&settings.TraySource!="lowest")
                 throw new InvalidDataException("Unknown tray battery source");
+            settings.TrayDeviceId=String.IsNullOrWhiteSpace(settings.TrayDeviceId)?null:settings.TrayDeviceId.Trim();
+            if(settings.TrayDeviceId!=null) {
+                if(settings.TrayDeviceId.Length>64)throw new InvalidDataException("Invalid tray device identifier");
+                foreach(char c in settings.TrayDeviceId)if(Char.IsControl(c))throw new InvalidDataException("Invalid tray device identifier");
+            }
             if(settings.Theme!="auto"&&settings.Theme!="light"&&settings.Theme!="dark")throw new InvalidDataException("Unknown theme");
             if(settings.WarningThreshold!=10&&settings.WarningThreshold!=15&&settings.WarningThreshold!=20)throw new InvalidDataException("Invalid notification threshold");
             if(settings.BackgroundSeconds!=60&&settings.BackgroundSeconds!=120&&settings.BackgroundSeconds!=300)throw new InvalidDataException("Invalid background interval");

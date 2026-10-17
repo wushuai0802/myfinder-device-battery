@@ -9,11 +9,14 @@ namespace AtkBatteryTray {
         public int? Percent;
         public bool Fresh, Charging;
         public bool Approximate;
-        public DateTime ConfirmedAt;
-        public string TimeText {get {var local=ConfirmedAt.ToLocalTime();return ConfirmedAt==DateTime.MinValue?"":local.ToString(local.Date==DateTime.Now.Date?"HH:mm":"M/d HH:mm");}}
-        public string Key {get {return Name+"|"+Percent+"|"+Fresh+"|"+Charging+"|"+Approximate+"|"+(!Fresh?TimeText:"");}}
+        public bool SystemProvided;
+        public DateTime ConfirmedAt,QueriedAt;
+        public static string FormatTime(DateTime value){var local=value.ToLocalTime();return value==DateTime.MinValue?"":local.ToString(local.Date==DateTime.Now.Date?"HH:mm":"M/d HH:mm");}
+        public string TimeText {get {return FormatTime(ConfirmedAt);}}
+        public string QueryText {get{return FormatTime(QueriedAt);}}
+        public string Key {get {return Name+"|"+Percent+"|"+Fresh+"|"+Charging+"|"+Approximate+"|"+SystemProvided+"|"+(!Fresh?TimeText:"")+"|"+(SystemProvided?QueryText:"");}}
         public string Tooltip {get {return Name+" "+(Percent.HasValue?(Approximate?"约":"")+Percent+"%":"--")+
-            (Percent.HasValue&&!Fresh?"（上次 "+TimeText+"）":Charging?" · 充电中":"");}}
+            (Percent.HasValue&&!Fresh?SystemProvided?"（系统提供"+(String.IsNullOrEmpty(QueryText)?"":"，最近查询 "+QueryText)+"）":String.IsNullOrEmpty(TimeText)?"（历史读数，时间未知）":"（上次 "+TimeText+"）":Charging?" · 充电中":"");}}
     }
     public sealed class TrayView {
         public BatteryView Battery;
@@ -22,11 +25,11 @@ namespace AtkBatteryTray {
     public sealed class PanelFeedback {
         public int PendingStage=-1;
         public string PendingOutput, DpiFailure, AudioFailure;
-        public bool MicrophonePending, ManualRefreshing;
+        public bool MicrophonePending, ManualRefreshing,AudioBlocked;
         public bool ShowPendingHints;
         public int HoverAction=-1,PressedAction=-1;
         public int KeyboardFocus=-1;
-        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction;}}
+        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction;}}
     }
     public static class UiState {
         public static bool Recent(DateTime timestamp,DateTime now,double seconds) {

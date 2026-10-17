@@ -26,6 +26,18 @@ class DeviceStatus:
                                  # tray's input wake fires only for these - an icon
                                  # greyed because its device is off must not re-poll
                                  # the app on every keystroke (review, #202).
+    # Added by MyFinder. Protocol fixtures keep their original fields; these
+    # describe evidence and must not be inferred merely from a non-empty value.
+    cached: bool = False
+    source_quality: str = "device_reply"
+    measured_at_utc: Optional[str] = None
+    queried_at_utc: Optional[str] = None
+    connection_known: Optional[bool] = None  # None: a reply proves online; silence proves neither sleep nor off
+    charging_known: Optional[bool] = None
+    physical_id: str = ""        # local-only grouping evidence; never exported raw
+    legacy_key: str = ""         # exact former key, not a name/PID based migration
+    unit_id: str = ""            # optional proven cross-provider slot/unit identity
+    refresh_scope: str = ""      # device only when this reader queries one unit
 
 
 class Provider:

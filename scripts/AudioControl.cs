@@ -29,6 +29,7 @@ namespace AtkBattery {
         public string CommunicationsOutputId;
         public bool OutputRolesDiffer;
         public bool OperationSucceeded;
+        public bool OutcomeUnknown;
         public int? OutputVolumePercent;
         public string VolumeEndpointId;
         public string[] Endpoints;
@@ -45,7 +46,7 @@ namespace AtkBattery {
         internal int? FormFactor;
     }
 
-    public static class AudioControl {
+    public static partial class AudioControl {
         const string SpeakerInterface = "Realtek(R) Audio";
         const string HeadsetInterface = "HyperX Cloud Alpha Wireless";
         static readonly object OperationLock = new object();

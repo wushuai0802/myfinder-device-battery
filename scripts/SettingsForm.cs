@@ -28,9 +28,9 @@ namespace AtkBatteryTray {
             AddRow(layout,0,"扬声器按钮",speaker);AddRow(layout,1,"耳机按钮",headset);AddRow(layout,2,"麦克风按钮",microphone);
             layout.Controls.Add(actual,0,3);layout.SetColumnSpan(actual,2);
             AddRow(layout,4,"托盘电量",traySource);
-            traySource.Items.AddRange(new object[]{"鼠标（默认）","耳机","两者中较低的电量"});
+            traySource.Items.AddRange(new object[]{new Choice {Id="auto",Name="自动选择有数据的设备"},new Choice {Id="mouse",Name="鼠标优先"},new Choice {Id="headset",Name="耳机优先"},new Choice {Id="keyboard",Name="键盘优先"},new Choice {Id="lowest",Name="新鲜读数中的最低电量"}});
             layout.Controls.Add(notify,0,5);layout.SetColumnSpan(notify,2);
-            var help=new Label {Text="保存只改变按钮绑定，不会切换音源或改变静音。\n全屏、演示或系统不允许通知时延后提醒。",AutoSize=true,ForeColor=SystemColors.GrayText,Margin=new Padding(0,8,0,4)};
+            var help=new Label {Text="保存不会切换音源或改变静音。\n全屏、演示或系统不允许通知时延后提醒。",AutoSize=true,ForeColor=SystemColors.GrayText,Margin=new Padding(0,8,0,4)};
             layout.Controls.Add(help,0,6);layout.SetColumnSpan(help,2);
             layout.Controls.Add(status,0,7);layout.SetColumnSpan(status,2);
             var actions=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
@@ -42,7 +42,12 @@ namespace AtkBatteryTray {
             reset.Click+=delegate {speaker.SelectedIndex=0;headset.SelectedIndex=0;microphone.SelectedIndex=0;status.Text="默认音源识别将在保存后生效。";};
             refreshDevices.Click+=delegate {refreshDevices.Enabled=false;status.Text="正在读取音频设备…";owner.RefreshAudioDevices();};
             foreach(var picker in new[]{speaker,headset,microphone})picker.DropDownClosed+=delegate {if(pendingList)AudioUpdated();};
-            try {settings=DeviceSettings.Current;traySource.SelectedIndex=settings.TraySource=="headset"?1:settings.TraySource=="lowest"?2:0;notify.Checked=settings.LowBatteryNotifications;Populate(false);}
+            try {
+                settings=DeviceSettings.Current;traySource.SelectedIndex=0;
+                for(int i=0;i<traySource.Items.Count;i++)if(((Choice)traySource.Items[i]).Id==settings.TraySource)traySource.SelectedIndex=i;
+                if(!String.IsNullOrEmpty(settings.TrayDeviceId)){traySource.Items.Add(new Choice {Id="fixed",Name="固定设备（在设备详情中选择）"});traySource.SelectedIndex=traySource.Items.Count-1;}
+                notify.Checked=settings.LowBatteryNotifications;notify.Text="低电量提醒（"+settings.WarningThreshold+"%及以下，每轮放电一次）";Populate(false);
+            }
             catch(Exception error){settings=new AudioBindings();traySource.SelectedIndex=0;status.Text="设置读取失败："+error.Message;}
         }
         static ComboBox Picker(){return new ComboBox {DropDownStyle=ComboBoxStyle.DropDownList,Dock=DockStyle.Top,Margin=new Padding(0,4,0,10)};}
@@ -77,7 +82,7 @@ namespace AtkBatteryTray {
         void Save() {
             try {
                 var next=settings.Clone();next.SetEndpoint("speaker",SelectedId(speaker));next.SetEndpoint("headset",SelectedId(headset));next.SetEndpoint("microphone",SelectedId(microphone));
-                next.TraySource=traySource.SelectedIndex==1?"headset":traySource.SelectedIndex==2?"lowest":"mouse";next.LowBatteryNotifications=notify.Checked;
+                string source=SelectedId(traySource);if(source!="fixed"){next.TraySource=source??"auto";next.TrayDeviceId=null;}next.LowBatteryNotifications=notify.Checked;
                 DeviceSettings.SaveConfiguration(next);settings=next;owner.ConfigurationChanged();Close();
             } catch(Exception error){status.ForeColor=Color.Firebrick;status.Text="保存失败，未切换音源："+error.Message;}
         }

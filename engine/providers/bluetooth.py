@@ -239,7 +239,12 @@ def group_devices(data: dict, diag: List[str],
         key = (p.get("key") or "").upper()
         if key == K_BAT.upper():
             try:
-                g["level"] = int(p.get("data"))
+                raw_level = p.get("data")
+                if isinstance(raw_level, bool) or not isinstance(raw_level, (int, float)):
+                    continue
+                if not 0 <= raw_level <= 100 or int(raw_level) != raw_level:
+                    continue
+                g["level"] = int(raw_level)
             except (TypeError, ValueError):
                 continue
             d = info.get(p.get("id")) or {}
@@ -274,7 +279,7 @@ def group_devices(data: dict, diag: List[str],
             level, cached = last_levels[mac], True
         if level is None:
             continue
-        name = (g["root_name"] or g["aep_name"] or g["name"] or f"Bluetooth {mac}").strip()
+        name = (g["root_name"] or g["aep_name"] or g["name"] or "Bluetooth device").strip()
         if g["aep_conn"] is not None:
             shown, src = g["aep_conn"], "WinRT"
         elif g["pnp_conn"] is not None:
@@ -290,7 +295,10 @@ def group_devices(data: dict, diag: List[str],
                     f"connected: WinRT={g['aep_conn']} PnP={g['pnp_conn']} "
                     f"-> {'shown' if shown else 'hidden'} [{src}], kind: {kind or 'unknown'}")
         if shown:
-            out.append(DeviceStatus(f"bt:{mac}", name, level, False, True, "bluetooth", kind=kind))
+            out.append(DeviceStatus(f"bt:{mac}", name, level, False, True, "bluetooth", kind=kind,
+                                    cached=cached, source_quality="system_property",
+                                    connection_known=g["aep_conn"] is not None or g["pnp_conn"] is not None,
+                                    charging_known=False))
     if not by_mac:
         diag.append("[Bluetooth] no Bluetooth devices found")
     return out
@@ -310,6 +318,7 @@ class BluetoothProvider(Provider):
         self._shown: Dict[str, DeviceStatus] = {}   # key -> last shown state
         self._misses: Dict[str, int] = {}
         self._levels: Dict[str, int] = {}           # MAC -> last known battery level
+        self._observed_at: Dict[str, str] = {}      # property query time, NOT device measurement time
 
     def _query(self) -> Optional[str]:
         """Raw JSON from PowerShell, or None on failure."""
@@ -370,7 +379,10 @@ class BluetoothProvider(Provider):
             if self._misses[key] < MISS_LIMIT:
                 self._diag.append(f"[Bluetooth] {self._shown[key].name}: missing from the reply, "
                                   f"keeping the icon (miss {self._misses[key]}/{MISS_LIMIT})")
-                out.append(self._shown[key])
+                # A missing reply is history, even if the previous connection
+                # flag said connected. Never mutate the object held by callers.
+                from dataclasses import replace
+                out.append(replace(self._shown[key], cached=True, connection_known=False))
             else:
                 self._diag.append(f"[Bluetooth] {self._shown[key].name}: removing the icon "
                                   f"({self._misses[key]} misses in a row)")
@@ -388,7 +400,16 @@ class BluetoothProvider(Provider):
         except ValueError:
             self._diag.append(f"[Bluetooth] FAILURE: could not parse the output: {raw[:300]}")
             return None
-        return group_devices(data, self._diag, self._levels)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        result = group_devices(data, self._diag, self._levels)
+        for status in result:
+            if not status.cached:
+                self._observed_at[status.key] = now
+            # Windows returns a system property without the device's sample
+            # time. Keep queried_at separately and leave measured_at unknown.
+            status.queried_at_utc = self._observed_at.get(status.key)
+        return result
 
     def diagnostics(self) -> List[str]:
         return list(self._diag)

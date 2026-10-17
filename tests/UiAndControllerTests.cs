@@ -75,7 +75,7 @@ static class UiAndControllerTests {
             low.Percent=18;low.Fresh=false;Check(!policy.Observe("mouse",low,true),"cached low battery never sends a warning");
             low.Fresh=true;low.Charging=true;Check(!policy.Observe("mouse",low,true),"charging does not produce a low battery warning");
             low.Charging=false;low.Percent=18;var customPolicy=new LowBatteryPolicy();Check(!customPolicy.Observe("mouse",low,true,15),"custom threshold defers the notification until it is reached");
-            foreach(float scale in new[]{1f,1.25f,1.5f,2f}) {
+            foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}) {
                 var point=UiState.LogicalPoint(new Point((int)(150*scale),(int)(160*scale)),scale);
                 Check(Math.Abs(point.X-150)<.81&&Math.Abs(point.Y-160)<.81,"hit coordinate maps correctly at "+scale);
                 using(var image=Render(mouse,headset,null,false,scale)) {
@@ -130,6 +130,14 @@ static class UiAndControllerTests {
             headset=new HeadsetReading {ConnectionVerified=true,Connected=false,ReceiverPresent=true};context.RefreshDevice("headset");Pump(delegate{return context.Headset==headset;});Check(!VisualDesign.ShouldShowHeadset(context.Headset),"confirmed radio disconnect collapses the headset card");
             headset=originalHeadset;context.RefreshDevice("headset");Pump(delegate{return context.Headset==headset;});
             context.SelectAudioOutput("headset");Pump(delegate{return !context.IsAudioBusy;});
+            var blockedField=typeof(TrayContext).GetField("audioNeedsReconcile",BindingFlags.Instance|BindingFlags.NonPublic);
+            blockedField.SetValue(context,true);
+            var blockedControls=PopupPages.Build(context,new PopupNavigation {Page=PopupPage.Audio},true);
+            Check(blockedControls.TrueForAll(delegate(PopupControl row){return row.Id!=100&&row.Id!=101&&row.Id!=102&&row.Id!=240||!row.Enabled;}),"unconfirmed audio state blocks output, microphone and volume hit targets");
+            var blockedOutput=blockedControls.Find(delegate(PopupControl row){return row.Id==100;});
+            Check(PopupPages.Hit(blockedControls,new PointF(blockedOutput.Rect.X+10,blockedOutput.Rect.Y+10))==null,"disabled audio controls cannot be activated by pointer hit testing");
+            using(var image=Render(mouse,headset,new PanelFeedback {AudioBlocked=true,AudioFailure="音频状态待确认"},false,1.75f))image.Save(Path.Combine(output,"cards-audio-awaiting-confirmation.png"));
+            blockedField.SetValue(context,false);
             using(var settings=new SettingsForm(context)) {
                 settings.PerformLayout();CreateHandles(settings);settings.PerformLayout();
                 using(var image=new Bitmap(settings.Width,settings.Height)){settings.DrawToBitmap(image,new Rectangle(Point.Empty,image.Size));image.Save(Path.Combine(output,"settings.png"));}
@@ -152,6 +160,12 @@ static class UiAndControllerTests {
                     foreach(var control in controls)Check(control.Rect.Left>=0&&control.Rect.Right<=logical.Width&&control.Rect.Bottom<=logical.Height,"secondary page bounds "+page);
                     using(var image=new Bitmap(logical.Width*2,logical.Height*2))using(var graphics=Graphics.FromImage(image)){graphics.Clear(Color.Transparent);graphics.ScaleTransform(2,2);PopupPages.Paint(graphics,context,navigation,controls,false,-1,-1,-1);image.Save(Path.Combine(output,"page-"+page+".png"));}
                 }
+                navigation.Page=PopupPage.Preferences;navigation.VisibleChoices=3;navigation.Offset=0;
+                var compactPreferences=PopupPages.Build(context,navigation,true);
+                Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==8;})&&PopupPages.SizeFor(compactPreferences).Height<260,"secondary preferences paginate in a small high-DPI work area");
+                navigation.Offset=5;compactPreferences=PopupPages.Build(context,navigation,true);
+                Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==217;})&&compactPreferences.Exists(delegate(PopupControl row){return row.Id==7;}),"clear-history remains reachable on the last preferences page");
+                navigation.VisibleChoices=7;navigation.Offset=0;
                 navigation.Page=PopupPage.Main;
                 var mainControls=PopupPages.Build(context,navigation,true);
                 bool disjoint=true;for(int a=0;a<mainControls.Count;a++)for(int b=a+1;b<mainControls.Count;b++)disjoint&=!mainControls[a].Rect.IntersectsWith(mainControls[b].Rect);

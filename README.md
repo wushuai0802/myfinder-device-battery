@@ -2,7 +2,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前通用测试版 **1.3.0-beta.1**，适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。稳定版1.2.0仍可从历史Release获取。
+当前通用测试版 **1.3.0-beta.2**，适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。稳定版1.2.0仍可从历史Release获取。
+
+beta.2 优先完善数据真实性、多设备隔离、交互和交付。系统蓝牙电量显示为“系统提供 · 最近查询”，不把系统缓存假装成设备刚上报；同型号接收器分开识别，慢读取器不再拖住所有通用结果。设备详情可固定为托盘主设备，部分读取失败可在诊断页查看。
 
 自动识别范围见 [兼容清单](docs/compatibility.md)。目前包含26个通用读取器和原有专用适配：
 
@@ -29,7 +31,7 @@ Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDoc
 1. 临时使用：运行 `启动.bat`，或 `outputs/AtkMouseBattery.exe --show`。
 2. 稳定安装及自启：运行 `一键安装自启.bat`。程序复制到 `%LOCALAPPDATA%\Programs\MyFinderDeviceBattery`，再创建当前用户的启动文件夹和开始菜单快捷方式，无需管理员权限。
 3. 以后更新会复用已记录的安装目录。稳定安装后可以移动或删除原解压包；直接运行的绿色模式需保留原目录。
-4. 更新前先从托盘右键退出程序。安装器不会强行结束正在运行且需要替换的已安装程序；复制和注册失败会尝试回滚本次修改。
+4. 更新前先从托盘右键退出程序，或运行新版 `outputs/AtkMouseBattery.exe --exit` 请求已支持该入口的版本退出；更早版本仍从托盘退出。安装器按整个发行包检查变化，即使exe未变、只有设备读取组件更新，也会先检查已安装主程序和便携读取进程是否退出。完整候选包先校验并暂存，再复制；复制和注册失败会恢复本次涉及的程序、读取组件、安装记录和快捷方式。用户设置不在安装事务中改写。
 
 自定义安装目录：
 
@@ -42,6 +44,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Startu
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Startup.ps1 -RemoveStartMenu
 ```
+
+移除程序使用 `-RemoveProgram`，同时清除个人设置再加 `-RemoveData`。两项都不会递归清空目录：程序清理只移除安装收据中哈希仍一致的自有文件，个人设置清理只移除本程序已知文件，未知或手动修改的文件会保留。完整卸载前请退出程序；默认不加参数仍只关闭自启。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Startup.ps1 -RemoveProgram -RemoveData
+```
+
+完整包包含 `release.json`、`package-manifest.json` 与第三方许可证。安装前校验文件长度和SHA256，并记录版本、配置schema及自有文件清单；缺少运行库、文件被修改或路径不安全时拒绝安装。应用自启诊断区分可用、被Windows禁用、入口缺失、目标异常和无法确认，不自行修改Windows的启动禁用决定。
 
 安装器兼容 Windows PowerShell 5.1 和 PowerShell 7，并识别本程序旧版的乱码快捷方式。Windows“启动应用”中已禁用的项目需先手动启用。自启直接运行 GUI exe，没有 PowerShell窗口、计划任务、服务或 watchdog。
 
@@ -79,7 +89,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Star
 
 打开面板立即读取；面板内鼠标 DPI 每2秒调度，成功读取电量后至少30秒再读。耳机正常约6秒检查，失败后退避。面板关闭后默认每分钟检查，可选2分钟/5分钟；较慢间隔会延后耳机开机发现。没有新增常驻高频轮询。
 
-通用读取进程随本程序启动和退出，通过本地管道通信，没有网络监听、服务、计划任务或额外watchdog。通用读取展开时最多每8秒触发；Windows蓝牙快照最多每分钟刷新一次、标准HID字段最多每30秒读取一次，打开面板和主动同步会立即请求。厂商GUI、配对、RGB、键位和固件操作不在读取组件内。
+通用管理进程随本程序启动和退出，通过本地管道通信，最多使用两个按需读取槽，所有子树归本程序管理。没有网络监听、服务、计划任务或额外watchdog。通用读取展开时最多每8秒触发；Windows蓝牙快照默认至少间隔一分钟、标准HID字段至少30秒，打开面板和主动同步可立即请求。结果分批返回，同一物理接收器的查询串行，失败独立退避；慢调用到达预算后终止隔离进程，保留上次证据。厂商GUI、配对、RGB、键位和固件操作不在读取组件内。
 
 鼠标移动主要是唤醒硬件；真正读取由定时器、打开面板或手动刷新触发。未知值显示 `--`。读数失败保留上次成功数据并标明时间，超过新鲜度阈值会改变显示和提示；跨日缓存包含日期。电量和充电标记分别检查时效。
 
@@ -87,7 +97,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Star
 
 鼠标写入只选择已有 DPI 档位：核验设备身份、系统行、全部 DPI 行及校验值，写入后回读确认，失败时尝试恢复。鼠标操作串行处理，连续操作合并等待目标。耳机只使用已验证的查询命令，不写固件、配对或设备设置。
 
-音源和麦克风操作独立排队，写入后核验并在失败时尝试恢复。麦克风按钮控制 Windows 端点静音，不能读取耳机物理静音开关。程序不联网，不读取账号、浏览器或密码管理器数据。
+音源和麦克风操作在隐藏受控进程中独立排队，写入后核验并在失败时尝试恢复。超时表示结果未确认，安全回收并读回之前暂停新的控制；端点、音量和静音变化优先接收Windows通知，保留轮询兜底。麦克风按钮控制Windows端点静音，不宣称已同步耳机物理静音开关。程序不联网，不读取账号、浏览器或密码管理器数据。
 
 ## 本地数据
 
@@ -98,7 +108,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Star
 | `audio-settings.json` | 音源绑定、主题、别名、托盘、提醒及同步偏好；自动兼容旧格式 |
 | `readings-cache.json` | 电量与原确认时间，不包含设备ID；关闭保留读数后不使用、不更新 |
 | `wireless-cache.json` | 通用设备电量与原确认时间，标识为散列值；不会用历史记录声明设备在线 |
-| `install.json` | 稳定安装目录及快捷方式目标 |
+| `install.json` | 稳定安装目录、版本、配置schema和自有文件哈希清单 |
 | `status.json` | 运行诊断，不参与自动刷新控制 |
 | `low-battery-state.txt` | 启用提醒后的去重记录 |
 | `active-ui-render.png`、`visual-status.json` | 满足条件时生成的本机绘图诊断 |
@@ -115,9 +125,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build.ps1 -Out
 
 使用系统自带的 x64 .NET Framework 编译器，不下载依赖。构建会运行协议、设置、端点匹配、菜单、控制队列、缓存、低电量策略、DPI坐标和安装回滚检查。测试用模拟硬件和隔离文件夹，安装器检查分别覆盖 PowerShell 5.1、可用时的 PowerShell 7，不改真实自启项或音源。测试截图保存在指定输出目录下。
 
-`scripts/Package.ps1 -OutputDirectory <目录>` 生成安装包及 `SHA256SUMS.txt`。GitHub Actions 在 main 推送及 PR 上构建并运行相同检查。离线检查不代替每种硬件、游戏和显示器组合的实测。
+`release.json`是版本唯一来源；构建时生成程序集版本信息。`scripts/Package.ps1 -OutputDirectory <目录>` 生成完整ZIP、包内文件清单及 `SHA256SUMS.txt`。使用已经验证的构建可传 `-SkipBuild -BuildDirectory <构建目录>`；源码、版本或构建文件在验证后改变会拒绝打包。
 
-通用版打包会按`engine/dependencies.lock.json`固定URL与SHA256准备官方便携运行库。维护端可运行`Build-Backend.ps1`，再用`engine/runtime/python.exe -I -B tests/test_universal_engine.py`及`-m unittest discover -s engine/tests`检查协议与桥接。最终用户无需执行这些步骤。第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+GitHub Actions 在main推送及PR上构建、运行协议与安装回归，然后将同一份构建打包为最终ZIP，隔离解压安装后启动真实应用和便携读取器进行无硬件检查，验证正常退出与父进程异常退出的子进程回收，最后上传该ZIP和SHA256。安装器小型模拟exe测试不代替完整包检查。离线检查不代替每种硬件、游戏和显示器组合的实测。
+
+通用版打包会按`engine/dependencies.lock.json`固定URL与SHA256准备官方便携运行库，复用已通过校验的下载缓存并校验官方Python签名。维护端可运行`Build-Backend.ps1`，再用`engine/runtime/python.exe -I -B -m unittest discover -s tests -p 'test_*.py'`及`-m unittest discover -s engine/tests`检查协议与桥接。最终用户无需执行这些步骤。自有代码采用[MIT许可证](LICENSE)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 `AtkBatteryProbe.exe --help`、`--self-test` 不访问 HID。`--enumerate` 读描述符；`--power`、`--diagnostic` 查询设备；`--dpi-read` 读取 PAW3955 档位表；`--select-stage N` 会实际选择一个已有的一基档位。
 

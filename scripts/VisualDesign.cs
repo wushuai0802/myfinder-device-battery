@@ -7,6 +7,10 @@ namespace AtkBatteryTray {
     // Shared logical geometry: rendering and hit testing must use the same layout.
     public static class VisualDesign {
         public const int PanelWidth=260,CardHeightNormal=96,CardHeightExpanded=126,HeadsetCardHeight=96,FooterHeight=30;
+        internal static bool? HighContrastOverride=null;
+        public static bool HighContrast {get{return HighContrastOverride??System.Windows.Forms.SystemInformation.HighContrast;}}
+        public const int CardGap=8,GenericCardHeight=60;
+        public const float BatteryRingSize=25,BatteryDigitSize=18;
         public static Size PanelSize {get{return new Size(260,126);}}
         public static float PanelRadius {get{return 16;}}
         public static int MouseCardHeight(DpiConfig dpi){return dpi!=null&&dpi.Stages!=null&&dpi.Stages.Count>4?126:96;}

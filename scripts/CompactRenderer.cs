@@ -13,8 +13,9 @@ namespace AtkBatteryTray {
         static Color Blue(bool dark){return PopupPages.Blue(dark);}
         public static void DrawSurface(Graphics g,RectangleF rect,bool dark) {
             using(var shape=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,16)) {
-                using(var fill=new LinearGradientBrush(rect,dark?Color.FromArgb(48,53,61):Color.White,dark?Color.FromArgb(41,45,52):Color.FromArgb(250,251,253),110))g.FillPath(fill,shape);
-                using(var pen=new Pen(dark?Color.FromArgb(75,83,94):Color.FromArgb(220,226,235),1))g.DrawPath(pen,shape);
+                if(VisualDesign.HighContrast){using(var fill=new SolidBrush(SystemColors.Window))g.FillPath(fill,shape);}
+                else using(var fill=new LinearGradientBrush(rect,dark?Color.FromArgb(48,53,61):Color.White,dark?Color.FromArgb(41,45,52):Color.FromArgb(250,251,253),110))g.FillPath(fill,shape);
+                using(var pen=new Pen(VisualDesign.HighContrast?SystemColors.WindowText:dark?Color.FromArgb(75,83,94):Color.FromArgb(220,226,235),1))g.DrawPath(pen,shape);
             }
         }
         public static void DrawLabel(Graphics g,string text,RectangleF rect,float fontSize,bool bold,Color color,StringAlignment align) {
@@ -68,18 +69,22 @@ namespace AtkBatteryTray {
             using(var path=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1,7))using(var pen=new Pen(color,width))g.DrawPath(pen,path);
         }
         static void Highlight(Graphics g,RectangleF rect,int id,PanelFeedback feedback,bool dark) {
-            if(feedback!=null&&(feedback.HoverAction==id||feedback.PressedAction==id))Fill(g,rect,Color.FromArgb(feedback.PressedAction==id?dark?30:19:dark?18:10,Fg(dark)),8);
+            if(feedback!=null&&(feedback.HoverAction==id||feedback.PressedAction==id)) {
+                if(VisualDesign.HighContrast)Outline(g,rect,Blue(dark),feedback.PressedAction==id?2:1);
+                else Fill(g,rect,Color.FromArgb(feedback.PressedAction==id?dark?30:19:dark?18:10,Fg(dark)),8);
+            }
         }
         static void Meter(Graphics g,BatteryView view,float top,bool dark,PanelFeedback feedback,int action) {
             Highlight(g,new RectangleF(168,top+6,82,44),action,feedback,dark);
-            var ring=new RectangleF(171,top+15,25,25);Color level=view.Fresh?TrayGlyph.LevelColor(view.Percent,dark):TrayGlyph.LevelColor(null,dark);
+            var ring=new RectangleF(171,top+15,VisualDesign.BatteryRingSize,VisualDesign.BatteryRingSize);Color level=view.Fresh?TrayGlyph.LevelColor(view.Percent,dark):TrayGlyph.LevelColor(null,dark);
             using(var track=new Pen(Track(dark),3.7f))g.DrawEllipse(track,ring);
             if(view.Percent.HasValue&&view.Percent.Value>0)using(var pen=new Pen(level,3.7f) {StartCap=LineCap.Round,EndCap=LineCap.Round}) {
                 if(view.Percent==100)g.DrawEllipse(pen,ring);else g.DrawArc(pen,ring,-90,view.Percent.Value*3.6f);
             }
             if(view.Charging)DrawSymbol(g,"bolt",new RectangleF(179,top+22,9,12),Fg(dark));
-            DrawLabel(g,view.Percent.HasValue?(view.Approximate?"≈":"")+view.Percent.Value.ToString():"--",new RectangleF(198,top+9,43,32),view.Approximate?16:18,true,Fg(dark),StringAlignment.Far);
-            if(view.Percent.HasValue)DrawLabel(g,"%",new RectangleF(241,top+15,10,21),10,false,Fg(dark),StringAlignment.Near);
+            Color digit=view.Fresh?Fg(dark):Muted(dark);
+            DrawLabel(g,view.Percent.HasValue?(view.Approximate?"≈":"")+view.Percent.Value.ToString():"--",new RectangleF(198,top+9,43,32),view.Approximate?16:VisualDesign.BatteryDigitSize,true,digit,StringAlignment.Far);
+            if(view.Percent.HasValue)DrawLabel(g,"%",new RectangleF(241,top+15,10,21),10,false,digit,StringAlignment.Near);
         }
         static void Header(Graphics g,string name,string subtitle,string icon,float top,bool dark,PanelFeedback feedback,int action) {
             Highlight(g,new RectangleF(10,top+6,150,44),action,feedback,dark);
@@ -90,10 +95,12 @@ namespace AtkBatteryTray {
             DrawLabel(g,subtitle,new RectangleF(38,top+28,123,19),11,false,Muted(dark),StringAlignment.Near);
         }
         static void Selection(Graphics g,RectangleF rect,string label,string icon,bool selected,bool enabled,bool hovered,bool pressed,bool pending,bool dark) {
-            if(selected)using(var path=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,7))using(var fill=new LinearGradientBrush(rect,dark?Color.FromArgb(50,139,250):Color.FromArgb(18,117,235),dark?Color.FromArgb(35,126,240):Color.FromArgb(8,101,214),90))g.FillPath(fill,path);
-            else if(hovered||pressed)Fill(g,rect,Color.FromArgb(pressed?dark?27:40:dark?16:27,Fg(dark)),7);
-            if(pending&&!selected)Outline(g,rect,Blue(dark),1.2f);
-            Color color=selected?Color.White:enabled?Fg(dark):Muted(dark);
+            if(selected&&!enabled)Fill(g,rect,Track(dark),7);
+            else if(selected&&VisualDesign.HighContrast)Fill(g,rect,Blue(dark),7);
+            else if(selected)using(var path=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,7))using(var fill=new LinearGradientBrush(rect,dark?Color.FromArgb(50,139,250):Color.FromArgb(18,117,235),dark?Color.FromArgb(35,126,240):Color.FromArgb(8,101,214),90))g.FillPath(fill,path);
+            else if(enabled&&(hovered||pressed))Fill(g,rect,Color.FromArgb(pressed?dark?27:40:dark?16:27,Fg(dark)),7);
+            if(enabled&&pending&&!selected)Outline(g,rect,Blue(dark),1.2f);
+            Color color=!enabled?Muted(dark):selected?PopupPages.SelectedForeground:Fg(dark);
             if(!String.IsNullOrEmpty(icon)) {
                 float width=label.Length*11+18;float x=rect.X+(rect.Width-width)/2;
                 DrawSymbol(g,icon,new RectangleF(x,rect.Y+(rect.Height-13)/2,13,13),color);
@@ -118,7 +125,7 @@ namespace AtkBatteryTray {
                     if(value.XDpi==value.YDpi)Selection(g,rect,value.XDpi.ToString(),null,selected,true,hoverStage==i,feedback!=null&&feedback.PressedAction==10+i,hint,dark);
                     else {
                         Selection(g,rect,"",null,selected,true,hoverStage==i,feedback!=null&&feedback.PressedAction==10+i,hint,dark);
-                        Color color=selected?Color.White:Fg(dark);DrawLabel(g,"X "+value.XDpi,new RectangleF(rect.X,rect.Y,rect.Width,rect.Height/2),10.5f,false,color,StringAlignment.Center);DrawLabel(g,"Y "+value.YDpi,new RectangleF(rect.X,rect.Y+rect.Height/2,rect.Width,rect.Height/2),10.5f,false,color,StringAlignment.Center);
+                        Color color=selected?PopupPages.SelectedForeground:Fg(dark);DrawLabel(g,"X "+value.XDpi,new RectangleF(rect.X,rect.Y,rect.Width,rect.Height/2),10.5f,false,color,StringAlignment.Center);DrawLabel(g,"Y "+value.YDpi,new RectangleF(rect.X,rect.Y+rect.Height/2,rect.Width,rect.Height/2),10.5f,false,color,StringAlignment.Center);
                     }
                 }
             }else{Fill(g,new RectangleF(11,55,238,30),Track(dark),9);DrawLabel(g,"等待DPI档位回读",new RectangleF(13,55,234,30),11,false,Muted(dark),StringAlignment.Center);}
@@ -134,13 +141,13 @@ namespace AtkBatteryTray {
                     Fill(drawing,new RectangleF(9,53,178,34),Track(dark),9);
                     for(int i=0;i<2;i++) {
                         var rect=i==0?VisualDesign.SpeakerOutputRectFor(dpi):VisualDesign.HeadsetOutputRectFor(dpi);rect.Y-=top;
-                        string target=i==0?"speaker":"headset";Selection(drawing,rect,i==0?"扬声器":"耳机",i==0?"speaker":"headset",audio!=null&&audio.ActiveOutput==target,audio!=null&&(i==0?audio.SpeakerAvailable:audio.HeadsetAvailable),hoverAudio==i,feedback!=null&&feedback.PressedAction==100+i,feedback!=null&&feedback.ShowPendingHints&&feedback.PendingOutput==target,dark);
+                        string target=i==0?"speaker":"headset";Selection(drawing,rect,i==0?"扬声器":"耳机",i==0?"speaker":"headset",audio!=null&&audio.ActiveOutput==target,(feedback==null||!feedback.AudioBlocked)&&audio!=null&&(i==0?audio.SpeakerAvailable:audio.HeadsetAvailable),hoverAudio==i,feedback!=null&&feedback.PressedAction==100+i,feedback!=null&&feedback.ShowPendingHints&&feedback.PendingOutput==target,dark);
                     }
                     var mic=VisualDesign.MicrophoneMuteRectFor(dpi);mic.Y-=top;bool muted=audio!=null&&audio.MicrophoneMuted==true;
-                    Color red=TrayGlyph.LevelColor(10,dark);Fill(drawing,mic,muted?Color.FromArgb(dark?35:20,red):Track(dark),9);
-                    DrawSymbol(drawing,muted?"mic-off":"mic",new RectangleF(mic.X+4,mic.Y+8,12,14),muted?red:Fg(dark));
-                    DrawLabel(drawing,audio==null||!audio.MicrophoneMuted.HasValue?"未知":muted?"已静音":"未静音",new RectangleF(mic.X+17,mic.Y,mic.Width-19,mic.Height),10.5f,false,muted?red:Fg(dark),StringAlignment.Center);
-                    if(hoverAudio==2||feedback!=null&&feedback.PressedAction==102)Outline(drawing,mic,muted?red:Muted(dark),.8f);
+                    bool blocked=feedback!=null&&feedback.AudioBlocked;Color red=TrayGlyph.LevelColor(10,dark);Fill(drawing,mic,!blocked&&muted?Color.FromArgb(dark?35:20,red):Track(dark),9);
+                    DrawSymbol(drawing,muted?"mic-off":"mic",new RectangleF(mic.X+4,mic.Y+8,12,14),blocked?Muted(dark):muted?red:Fg(dark));
+                    DrawLabel(drawing,blocked?"待确认":audio==null||!audio.MicrophoneMuted.HasValue?"未知":muted?"已静音":"未静音",new RectangleF(mic.X+17,mic.Y,mic.Width-19,mic.Height),10.5f,false,blocked?Muted(dark):muted?red:Fg(dark),StringAlignment.Center);
+                    if(!blocked&&(hoverAudio==2||feedback!=null&&feedback.PressedAction==102))Outline(drawing,mic,muted?red:Muted(dark),.8f);
                 }
                 var saved=g.Save();g.SetClip(new RectangleF(0,top,260,Math.Max(0,104*progress-8)),CombineMode.Intersect);
                 using(var attributes=new ImageAttributes()){var matrix=new ColorMatrix();matrix.Matrix33=progress;attributes.SetColorMatrix(matrix);g.DrawImage(layer,new Rectangle(0,(int)top,260,96),0,0,layer.Width,layer.Height,GraphicsUnit.Pixel,attributes);}g.Restore(saved);
@@ -185,7 +192,7 @@ namespace AtkBatteryTray {
                     int index=layout.All.IndexOf(card);
                     DrawSurface(g,new RectangleF(.5f,card.Top+.5f,259,59),dark);
                     string subtitle=card.Subtitle;
-                    if(subtitle==null)subtitle=card.Battery.Percent.HasValue&&!card.Battery.Fresh?"上次确认 "+card.Battery.TimeText:card.Battery.Fresh?card.Device.Transport+" · 已连接":card.Device.Online?"电量暂未读取":"设备未连接";
+                    if(subtitle==null)subtitle=WirelessLayout.Subtitle(card.Device,card.Battery);
                     string icon=card.Kind=="keyboard"?"keyboard":card.Kind=="headset"?"headset":card.Kind=="mouse"?"mouse":"info";
                     Header(g,card.Name,subtitle,icon,card.Top,dark,feedback,1000+index);Meter(g,card.Battery,card.Top,dark,feedback,2000+index);
                     if(feedback.KeyboardFocus==1000+index)Outline(g,new RectangleF(10,card.Top+6,150,44),Blue(dark),1);
@@ -194,18 +201,24 @@ namespace AtkBatteryTray {
                 g.Restore(saved);
             }
             float top=layout.Footer;float width=layout.Paged?146:208;
-            Fill(g,new RectangleF(8,top+3,width,24),dark?Color.FromArgb(225,41,45,52):Color.FromArgb(225,250,251,253),7);
+            var sync=new RectangleF(8,top+1,width,28);var more=new RectangleF(226,top+1,28,28);
+            Fill(g,new RectangleF(8,top+3,width,24),VisualDesign.HighContrast?SystemColors.Window:dark?Color.FromArgb(225,41,45,52):Color.FromArgb(225,250,251,253),7);
+            Highlight(g,sync,0,feedback,dark);
             string status=feedback.ManualRefreshing?"正在同步…":layout.All[0].Id=="empty"?owner.GenericScanning?"正在识别设备…":"暂无可读取电量的设备":layout.Paged?(layout.Start+1)+"–"+layout.End+" / "+layout.All.Count+" 台设备":"已识别 "+layout.All.Count+" 台设备";
-            var failure=feedback.DpiFailure??feedback.AudioFailure;
+            var failure=feedback.DpiFailure??feedback.AudioFailure??(!String.IsNullOrEmpty(owner.GenericHealthSummary)?owner.GenericHealthSummary:!String.IsNullOrEmpty(owner.GenericError)?"读取器暂不可用":null);
             DrawSymbol(g,"refresh",new RectangleF(11,top+10,12,12),Muted(dark));
             DrawLabel(g,failure??status,new RectangleF(29,top+3,width-25,25),11,false,String.IsNullOrEmpty(failure)?Muted(dark):TrayGlyph.LevelColor(10,dark),StringAlignment.Near);
             if(layout.Paged) {
+                if(layout.Start>0)Highlight(g,new RectangleF(158,top+1,28,28),902,feedback,dark);
+                if(layout.End<layout.All.Count)Highlight(g,new RectangleF(192,top+1,28,28),903,feedback,dark);
                 DrawSymbol(g,"back",new RectangleF(166,top+8,14,14),layout.Start>0?Fg(dark):Muted(dark));
                 DrawSymbol(g,"chevron",new RectangleF(198,top+8,14,14),layout.End<layout.All.Count?Fg(dark):Muted(dark));
+                if(feedback.KeyboardFocus==902&&layout.Start>0)Outline(g,new RectangleF(158,top+1,28,28),Blue(dark),1);
+                if(feedback.KeyboardFocus==903&&layout.End<layout.All.Count)Outline(g,new RectangleF(192,top+1,28,28),Blue(dark),1);
             }
-            Fill(g,new RectangleF(228,top+3,24,24),dark?Color.FromArgb(48,53,61):Color.FromArgb(246,248,251),7);DrawSymbol(g,"more",new RectangleF(232,top+7,16,16),Fg(dark));
-            if(feedback.KeyboardFocus==0)Outline(g,new RectangleF(8,top+3,width,24),Blue(dark),1);
-            if(feedback.KeyboardFocus==1)Outline(g,new RectangleF(226,top+1,28,28),Blue(dark),1);
+            Fill(g,new RectangleF(228,top+3,24,24),VisualDesign.HighContrast?SystemColors.Window:dark?Color.FromArgb(48,53,61):Color.FromArgb(246,248,251),7);Highlight(g,more,1,feedback,dark);DrawSymbol(g,"more",new RectangleF(232,top+7,16,16),Fg(dark));
+            if(feedback.KeyboardFocus==0)Outline(g,sync,Blue(dark),1);
+            if(feedback.KeyboardFocus==1)Outline(g,more,Blue(dark),1);
         }
     }
 }

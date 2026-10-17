@@ -9,6 +9,7 @@ namespace AtkBatteryTray {
     // by Fan4Metal/mouse_tray; no mouse or system state is read here.
     public static class TrayGlyph {
         public static Color LevelColor(int? percent,bool dark) {
+            if(VisualDesign.HighContrast)return percent.HasValue?SystemColors.WindowText:SystemColors.GrayText;
             if(!percent.HasValue)return dark?Color.FromArgb(160,166,176):Color.FromArgb(100,108,119);
             if(percent.Value<20)return dark?Color.FromArgb(255,98,91):Color.FromArgb(201,42,34);
             if(percent.Value<50)return dark?Color.FromArgb(228,201,103):Color.FromArgb(213,180,63);
@@ -23,12 +24,12 @@ namespace AtkBatteryTray {
                     // The level color occupies the entire badge so it remains
                     // visible at 16px. Dark digits contrast with all three bands.
                     Color level=LevelColor(percent,true);
-                    Color fill=percent.HasValue?(stale?LevelColor(null,true):level):Color.FromArgb(83,94,108);
-                    Color fg=percent.HasValue?Color.FromArgb(12,17,21):Color.White;
+                    Color fill=VisualDesign.HighContrast?SystemColors.Window:percent.HasValue?(stale?LevelColor(null,true):level):Color.FromArgb(83,94,108);
+                    Color fg=VisualDesign.HighContrast?SystemColors.WindowText:percent.HasValue?Color.FromArgb(12,17,21):Color.White;
                     Color halo=Color.Transparent;
                     var badgeRect=new RectangleF(.8f,.8f,30.4f,30.4f);
                     using(var badge=new SolidBrush(fill))g.FillEllipse(badge,badgeRect);
-                    using(var edge=new Pen(Color.FromArgb(65,Color.White),.8f))g.DrawEllipse(edge,badgeRect);
+                    using(var edge=new Pen(VisualDesign.HighContrast?SystemColors.WindowText:Color.FromArgb(65,Color.White),.8f))g.DrawEllipse(edge,badgeRect);
                     DrawDigits(g,percent.HasValue?(approximate?"~":"")+percent.Value.ToString():"--",charge,fg,halo);
                     if(charge) {
                         using(var marker=new SolidBrush(Color.FromArgb(12,17,21)))g.FillEllipse(marker,25f,1.2f,6.4f,9.6f);

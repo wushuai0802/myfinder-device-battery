@@ -72,6 +72,10 @@ static class AudioSettingsTests {
             loaded.Theme="dark";loaded.RememberReadings=false;loaded.ReducedMotion=true;loaded.WarningThreshold=15;loaded.BackgroundSeconds=120;loaded.MouseAlias="办公鼠标";
             DeviceSettings.SaveBindings(path,loaded);loaded=DeviceSettings.LoadBindings(path);
             Check(loaded.Theme=="dark"&&!loaded.RememberReadings&&loaded.ReducedMotion&&loaded.WarningThreshold==15&&loaded.BackgroundSeconds==120&&loaded.MouseAlias=="办公鼠标","new preferences roundtrip including explicit false");
+            loaded.TrayDeviceId="device-000000000000000000000001";DeviceSettings.SaveBindings(path,loaded);loaded=DeviceSettings.LoadBindings(path);
+            Check(loaded.TrayDeviceId=="device-000000000000000000000001"&&loaded.Clone().TrayDeviceId==loaded.TrayDeviceId,"a fixed tray device survives save and editable cloning");
+            var invalidPin=loaded.Clone();invalidPin.TrayDeviceId="device\ninvalid";Reject(delegate{DeviceSettings.SaveBindings(path,invalidPin);},"tray identifiers cannot contain control characters");
+            invalidPin=loaded.Clone();invalidPin.TrayDeviceId=new string('x',65);Reject(delegate{DeviceSettings.SaveBindings(path,invalidPin);},"oversized tray identifiers cannot overwrite valid settings");
             var invalid=loaded.Clone();invalid.WarningThreshold=0;Reject(delegate{DeviceSettings.SaveBindings(path,invalid);},"invalid warning threshold cannot overwrite settings");
             invalid=loaded.Clone();invalid.MouseAlias="bad\nname";Reject(delegate{DeviceSettings.SaveBindings(path,invalid);},"alias cannot inject control characters");
             string cache=Path.Combine(root,"readings-cache.json");var confirmed=DateTime.UtcNow.AddMinutes(-3);

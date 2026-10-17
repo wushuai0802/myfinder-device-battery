@@ -138,9 +138,9 @@ class HyperXProvider(Provider):
             level = parse_level(self._query(d["path"], CMD_LEVEL))
             if level is None:
                 continue
-            charging = parse_charging(self._query(d["path"], CMD_CHARGING)) or False
+            charging = parse_charging(self._query(d["path"], CMD_CHARGING))
             out.append(DeviceStatus(f"hyperx:{pid:04x}", name, level, charging, True,
-                                    "hyperx", kind="headset"))
+                                    "hyperx", kind="headset", charging_known=charging is not None))
         return out
 
     def diagnostics(self) -> List[str]:

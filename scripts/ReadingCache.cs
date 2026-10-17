@@ -13,8 +13,16 @@ namespace AtkBattery {
     }
     internal static class ReadingCache {
         static string lastKey;
+        internal static string EncodeWireless(IEnumerable<WirelessDevice> devices){
+            var saved=new List<WirelessDevice>();foreach(var device in devices)if(device.Percent.HasValue&&device.ConfirmedTime!=DateTime.MinValue&&(DateTime.UtcNow-device.ConfirmedTime).TotalDays<=7&&saved.Count<64)saved.Add(device);
+            using(var output=new MemoryStream()){new DataContractJsonSerializer(typeof(WirelessSnapshot)).WriteObject(output,new WirelessSnapshot {Schema=2,Complete=true,Devices=saved.ToArray()});return System.Text.Encoding.UTF8.GetString(output.ToArray());}
+        }
+        internal static string EncodeNative(BatteryReading mouse,HeadsetReading headset){
+            var value=new SavedReadings();if(mouse!=null&&Valid(mouse.Percent,mouse.TimestampUtc)){value.MousePercent=mouse.Percent;value.MouseTime=mouse.TimestampUtc;}if(headset!=null&&Valid(headset.Percent,headset.BatteryTimestampUtc)){value.HeadsetPercent=headset.Percent;value.HeadsetTime=headset.BatteryTimestampUtc;}
+            using(var output=new MemoryStream()){new DataContractJsonSerializer(typeof(SavedReadings)).WriteObject(output,value);return System.Text.Encoding.UTF8.GetString(output.ToArray());}
+        }
         internal static WirelessDevice[] LoadWireless(string path) {
-            try {if(File.Exists(path)&&new FileInfo(path).Length<=131072){var snapshot=GenericBatteryWorker.Parse(File.ReadAllText(path));if(String.IsNullOrEmpty(snapshot.Error)){foreach(var device in snapshot.Devices){device.Fresh=false;device.Online=false;device.Charging=false;}return snapshot.Devices;}}}
+            try {if(File.Exists(path)&&new FileInfo(path).Length<=131072){var snapshot=GenericBatteryWorker.Parse(File.ReadAllText(path));if(String.IsNullOrEmpty(snapshot.Error)){foreach(var device in snapshot.Devices){device.Fresh=false;device.Online=false;device.Charging=null;}return snapshot.Devices;}}}
             catch(IOException){}catch(UnauthorizedAccessException){}
             return new WirelessDevice[0];
         }
