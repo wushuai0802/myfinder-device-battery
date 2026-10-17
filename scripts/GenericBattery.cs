@@ -36,6 +36,7 @@ namespace AtkBattery {
         [DataMember(Name="refreshScope")] public string RefreshScope;
         public DateTime ConfirmedTime {get{DateTime value;return DateTime.TryParse(ConfirmedAtUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out value)?value.ToUniversalTime():DateTime.MinValue;}}
         public DateTime QueryTime {get{DateTime value;return DateTime.TryParse(QueriedAtUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out value)?value.ToUniversalTime():DateTime.MinValue;}}
+        internal bool SameCacheIdentity(WirelessDevice other){return other!=null&&Id==other.Id&&Kind==other.Kind&&Provider==other.Provider;}
         public string Key {get{return Id+"|"+Name+"|"+Percent+"|"+Charging+"|"+Online+"|"+Fresh+"|"+Approximate+"|"+ConfirmedAtUtc+"|"+SourceQuality+"|"+QueriedAtUtc;}}
     }
     [DataContract] public sealed class ReaderHealth {

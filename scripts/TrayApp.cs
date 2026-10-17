@@ -762,16 +762,13 @@ namespace AtkBatteryTray {
                 GenericReady=true;GenericError=null;WirelessDevices=snapshot.Devices??new WirelessDevice[0];GenericHealth=snapshot.Health??new ReaderHealth[0];GenericFailureCount=0;
                 foreach(var health in GenericHealth)if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
-                var pref=DeviceSettings.Current;bool aliasesChanged=false;
-                foreach(var device in WirelessDevices){WirelessDevice cached;string legacy=device.LegacyId;
-                    if(!String.IsNullOrEmpty(legacy)&&Array.FindAll(WirelessDevices,delegate(WirelessDevice other){return other.LegacyId==legacy;}).Length==1){
-                        string alias;if(!pref.DeviceAliases.ContainsKey(device.Id)&&pref.DeviceAliases.TryGetValue(legacy,out alias)){pref.DeviceAliases[device.Id]=alias;aliasesChanged=true;}
-                        if(!wirelessCache.ContainsKey(device.Id)&&wirelessCache.TryGetValue(legacy,out cached)&&cached.Kind==device.Kind&&cached.Provider==device.Provider)wirelessCache[device.Id]=cached;
-                    }
-                    if(pref.RememberReadings&&!device.Percent.HasValue&&wirelessCache.TryGetValue(device.Id,out cached)&&cached.Kind==device.Kind&&cached.Provider==device.Provider&&(DateTime.UtcNow-cached.ConfirmedTime).TotalDays<=7){device.Percent=cached.Percent;device.ConfirmedAtUtc=cached.ConfirmedAtUtc;device.Fresh=false;device.Approximate=cached.Approximate;device.Charging=null;device.SourceQuality="cached";}
+                var pref=DeviceSettings.Current;
+                foreach(var device in WirelessDevices){WirelessDevice cached;
+                    // A legacy PID-only key cannot prove which physical device
+                    // produced a historical reading, even if only one is here now.
+                    if(pref.RememberReadings&&!device.Percent.HasValue&&wirelessCache.TryGetValue(device.Id,out cached)&&device.SameCacheIdentity(cached)&&(DateTime.UtcNow-cached.ConfirmedTime).TotalDays<=7){device.Percent=cached.Percent;device.ConfirmedAtUtc=cached.ConfirmedAtUtc;device.Fresh=false;device.Approximate=cached.Approximate;device.Charging=null;device.SourceQuality="cached";}
                     if(device.Percent.HasValue)wirelessCache[device.Id]=device;
                 }
-                if(aliasesChanged)try{DeviceSettings.SaveConfiguration(pref);}catch(IOException){}catch(UnauthorizedAccessException){}
                 foreach(string key in new List<string>(wirelessCache.Keys))if((DateTime.UtcNow-wirelessCache[key].ConfirmedTime).TotalDays>7)wirelessCache.Remove(key);
                 if(complete&&!clearingHistory&&pref.RememberReadings)fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json"),ReadingCache.EncodeWireless(wirelessCache.Values));
                 bool previous=NativeMousePresent;if(snapshot.NativeMousePresent.HasValue)NativeMousePresent=snapshot.NativeMousePresent.Value;if(NativeMousePresent&&!previous)RequestRead(true,false);

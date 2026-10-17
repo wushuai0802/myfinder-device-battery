@@ -35,6 +35,9 @@ static class WirelessTests {
             string json="{\"schema\":1,\"devices\":[{\"id\":\"device-000000000000000000000001\",\"name\":\"Keyboard\\nInjected\",\"kind\":\"keyboard\",\"percent\":42,\"online\":true,\"fresh\":true,\"confirmedAtUtc\":\""+DateTime.UtcNow.ToString("o")+"\"}]}";
             var snapshot=GenericBatteryWorker.Parse(json);Check(snapshot.Devices.Length==1&&snapshot.Devices[0].Percent==42&&snapshot.Devices[0].Fresh,"valid integer battery reports are accepted");
             Check(!snapshot.Devices[0].Name.Contains("\n"),"untrusted device names do not inject controls");
+            var sameModelA=Device("a","keyboard",42);var sameModelB=Device("b","keyboard",42);
+            Check(!sameModelA.SameCacheIdentity(sameModelB),"same-model history cannot migrate between different physical identities");
+            Check(sameModelA.SameCacheIdentity(Device("a","keyboard",42)),"exact device/provider/type identity can retain history");
             Check(GenericBatteryWorker.Parse(json.Replace("\"percent\":42","\"percent\":200")).Devices[0].Percent==null,"invalid levels are not clamped into fake percentages");
             var cache=Path.Combine(output,"wireless-cache.json");ReadingCache.SaveWireless(cache,snapshot.Devices);var restored=ReadingCache.LoadWireless(cache);
             Check(restored.Length==1&&restored[0].Percent==42&&!restored[0].Fresh&&!restored[0].Online,"disk cache cannot claim a connected device");
