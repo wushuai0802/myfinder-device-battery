@@ -4,6 +4,12 @@ backups/
 logs/
 tmp/
 snapshots/
+inputs/upstream/
+inputs/runtime/
+engine/runtime/
+outputs/backend-runtime/
+__pycache__/
+*.pyc
 outputs/*.json
 outputs/active-ui-render.png
 outputs/releases/

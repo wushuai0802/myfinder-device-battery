@@ -26,6 +26,14 @@ $correct=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('TXlGaW5kZX
 Assert ((Get-DeviceBatteryShortcutName) -ceq $correct) 'shortcut name is Unicode-correct regardless of PowerShell default encoding'
 $shell=New-DeviceBatteryShortcutShell
 try {
+    $engine=Join-Path $source 'engine'
+    New-Item -ItemType Directory -Path $engine | Out-Null
+    [IO.File]::WriteAllText((Join-Path $engine 'server.py'),'# isolated engine fixture')
+    Assert-Rejected {Install-DeviceBattery @arguments} 'incomplete universal packages are rejected before registration'
+    New-Item -ItemType Directory -Path (Join-Path $engine 'runtime'),(Join-Path $engine 'providers'),(Join-Path $engine 'tests') -Force | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $engine 'runtime\python.exe'),[byte[]]@(77,90,7,8))
+    [IO.File]::WriteAllText((Join-Path $engine 'providers\base.py'),'# fixture provider')
+    [IO.File]::WriteAllText((Join-Path $engine 'tests\private-fixture.py'),'not for installation')
     $bad=[Text.Encoding]::GetEncoding(936).GetString([Text.Encoding]::UTF8.GetBytes($correct))
     $legacy=$shell.CreateShortcut((Join-Path $startup $bad))
     $legacy.TargetPath=Join-Path $source 'outputs\AtkMouseBattery.exe'
@@ -33,6 +41,9 @@ try {
     $legacy.Save()
     $installed=Install-DeviceBattery @arguments
     Assert (Test-Path -LiteralPath $installed.InstalledExecutable) 'payload is copied to the stable directory'
+    Assert (Test-Path -LiteralPath (Join-Path $target 'engine\runtime\python.exe')) 'portable runtime is included without a global Python installation'
+    Assert (Test-Path -LiteralPath (Join-Path $target 'engine\providers\base.py')) 'battery adapters are included with the installed app'
+    Assert (-not (Test-Path -LiteralPath (Join-Path $target 'engine\tests\private-fixture.py'))) 'development fixtures are not installed'
     Assert (-not (Test-Path -LiteralPath (Join-Path $startup $bad))) 'owned garbled v1 shortcut is migrated'
     Assert ((Get-ChildItem $startup -Filter '*.lnk').Count -eq 1) 'exactly one autostart shortcut remains'
     Assert ($shell.CreateShortcut((Join-Path $startup $correct)).TargetPath -ieq (Join-Path $target 'outputs\AtkMouseBattery.exe')) 'autostart points to the stable program'

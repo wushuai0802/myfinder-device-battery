@@ -1,7 +1,7 @@
 name: Windows build and regression checks
 on:
   push:
-    branches: [main]
+    branches: [main, 'codex/**']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -15,6 +15,14 @@ jobs:
       - name: Build and run isolated checks
         shell: powershell
         run: ./scripts/Build.ps1 -OutputDirectory "$env:RUNNER_TEMP/device-battery-build"
+      - name: Build portable device reader and run protocol fixtures
+        shell: powershell
+        run: |
+          ./scripts/Build-Backend.ps1 -OutputDirectory ./engine/runtime
+          & ./engine/runtime/python.exe -I -B ./tests/test_universal_engine.py
+          if ($LASTEXITCODE -ne 0) { throw 'Universal engine tests failed.' }
+          & ./engine/runtime/python.exe -I -B -m unittest discover -s ./engine/tests -q
+          if ($LASTEXITCODE -ne 0) { throw 'Device protocol tests failed.' }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64-build

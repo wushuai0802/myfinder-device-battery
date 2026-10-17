@@ -14,7 +14,7 @@ namespace AtkBatteryTray {
             if(percent.Value<50)return dark?Color.FromArgb(228,201,103):Color.FromArgb(213,180,63);
             return dark?Color.FromArgb(61,212,135):Color.FromArgb(34,155,90);
         }
-        public static Bitmap Render(int? percent,bool charge,bool dark,bool stale,int size) {
+        public static Bitmap Render(int? percent,bool charge,bool dark,bool stale,int size,bool approximate=false) {
             size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
             using(var large=new Bitmap(canvas,canvas,PixelFormat.Format32bppPArgb)) {
                 using(var g=Graphics.FromImage(large)) {
@@ -29,7 +29,7 @@ namespace AtkBatteryTray {
                     var badgeRect=new RectangleF(.8f,.8f,30.4f,30.4f);
                     using(var badge=new SolidBrush(fill))g.FillEllipse(badge,badgeRect);
                     using(var edge=new Pen(Color.FromArgb(65,Color.White),.8f))g.DrawEllipse(edge,badgeRect);
-                    DrawDigits(g,percent.HasValue?percent.Value.ToString():"--",charge,fg,halo);
+                    DrawDigits(g,percent.HasValue?(approximate?"~":"")+percent.Value.ToString():"--",charge,fg,halo);
                     if(charge) {
                         using(var marker=new SolidBrush(Color.FromArgb(12,17,21)))g.FillEllipse(marker,25f,1.2f,6.4f,9.6f);
                         PointF[] bolt={new PointF(29.1f,2.2f),new PointF(26.2f,6.2f),new PointF(28.1f,6.2f),new PointF(27.2f,9.6f),new PointF(30.2f,5.2f),new PointF(28.4f,5.2f)};

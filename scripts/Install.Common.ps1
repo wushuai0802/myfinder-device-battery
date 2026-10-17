@@ -140,6 +140,21 @@ function Assert-DeviceBatteryInstallDirectory([string]$Path, [string]$SourceRoot
     return $full
 }
 
+function Get-DeviceBatteryEngineFiles([string]$EngineDirectory) {
+    $pending=New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push([IO.Path]::GetFullPath($EngineDirectory))
+    $count=0
+    while($pending.Count -gt 0) {
+        $directory=$pending.Pop()
+        if(((Get-Item -LiteralPath $directory).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'Linked engine directories are not supported.'}
+        foreach($item in (Get-ChildItem -LiteralPath $directory -Force)) {
+            if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'Linked engine payload entries are not supported.'}
+            if($item.PSIsContainer){if($item.Name -notin @('tests','__pycache__','.git')){$pending.Push($item.FullName)}}
+            elseif($item.Extension -ne '.pyc'){$count++;if($count -gt 5000){throw 'Engine payload exceeds the file limit.'};$item}
+        }
+    }
+}
+
 function Install-DeviceBattery {
     [CmdletBinding()]
     param(
@@ -155,11 +170,19 @@ function Install-DeviceBattery {
     $sourceExe = Join-Path $source 'outputs\AtkMouseBattery.exe'
     $payload = @('outputs\AtkMouseBattery.exe', 'scripts\Install.Common.ps1',
         'scripts\Install-Startup.ps1', 'scripts\Uninstall-Startup.ps1')
+    $engine=Join-Path $source 'engine'
+    if(Test-Path -LiteralPath (Join-Path $engine 'server.py')) {
+        if(-not (Test-Path -LiteralPath (Join-Path $engine 'runtime\python.exe'))){throw 'The portable device engine is incomplete. Use the complete release package.'}
+        foreach($file in (Get-DeviceBatteryEngineFiles $engine)) {
+            $relative=$file.FullName.Substring($source.Length+1)
+            $payload+=$relative
+        }
+    }
     foreach ($relative in $payload) {
         if (-not (Test-Path -LiteralPath (Join-Path $source $relative) -PathType Leaf)) { throw ('Package file missing: ' + $relative) }
     }
-    foreach ($relative in @('outputs\AtkBatteryProbe.exe', 'README.md', 'scripts\Start.ps1',
-        'docs\images\cards-light.png', 'docs\images\cards-dark.png')) {
+    foreach ($relative in @('outputs\AtkBatteryProbe.exe', 'README.md', 'THIRD_PARTY_NOTICES.md', 'scripts\Start.ps1',
+        'docs\images\cards-light.png', 'docs\images\cards-dark.png','docs\images\universal-light.png','docs\images\universal-dark.png','docs\compatibility.md')) {
         if (Test-Path -LiteralPath (Join-Path $source $relative) -PathType Leaf) { $payload += $relative }
     }
     foreach ($launcher in @(Get-ChildItem -LiteralPath $source -Filter '*.bat' -File)) { $payload += $launcher.Name }

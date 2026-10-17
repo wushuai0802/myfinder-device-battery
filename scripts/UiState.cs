@@ -8,10 +8,11 @@ namespace AtkBatteryTray {
         public string Name;
         public int? Percent;
         public bool Fresh, Charging;
+        public bool Approximate;
         public DateTime ConfirmedAt;
         public string TimeText {get {var local=ConfirmedAt.ToLocalTime();return ConfirmedAt==DateTime.MinValue?"":local.ToString(local.Date==DateTime.Now.Date?"HH:mm":"M/d HH:mm");}}
-        public string Key {get {return Name+"|"+Percent+"|"+Fresh+"|"+Charging+"|"+(!Fresh?TimeText:"");}}
-        public string Tooltip {get {return Name+" "+(Percent.HasValue?Percent+"%":"--")+
+        public string Key {get {return Name+"|"+Percent+"|"+Fresh+"|"+Charging+"|"+Approximate+"|"+(!Fresh?TimeText:"");}}
+        public string Tooltip {get {return Name+" "+(Percent.HasValue?(Approximate?"约":"")+Percent+"%":"--")+
             (Percent.HasValue&&!Fresh?"（上次 "+TimeText+"）":Charging?" · 充电中":"");}}
     }
     public sealed class TrayView {

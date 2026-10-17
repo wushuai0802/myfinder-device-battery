@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using System.Collections.Generic;
 
 namespace AtkBattery {
     [DataContract]
@@ -10,7 +11,7 @@ namespace AtkBattery {
         [DataMember(Order=1, EmitDefaultValue=false)] public string SpeakerEndpointId;
         [DataMember(Order=2, EmitDefaultValue=false)] public string HeadsetEndpointId;
         [DataMember(Order=3, EmitDefaultValue=false)] public string MicrophoneEndpointId;
-        [DataMember(Order=4, EmitDefaultValue=false)] public string TraySource = "mouse";
+        [DataMember(Order=4, EmitDefaultValue=false)] public string TraySource = "auto";
         [DataMember(Order=5, EmitDefaultValue=false)] public bool LowBatteryNotifications;
         [DataMember(Order=6)] public string Theme = "auto";
         [DataMember(Order=7)] public bool ReducedMotion;
@@ -19,9 +20,11 @@ namespace AtkBattery {
         [DataMember(Order=10)] public string MouseAlias = "ATK A9 Air+";
         [DataMember(Order=11)] public string HeadsetAlias = "HyperX Cloud Alpha";
         [DataMember(Order=12)] public int BackgroundSeconds = 60;
+        [DataMember(Order=13)] public Dictionary<string,string> DeviceAliases = new Dictionary<string,string>();
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";TraySource="mouse";RememberReadings=true;WarningThreshold=20;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
+            DeviceAliases=new Dictionary<string,string>();
         }
 
         public AudioBindings Clone() {
@@ -30,7 +33,7 @@ namespace AtkBattery {
                 MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,
                 LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ReducedMotion=ReducedMotion,
                 RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
-                HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds };
+                HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases) };
         }
         public string EndpointFor(string role) {
             if(role=="speaker")return SpeakerEndpointId;
@@ -81,13 +84,16 @@ namespace AtkBattery {
             if(settings==null||settings.SchemaVersion!=1)throw new InvalidDataException("Unsupported audio settings format");
             foreach(string role in new[]{"speaker","headset","microphone"})settings.SetEndpoint(role,settings.EndpointFor(role));
             if(String.IsNullOrEmpty(settings.TraySource))settings.TraySource="mouse";
-            if(settings.TraySource!="mouse"&&settings.TraySource!="headset"&&settings.TraySource!="lowest")
+            if(settings.TraySource!="auto"&&settings.TraySource!="mouse"&&settings.TraySource!="headset"&&settings.TraySource!="keyboard"&&settings.TraySource!="lowest")
                 throw new InvalidDataException("Unknown tray battery source");
             if(settings.Theme!="auto"&&settings.Theme!="light"&&settings.Theme!="dark")throw new InvalidDataException("Unknown theme");
             if(settings.WarningThreshold!=10&&settings.WarningThreshold!=15&&settings.WarningThreshold!=20)throw new InvalidDataException("Invalid notification threshold");
             if(settings.BackgroundSeconds!=60&&settings.BackgroundSeconds!=120&&settings.BackgroundSeconds!=300)throw new InvalidDataException("Invalid background interval");
             settings.MouseAlias=CleanAlias(settings.MouseAlias,"ATK A9 Air+");
             settings.HeadsetAlias=CleanAlias(settings.HeadsetAlias,"HyperX Cloud Alpha");
+            if(settings.DeviceAliases==null)settings.DeviceAliases=new Dictionary<string,string>();
+            if(settings.DeviceAliases.Count>128)throw new InvalidDataException("Too many device aliases");
+            foreach(var id in new List<string>(settings.DeviceAliases.Keys)){if(id.Length>64)throw new InvalidDataException("Invalid device identifier");settings.DeviceAliases[id]=CleanAlias(settings.DeviceAliases[id],"无线设备");}
         }
         static string CleanAlias(string value,string fallback) {
             value=(value??"").Trim();if(value.Length==0)return fallback;

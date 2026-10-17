@@ -33,6 +33,10 @@ namespace AtkBatteryTray {
                     g.DrawArc(pen,3,2,14,14,180,180);
                     using(var left=VisualDesign.RoundRect(2.5f,9,4,8,1.5f))g.DrawPath(pen,left);
                     using(var right=VisualDesign.RoundRect(13.5f,9,4,8,1.5f))g.DrawPath(pen,right);
+                }else if(name=="keyboard") {
+                    using(var shape=VisualDesign.RoundRect(1,4,18,13,2.5f))g.DrawPath(pen,shape);
+                    for(int row=0;row<2;row++)for(int column=0;column<4;column++)g.DrawLine(pen,4+column*4,7+row*3,4.5f+column*4,7+row*3);
+                    g.DrawLine(pen,6,13,14,13);
                 }else if(name=="chevron"||name=="back") {
                     g.DrawLines(pen,name=="back"?new[]{new PointF(12,4),new PointF(6,10),new PointF(12,16)}:new[]{new PointF(7,4),new PointF(13,10),new PointF(7,16)});
                 }else if(name=="more") {
@@ -74,7 +78,7 @@ namespace AtkBatteryTray {
                 if(view.Percent==100)g.DrawEllipse(pen,ring);else g.DrawArc(pen,ring,-90,view.Percent.Value*3.6f);
             }
             if(view.Charging)DrawSymbol(g,"bolt",new RectangleF(179,top+22,9,12),Fg(dark));
-            DrawLabel(g,view.Percent.HasValue?view.Percent.Value.ToString():"--",new RectangleF(198,top+9,43,32),18,true,Fg(dark),StringAlignment.Far);
+            DrawLabel(g,view.Percent.HasValue?(view.Approximate?"≈":"")+view.Percent.Value.ToString():"--",new RectangleF(198,top+9,43,32),view.Approximate?16:18,true,Fg(dark),StringAlignment.Far);
             if(view.Percent.HasValue)DrawLabel(g,"%",new RectangleF(241,top+15,10,21),10,false,Fg(dark),StringAlignment.Near);
         }
         static void Header(Graphics g,string name,string subtitle,string icon,float top,bool dark,PanelFeedback feedback,int action) {
@@ -165,6 +169,43 @@ namespace AtkBatteryTray {
                 else if(id>=100&&id<=102&&progress>.98f)rect=id==100?VisualDesign.SpeakerOutputRectFor(dpi):id==101?VisualDesign.HeadsetOutputRectFor(dpi):VisualDesign.MicrophoneMuteRectFor(dpi);
                 if(!rect.IsEmpty)Outline(g,rect,Blue(dark),1.1f);
             }
+        }
+        internal static void PaintWireless(Graphics g,TrayContext owner,WirelessLayout layout,bool dark,PanelFeedback feedback) {
+            g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=TextRenderingHint.AntiAliasGridFit;
+            foreach(var card in layout.Cards) {
+                var saved=g.Save();
+                g.SetClip(new RectangleF(0,card.Top,260,card.Height),CombineMode.Intersect);
+                if(card.NativeMouse) {
+                    g.TranslateTransform(0,card.Top);
+                    Paint(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,dark,null,owner.Audio,1,feedback.HoverAction>=10&&feedback.HoverAction<18?feedback.HoverAction-10:-1,false,0,-1,feedback);
+                }else if(card.NativeHeadset) {
+                    g.TranslateTransform(0,card.Top-VisualDesign.MouseCardHeight(owner.Dpi)-8);
+                    Paint(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,dark,owner.Headset,owner.Audio,1,-1,false,1,feedback.HoverAction>=100&&feedback.HoverAction<=102?feedback.HoverAction-100:-1,feedback);
+                }else {
+                    int index=layout.All.IndexOf(card);
+                    DrawSurface(g,new RectangleF(.5f,card.Top+.5f,259,59),dark);
+                    string subtitle=card.Subtitle;
+                    if(subtitle==null)subtitle=card.Battery.Percent.HasValue&&!card.Battery.Fresh?"上次确认 "+card.Battery.TimeText:card.Battery.Fresh?card.Device.Transport+" · 已连接":card.Device.Online?"电量暂未读取":"设备未连接";
+                    string icon=card.Kind=="keyboard"?"keyboard":card.Kind=="headset"?"headset":card.Kind=="mouse"?"mouse":"info";
+                    Header(g,card.Name,subtitle,icon,card.Top,dark,feedback,1000+index);Meter(g,card.Battery,card.Top,dark,feedback,2000+index);
+                    if(feedback.KeyboardFocus==1000+index)Outline(g,new RectangleF(10,card.Top+6,150,44),Blue(dark),1);
+                    if(feedback.KeyboardFocus==2000+index)Outline(g,new RectangleF(168,card.Top+6,84,44),Blue(dark),1);
+                }
+                g.Restore(saved);
+            }
+            float top=layout.Footer;float width=layout.Paged?146:208;
+            Fill(g,new RectangleF(8,top+3,width,24),dark?Color.FromArgb(225,41,45,52):Color.FromArgb(225,250,251,253),7);
+            string status=feedback.ManualRefreshing?"正在同步…":layout.All[0].Id=="empty"?owner.GenericScanning?"正在识别设备…":"暂无可读取电量的设备":layout.Paged?(layout.Start+1)+"–"+layout.End+" / "+layout.All.Count+" 台设备":"已识别 "+layout.All.Count+" 台设备";
+            var failure=feedback.DpiFailure??feedback.AudioFailure;
+            DrawSymbol(g,"refresh",new RectangleF(11,top+10,12,12),Muted(dark));
+            DrawLabel(g,failure??status,new RectangleF(29,top+3,width-25,25),11,false,String.IsNullOrEmpty(failure)?Muted(dark):TrayGlyph.LevelColor(10,dark),StringAlignment.Near);
+            if(layout.Paged) {
+                DrawSymbol(g,"back",new RectangleF(166,top+8,14,14),layout.Start>0?Fg(dark):Muted(dark));
+                DrawSymbol(g,"chevron",new RectangleF(198,top+8,14,14),layout.End<layout.All.Count?Fg(dark):Muted(dark));
+            }
+            Fill(g,new RectangleF(228,top+3,24,24),dark?Color.FromArgb(48,53,61):Color.FromArgb(246,248,251),7);DrawSymbol(g,"more",new RectangleF(232,top+7,16,16),Fg(dark));
+            if(feedback.KeyboardFocus==0)Outline(g,new RectangleF(8,top+3,width,24),Blue(dark),1);
+            if(feedback.KeyboardFocus==1)Outline(g,new RectangleF(226,top+1,28,28),Blue(dark),1);
         }
     }
 }

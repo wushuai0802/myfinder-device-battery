@@ -1,0 +1,544 @@
+"""Razer devices (headsets, mice, keyboards with a wireless receiver).
+
+Protocol: a 90-byte feature report (report id 0), the same one Synapse and
+OpenRazer use.
+
+    [0]  status         (0x00 in a request; 0x02 = OK, 0x01 = busy, 0x03 = failure,
+                         0x04 = timeout / device not responding, 0x05 = not supported)
+    [1]  transaction id (0x1f for most mice, 0x3f for headsets, 0xff for older ones)
+    [2..3] remaining packets
+    [4]  protocol type
+    [5]  data size
+    [6]  command class  (0x07 = power)
+    [7]  command id     (0x80 = battery level, 0x84 = charging)
+    [8..87] arguments   (arg[1] = value)
+    [88] crc = XOR of bytes 2..87
+    [89] reserved
+"""
+from __future__ import annotations
+
+import time
+from typing import Dict, List, Optional, Tuple
+
+import hid
+
+from . import blackshark, blackshark2020, hidlist
+from .base import DeviceStatus, Provider, hexdump, log
+
+RAZER_VID = 0x1532
+
+# PID -> (name, preferred transaction id)
+#
+# The mice come from OpenRazer's razer_attr_read_charge_level() (driver/razermouse_driver.c,
+# commit 6820f9da16): every PID there that is a wireless mouse, its receiver or the same
+# mouse on its cable, with the transaction id OpenRazer uses for it. Left out on purpose:
+# 0x00CB Basilisk V3 35K (a wired-only mouse) and 0x0095 Orochi V2 over Bluetooth
+# (Windows' own Bluetooth battery value already covers it). tests/test_razer.py holds a
+# copy of that OpenRazer list and checks this table against it.
+KNOWN = {
+    0x0528: ("Razer BlackShark V2 Pro (2020)", 0x3F),
+    0x0555: ("Razer BlackShark V2 Pro (2023)", 0x3F),
+    0x0556: ("Razer BlackShark V2 Pro (2023)", 0x3F),
+    0x0557: ("Razer BlackShark V2 Pro (2023)", 0x3F),
+    0x00A4: ("Razer Mouse Dock Pro", 0x1F),
+    # ---- keyboards with a battery, from OpenRazer's keyboard driver (razerkbd_driver.c:
+    # razer_attr_read_charge_level). The wireless id is the HyperSpeed receiver, the
+    # wired id the keyboard on its cable (charging).
+    0x0290: ("Razer DeathStalker V2 Pro", 0x9F),
+    0x0292: ("Razer DeathStalker V2 Pro", 0x1F),
+    0x0296: ("Razer DeathStalker V2 Pro TKL", 0x9F),
+    0x0298: ("Razer DeathStalker V2 Pro TKL", 0x1F),
+    0x0271: ("Razer BlackWidow V3 Mini HyperSpeed", 0x9F),
+    0x0258: ("Razer BlackWidow V3 Mini HyperSpeed", 0x1F),
+    0x02BA: ("Razer BlackWidow V4 Mini HyperSpeed", 0x9F),
+    0x02B9: ("Razer BlackWidow V4 Mini HyperSpeed", 0x1F),
+    0x02D5: ("Razer BlackWidow V4 Tenkeyless HyperSpeed", 0x9F),
+    0x02D7: ("Razer BlackWidow V4 Tenkeyless HyperSpeed", 0x1F),
+    # ---- mice, from OpenRazer (wired / wireless PIDs of one mouse share a name)
+    0x001F: ("Razer Naga Epic", 0xFF),
+    0x0024: ("Razer Mamba (2012)", 0xFF),
+    0x0025: ("Razer Mamba (2012)", 0xFF),
+    0x0032: ("Razer Ouroboros", 0xFF),
+    0x003E: ("Razer Naga Epic Chroma", 0xFF),
+    0x003F: ("Razer Naga Epic Chroma", 0xFF),      # its dock
+    0x0044: ("Razer Mamba", 0xFF),
+    0x0045: ("Razer Mamba", 0xFF),
+    0x0059: ("Razer Lancehead", 0x3F),
+    0x005A: ("Razer Lancehead", 0x3F),
+    0x0062: ("Razer Atheris", 0x1F),
+    0x006F: ("Razer Lancehead Wireless", 0x1F),
+    0x0070: ("Razer Lancehead Wireless", 0x1F),
+    0x0072: ("Razer Mamba Wireless", 0x3F),
+    0x0073: ("Razer Mamba Wireless", 0x3F),
+    0x0077: ("Razer Pro Click", 0x1F),
+    0x0080: ("Razer Pro Click", 0x1F),
+    0x007A: ("Razer Viper Ultimate", 0xFF),
+    0x007B: ("Razer Viper Ultimate", 0xFF),
+    0x007C: ("Razer DeathAdder V2 Pro", 0x3F),
+    0x007D: ("Razer DeathAdder V2 Pro", 0x3F),
+    0x0083: ("Razer Basilisk X HyperSpeed", 0xFF),
+    0x0086: ("Razer Basilisk Ultimate", 0x1F),
+    0x0088: ("Razer Basilisk Ultimate", 0x1F),
+    0x008F: ("Razer Naga Pro", 0x1F),
+    0x0090: ("Razer Naga Pro", 0x1F),
+    0x0094: ("Razer Orochi V2", 0x1F),
+    0x009A: ("Razer Pro Click Mini", 0x1F),
+    0x009C: ("Razer DeathAdder V2 X HyperSpeed", 0x1F),
+    0x009E: ("Razer Viper Mini SE", 0x1F),
+    0x009F: ("Razer Viper Mini SE", 0x1F),
+    0x00A5: ("Razer Viper V2 Pro", 0x1F),
+    0x00A6: ("Razer Viper V2 Pro", 0x1F),
+    0x00A7: ("Razer Naga V2 Pro", 0x1F),
+    0x00A8: ("Razer Naga V2 Pro", 0x1F),
+    0x00AA: ("Razer Basilisk V3 Pro", 0x1F),
+    0x00AB: ("Razer Basilisk V3 Pro", 0x1F),
+    0x00AF: ("Razer Cobra Pro", 0x1F),
+    0x00B0: ("Razer Cobra Pro", 0x1F),
+    0x00B3: ("Razer HyperPolling Dongle", 0x1F),
+    0x00B4: ("Razer Naga V2 HyperSpeed", 0x1F),
+    0x00B6: ("Razer DeathAdder V3 Pro", 0x1F),
+    0x00B7: ("Razer DeathAdder V3 Pro", 0x1F),
+    0x00B8: ("Razer Viper V3 HyperSpeed", 0x1F),
+    0x00B9: ("Razer Basilisk V3 X HyperSpeed", 0x1F),
+    0x00BE: ("Razer DeathAdder V4 Pro", 0x1F),
+    0x00BF: ("Razer DeathAdder V4 Pro", 0x1F),
+    0x00C0: ("Razer Viper V3 Pro", 0x1F),
+    0x00C1: ("Razer Viper V3 Pro", 0x1F),
+    0x00C2: ("Razer DeathAdder V3 Pro", 0x1F),
+    0x00C3: ("Razer DeathAdder V3 Pro", 0x1F),
+    0x00C4: ("Razer DeathAdder V3 HyperSpeed", 0x1F),
+    0x00C5: ("Razer DeathAdder V3 HyperSpeed", 0x1F),
+    0x00C7: ("Razer Pro Click V2 Vertical Edition", 0x1F),
+    0x00C8: ("Razer Pro Click V2 Vertical Edition", 0x1F),
+    0x00CC: ("Razer Basilisk V3 Pro 35K", 0x1F),
+    0x00CD: ("Razer Basilisk V3 Pro 35K", 0x1F),
+    0x00D0: ("Razer Pro Click V2", 0x1F),
+    0x00D1: ("Razer Pro Click V2", 0x1F),
+    0x00D3: ("Razer Basilisk Mobile", 0x1F),
+    0x00D4: ("Razer Basilisk Mobile", 0x1F),
+    0x00D6: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
+    0x00D7: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
+
+    # Keyboards with a battery. OpenRazer's RazerBlackWidowV3ProWired (0x025A) lists
+    # get_battery/is_charging, and the wireless model (0x025C) inherits that class.
+    # razer_attr_read_charge_level() reads both with razer_chroma_misc_get_battery_level()
+    # - the same 0x07:0x80 / 0x07:0x84 commands this provider already sends - and sets
+    # the transaction id to 0x9f for the wireless keyboards of this generation and 0x3f
+    # for their wired twins. 0x3f is not a value this keyboard answers on: the wired id
+    # goes only to 0x025A.
+    0x025A: ("Razer BlackWidow V3 Pro", 0x3F),
+    0x025C: ("Razer BlackWidow V3 Pro", 0x9F),
+}
+
+# The keyboards above take the commands on one USB interface: OpenRazer sends them with
+# wIndex = report_index to the interface (USB_RECIP_INTERFACE), in
+# razer_get_report_params(). That interface is asked first; the others stay a fallback.
+KEYBOARD_INTERFACE = {
+    0x0290: 2, 0x0296: 2, 0x02D5: 2,
+    0x0292: 3, 0x0298: 3, 0x02D7: 3,
+    0x0271: 3, 0x0258: 3, 0x02BA: 3, 0x02B9: 3,
+}
+
+TRANSACTION_IDS = (0x1F, 0x3F, 0xFF, 0x9F, 0x08)
+
+# Devices that are not in KNOWN are only polled when their name suggests a
+# battery: some wired Razer devices (e.g. the Huntsman V2 keyboard) answer the
+# battery command too, with a meaningless value.
+WIRELESS_WORDS = ("hyperspeed", "wireless", "receiver", "dongle", "dock",
+                  "blackshark", "barracuda", "nari")
+
+
+def maybe_wireless(pid: int, name: str) -> bool:
+    n = name.lower()
+    return pid in KNOWN or pid in blackshark.PA_PIDS or any(w in n for w in WIRELESS_WORDS)
+
+STATUS_OK = 0x02
+STATUS_BUSY = 0x01
+STATUS_TIMEOUT = 0x04     # receiver present, device not responding (off / asleep)
+STATUS_NOT_SUPPORTED = 0x05
+# Not a Razer status byte (those fit in a byte): every packet read back belonged to
+# another command, i.e. to another app that talks to the same collection. RGB software
+# sending lighting frames (class 0x0f) does this many times a second, and each of its
+# requests overwrites the device's reply buffer (issue #108: 13 reads in a row carried
+# "0f:03", OpenRazer's set_custom_frame, with a new transaction id each time).
+STATUS_FOREIGN = 0x100
+# how many times one request is sent while only foreign packets come back
+SENDS = 3
+
+# How long a device that stopped answering keeps its last value, greyed out (the
+# translucent icon the README describes for a sleeping mouse), before the icon goes
+# away. Same value as the WLmouse provider uses.
+ASLEEP_KEEP = 300
+
+
+def build_request(transaction_id: int, cmd_class: int, cmd_id: int, size: int = 0x02) -> bytes:
+    msg = bytearray(90)
+    msg[1] = transaction_id
+    msg[5] = size
+    msg[6] = cmd_class
+    msg[7] = cmd_id
+    crc = 0
+    for b in msg[2:88]:
+        crc ^= b
+    msg[88] = crc
+    return bytes(msg)
+
+
+def normalize_reply(resp) -> Optional[List[int]]:
+    """hidapi on Windows returns the reply with the report id as the first byte."""
+    if not resp:
+        return None
+    data = list(resp)
+    if len(data) >= 91:
+        data = data[1:91]
+    if len(data) < 90:
+        return None
+    return data
+
+
+def parse_reply(data: List[int], cmd_class: int, cmd_id: int) -> Tuple[int, Optional[int]]:
+    """-> (status, arg1). arg1 is None if the reply is not for our command."""
+    status = data[0]
+    if data[6] != cmd_class or data[7] != cmd_id:
+        return status, None
+    return status, data[9]
+
+
+class _Cand:
+    """Cached working HID interface and transaction id for a PID."""
+
+    def __init__(self, path: bytes, tid: int):
+        self.path = path
+        self.tid = tid
+
+
+class RazerProvider(Provider):
+    name = "razer"
+
+    def __init__(self):
+        self._cache: Dict[Tuple[int, str], _Cand] = {}
+        self._dead: Dict[bytes, float] = {}   # interfaces known not to respond
+        self._diag: List[str] = []
+        self._failing: Dict[str, str] = {}    # key -> reason of the ongoing failure
+        self._last: Dict[str, Tuple[int, bool, float]] = {}   # last good level per device
+
+    # ---- low level -------------------------------------------------------
+    def _send(self, dev, req: bytes, tid: int) -> bool:
+        try:
+            dev.send_feature_report(b"\x00" + req)
+        except (OSError, ValueError) as e:
+            self._diag.append(f"    send tid={tid:02x}: {e}")
+            return False
+        return True
+
+    def _query(self, dev, tid: int, cmd_class: int, cmd_id: int) -> Tuple[Optional[int], Optional[int]]:
+        req = build_request(tid, cmd_class, cmd_id)
+        if not self._send(dev, req, tid):
+            return None, None
+        sends, foreign = 1, 0
+        # The device does not reply instantly: poll for up to ~1 s while status is "busy".
+        deadline = time.time() + 1.0
+        time.sleep(0.06)
+        while True:
+            try:
+                resp = dev.get_feature_report(0x00, 91)
+            except (OSError, ValueError) as e:
+                self._diag.append(f"    get tid={tid:02x}: {e}")
+                return None, None
+            data = normalize_reply(resp)
+            if data is None:
+                self._diag.append(f"    short reply: {hexdump(resp)}")
+                return None, None
+            status, value = parse_reply(data, cmd_class, cmd_id)
+            self._diag.append(
+                f"    tid={tid:02x} cmd={cmd_class:02x}:{cmd_id:02x} -> status={status:02x} "
+                f"tid'={data[1]:02x} raw={hexdump(data, 12)}")
+            # Keep reading while the device is busy, and also while the packet in hand is
+            # not the answer to this command. The status byte alone cannot tell the two
+            # apart: Razer Synapse polls the same collection (LED state is class 0x0f) and
+            # its replies carry status 0x02 exactly like ours. Giving up on the first reply
+            # is how a DeathAdder V2 Pro answered a class 0x07:0x80 battery request with
+            # "status=02 tid'=1f cmd=0f:03" and got written off as "off or asleep" - see
+            # issue #3. Whether the real reply is behind that packet in the queue is not
+            # verified on that hardware; reading on is strictly better than stopping.
+            # (only a success status can hide somebody else's packet: 04 asleep and 05
+            # not supported are final answers and come back right away)
+            is_foreign = status == STATUS_OK and value is None
+            if time.time() < deadline and (status == STATUS_BUSY or is_foreign):
+                if is_foreign:
+                    foreign += 1
+                    # The other app's request may have replaced ours before the device
+                    # read it, and then our answer never comes: ask again, a few times.
+                    if foreign % 4 == 0 and sends < SENDS:
+                        if not self._send(dev, req, tid):
+                            return None, None
+                        sends += 1
+                        self._diag.append(f"    sent tid={tid:02x} again ({sends} of {SENDS})")
+                time.sleep(0.08)
+                continue
+            if is_foreign:
+                # a success status on somebody else's packet is not an answer to ours
+                self._diag.append("    every reply was for another command: another app "
+                                  "(Synapse, Chroma or other RGB software) is using this "
+                                  "collection; close it to read the battery")
+                return STATUS_FOREIGN, None
+            return status, value
+
+    def _read(self, path: bytes, tid: int) -> Tuple[Optional[int], Optional[int], Optional[bool]]:
+        """-> (status, level%, charging)"""
+        dev = hid.device()
+        try:
+            dev.open_path(path)
+        except (OSError, IOError) as e:
+            self._diag.append(f"    open: {e}")
+            return None, None, None
+        try:
+            status, raw = self._query(dev, tid, 0x07, 0x80)
+            if status != STATUS_OK or raw is None:
+                return status, None, None
+            level = round(raw / 255 * 100)
+            cst, craw = self._query(dev, tid, 0x07, 0x84)
+            charging = bool(craw) if cst == STATUS_OK and craw is not None else False
+            return status, level, charging
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+    # ---- high level ------------------------------------------------------
+    def poll(self) -> List[DeviceStatus]:
+        """One icon for a mouse on its cable while its receiver stays plugged in.
+
+        On the cable the mouse is a second PID with the same name in KNOWN, and the
+        receiver then answers "not responding". Its greyed copy of the last level stayed
+        next to the live icon of the cable for ASLEEP_KEEP. A greyed icon is dropped when
+        another PID of the same model answers in the same poll. Two live icons stay: that
+        is two mice of the same model, one on the receiver and one on the cable."""
+        out = self._poll_devices()
+        models = {name for name, _tid in KNOWN.values()}
+        live: Dict[str, set] = {}       # model name -> PIDs that answered (key "razer:<pid>:...")
+        for s in out:
+            if s.online and s.name in models:
+                live.setdefault(s.name, set()).add(s.key.split(":")[1])
+        return [s for s in out
+                if s.online or not live.get(s.name, set()) - {s.key.split(":")[1]}]
+
+    def _poll_devices(self) -> List[DeviceStatus]:
+        self._diag = []
+        try:
+            infos = hidlist.enumerate(RAZER_VID)
+        except Exception as e:  # pragma: no cover
+            log.warning("hid.enumerate(razer): %s", e)
+            return []
+
+        # group interfaces by device (PID + serial / location)
+        groups: Dict[Tuple[int, str], List[dict]] = {}
+        for d in infos:
+            pid = d["product_id"]
+            serial = d.get("serial_number") or ""
+            groups.setdefault((pid, serial), []).append(d)
+
+        # Windows re-parents some collections: Razer Synapse creates RZVIRTUAL
+        # children for a mouse's extra buttons, and hidapi reports those with an
+        # empty serial and no strings. Grouped by serial they look like a second,
+        # identical device that can never answer, so every poll logs a "poll
+        # failed" line for a device that is fine (and if one ever did answer, the
+        # same mouse would get a second icon). Attach them to the real device of
+        # the same PID when there is exactly one.
+        named: Dict[int, List[str]] = {}
+        for pid, serial in groups:
+            if serial:
+                named.setdefault(pid, []).append(serial)
+        for (pid, serial) in list(groups):
+            if not serial and len(named.get(pid, [])) == 1:
+                groups[(pid, named[pid][0])] += groups.pop((pid, serial))
+
+        out: List[DeviceStatus] = []
+        for (pid, serial), ifaces in groups.items():
+            name, pref_tid = KNOWN.get(pid, (None, None))
+            if not name:
+                name = (ifaces[0].get("product_string") or f"Razer {pid:04x}").strip()
+            key = f"razer:{pid:04x}:{serial}"
+            kind = "keyboard" if pid in KEYBOARD_INTERFACE else ""
+            diag_from = len(self._diag)
+            self._diag.append(f"[Razer] {name} pid={pid:04x}, interfaces: {len(ifaces)}")
+            if pid == blackshark2020.CABLE_PID:
+                self._diag.append("  skipped: 2020 charging cable; battery is read from receiver 0528")
+                continue
+            if not maybe_wireless(pid, name):
+                self._diag.append("  skipped: not a known wireless device")
+                continue
+            if pid == 0x053A:
+                # The Barracuda Pro's receiver does not answer the mouse request this
+                # provider sends; it speaks the headset "PA" protocol instead, which
+                # providers/barracuda.py reads.
+                self._diag.append("  skipped: read by the barracuda provider (own PA protocol)")
+                continue
+            is_headset = pid in blackshark.PA_PIDS or "blackshark" in name.lower()
+            if pid == blackshark2020.PID:
+                # Deliberately no generic/PA fallback: the 0528 hardware rejects
+                # their reads/writes. A missing fresh feature reply means no reading.
+                st = self._poll_2020(ifaces)
+            elif pid in blackshark.PA_PIDS:
+                # 2023 headset: its own protocol first
+                st = self._poll_pa((pid, serial), ifaces)
+                if st is None:
+                    st = self._poll_group((pid, serial), ifaces, pref_tid)
+            else:
+                st = self._poll_group((pid, serial), ifaces, pref_tid)
+                if is_headset and (st is None or st[0] != STATUS_OK):
+                    pa = self._poll_pa((pid, serial), ifaces)
+                    if pa is not None and (st is None or pa[0] == STATUS_OK):
+                        st = pa
+            if st is None or st[0] != STATUS_OK:
+                # failed poll: the details go to the log once, when the device stops
+                # answering (or the reason changes), not on every poll while it is off
+                reason = ("no reply" if st is None else
+                          "only replies for another app" if st[0] == STATUS_FOREIGN else
+                          f"status {st[0]:02x}")
+                if self._failing.get(key) != reason:
+                    self._failing[key] = reason
+                    log.info("[Razer] %s: poll failed (%s); not logged again until it changes",
+                             name, reason)
+                    for line in self._diag[diag_from:]:
+                        log.info("%s", line)
+                # STATUS_TIMEOUT covers a switched-off device and one that fell asleep
+                # a few seconds after the last movement, and the receiver cannot tell
+                # them apart. Keep the last value (greyed out, the translucent icon
+                # the README describes) for a while and let the icon go away after
+                # that; it comes back as soon as the device answers again. The same
+                # thing the WLmouse provider does for a silent mouse.
+                #
+                # Headsets are left alone: the README says a switched-off headset
+                # disappears from the tray, and no Razer headset is on hand to test a
+                # sleeping one, so they keep exactly the behaviour they had before.
+                last = self._last.get(key)
+                if not is_headset and last and time.time() - last[2] < ASLEEP_KEEP:
+                    out.append(DeviceStatus(key, name, last[0], last[1], False, "razer", kind=kind))
+                continue
+            elif self._failing.pop(key, None) is not None:
+                log.info("[Razer] %s: answering again", name)
+            status, level, charging = st
+            if status == STATUS_OK:
+                if level is not None:
+                    self._last[key] = (level, bool(charging), time.time())
+                approx = ""
+                if pid == blackshark2020.PID and level is None:
+                    approx = "battery level unknown"
+                    if charging:
+                        approx += ", charging"
+                if pid == blackshark2020.PID and charging is None:
+                    approx = (approx or f"{level}%") + ", charging state unknown"
+                out.append(DeviceStatus(key, name, level, bool(charging), True, "razer",
+                                        approx=approx, kind=kind))
+        return out
+
+    def _poll_group(self, gkey, ifaces, pref_tid):
+        cached = self._cache.get(gkey)
+        if cached:
+            status, level, charging = self._read(cached.path, cached.tid)
+            if status in (STATUS_OK, STATUS_TIMEOUT, STATUS_FOREIGN):
+                return status, level, charging
+            self._cache.pop(gkey, None)
+
+        # Probe order: vendor / main collection interfaces first, then the rest.
+        # Collections Windows re-parented (interface number -1) go last.
+        want = KEYBOARD_INTERFACE.get(gkey[0])
+
+        def rank(d):
+            up = d.get("usage_page", 0)
+            iface = d.get("interface_number", 0)
+            if iface is None or iface < 0:
+                iface = 99
+            return (0 if iface == want else 1, 0 if up in (0x0001, 0xFF00) else 1, iface)
+
+        tids = [pref_tid] if pref_tid else []
+        tids += [t for t in TRANSACTION_IDS if t not in tids]
+        now = time.time()
+        timeout_hit = None
+        for d in sorted(ifaces, key=rank):
+            path = d["path"]
+            if self._dead.get(path, 0) > now:
+                continue
+            self._diag.append(
+                f"  iface={d.get('interface_number')} usage={d.get('usage_page', 0):04x}:"
+                f"{d.get('usage', 0):04x}")
+            answered = False
+            for tid in tids:
+                status, level, charging = self._read(path, tid)
+                if status is None:
+                    break          # the interface rejects feature reports, next one
+                answered = True
+                if status == STATUS_OK:
+                    self._cache[gkey] = _Cand(path, tid)
+                    return status, level, charging
+                if status == STATUS_TIMEOUT:
+                    timeout_hit = (status, None, None)
+                    self._cache[gkey] = _Cand(path, tid)
+                    break
+                if status == STATUS_FOREIGN:
+                    # Another app's replies arrive here, so this is the collection that
+                    # takes the Razer commands. The other transaction ids and interfaces
+                    # would only cost another second each: keep this one and stop.
+                    self._cache[gkey] = _Cand(path, tid)
+                    return status, None, None
+            if not answered:
+                self._dead[path] = now + 300   # leave this interface alone for 5 minutes
+        return timeout_hit
+
+    def _poll_2020(self, ifaces):
+        """Only the 0xFF00 collection accepts the 2020 feature report."""
+        offline = None
+        for d in ifaces:
+            if not blackshark2020.is_candidate(d):
+                continue
+            self._diag.append(
+                f"  [2020] iface={d.get('interface_number')} usage=ff00:0001")
+            res, level, charging = blackshark2020.read_battery(d["path"], self._diag)
+            if res == "ok":
+                return STATUS_OK, level, charging
+            if res == "offline":
+                offline = (STATUS_TIMEOUT, None, None)
+        return offline
+
+    def _poll_pa(self, gkey, ifaces):
+        """BlackShark V2 Pro 2023: the "PA" protocol over output/input reports."""
+        cache_key = ("pa",) + tuple(gkey)
+        cached = self._cache.get(cache_key)
+        cands = [d for d in ifaces if blackshark.is_candidate(d)] or list(ifaces)
+        if cached:
+            cands.sort(key=lambda d: 0 if d["path"] == cached.path else 1)
+        offline = None
+        asleep = None
+        for d in cands:
+            self._diag.append(
+                f"  [PA] iface={d.get('interface_number')} usage={d.get('usage_page', 0):04x}:"
+                f"{d.get('usage', 0):04x}")
+            res, level, charging = blackshark.read_battery(d["path"], self._diag)
+            if res == "ok":
+                self._cache[cache_key] = _Cand(d["path"], 0)
+                return STATUS_OK, level, charging
+            if res == "offline":
+                # The interface accepted a command and the headset did not answer: this is the
+                # collection that speaks the protocol, with the headset switched off. Remember
+                # it, so an off headset costs one probe per poll instead of one per collection
+                # (measured: 2 probes -> 1 with two vendor collections, ~0.7 s each), and stop
+                # walking the list.
+                self._cache[cache_key] = _Cand(d["path"], 0)
+                if offline is None:
+                    offline = (STATUS_TIMEOUT, None, None)
+                break
+            if res == "nowake" and asleep is None:
+                # The interface opened but never accepted a command - which is also what a
+                # wrong collection looks like, so it must NOT be cached. If a wrong path were
+                # cached, the sort above would put it first and its "offline" would break the
+                # loop every time, so the collection that actually works would never be
+                # reached again and a headset switched on later would never be read.
+                # Keep it only as the fallback answer, so a receiver that is asleep still
+                # shows "no link" (STATUS_TIMEOUT) instead of losing its icon.
+                asleep = (STATUS_TIMEOUT, None, None)
+        return offline or asleep
+
+    def diagnostics(self) -> List[str]:
+        return list(self._diag)
