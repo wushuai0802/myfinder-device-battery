@@ -746,9 +746,9 @@ namespace AtkBatteryTray {
             if(!genericWorker.Available){GenericError="请使用完整发行包以启用通用设备识别。";return;}
             if(genericBusy!=0){if(force){genericQueuedTarget=genericQueued&&genericQueuedTarget!=deviceId?null:deviceId;genericQueued=true;}return;}
             if(!force&&(DateTime.UtcNow-genericChecked).TotalSeconds<(panelOpen?8:DeviceSettings.Current.BackgroundSeconds))return;
-            genericBusy=1;genericTarget=deviceId;int epoch=historyGeneration;
+            genericBusy=1;genericTarget=deviceId;int epoch=historyGeneration;bool parkEmptyReaders=!panelOpen;
             ThreadPool.QueueUserWorkItem(delegate {
-                var snapshot=genericWorker.Poll(force,deviceId,delegate(WirelessSnapshot partial){if(disposed)return;try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed&&epoch==historyGeneration)ApplyWireless(partial,false);});}catch(InvalidOperationException){}});if(disposed)return;
+                var snapshot=genericWorker.Poll(force,deviceId,delegate(WirelessSnapshot partial){if(disposed)return;try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed&&epoch==historyGeneration)ApplyWireless(partial,false);});}catch(InvalidOperationException){}},parkEmptyReaders);if(disposed)return;
                 try{dispatch.BeginInvoke((MethodInvoker)delegate {
                     if(disposed)return;genericBusy=0;genericTarget=null;genericChecked=DateTime.UtcNow;
                     if(epoch==historyGeneration)ApplyWireless(snapshot,true);
@@ -789,6 +789,8 @@ namespace AtkBatteryTray {
             var text="MyFinder Device Battery "+AppRuntime.Version+"\r\n鼠标："+mouse.Tooltip+"\r\n耳机："+headset.Tooltip+
                 "\r\n耳机无线："+(ShowHeadset(Headset,Audio)?"已确认连接":"未确认连接")+"\r\n音源："+(Audio==null?"未确认":Audio.ActiveOutput)+
                 "\r\n后台间隔："+DeviceSettings.Current.BackgroundSeconds+"秒\r\n自启："+PopupPages.StartupState();
+            if(!String.IsNullOrEmpty(ErrorMessage))text+="\r\n鼠标读取："+SafeDiagnostic.Clean(ErrorMessage);
+            if(!String.IsNullOrEmpty(DpiError))text+="\r\nDPI读取："+SafeDiagnostic.Clean(DpiError);
             foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip;
             text+="\r\n通用读取："+(GenericReady?"已就绪":GenericScanning?"识别中":"尚未就绪")+"\r\n读取健康："+(GenericError??GenericHealthSummary??"正常");foreach(var item in GenericHealth)if(item.State!="ok"&&item.State!="no_devices")text+="\r\n"+item.Provider+"："+item.State+" / "+item.ErrorCode;
             return String.Join(Environment.NewLine,Array.ConvertAll(text.Split(new[]{"\r\n"},StringSplitOptions.None),delegate(string line){return SafeDiagnostic.Clean(line);}));

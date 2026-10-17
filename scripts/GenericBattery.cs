@@ -98,11 +98,11 @@ namespace AtkBattery {
             generation++;
             return process;
         }}
-        internal WirelessSnapshot Poll(bool force=false,string deviceId=null,Action<WirelessSnapshot> progress=null) {lock(query){
+        internal WirelessSnapshot Poll(bool force=false,string deviceId=null,Action<WirelessSnapshot> progress=null,bool parkEmptyReaders=false) {lock(query){
             try {
                 var child=Start();int currentGeneration=generation;long request=Interlocked.Increment(ref sequence);
                 if(deviceId!=null&&!Regex.IsMatch(deviceId,@"^device-[a-f0-9]{24}$"))return new WirelessSnapshot {Error="无效的设备刷新目标。"};
-                child.StandardInput.WriteLine("{\"command\":\"poll\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"force\":"+(force?"true":"false")+(deviceId==null?"":",\"deviceId\":\""+deviceId+"\"")+"}");child.StandardInput.Flush();
+                child.StandardInput.WriteLine("{\"command\":\"poll\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"force\":"+(force?"true":"false")+",\"parkEmptyReaders\":"+(parkEmptyReaders?"true":"false")+(deviceId==null?"":",\"deviceId\":\""+deviceId+"\"")+"}");child.StandardInput.Flush();
                 var clock=Stopwatch.StartNew();var reader=child.StandardOutput;
                 for(int frames=0;frames<128;frames++){
                     var line=Task.Factory.StartNew(delegate{return AppRuntime.ReadLineBounded(reader,524288);});

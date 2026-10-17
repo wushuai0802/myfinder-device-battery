@@ -311,6 +311,93 @@ class IdentityTests(unittest.TestCase):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_successful_topology_clears_only_its_prior_failure_and_partial_error(self):
+        pool = FakePool([], {("topology", ""): (0, IsolationError("read_failed"))})
+        engine = poll_fixture(pool)
+        frames = []
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            first = engine.poll(park_empty_readers=True)
+            self.assertIn("topology: read_failed", first["errors"])
+            self.assertIn("topology", engine.retry_after)
+            self.assertEqual(engine.failures["topology"], 1)
+            engine._failure("independent", "independent", "read_failed")
+            pool.outcomes[("topology", "")] = (0, [])
+            second = engine.poll(park_empty_readers=True, progress=frames.append)
+        self.assertNotIn("topology", engine.health)
+        self.assertNotIn("topology", engine.retry_after)
+        self.assertNotIn("topology", engine.failures)
+        self.assertTrue(all("topology: read_failed" not in frame["errors"] for frame in frames))
+        self.assertIn("independent: read_failed", second["errors"])
+        self.assertIn("independent", engine.health)
+        self.assertTrue(all(child.closed == 0 for child in pool.children))
+        engine.close()
+
+    def test_background_healthy_empty_round_parks_only_reader_slots(self):
+        pool = FakePool([receiver("a")])
+        engine = poll_fixture(pool, ("standard_hid",))
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            result = engine.poll(park_empty_readers=True)
+        self.assertEqual(result["devices"], [])
+        self.assertTrue(all(child.closed == 1 for child in pool.children))
+        self.assertIn("standard_hid|physical-a", engine.last_poll)
+        self.assertIn("standard_hid|physical-a", engine._affinity)
+        self.assertEqual(engine.health["standard_hid|physical-a"]["state"], "unsupported")
+        engine.close()
+
+    def test_foreground_empty_round_retains_reader_discovery_cache(self):
+        pool = FakePool([receiver("a")])
+        engine = poll_fixture(pool, ("standard_hid",))
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            engine.poll(park_empty_readers=False)
+        self.assertTrue(all(child.closed == 0 for child in pool.children))
+        engine.close()
+
+    def test_parked_reader_slots_can_force_query_again(self):
+        pool = FakePool([receiver("a")])
+        engine = poll_fixture(pool, ("standard_hid",))
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            engine.poll(park_empty_readers=True)
+            pool.calls.clear()
+            engine.poll(force=True, park_empty_readers=True)
+        self.assertIn(("standard_hid", "physical-a"), pool.calls)
+        engine.close()
+
+    def test_system_property_measurement_never_parks_as_not_fresh(self):
+        bt = DeviceStatus("bt:x", "Bluetooth", 50, source="bluetooth", source_quality="system_property", queried_at_utc=utcnow())
+        pool = FakePool([], {("bluetooth", ""): (0, [bt])})
+        engine = poll_fixture(pool, ("bluetooth",))
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            result = engine.poll(park_empty_readers=True)
+        self.assertFalse(result["devices"][0]["fresh"])
+        self.assertTrue(all(child.closed == 0 for child in pool.children))
+        engine.close()
+
+    def test_known_candidate_unavailable_never_parks(self):
+        pool = FakePool([receiver("a")])
+        engine = poll_fixture(pool, ("lofree",))
+        engine.health["known-grace"] = {"provider": "known", "state": "unavailable", "deviceCount": 0}
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            engine.poll(park_empty_readers=True)
+        self.assertTrue(all(child.closed == 0 for child in pool.children))
+        engine.close()
+
+    def test_protocol_grace_cached_status_never_parks(self):
+        cached = DeviceStatus("a", "Grace", 50, source="lofree", cached=True, online=False)
+        pool = FakePool([receiver("a")], {("lofree", "physical-a"): (0, [cached])})
+        engine = poll_fixture(pool)
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            engine.poll(park_empty_readers=True)
+        self.assertTrue(all(child.closed == 0 for child in pool.children))
+        engine.close()
+
+    def test_package_smoke_never_parks_before_lifecycle_check(self):
+        pool = FakePool()
+        engine = BatteryEngine(package_smoke=True, process_factory=pool.factory)
+        result = engine.poll(park_empty_readers=True)
+        self.assertTrue(result["packageSmoke"])
+        self.assertTrue(all(child.closed == 0 for child in pool.children))
+        engine.close()
+
     def test_no_declared_standard_battery_is_unsupported_not_failure(self):
         engine = BatteryEngine([], include_native=True)
         engine._accept("standard|physical-a", "standard_hid", [], utcnow(), "physical-a", candidate_count=0)

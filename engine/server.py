@@ -364,7 +364,7 @@ class BatteryEngine:
                                   "scope": "provider", "checkedAtUtc": utcnow(),
                                   "nextRetryAtUtc": (datetime.now(timezone.utc) + timedelta(seconds=wait)).isoformat().replace("+00:00", "Z")}
 
-    def poll(self, force=False, device_id=None, request_id=0, generation=0, progress=None):
+    def poll(self, force=False, device_id=None, request_id=0, generation=0, progress=None, park_empty_readers=False):
         self._generation += 1
         token = self._generation
         if self._direct:
@@ -382,7 +382,17 @@ class BatteryEngine:
                     progress(self._snapshot(request_id, generation, False))
             return self._snapshot(request_id, generation)
         try:
-            return self._isolated_poll(force, device_id, request_id, generation, progress, token)
+            result = self._isolated_poll(force, device_id, request_id, generation, progress, token)
+            # Closed-panel, native-only PCs do not need two idle Python readers.
+            # Never discard protocol grace/cached state or a known candidate
+            # waiting for a usable reply. Foreground polls retain discovery
+            # caches, and package smoke keeps children for lifecycle checks.
+            if (park_empty_readers and device_id is None and not self.package_smoke
+                    and not any(self.by_provider.values()) and self.health
+                    and not result.get("errors")
+                    and all(h.get("state") in ("no_devices", "unsupported") for h in self.health.values())):
+                self.close()
+            return result
         except Exception:
             self._failure("manager", "manager", "read_failed")
             self.close()
@@ -454,6 +464,11 @@ class BatteryEngine:
                             raise IsolationError("invalid_response")
                         inventory = [d for d in inventory if (d.get("vendor_id"), d.get("product_id")) not in NATIVE]
                         groups = dict(list(physical_groups(inventory).items())[:MAX_DEVICES])
+                        # A successful new topology supersedes its own previous
+                        # failure. Do not clear independent reader faults.
+                        self.health.pop("topology", None)
+                        self.failures.pop("topology", None)
+                        self.retry_after.pop("topology", None)
                         live_readers = {"bluetooth"}
                         for provider_name in self.providers:
                             if provider_name == "bluetooth" or (target_name and provider_name != target_name):
@@ -556,7 +571,8 @@ def main():
                     continue
                 emit = lambda result: print(json.dumps(result, ensure_ascii=True), flush=True)
                 result = engine.poll(force=command.get("force") is True, device_id=target,
-                                     request_id=request_id, generation=generation, progress=emit)
+                                     request_id=request_id, generation=generation, progress=emit,
+                                     park_empty_readers=command.get("parkEmptyReaders") is True)
                 emit(result)
             except Exception:
                 print(json.dumps({"schema": 2, "requestId": 0, "generation": 0, "complete": True,
