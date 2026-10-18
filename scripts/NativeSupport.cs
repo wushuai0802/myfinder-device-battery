@@ -17,6 +17,8 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern IntPtr GetShellWindow();
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window,out NativeRect rect);
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+        internal static bool IsLeftButtonPressed(){return (GetAsyncKeyState(SystemInformation.MouseButtonsSwapped?2:1)&0x8000)!=0;}
         public static void EnableDpiAwareness() {
             try{if(SetProcessDpiAwarenessContext(new IntPtr(-4)))return;}catch(EntryPointNotFoundException){}
             try{if(SetProcessDpiAwareness(2)==0)return;}catch(DllNotFoundException){}catch(EntryPointNotFoundException){}

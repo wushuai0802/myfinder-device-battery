@@ -77,6 +77,9 @@ namespace AtkBatteryTray {
         float motionStart,motionTarget,motionDurationMs;
         bool closing;
         bool ignoreDeactivate;
+        readonly System.Windows.Forms.Timer deactivateRelease=new System.Windows.Forms.Timer();
+        bool deferredDeactivation;
+        int deactivationEpoch;
         int hoverStage=-1;
         bool hoverRefresh;
         bool hoverSettings;
@@ -130,7 +133,9 @@ namespace AtkBatteryTray {
                 float t=Math.Min(1f,(float)pageClock.Elapsed.TotalMilliseconds/160f);pageProgress=1f-(float)Math.Pow(1-t,3);
                 if(t>=1f){pageProgress=1;pageAnimation.Stop();}UpdateLayoutSize();Invalidate();
             };
-            Deactivate+=delegate {if(!ignoreDeactivate&&!closing)CloseAnimated();};
+            deactivateRelease.Interval=16;deactivateRelease.Tick+=delegate {CheckDeferredDeactivation();};
+            Activated+=delegate {CancelDeferredDeactivation();};
+            Deactivate+=delegate {HandleDeactivation();};
             MouseDown+=delegate(object sender,MouseEventArgs e) {
                 if(e.Button!=MouseButtons.Left||closing)return;
                 pressedControl=PopupPages.Hit(ControlsForPage(),PanelPoint(e.Location));pressedPage=navigation.Page;
@@ -315,6 +320,7 @@ namespace AtkBatteryTray {
             get {var p=base.CreateParams;p.ExStyle|=0x80|0x80000;return p;}
         }
         public void OpenAnimated(bool fromLauncher=false) {
+            CancelDeferredDeactivation();
             anchor=Cursor.Position;
             if(fromLauncher){var screen=Screen.FromPoint(anchor).WorkingArea;anchor=new Point(screen.Right-24,screen.Top+16);}
             dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;
@@ -330,15 +336,38 @@ namespace AtkBatteryTray {
             y=Math.Max(screen.Top+margin,Math.Min(y,screen.Bottom-Height-margin));Location=new Point(x,y);
         }
         public void Reveal() {
-            ResetPage();
+            CancelDeferredDeactivation();ResetPage();ignoreDeactivate=true;
             if(closing){closing=false;owner.PanelOpened();AnimateTo(1f,190f);}
             Show();Activate();
+            BeginInvoke((MethodInvoker)delegate {if(!IsDisposed)ignoreDeactivate=false;});
+        }
+        internal bool IsClosing {get{return closing;}}
+        internal bool DeferredDeactivationPending {get{return deferredDeactivation;}}
+        internal void HandleDeactivation() {
+            if(ignoreDeactivate||closing||IsDisposed)return;
+            CancelDeferredDeactivation();
+            // A tray press can deactivate us before NotifyIcon receives MouseDown.
+            // Keep the popup until release so that press can capture a close intent.
+            deferredDeactivation=true;
+            if(owner.LeftButtonPressed)deactivateRelease.Start();
+            else CheckDeferredDeactivation();
+        }
+        internal void CancelDeferredDeactivation() {
+            deferredDeactivation=false;deactivationEpoch++;
+            if(!IsDisposed)deactivateRelease.Stop();
+        }
+        internal void CheckDeferredDeactivation() {
+            if(!deferredDeactivation||owner.LeftButtonPressed)return;
+            deactivateRelease.Stop();int epoch=deactivationEpoch;
+            BeginInvoke((MethodInvoker)delegate {
+                if(!IsDisposed&&deferredDeactivation&&epoch==deactivationEpoch&&owner.OwnsDetails(this))CloseAnimated();
+            });
         }
         public void CloseAnimated() {
-            if(closing)return;closing=true;owner.PanelClosed();AnimateTo(0f,135f);
+            CancelDeferredDeactivation();if(closing)return;closing=true;owner.PanelClosed();AnimateTo(0f,135f);
         }
         public void ToggleAnimated() {
-            if(closing) { ResetPage();closing=false;owner.PanelOpened();AnimateTo(1f,190f); }
+            if(closing)Reveal();
             else CloseAnimated();
         }
         void ResetPage(){navigation.Reset();keyboardFocus=-1;keyboardFocusKey=null;hoverAction=-1;pressedAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;lastHoverTip=null;controlTip.SetToolTip(this,null);pressedControl=null;draggingVolume=false;Capture=false;pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
@@ -359,7 +388,7 @@ namespace AtkBatteryTray {
             Invalidate();
         }
         protected override void Dispose(bool disposing) {
-            if(disposing){owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
+            if(disposing){CancelDeferredDeactivation();deactivateRelease.Dispose();owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
             base.Dispose(disposing);
         }
         protected override void OnPaintBackground(PaintEventArgs e) {if(!layeredRendering)base.OnPaintBackground(e);}
@@ -479,6 +508,9 @@ namespace AtkBatteryTray {
         readonly Func<string,AudioReading> writeOutput;
         readonly Func<bool,AudioReading> writeMute;
         readonly Func<string,int,AudioReading> writeVolume;
+        readonly Func<bool> readLeftButton;
+        bool trayPressPending,trayPressCloses;
+        Details trayPressTarget;
         readonly ToolStripMenuItem audioSettingsMenu=new ToolStripMenuItem("音源设置");
         readonly System.Windows.Forms.Timer deviceDebounce=new System.Windows.Forms.Timer();
         readonly System.Windows.Forms.Timer expiryTimer=new System.Windows.Forms.Timer(),audioDebounce=new System.Windows.Forms.Timer(),operationTimer=new System.Windows.Forms.Timer();
@@ -562,9 +594,10 @@ namespace AtkBatteryTray {
             try {string path=Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt");if(File.Exists(path)&&new FileInfo(path).Length<65536){string text=File.ReadAllText(path);lowBattery.Restore("mouse",text.Contains("mouse=1"));lowBattery.Restore("headset",text.Contains("headset=1"));foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text,@"(?m)^(device-[a-f0-9]{24})=1\r?$"))lowBattery.Restore(match.Groups[1].Value,true);}}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select) : this(showPanel,read,select,null,null) {}
-        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null) {
+        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null) {
             persistStatus=diagnostics;
             readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;writeVolume=volumeWriter;
+            readLeftButton=leftButtonReader??new Func<bool>(NativeDisplay.IsLeftButtonPressed);
             if(diagnostics){genericWorker=new GenericBatteryWorker();try{NativeMousePresent=MouseBattery.Enumerate().Count>0;}catch{NativeMousePresent=false;}}
             var unused=dispatch.Handle;
             var menu=new ContextMenuStrip();
@@ -574,7 +607,10 @@ namespace AtkBatteryTray {
             var settingsItem=new ToolStripMenuItem("设置…");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
             menu.Items.Add(new ToolStripSeparator());
             var exit=new ToolStripMenuItem("\u9000\u51fa");exit.Click+=delegate {ExitThread();};menu.Items.Add(exit);
-            tray.ContextMenuStrip=menu;tray.MouseClick+=delegate(object sender,MouseEventArgs e){if(e.Button==MouseButtons.Left)ShowDetails();};
+            tray.ContextMenuStrip=menu;
+            // MouseClick omits the second release of a Windows double-click.
+            tray.MouseDown+=delegate(object sender,MouseEventArgs e){HandleTrayMouseDown(e.Button);};
+            tray.MouseUp+=delegate(object sender,MouseEventArgs e){HandleTrayMouseUp(e.Button);};
             if(diagnostics&&DeviceSettings.Current.RememberReadings)ReadingCache.Load(Path.Combine(DeviceSettings.DataDirectory,"readings-cache.json"),out LastGood,out lastKnownHeadset);
             if(diagnostics&&DeviceSettings.Current.RememberReadings)foreach(var device in ReadingCache.LoadWireless(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json")))wirelessCache[device.Id]=device;
             UpdateIcon();tray.Visible=diagnostics;
@@ -592,9 +628,27 @@ namespace AtkBatteryTray {
             RefreshBattery(false);
             if(showPanel)dispatch.BeginInvoke((MethodInvoker)delegate {ShowDetails(true);});
         }
-        void ShowDetails(bool reveal=false) {
-            if(details!=null&&!details.IsDisposed){if(reveal)details.Reveal();else details.ToggleAnimated();return;}
-            details=new Details(this);details.OpenAnimated(reveal);
+        void ShowDetails(bool fromLauncher=false) {
+            if(details!=null&&!details.IsDisposed){details.Reveal();return;}
+            details=new Details(this);details.OpenAnimated(fromLauncher);
+        }
+        internal bool LeftButtonPressed {get{return readLeftButton();}}
+        internal bool OwnsDetails(Details popup){return !disposed&&details==popup;}
+        internal void HandleTrayMouseDown(MouseButtons button) {
+            if(button!=MouseButtons.Left||disposed)return;
+            trayPressPending=true;trayPressTarget=details!=null&&!details.IsDisposed?details:null;
+            trayPressCloses=trayPressTarget!=null&&!trayPressTarget.IsClosing;
+            if(!trayPressCloses&&trayPressTarget!=null)trayPressTarget.CancelDeferredDeactivation();
+        }
+        internal void HandleTrayMouseUp(MouseButtons button) {
+            if(button!=MouseButtons.Left||disposed)return;
+            var target=trayPressPending?trayPressTarget:details;
+            // Up-only tray mirrors should also close a surviving popup, never reverse
+            // a dismissal. With paired notifications the down-time intent wins.
+            bool close=trayPressPending?trayPressCloses:target!=null&&!target.IsDisposed;
+            trayPressPending=false;trayPressCloses=false;trayPressTarget=null;
+            if(close){if(target!=null&&!target.IsDisposed&&OwnsDetails(target))target.CloseAnimated();return;}
+            ShowDetails();
         }
         internal void ListenForShowRequest(ShowPanelSignal signal) {
             signal.Listen(delegate {if(disposed)return;try {dispatch.BeginInvoke((MethodInvoker)delegate {if(!disposed)ShowDetails(true);});}catch(InvalidOperationException){}});
