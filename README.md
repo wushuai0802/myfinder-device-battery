@@ -92,6 +92,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Star
 
 打开面板立即读取；面板内鼠标 DPI 每2秒调度，成功读取电量后至少30秒再读。耳机正常约6秒检查，失败后退避。面板关闭后默认每分钟检查，可选2分钟/5分钟；较慢间隔会延后耳机开机发现。没有新增常驻高频轮询。
 
+电量的新鲜状态受90秒时效限制，还取决于读数来源和连接证据；这个窗口不会随后台间隔延长。选择120秒或300秒后台同步后，两次查询之间的电量可能先变灰并标为历史读数，保留原确认时间；这表示测量已过期，不据此判定设备断开。Windows蓝牙系统属性仍单独标明“系统提供”和最近查询时间，不冒充设备刚上报。
+
 通用管理进程随本程序启动和退出，通过本地管道通信，最多使用两个按需读取槽，所有子树归本程序管理。没有网络监听、服务、计划任务或额外watchdog。通用读取展开时最多每8秒触发；Windows蓝牙快照默认至少间隔一分钟、标准HID字段至少30秒，打开面板和主动同步可立即请求。结果分批返回，同一物理接收器的查询串行，失败独立退避；慢调用到达预算后终止隔离进程，保留上次证据。厂商GUI、配对、RGB、键位和固件操作不在读取组件内。
 
 面板关闭、完整轮询确认没有通用设备状态且读取器均正常无设备或不支持时，释放空闲读取槽；管理进程继续按原间隔工作。有设备、历史状态待确认或读取故障时保留对应上下文。展开面板时保留读取槽以减少反复启动。
@@ -133,6 +135,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build.ps1 -Out
 `release.json`是版本唯一来源；构建时生成程序集版本信息。`scripts/Package.ps1 -OutputDirectory <目录>` 生成完整ZIP、包内文件清单及 `SHA256SUMS.txt`。使用已经验证的构建可传 `-SkipBuild -BuildDirectory <构建目录>`；源码、版本或构建文件在验证后改变会拒绝打包。
 
 GitHub Actions 在main推送及PR上构建、运行协议与安装回归，然后将同一份构建打包为最终ZIP，隔离解压安装后启动真实应用和便携读取器进行无硬件检查，验证正常退出与父进程异常退出的子进程回收，最后上传该ZIP和SHA256。安装器小型模拟exe测试不代替完整包检查。离线检查不代替每种硬件、游戏和显示器组合的实测。
+
+验证边界、交互性能与八小时资源采样方法见 [验证范围与复验方法](docs/verification.md)。
 
 通用版打包会按`engine/dependencies.lock.json`固定URL与SHA256准备官方便携运行库，复用已通过校验的下载缓存并校验官方Python签名。维护端可运行`Build-Backend.ps1`，再用`engine/runtime/python.exe -I -B -m unittest discover -s tests -p 'test_*.py'`及`-m unittest discover -s engine/tests`检查协议与桥接。最终用户无需执行这些步骤。自有代码采用[MIT许可证](LICENSE)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

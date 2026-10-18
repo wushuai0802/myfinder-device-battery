@@ -30,6 +30,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Measure-Runtime.
 
 把示例路径和PID替换为真实主进程。采样绑定EXE路径、PID、启动时间、版本与SHA256；退出或换版会明确提前结束，不把短跑写成八小时通过。样本有数量上限，summary.json 区分warmup和steady，记录首末值、变化率、主进程/进程树、私有内存/工作集、句柄/线程及按逻辑核归一的CPU。
 
+时长完成以有效样本的采集时间为准，后续写日志耗时不补足观察时长。已观测后代按PID和实际启动时间持续跟踪，父进程先退出后仍计入；确认退出或PID被重用时移除。暂时不可读的已知身份保留并标记子树不完整，仍计入进程数量上限。
+
 30秒采样可能漏掉短生命周期子进程或瞬时峰值；结果中的峰值仅为观测样本峰值，CPU也不是完整系统会计。报告必须注明实际设备场景，不能把无通用设备时的占用当作典型多设备占用。
 
 `EightHoursCompleted`仅表示目标时长完成；`ContinuousEightHoursObserved`还要求主进程采样无超过`max(4 × 采样间隔, 2秒)`的空档或时钟倒退。`CompleteTreeEightHoursObserved`进一步要求每次子树快照完整；短命子进程在读取时退出会计入不完整快照，但不否定主进程连续观察。不完整快照不纳入Tree统计；任一标记均不代表捕获了采样间的所有子进程。

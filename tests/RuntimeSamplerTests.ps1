@@ -39,6 +39,26 @@ $regressed=New-RuntimeObservationState $origin .15
 Add-RuntimeObservationSample $regressed $origin;Add-RuntimeObservationSample $regressed $origin.AddSeconds(-1)
 $continuity=Get-RuntimeObservationContinuity $regressed $origin $true
 Check (-not $continuity.ContinuousRequestedDurationObserved -and $continuity.ClockRegressionCount -eq 1 -and $continuity.GapThresholdSeconds -eq 2) 'clock regression invalidates continuity and small intervals retain the two-second threshold'
+Check (-not (Test-RuntimeSampleCompletesDuration .9 1) -and (Test-RuntimeSampleCompletesDuration 1 1)) 'completion uses the valid sample time, not a later logging clock'
+$actualStart=$origin.AddSeconds(2).AddTicks(3)
+$known=@{20=$origin.AddSeconds(1);30=$actualStart}
+$identities=@{20=[pscustomobject]@{State='gone'};30=[pscustomobject]@{State='alive';StartedAtUtc=$actualStart}}
+$resolve={param($observedId) $identities[$observedId]}
+$orphanInventory=@([pscustomobject]@{ProcessId=30;ParentProcessId=20;CreationDate=$origin.AddSeconds(2)})
+$selected=Get-RuntimeProcessCandidates $orphanInventory 10 $origin $known $resolve 3
+Check ($selected.Candidates.ContainsKey(30) -and -not $known.ContainsKey(20) -and $selected.Candidates[30].StartedAtUtc.Ticks -eq $actualStart.Ticks) 'an observed descendant survives its missing parent with its exact actual start time'
+Reject {Get-RuntimeProcessCandidates @() 10 $origin $known $resolve 1} 'retained descendants still count against MaxProcesses'
+$identities[30]=[pscustomobject]@{State='alive';StartedAtUtc=$actualStart.AddTicks(1)}
+$foreignInventory=@([pscustomobject]@{ProcessId=30;ParentProcessId=999;CreationDate=$actualStart},[pscustomobject]@{ProcessId=40;ParentProcessId=30;CreationDate=$origin.AddSeconds(3)})
+$selected=Get-RuntimeProcessCandidates $foreignInventory 10 $origin $known $resolve 3
+Check ($known.Count -eq 0 -and $selected.Candidates.Count -eq 1) 'a reused PID even one tick later cannot retain an old identity or import its unrelated children'
+$known=@{30=$actualStart};$identities[30]=[pscustomobject]@{State='unavailable'}
+$selected=Get-RuntimeProcessCandidates $foreignInventory 10 $origin $known $resolve 3
+Check ($selected.Partial -and $known.ContainsKey(30) -and $selected.Candidates.Count -eq 1) 'an unreadable known process remains unresolved without becoming an unverified discovery anchor'
+Reject {Get-RuntimeProcessCandidates @() 10 $origin $known $resolve 1} 'unreadable retained identities cannot bypass MaxProcesses'
+$identities[30]=[pscustomobject]@{State='gone'}
+$selected=Get-RuntimeProcessCandidates @() 10 $origin $known $resolve 1
+Check (-not $selected.Partial -and $known.Count -eq 0) 'confirmed exit retires an unreadable retained identity'
 $version=[Diagnostics.FileVersionInfo]::GetVersionInfo($fixture).ProductVersion
 $process=[Diagnostics.Process]::Start((New-Object Diagnostics.ProcessStartInfo -Property @{
     FileName=$fixture;Arguments='--runtime-fixture 8 --child';UseShellExecute=$false;CreateNoWindow=$true;WindowStyle='Hidden'}))
@@ -90,6 +110,51 @@ try {
     Check ($summary.StopReason -eq 'process_exited' -and -not $summary.RequestedDurationCompleted -and -not $summary.EightHoursCompleted) 'process exit stops early without claiming a completed soak'
     Check ($summary.LastDeviceScenario.State -eq 'unverified') 'omitting a status snapshot never invents a hardware scenario'
 }finally{if(-not $short.WaitForExit(10000)){throw 'Short inert runtime fixture did not exit on its own.'};$short.Dispose()}
+$late=[Diagnostics.Process]::Start((New-Object Diagnostics.ProcessStartInfo -Property @{
+    FileName=$fixture;Arguments='--runtime-fixture 2';UseShellExecute=$false;CreateNoWindow=$true;WindowStyle='Hidden'}))
+try {
+    $result=& {
+        # Delay this test-owned summary write across the requested deadline and
+        # the dummy's exit. Empty fake topology keeps the scenario deterministic.
+        function Get-CimInstance {param($ClassName,$Property) @()}
+        function Move-Item {
+            param($LiteralPath,$Destination,[switch]$Force)
+            Microsoft.PowerShell.Management\Move-Item @PSBoundParameters
+            if($Destination.EndsWith('summary.json')){Start-Sleep -Milliseconds 2500}
+        }
+        & $sampler -ExecutablePath $fixture -TargetProcessId $late.Id -ExpectedVersion $version -OutputDirectory $OutputDirectory `
+            -DurationSeconds 1 -IntervalSeconds .1 -WarmupSeconds 0
+    }
+    $summary=Get-Content -LiteralPath $result.SummaryPath -Raw | ConvertFrom-Json
+    Check ($summary.StopReason -eq 'process_exited' -and -not $summary.RequestedDurationCompleted -and $summary.Statistics.'All.Root.PrivateBytes'.LastElapsedSeconds -lt 1) 'logging across the deadline cannot complete a run whose valid sample precedes the deadline and target exits during logging'
+}finally{if(-not $late.WaitForExit(10000)){throw 'Late-logging fixture did not exit on its own.'};$late.Dispose()}
+$orphanSignal=Join-Path $OutputDirectory 'release-orphan-parent'
+$orphanInfo=Join-Path $OutputDirectory 'orphan-processes.txt'
+$orphanRoot=[Diagnostics.Process]::Start((New-Object Diagnostics.ProcessStartInfo -Property @{
+    FileName=$firstFixture;Arguments=('--orphan-root 6 "'+$orphanSignal+'" "'+$orphanInfo+'"');UseShellExecute=$false;CreateNoWindow=$true;WindowStyle='Hidden'}))
+try {
+    $wait=[Diagnostics.Stopwatch]::StartNew()
+    while(-not (Test-Path -LiteralPath $orphanInfo) -and $wait.Elapsed.TotalSeconds -lt 3){Start-Sleep -Milliseconds 20}
+    Check (Test-Path -LiteralPath $orphanInfo) 'three-generation inert fixture publishes its parent and descendant identities'
+    $info=@(Get-Content -LiteralPath $orphanInfo);$orphanParentId=[int]$info[0];$orphanId=[int]$info[1];$orphanStartedTicks=[long]$info[2]
+    $result=& {
+        function Move-Item {
+            param($LiteralPath,$Destination,[switch]$Force)
+            Microsoft.PowerShell.Management\Move-Item @PSBoundParameters
+            if($Destination.EndsWith('summary.json') -and -not (Test-Path -LiteralPath $orphanSignal)){
+                [IO.File]::WriteAllText($orphanSignal,'release')
+            }
+        }
+        & $sampler -ExecutablePath $firstFixture -TargetProcessId $orphanRoot.Id -ExpectedVersion 'runtime-sampler-fixture-v1' -OutputDirectory $OutputDirectory `
+            -DurationSeconds 2.5 -IntervalSeconds .15 -WarmupSeconds 0 -RowsPerFile 32 -MaxSampleFiles 1
+    }
+    $rows=@(Get-ChildItem -LiteralPath $result.RunDirectory -Filter 'samples-*.jsonl' -File | ForEach-Object {Get-Content -LiteralPath $_.FullName | ForEach-Object {$_|ConvertFrom-Json}})
+    Check (@($rows|Where-Object {$_.Processes.ProcessId -contains $orphanParentId -and $_.Processes.ProcessId -contains $orphanId}).Count -gt 0) 'first sample observes both the intermediate parent and its inert child'
+    $retained=@($rows|Where-Object {$_.Processes.ProcessId -notcontains $orphanParentId -and $_.Processes.ProcessId -contains $orphanId})
+    Check ($retained.Count -gt 0) 'later real samples retain the living descendant after its intermediate parent exits'
+    $observed=@($retained[0].Processes|Where-Object {$_.ProcessId -eq $orphanId})[0]
+    Check (([datetime]$observed.StartedAtUtc).ToUniversalTime().Ticks -eq $orphanStartedTicks) 'retained real descendant stays bound to its exact actual start time'
+}finally{if(-not $orphanRoot.WaitForExit(10000)){throw 'Orphan root fixture did not exit on its own.'};$orphanRoot.Dispose()}
 $activeFixture=Join-Path $fixtureDirectory 'active-version-fixture.exe'
 Copy-Item -LiteralPath $firstFixture -Destination $activeFixture
 $changing=[Diagnostics.Process]::Start((New-Object Diagnostics.ProcessStartInfo -Property @{

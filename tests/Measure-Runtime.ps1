@@ -46,6 +46,18 @@ function Read-Root {
             StartedAtUtc=$candidate.StartTime.ToUniversalTime()}
     }finally{$candidate.Dispose()}
 }
+function Read-ObservedProcessIdentity([int]$ObservedProcessId) {
+    try{$candidate=Get-Process -Id $ObservedProcessId -ErrorAction Stop}
+    catch{
+        if($_.CategoryInfo.Category -eq 'ObjectNotFound'){return [pscustomobject]@{State='gone'}}
+        return [pscustomobject]@{State='unavailable'}
+    }
+    try {
+        if($candidate.HasExited){return [pscustomobject]@{State='gone'}}
+        [pscustomobject]@{State='alive';StartedAtUtc=$candidate.StartTime.ToUniversalTime()}
+    }catch{[pscustomobject]@{State='unavailable'}}
+    finally{$candidate.Dispose()}
+}
 function New-Statistics { @{Count=0;Sum=0.0;Minimum=[double]::PositiveInfinity;Maximum=[double]::NegativeInfinity;First=$null;Last=$null;FirstAtSeconds=$null;LastAtSeconds=$null} }
 function Add-Statistics($stats,$value,$atSeconds) {
     if($null -eq $value){return}
@@ -110,6 +122,7 @@ $clock=[Diagnostics.Stopwatch]::StartNew()
 $startedAtUtc=[datetime]::UtcNow
 $observation=New-RuntimeObservationState $startedAtUtc $IntervalSeconds
 $previousCpu=@{};$previousAt=$null;$sampleCount=0;$partialSamples=0;$maximumTree=0
+$trackedIdentities=@{}
 $fileIndex=-1;$rowsInFile=$RowsPerFile;$sampleFile=$null;$stopReason='duration_reached';$samplingFailure=$null;$reachedDuration=$false
 $lastScenario=[pscustomobject]@{State='unverified'};$scenarioCounts=@{}
 
@@ -137,6 +150,7 @@ function Save-Summary([bool]$finished) {
             'CPU is interval processor time divided by wall time and logical processor count.',
             'EightHoursCompleted is elapsed-duration completion only. ContinuousEightHoursObserved additionally requires continuous root-process samples with no long observation gaps or clock regression.',
             'CompleteTreeEightHoursObserved additionally requires every sampled child tree to be complete. Partial tree samples are excluded from Tree statistics; this does not capture all transient children between samples.',
+            'Previously observed descendants remain tracked by exact PID/start time after their parent exits. Unreadable known identities keep the tree partial until resolved or confirmed gone.',
             'Short-lived processes between samples and their CPU/memory peaks can be missed; hardware workload and 60fps are not certified.')}
     $temporary=$summaryPath+'.tmp'
     [IO.File]::WriteAllText($temporary,($summary|ConvertTo-Json -Depth 12),$utf8)
@@ -155,27 +169,24 @@ try {
         }
         if(-not [string]::Equals($root.Path,$exactPath,[StringComparison]::OrdinalIgnoreCase)){$stopReason='process_identity_changed';break}
         $inventory=@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate)
-        $tree=@{};$tree[$TargetProcessId]=$boundStart
-        do {
-            $added=$false
-            foreach($entry in $inventory){
-                $childId=[int]$entry.ProcessId;$parentId=[int]$entry.ParentProcessId
-                if($tree.ContainsKey($childId) -or -not $tree.ContainsKey($parentId) -or $null -eq $entry.CreationDate){continue}
-                $created=$entry.CreationDate.ToUniversalTime()
-                if($created -lt $tree[$parentId]){continue}
-                $tree[$childId]=$created;$added=$true
-                if($tree.Count -gt $MaxProcesses){throw 'Process tree exceeds MaxProcesses; sampling stopped without truncating totals.'}
-            }
-        }while($added)
+        $selection=Get-RuntimeProcessCandidates $inventory $TargetProcessId $boundStart $trackedIdentities {param($observedId) Read-ObservedProcessIdentity $observedId} $MaxProcesses
+        $tree=$selection.Candidates
         $at=[datetime]::UtcNow;$seconds=$clock.Elapsed.TotalSeconds;$currentCpu=@{};$processes=New-Object Collections.Generic.List[object]
         $totals=@{PrivateBytes=0L;WorkingSetBytes=0L;Handles=0L;Threads=0L;CpuPercentNormalized=$null}
-        $cpuDelta=0.0;$rootDelta=$null;$partial=$false;$rootValues=$null
+        $cpuDelta=0.0;$rootDelta=$null;$partial=$selection.Partial;$rootValues=$null
         foreach($childId in $tree.Keys){
             $process=$null
             try {
                 $process=Get-Process -Id $childId -ErrorAction Stop
                 $created=$process.StartTime.ToUniversalTime()
-                if([Math]::Abs(($created-$tree[$childId]).TotalSeconds) -gt 1){throw 'Process identity changed during the sample.'}
+                $expected=$tree[$childId]
+                # CIM CreationDate has microsecond precision. Once observed,
+                # identities use the actual StartTime ticks with no tolerance.
+                if(($expected.Exact -and $created.Ticks -ne $expected.StartedAtUtc.Ticks) -or
+                        (-not $expected.Exact -and [Math]::Abs($created.Ticks-$expected.StartedAtUtc.Ticks) -ge 10)){
+                    $trackedIdentities.Remove($childId);throw 'Process identity changed during the sample.'
+                }
+                if($childId -ne $TargetProcessId){$trackedIdentities[$childId]=$created}
                 $key=$childId.ToString()+':'+$created.Ticks
                 $cpu=$process.TotalProcessorTime.TotalSeconds;$currentCpu[$key]=$cpu
                 $delta=$null
@@ -219,7 +230,7 @@ try {
         }
         [IO.File]::AppendAllText($sampleFile,($sample|ConvertTo-Json -Compress -Depth 9)+[Environment]::NewLine,$utf8);$rowsInFile++
         Save-Summary $false
-        if($clock.Elapsed.TotalSeconds -ge $DurationSeconds){$reachedDuration=$true;break}
+        if(Test-RuntimeSampleCompletesDuration $seconds $DurationSeconds){$reachedDuration=$true;break}
         # Polling sleeps are capped so exits/version changes are noticed within
         # one sampling interval (30 seconds by default), without a busy loop.
         $remaining=[Math]::Min($IntervalSeconds,$DurationSeconds-$clock.Elapsed.TotalSeconds)
