@@ -83,10 +83,14 @@
       "verificationLevel": "D",
       "compatible": false,
       "match": {"vendorId":"05AC","productId":"024F","productName":"INFI75-1.1"},
-      "transport": "USB接口已发现；有线直连与无线接收器尚未区分验证",
+      "transport": "有线USB与2.4G接收器已分别检查，均未取得可用电量",
       "capabilities": [],
-      "firmware": "未记录，不刷写固件或屏幕Flash",
-      "notes": "当前连接方式未取得标准电量。共享VID/PID不是其他键盘命令可用的证据；不发送未经验证的私有命令。"
+      "firmware": "键盘固件未确认；2.4G接收器bcdDevice为0200，不等同键盘固件版本",
+      "observations": [
+        {"connection":"wired","productName":"INFI75-1.1","usagePage":"FF13","usage":"0001","featureBytes":65},
+        {"connection":"2.4G","productName":"2.4G Wireless Keyboard","usagePage":"FFB5","usage":"0001","inputBytes":8,"outputBytes":8,"featureBytes":0,"standardBatteryCandidates":0,"checkedOn":"2026-10-18"}
+      ],
+      "notes": "2.4G缺少现有标准电量字段，官方驱动产品匹配和65字节Feature通道也不适用。共享VID/PID不是其他键盘命令可用的证据；不发送未经验证的私有命令，不刷固件或屏幕Flash。"
     }
   ]
 }

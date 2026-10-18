@@ -15,8 +15,9 @@ namespace AtkBatteryTray {
         public string TimeText {get {return FormatTime(ConfirmedAt);}}
         public string QueryText {get{return FormatTime(QueriedAt);}}
         public string Key {get {return Name+"|"+Percent+"|"+Fresh+"|"+Charging+"|"+Approximate+"|"+SystemProvided+"|"+(!Fresh?TimeText:"")+"|"+(SystemProvided?QueryText:"");}}
-        public string Tooltip {get {return Name+" "+(Percent.HasValue?(Approximate?"约":"")+Percent+"%":"--")+
-            (Percent.HasValue&&!Fresh?SystemProvided?"（系统提供"+(String.IsNullOrEmpty(QueryText)?"":"，最近查询 "+QueryText)+"）":String.IsNullOrEmpty(TimeText)?"（历史读数，时间未知）":"（上次 "+TimeText+"）":Charging?" · 充电中":"");}}
+        public string Tooltip {get {return TooltipFor(Name);}}
+        public string TooltipFor(string displayName) {return displayName+" "+(Percent.HasValue?(Approximate?"约":"")+Percent+"%":"--")+
+            (Percent.HasValue&&!Fresh?SystemProvided?"（系统提供"+(String.IsNullOrEmpty(QueryText)?"":"，最近查询 "+QueryText)+"）":String.IsNullOrEmpty(TimeText)?"（历史读数，时间未知）":"（上次 "+TimeText+"）":Charging?" · 充电中":"");}
     }
     public sealed class TrayView {
         public BatteryView Battery;
@@ -29,7 +30,8 @@ namespace AtkBatteryTray {
         public bool ShowPendingHints;
         public int HoverAction=-1,PressedAction=-1;
         public int KeyboardFocus=-1;
-        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction;}}
+        public int VolumePreview=-1;
+        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction+"|"+VolumePreview;}}
     }
     public static class UiState {
         public static bool Recent(DateTime timestamp,DateTime now,double seconds) {
@@ -72,6 +74,16 @@ namespace AtkBatteryTray {
             if(audio!=null&&audio.Devices!=null)foreach(var device in audio.Devices)
                 if(String.Equals(id,device.Id,StringComparison.OrdinalIgnoreCase))return device.Name;
             return String.IsNullOrEmpty(id)?"未检测到":"设备未连接";
+        }
+        public static string CurrentOutputName(AudioReading audio) {
+            if(audio==null)return "系统输出未确认";
+            string id=audio.ConsoleOutputId;
+            if(String.IsNullOrEmpty(id))return "未检测到系统输出";
+            if(audio.Devices!=null)foreach(var device in audio.Devices)
+                if(device!=null&&AudioControl.SameId(id,device.Id)&&!String.IsNullOrWhiteSpace(device.Name))return device.Name;
+            if(AudioControl.SameId(id,audio.SpeakerId)&&!String.IsNullOrWhiteSpace(audio.SpeakerName))return audio.SpeakerName;
+            if(AudioControl.SameId(id,audio.HeadsetId)&&!String.IsNullOrWhiteSpace(audio.HeadsetName))return audio.HeadsetName;
+            return "当前系统输出（名称未确认）";
         }
     }
     public sealed class LowBatteryPolicy {

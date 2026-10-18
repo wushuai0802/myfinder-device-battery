@@ -31,8 +31,16 @@ namespace AtkBattery {
         internal static AudioReading Switch(string target){return shared.Query(new AudioCommand {Operation="output",Target=target});}
         internal static AudioReading Mute(bool value){return shared.Query(new AudioCommand {Operation="mute",Mute=value});}
         internal static AudioReading Volume(string endpoint,int value){return shared.Query(new AudioCommand {Operation="volume",Endpoint=endpoint,Percent=value});}
+        internal static AudioReading Execute(AudioCommand command){return shared.Query(command);}
         internal static void Shutdown(){shared.disposed=true;var owned=Interlocked.Exchange(ref shared.job,null);if(owned!=null)owned.Dispose();ThreadPool.QueueUserWorkItem(delegate{shared.Dispose();});}
-        internal AudioReading Query(AudioCommand command){lock(gate){
+        internal AudioReading Query(AudioCommand command){
+            // Capture before waiting for the broker lock or starting its process.
+            // A settings change must never retarget an operation already submitted.
+            if(command==null)return Unknown("无效的音频请求。",false);
+            var bindings=command.Settings??DeviceSettings.Current;
+            var captured=new AudioBindings {SpeakerEndpointId=bindings.SpeakerEndpointId,HeadsetEndpointId=bindings.HeadsetEndpointId,MicrophoneEndpointId=bindings.MicrophoneEndpointId,ExplicitAudioBindingsOnly=bindings.ExplicitAudioBindingsOnly};
+            command=new AudioCommand {Operation=command.Operation,Target=command.Target,Endpoint=command.Endpoint,Percent=command.Percent,Mute=command.Mute,Settings=captured};
+            lock(gate){
             if(disposed)return Unknown("音频组件已退出。",false);
             try{
                 if(quarantined&&!Stop())return Unknown("上次音频进程仍未退出，控制继续停用。",true);
@@ -41,7 +49,7 @@ namespace AtkBattery {
                     var info=new ProcessStartInfo(executable,"--audio-broker") {UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
                     process=Process.Start(info);process.ErrorDataReceived+=delegate{};process.BeginErrorReadLine();job=new ChildProcessJob(process);
                 }
-                command.Id=++sequence;command.Settings=DeviceSettings.Current;process.StandardInput.WriteLine(Encode(command));process.StandardInput.Flush();
+                command.Id=++sequence;process.StandardInput.WriteLine(Encode(command));process.StandardInput.Flush();
                 var input=process.StandardOutput;var line=Task.Factory.StartNew(delegate{return AppRuntime.ReadLineBounded(input,262144);});
                 if(!line.Wait(testBudget>0?testBudget:command.Operation=="read"?3500:6000)){bool stopped=Stop();return Unknown(stopped?"音频响应超时，结果未确认；正在重新核对。":"音频操作仍未退出，暂停新的控制请求。",command.Operation!="read");}
                 var response=Decode<AudioResponse>(line.Result);if(response==null||response.Id!=command.Id||response.Reading==null){Stop();return Unknown("音频返回结果无效，正在重新核对。",command.Operation!="read");}
@@ -65,8 +73,8 @@ namespace AtkBattery {
                     try{
                         DeviceSettings.UseTransientConfiguration(command.Settings??new AudioBindings());
                         if(command.Operation=="read")result=AudioControl.Read();
-                        else if(command.Operation=="output")result=AudioControl.SwitchOutput(command.Target);
-                        else if(command.Operation=="mute")result=AudioControl.SetHeadsetMicrophoneMute(command.Mute);
+                        else if(command.Operation=="output")result=AudioControl.SwitchOutput(command.Target,command.Endpoint);
+                        else if(command.Operation=="mute")result=AudioControl.SetHeadsetMicrophoneMute(command.Mute,command.Endpoint);
                         else if(command.Operation=="volume")result=AudioControl.SetOutputVolume(command.Endpoint,command.Percent);
                         else result=Unknown("无效的音频请求。",false);
                     }catch(Exception){result=Unknown("音频请求失败。",command.Operation!="read");}

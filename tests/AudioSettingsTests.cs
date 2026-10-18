@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using AtkBattery;
+using AtkBatteryTray;
 
 static class AudioSettingsTests {
     static int passed;
@@ -25,6 +26,12 @@ static class AudioSettingsTests {
             var loaded=DeviceSettings.LoadBindings(path);
             Check(loaded.TraySource=="lowest"&&loaded.LowBatteryNotifications,"tray and notification preferences roundtrip with audio bindings");
             foreach(string role in new[]{"speaker","headset","microphone"})Check(loaded.EndpointFor(role)==settings.EndpointFor(role),"roundtrip "+role);
+            var mapped=loaded.Clone();const string mappedId="device-000000000000000000000001";
+            mapped.AudioDeviceBindings[mappedId]=new AudioEndpointBindings {HeadsetEndpointId="mapped-render",MicrophoneEndpointId="mapped-capture"};
+            DeviceSettings.SaveBindings(path,mapped);var mappedLoaded=DeviceSettings.LoadBindings(path);
+            Check(mappedLoaded.HeadsetEndpointId==loaded.HeadsetEndpointId&&mappedLoaded.AudioDeviceBindings[mappedId].HeadsetEndpointId=="mapped-render"&&mappedLoaded.AudioDeviceBindings[mappedId].MicrophoneEndpointId=="mapped-capture","stable-device audio mapping roundtrips without replacing global endpoints");
+            var mappedClone=mappedLoaded.Clone();mappedClone.AudioDeviceBindings[mappedId].HeadsetEndpointId="changed";
+            Check(mappedLoaded.AudioDeviceBindings[mappedId].HeadsetEndpointId=="mapped-render","editable device mapping copies cannot mutate saved binding objects");
             var clone=loaded.Clone();clone.SetEndpoint("speaker",null);
             Check(loaded.SpeakerEndpointId!=null,"editing a copy does not change saved bindings");
             DeviceSettings.SaveBindings(path,clone);
@@ -39,10 +46,21 @@ static class AudioSettingsTests {
             bool ambiguous;
             Check(AudioControl.FindEndpoint(endpoints,"speaker",out ambiguous).Id=="realtek"&&!ambiguous,"default speaker detection is preserved");
             Check(AudioControl.FindEndpoint(endpoints,"headset",out ambiguous).Id=="hyperx"&&!ambiguous,"default headset detection is preserved");
+            var namedOutput=new AudioReading {ConsoleOutputId="speaker",SpeakerId="speaker",SpeakerName="Fallback speaker",HeadsetId="headset",HeadsetName="Fallback headset"};
+            Check(UiState.CurrentOutputName(namedOutput)=="Fallback speaker"&&UiState.EndpointName(namedOutput,"speaker")=="设备未连接","current output retains its known speaker name while absent binding-list entries keep their original qualifier");
+            namedOutput.Devices=new[]{new AudioDeviceChoice {Id="speaker",Name="Enumerated speaker",Flow=0}};
+            bool listPreferred=UiState.CurrentOutputName(namedOutput)=="Enumerated speaker";namedOutput.ConsoleOutputId="headset";
+            Check(listPreferred&&UiState.CurrentOutputName(namedOutput)=="Fallback headset","current output prefers device-list names and falls back to the matching headset name");
+            namedOutput.ConsoleOutputId="other-live-output";bool unknownNamed=UiState.CurrentOutputName(namedOutput)=="当前系统输出（名称未确认）";namedOutput.ConsoleOutputId=null;
+            Check(unknownNamed&&UiState.CurrentOutputName(namedOutput)=="未检测到系统输出","an existing unnamed current endpoint is distinct from having no system output");
             var manual=new AudioBindings {SpeakerEndpointId="USB",HeadsetEndpointId="realtek",MicrophoneEndpointId="mic"};
             Check(AudioControl.FindEndpoint(endpoints,"speaker",manual,out ambiguous).Id=="usb","explicit output ID overrides vendor detection, case-insensitively");
             Check(AudioControl.FindEndpoint(endpoints,"headset",manual,out ambiguous).Id=="realtek","headset button accepts a user-selected output");
             Check(AudioControl.FindEndpoint(endpoints,"microphone",manual,out ambiguous).Id=="mic","microphone uses the selected recording endpoint");
+            var explicitOnly=new AudioBindings {ExplicitAudioBindingsOnly=true};
+            Check(AudioControl.FindEndpoint(endpoints,"speaker",explicitOnly,out ambiguous)==null&&AudioControl.FindEndpoint(endpoints,"headset",explicitOnly,out ambiguous)==null&&AudioControl.FindEndpoint(endpoints,"microphone",explicitOnly,out ambiguous)==null,"unmapped device scopes never inherit global vendor detection");
+            explicitOnly.HeadsetEndpointId="usb";explicitOnly.MicrophoneEndpointId="mic";
+            Check(AudioControl.FindEndpoint(endpoints,"headset",explicitOnly,out ambiguous).Id=="usb"&&AudioControl.FindEndpoint(endpoints,"microphone",explicitOnly,out ambiguous).Id=="mic","explicit device scopes resolve only their selected endpoints");
             manual.SpeakerEndpointId="unplugged";
             Check(AudioControl.FindEndpoint(endpoints,"speaker",manual,out ambiguous)==null,"missing explicit output never falls back to a different device");
             manual.SpeakerEndpointId="mic";

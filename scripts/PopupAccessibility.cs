@@ -41,7 +41,7 @@ namespace AtkBatteryTray {
         }
         PopupControl Resolve(string key){return Items.Find(delegate(PopupControl row){return row.StableKey==key;});}
         void Run(Action action) {
-            if(host.IsDisposed)return;
+            if(host.IsDisposed||host.Disposing||!host.IsHandleCreated)return;
             if(host.InvokeRequired){try{host.BeginInvoke(action);}catch(InvalidOperationException){}}else action();
         }
         sealed class Item:AccessibleObject {

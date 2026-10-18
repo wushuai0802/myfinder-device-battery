@@ -9,6 +9,7 @@ using AtkBatteryTray;
 
 static class TrayInteractionTests {
     static int checks,cases,activationChecksUnavailable;
+    static bool traceEnabled;
     const BindingFlags PrivateInstance=BindingFlags.Instance|BindingFlags.NonPublic;
     static readonly FieldInfo DetailsField=typeof(TrayContext).GetField("details",PrivateInstance);
     static readonly FieldInfo TrayField=typeof(TrayContext).GetField("tray",PrivateInstance);
@@ -21,6 +22,31 @@ static class TrayInteractionTests {
     static readonly MethodInfo FormDeactivate=typeof(Form).GetMethod("OnDeactivate",PrivateInstance);
     static readonly MethodInfo ShowDetails=typeof(TrayContext).GetMethod("ShowDetails",PrivateInstance);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    sealed class ActivationProbe:NativeWindow,IDisposable {
+        readonly Details popup;
+        internal bool NativeFocusLoss;
+        internal IntPtr Peer;
+        internal ActivationProbe(Details popup){this.popup=popup;AssignHandle(popup.Handle);}
+        protected override void WndProc(ref Message message) {
+            if(message.Msg==0x0006&&(message.WParam.ToInt64()&0xffff)==0&&!popup.IsClosing&&!popup.Disposing&&!popup.IsDisposed){NativeFocusLoss=true;Peer=message.LParam;}
+            base.WndProc(ref message);
+        }
+        public void Dispose(){ReleaseHandle();}
+    }
+    static string PopupState(Details popup) {
+        if(popup==null)return "null";
+        return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(popup)+":disposed="+popup.IsDisposed+",visible="+popup.Visible+",closing="+popup.IsClosing+",deferred="+popup.DeferredDeactivationPending+",ignore="+IgnoreDeactivateField.GetValue(popup)+",capture="+popup.Capture;
+    }
+    static void Trace(Fixture fixture,string phase,Details popup=null) {
+        if(!traceEnabled)return;
+        var target=(Details)typeof(TrayContext).GetField("trayPressTarget",PrivateInstance).GetValue(fixture.Context);
+        Console.WriteLine("TRACE "+phase+" left="+fixture.LeftDown+" pending="+typeof(TrayContext).GetField("trayPressPending",PrivateInstance).GetValue(fixture.Context)+" closes="+typeof(TrayContext).GetField("trayPressCloses",PrivateInstance).GetValue(fixture.Context)+" target="+PopupState(target)+" current="+PopupState(fixture.Current)+" event="+PopupState(popup)+" active="+PopupState(Form.ActiveForm as Details)+" foreground="+GetForegroundWindow());
+    }
+    static void Observe(Fixture fixture,Details popup) {
+        if(!traceEnabled||popup==null)return;
+        popup.Activated+=delegate{Trace(fixture,"Activated",popup);};popup.Deactivate+=delegate{Trace(fixture,"Deactivate",popup);};
+        popup.MouseCaptureChanged+=delegate{Trace(fixture,"CaptureChanged",popup);};popup.VisibleChanged+=delegate{Trace(fixture,"VisibleChanged",popup);};popup.Disposed+=delegate{Trace(fixture,"Disposed",popup);};
+    }
 
     static void MouseDown(NotifyIcon notify,MouseButtons button,int clicks) {
         var message=Message.Create(IntPtr.Zero,0x400,IntPtr.Zero,new IntPtr(button==MouseButtons.Left?(clicks==2?0x203:0x201):0x204));
@@ -90,17 +116,22 @@ static class TrayInteractionTests {
         }
         internal Details Current {get{return (Details)DetailsField.GetValue(Context);}}
         internal void Down(int clicks=1) {
+            Trace(this,"before Down");
             LeftDown=true;
             // Framework's actual tray callback path: double-clicks suppress MouseClick,
             // while MouseDown/MouseUp must still reach the production subscribers.
             MouseDown(Notify,MouseButtons.Left,clicks);
+            Trace(this,"after Down");
         }
         internal void Up() {
+            Trace(this,"before Up");
             LeftDown=false;MouseUp(Notify,MouseButtons.Left);
+            Trace(this,"after Up");
         }
         internal void Click(int clicks=1) {Down(clicks);Up();}
         internal Details Open() {
             Click();var details=Current;
+            Observe(this,details);
             Check(details!=null&&!details.IsDisposed&&details.Visible&&!details.IsClosing,"release opens a visible popup");
             Until(delegate{return details.IsDisposed||!(bool)IgnoreDeactivateField.GetValue(details);},"opening deactivation guard is released");
             PumpFor(230);
@@ -108,7 +139,12 @@ static class TrayInteractionTests {
             Check(!ReleaseTimer(details).Enabled,"deactivation release timer is idle while open");
             return details;
         }
-        internal void Reveal() {ShowDetails.Invoke(Context,new object[]{true});}
+        internal Details OpenHidden(bool createHandle=true) {
+            var details=new Details(Context);DetailsField.SetValue(Context,details);
+            if(createHandle){var handle=details.Handle;}
+            IgnoreDeactivateField.SetValue(details,false);Observe(this,details);return details;
+        }
+        internal void Reveal() {Trace(this,"before Reveal");ShowDetails.Invoke(Context,new object[]{true});Observe(this,Current);Trace(this,"after Reveal");}
         public void Dispose() {
             LeftDown=false;
             Context.ExitThread();Context.Dispose();
@@ -175,10 +211,58 @@ static class TrayInteractionTests {
     }
     static void ReplacedTarget() {
         using(var f=new Fixture()) {
-            var details=f.Open();f.Down();details.Dispose();f.Reveal();var replacement=f.Current;
+            var details=f.OpenHidden();f.Down();details.Dispose();var replacement=f.OpenHidden();
             Check(replacement!=details&&!replacement.IsDisposed,"explicit show replaces a disposed captured popup");
-            f.Up();PumpFor(240);
+            f.Up();PumpFor(80);Trace(f,"hidden replacement after pump",replacement);
             Check(f.Current==replacement&&!replacement.IsDisposed&&!replacement.IsClosing,"old captured close cannot dismiss a later replacement popup");
+        }
+    }
+    static void VisibleReplacementActivation() {
+        using(var f=new Fixture()) {
+            var details=f.Open();f.Down();details.Dispose();f.Reveal();var replacement=f.Current;
+            Check(replacement!=details&&!replacement.IsDisposed,"explicit visible show replaces a disposed captured popup");
+            bool wasForeground=Form.ActiveForm==replacement||GetForegroundWindow()==replacement.Handle;
+            using(var probe=new ActivationProbe(replacement)) {
+                f.Up();Check(!replacement.IsClosing&&!replacement.IsDisposed,"old captured release does not directly close the visible replacement");PumpFor(240);Trace(f,"visible replacement after pump",replacement);
+                if(wasForeground&&!probe.NativeFocusLoss)Check(f.Current==replacement&&!replacement.IsDisposed&&!replacement.IsClosing,"visible replacement remains open when native focus is retained");
+                else {activationChecksUnavailable++;Console.WriteLine("UNAVAILABLE replacement retention: native foreground was unavailable or an independent WM_ACTIVATE focus loss occurred (initial="+wasForeground+", nativeLoss="+probe.NativeFocusLoss+", peer="+probe.Peer+")");}
+            }
+        }
+    }
+    static void PopupHandleLifecycle() {
+        using(var f=new Fixture()) {
+            var details=f.OpenHidden(false);
+            Check(!details.IsHandleCreated,"constructor leaves an unshown popup without a native handle");
+            details.HandleDeactivation();details.CheckDeferredDeactivation();
+            Check(!details.IsHandleCreated&&!details.DeferredDeactivationPending,"deactivation before handle creation cannot queue native callbacks or create a handle");
+            details.Dispose();details.Dispose();Check(details.IsDisposed&&!details.IsHandleCreated,"repeated popup disposal never recreates a tooltip or native handle");
+        }
+        using(var f=new Fixture()) {
+            var details=f.OpenHidden();bool reentered=false;
+            details.HandleDestroyed+=delegate {reentered=true;details.HandleDeactivation();details.CheckDeferredDeactivation();};
+            details.Dispose();
+            Check(reentered&&details.IsDisposed&&!details.DeferredDeactivationPending&&!details.IsHandleCreated,"native handle destruction during Dispose cannot restart deactivation polling or BeginInvoke");
+        }
+        using(var f=new Fixture()) {
+            var details=f.OpenHidden();details.HandleDeactivation();Check(details.DeferredDeactivationPending,"a live hidden owned handle can queue the tested deferred close");
+            typeof(Control).GetMethod("DestroyHandle",PrivateInstance).Invoke(details,null);
+            Check(!details.IsHandleCreated&&!details.DeferredDeactivationPending,"destroying the handle retires its queued deactivation callback");
+            var replacementHandle=details.Handle;PumpFor(80);
+            Check(!details.IsDisposed&&!details.IsClosing&&!details.DeferredDeactivationPending,"recreating a handle cannot execute a close queued by its retired predecessor");
+            details.HandleDeactivation();Check(details.DeferredDeactivationPending,"a new handle may queue its own deferred close");
+            typeof(Details).GetMethod("BeginPresentation",PrivateInstance).Invoke(details,null);PumpFor(80);
+            Check(!details.IsDisposed&&!details.IsClosing&&!details.DeferredDeactivationPending,"a later presentation retires callbacks from the earlier display generation");
+        }
+        using(var f=new Fixture()) {
+            var old=f.OpenHidden();old.HandleDeactivation();var replacement=f.OpenHidden();PumpFor(80);
+            Check(!old.IsClosing&&!old.IsDisposed&&!replacement.IsDisposed&&!replacement.IsClosing,"an old owned window cannot close after the controller replaces its current window");old.Dispose();
+        }
+        using(var f=new Fixture()) {
+            var details=f.OpenHidden();int epoch=(int)typeof(Details).GetMethod("BeginPresentation",PrivateInstance).Invoke(details,null);
+            typeof(Details).GetMethod("QueueOpeningGuardRelease",PrivateInstance).Invoke(details,new object[]{epoch});
+            typeof(Control).GetMethod("DestroyHandle",PrivateInstance).Invoke(details,null);var handle=details.Handle;PumpFor(80);
+            Check(!(bool)IgnoreDeactivateField.GetValue(details),"handle recreation releases the current opening guard instead of leaving deactivation ignored");
+            details.HandleDeactivation();Until(delegate{return details.IsDisposed;},"a recreated popup still dismisses on a later genuine deactivation");
         }
     }
     static void ReopenDuringClose() {
@@ -270,12 +354,17 @@ static class TrayInteractionTests {
     }
 
     [STAThread]
-    static int Main() {
+    static int Main(string[] args) {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);
         object previous=cached.GetValue(null);
         try {
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
             NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
+            traceEnabled=Array.IndexOf(args,"--trace")>=0;
             Check(NotifyDown!=null&&NotifyUp!=null&&FormDeactivate!=null,".NET Framework callback entrypoints exist");
+            if(Array.IndexOf(args,"--replacement-only")>=0){Run("captured target replaced before release",ReplacedTarget);Run("visible replacement native activation probe",VisibleReplacementActivation);return 0;}
+            if(Array.IndexOf(args,"--lifecycle-only")>=0){Run("popup native handle lifecycle",PopupHandleLifecycle);Run("captured target replaced before release",ReplacedTarget);Console.WriteLine("PASS "+checks+" hidden lifecycle/replacement checks");return 0;}
+            Run("popup native handle lifecycle",PopupHandleLifecycle);
             Run("slow tray open/close",SlowClicks);
             Run("actual NotifyIcon fast double-click callback sequence",FastDoubleClick);
             Run("deactivation before tray down",DeactivateBeforeDown);
@@ -283,6 +372,7 @@ static class TrayInteractionTests {
             Run("hold beyond the close animation",LongPress);
             Run("disposed captured close target",DisposedTarget);
             Run("captured target replaced before release",ReplacedTarget);
+            Run("visible replacement native activation probe",VisibleReplacementActivation);
             Run("press during closing reveals with activation probe",ReopenDuringClose);
             Run("right-button isolation and menu reveal",RightButtonAndMenu);
             Run("reduced motion",ReducedMotion);

@@ -107,6 +107,28 @@ namespace AtkBatteryTray {
                 DrawLabel(g,label,new RectangleF(x+17,rect.Y,rect.Right-x-18,rect.Height),11,false,color,StringAlignment.Near);
             }else DrawLabel(g,label,rect,11.5f,selected,color,StringAlignment.Center);
         }
+        internal static void SystemVolume(Graphics g,RectangleF rect,AudioReading audio,bool dark,PanelFeedback feedback) {
+            bool blocked=feedback!=null&&feedback.AudioBlocked;
+            bool enabled=!blocked&&audio!=null&&audio.OutputVolumePercent.HasValue&&!String.IsNullOrEmpty(audio.VolumeEndpointId);
+            int preview=feedback==null?-1:feedback.VolumePreview;
+            int? value=enabled?(int?)(preview>=0?Math.Max(0,Math.Min(100,preview)):audio.OutputVolumePercent.Value):null;
+            DrawSurface(g,new RectangleF(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1),dark);
+            var hit=new RectangleF(rect.X+4,rect.Y+2,rect.Width-8,rect.Height-4);
+            if(enabled)Highlight(g,hit,240,feedback,dark);
+            string endpoint=enabled?UiState.CurrentOutputName(audio):blocked?"待确认":"不可用";
+            string label="系统音量 · "+(enabled&&preview>=0?"待应用 · ":"")+endpoint;
+            DrawLabel(g,label,new RectangleF(rect.X+11,rect.Y+2,rect.Width-64,23),11,false,enabled?Fg(dark):Muted(dark),StringAlignment.Near);
+            DrawLabel(g,value.HasValue?value+"%":"--",new RectangleF(rect.Right-49,rect.Y+2,38,23),11,false,enabled?Fg(dark):Muted(dark),StringAlignment.Far);
+            var meter=PopupPages.VolumeTrack(rect);Fill(g,meter,Track(dark),3);
+            if(value.HasValue) {
+                float width=meter.Width*value.Value/100f;
+                if(width>0)Fill(g,new RectangleF(meter.X,meter.Y,width,meter.Height),Blue(dark),Math.Min(3,width/2));
+                float x=meter.X+width;
+                using(var brush=new SolidBrush(VisualDesign.HighContrast?SystemColors.Window:dark?Color.FromArgb(235,240,247):Color.White))g.FillEllipse(brush,x-5.5f,meter.Y-3,11,12);
+                using(var pen=new Pen(Blue(dark),1))g.DrawEllipse(pen,x-5.5f,meter.Y-3,11,12);
+            }
+            if(enabled&&feedback!=null&&feedback.KeyboardFocus==240)Outline(g,hit,Blue(dark),1.1f);
+        }
         public static void Paint(Graphics g,BatteryReading current,BatteryReading lastGood,string error,bool busy,DpiConfig dpi,string dpiError,bool dpiBusy,bool dark,HeadsetReading headset,AudioReading audio,float openProgress=1,int hoverStage=-1,bool hoverRefresh=false,float headsetProgress=1,int hoverAudio=-1,PanelFeedback feedback=null,bool hoverSettings=false) {
             if(g==null)return;
             g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=TextRenderingHint.AntiAliasGridFit;
@@ -152,7 +174,9 @@ namespace AtkBatteryTray {
                 var saved=g.Save();g.SetClip(new RectangleF(0,top,260,Math.Max(0,104*progress-8)),CombineMode.Intersect);
                 using(var attributes=new ImageAttributes()){var matrix=new ColorMatrix();matrix.Matrix33=progress;attributes.SetColorMatrix(matrix);g.DrawImage(layer,new Rectangle(0,(int)top,260,96),0,0,layer.Width,layer.Height,GraphicsUnit.Pixel,attributes);}g.Restore(saved);
             }
-            float footer=mouseHeight+104*progress;string status;
+            var volume=new RectangleF(0,mouseHeight+104*progress+VisualDesign.CardGap,260,VisualDesign.SystemVolumeHeight);
+            SystemVolume(g,volume,audio,dark,feedback);
+            float footer=volume.Bottom;string status;
             string failure=feedback==null?null:feedback.DpiFailure??feedback.AudioFailure;
             if(!String.IsNullOrEmpty(failure))status=failure;
             else if(feedback!=null&&feedback.ManualRefreshing)status="正在同步…";
@@ -200,6 +224,7 @@ namespace AtkBatteryTray {
                 }
                 g.Restore(saved);
             }
+            if(layout.HasVolume)SystemVolume(g,layout.VolumeRect,owner.Audio,dark,feedback);
             float top=layout.Footer;float width=layout.Paged?146:208;
             var sync=new RectangleF(8,top+1,width,28);var more=new RectangleF(226,top+1,28,28);
             Fill(g,new RectangleF(8,top+3,width,24),VisualDesign.HighContrast?SystemColors.Window:dark?Color.FromArgb(225,41,45,52):Color.FromArgb(225,250,251,253),7);

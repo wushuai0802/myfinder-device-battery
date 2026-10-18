@@ -44,7 +44,7 @@ static class WirelessTests {
             owner=new TrayContext(false,delegate(bool include){return new MouseSnapshot();},delegate(int stage){return null;});
             owner.NativeMousePresent=false;owner.GenericReady=true;owner.WirelessDevices=new[]{Device("1","mouse",75),Device("2","keyboard",42,true),Device("3","headset",19)};
             var navigation=new PopupNavigation();var layout=WirelessLayout.Build(owner,0,500);
-            Check(layout.Cards.Count==3&&layout.Size==new Size(260,226),"three generic cards stay compact");
+            Check(layout.Cards.Count==3&&layout.Size==new Size(260,282),"three generic cards retain their compact geometry above one shared volume row");
             Check(layout.All.TrueForAll(delegate(WirelessCard c){return c.Name!="ATK A9 Air+";}),"another PC does not get a phantom ATK card");
             Check(layout.Cards[1].Kind=="keyboard"&&layout.Cards[1].Battery.Approximate,"keyboard and coarse-level capabilities reach the UI");
             var controls=PopupPages.Build(owner,navigation,false,layout);bool disjoint=true;for(int a=0;a<controls.Count;a++)for(int b=a+1;b<controls.Count;b++)disjoint&=!controls[a].Rect.IntersectsWith(controls[b].Rect);Check(disjoint,"dynamic card hit areas do not overlap");

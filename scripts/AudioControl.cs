@@ -69,6 +69,9 @@ namespace AtkBattery {
         // Switch the normal/media output only. The communications default is
         // deliberately preserved, as is every default recording endpoint.
         public static AudioReading SwitchOutput(string target) {
+            return SwitchOutput(target,null);
+        }
+        internal static AudioReading SwitchOutput(string target,string expectedEndpointId) {
             if (target != "speaker" && target != "headset")
                 return FailedReading("音源只能选择 speaker 或 headset。");
             return OnAudioThread(delegate {
@@ -78,6 +81,11 @@ namespace AtkBattery {
                     if (String.IsNullOrEmpty(targetId)) {
                         before.Error = AddError(before.Error, "未找到唯一可用的目标音源，未更改默认设备。");
                         before.OperationSucceeded = false;
+                        return before;
+                    }
+                    if (expectedEndpointId!=null&&!SameId(targetId,expectedEndpointId)) {
+                        before.Error=AddError(before.Error,"音源绑定或设备已改变，未更改默认设备。");
+                        before.OperationSucceeded=false;
                         return before;
                     }
                     if (String.IsNullOrEmpty(before.ConsoleOutputId) || String.IsNullOrEmpty(before.MultimediaOutputId)) {
@@ -126,12 +134,20 @@ namespace AtkBattery {
         // This is Windows endpoint mute, not the headset's physical mute state.
         // It targets the configured capture endpoint without changing any defaults.
         public static AudioReading SetHeadsetMicrophoneMute(bool mute) {
+            return SetHeadsetMicrophoneMute(mute,null);
+        }
+        internal static AudioReading SetHeadsetMicrophoneMute(bool mute,string expectedEndpointId) {
             return OnAudioThread(delegate {
                 using (var session = new AudioSession()) {
                     AudioReading before = ReadCore(session);
                     if (String.IsNullOrEmpty(before.MicrophoneId)) {
                         before.Error = AddError(before.Error, "未找到唯一可用的麦克风，未更改静音状态。");
                         before.OperationSucceeded = false;
+                        return before;
+                    }
+                    if (expectedEndpointId!=null&&!SameId(before.MicrophoneId,expectedEndpointId)) {
+                        before.Error=AddError(before.Error,"麦克风绑定或设备已改变，未更改静音状态。");
+                        before.OperationSucceeded=false;
                         return before;
                     }
                     IMMDevice microphone = null;
@@ -155,7 +171,7 @@ namespace AtkBattery {
                         Check(volume.GetMute(out actualMute), "核验麦克风静音状态");
                         if (actualMute != mute) throw new InvalidOperationException("麦克风静音设置后核验不一致。");
                         AudioReading after = ReadCore(session);
-                        if (after.MicrophoneMuted != mute) throw new InvalidOperationException("麦克风静音重新读取后核验不一致。");
+                        if (!SameId(after.MicrophoneId,before.MicrophoneId)||after.MicrophoneMuted != mute) throw new InvalidOperationException("麦克风端点或静音重新读取后核验不一致。");
                         after.OperationSucceeded = true;
                         return after;
                     } catch (Exception ex) {
@@ -191,6 +207,7 @@ namespace AtkBattery {
             return OnAudioThread(delegate {
                 using(var session=new AudioSession()) {
                     var before=ReadCore(session);
+                    if(DeviceSettings.Current.ExplicitAudioBindingsOnly&&!SameId(expectedEndpointId,before.SpeakerId)&&!SameId(expectedEndpointId,before.HeadsetId)){before.OperationSucceeded=false;before.Error="输出不属于当前设备绑定，未更改音量。";return before;}
                     if(!SameId(before.ConsoleOutputId,expectedEndpointId)){before.OperationSucceeded=false;before.Error="输出设备已改变，请重试。";return before;}
                     IMMDevice device=null;object native=null;float old=0;bool changed=false;
                     try {
@@ -265,7 +282,8 @@ namespace AtkBattery {
             }
             result.Endpoints = descriptions.ToArray();
             result.Devices = choices.ToArray();
-            if(!String.IsNullOrEmpty(result.ConsoleOutputId)) {
+            bool volumeInScope=!bindings.ExplicitAudioBindingsOnly||SameId(result.ConsoleOutputId,result.SpeakerId)||SameId(result.ConsoleOutputId,result.HeadsetId);
+            if(!String.IsNullOrEmpty(result.ConsoleOutputId)&&volumeInScope) {
                 IMMDevice device=null;object native=null;
                 try {
                     Check(session.Enumerator.GetDevice(result.ConsoleOutputId,out device),"打开当前输出设备");
@@ -300,6 +318,7 @@ namespace AtkBattery {
             ambiguous = false;
             if(target!="speaker"&&target!="headset"&&target!="microphone")return null;
             string configuredId=bindings.EndpointFor(target);
+            if(bindings.ExplicitAudioBindingsOnly&&String.IsNullOrEmpty(configuredId))return null;
             if(!String.IsNullOrEmpty(configuredId)) {
                 int expectedFlow=target=="microphone"?1:0;
                 foreach(var endpoint in endpoints) {

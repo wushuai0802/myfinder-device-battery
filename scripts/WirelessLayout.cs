@@ -8,7 +8,7 @@ namespace AtkBatteryTray {
         internal string Id,Name,Kind,Subtitle;
         internal BatteryView Battery;
         internal WirelessDevice Device;
-        internal bool NativeMouse,NativeHeadset;
+        internal bool NativeMouse,NativeHeadset,Hidden;
         internal int Height {get{return NativeMouse?VisualDesign.MouseCardHeight(Dpi):NativeHeadset?96:VisualDesign.GenericCardHeight;}}
         internal DpiConfig Dpi;
         internal float Top;
@@ -18,9 +18,12 @@ namespace AtkBatteryTray {
         internal readonly List<WirelessCard> All=new List<WirelessCard>();
         internal int Start,End;
         internal float Footer;
+        internal bool HasVolume=true;
+        internal float VolumeTop;
+        internal RectangleF VolumeRect {get{return new RectangleF(0,VolumeTop,260,VisualDesign.SystemVolumeHeight);}}
         internal bool Paged {get{return Start>0||End<All.Count;}}
         internal Size Size {get{return new Size(260,(int)Footer+30);}}
-        internal static WirelessLayout Build(TrayContext owner,int offset,int maximumHeight) {
+        internal static WirelessLayout Build(TrayContext owner,int offset,int maximumHeight,bool includeHidden=false) {
             var layout=new WirelessLayout();var pref=DeviceSettings.Current;var now=DateTime.UtcNow;
             if(owner.NativeMousePresent)layout.All.Add(new WirelessCard {Id="native:mouse",Name=pref.MouseAlias,Kind="mouse",Battery=UiState.Mouse(owner.Current,owner.LastGood,now),NativeMouse=true,Dpi=owner.Dpi});
             foreach(var device in owner.WirelessDevices) {
@@ -28,14 +31,23 @@ namespace AtkBatteryTray {
                 layout.All.Add(new WirelessCard {Id=device.Id,Name=name,Kind=device.Kind,Device=device,Battery=View(device)});
             }
             if(VisualDesign.ShouldShowHeadset(owner.Headset))layout.All.Add(new WirelessCard {Id="native:headset",Name=pref.HeadsetAlias,Kind="headset",Battery=UiState.Headset(owner.Headset,now),NativeHeadset=true});
-            if(layout.All.Count==0)layout.All.Add(new WirelessCard {Id="empty",Name="无线设备",Kind="device",Battery=new BatteryView {Name="无线设备"},Subtitle=owner.GenericScanning?"正在识别设备…":!String.IsNullOrEmpty(owner.GenericError)?"设备读取组件暂不可用":owner.GenericFailureCount>0||!String.IsNullOrEmpty(owner.GenericHealthSummary)?"部分读取器暂不可用":!owner.GenericReady?"设备读取组件尚未就绪":"尚未连接兼容设备"});
+            var hidden=new HashSet<string>(pref.HiddenDeviceIds,StringComparer.Ordinal);
+            if(includeHidden)foreach(string id in pref.HiddenDeviceIds)if(!layout.All.Exists(delegate(WirelessCard card){return card.Id==id;})) {
+                string alias;string name=id=="native:mouse"?pref.MouseAlias:id=="native:headset"?pref.HeadsetAlias:pref.DeviceAliases.TryGetValue(id,out alias)?alias:"已隐藏设备";
+                layout.All.Add(new WirelessCard {Id=id,Name=name,Kind="device",Battery=new BatteryView {Name=name},Subtitle="设备未连接"});
+            }
+            var discovered=new List<WirelessCard>(layout.All);layout.All.Clear();var added=new HashSet<string>(StringComparer.Ordinal);
+            Action<WirelessCard> add=delegate(WirelessCard card){if(card==null||!added.Add(card.Id))return;card.Hidden=hidden.Contains(card.Id);if(includeHidden||!card.Hidden)layout.All.Add(card);};
+            foreach(string id in pref.DeviceOrder)add(discovered.Find(delegate(WirelessCard card){return card.Id==id;}));
+            foreach(var card in discovered)add(card);
+            if(layout.All.Count==0)layout.All.Add(new WirelessCard {Id="empty",Name="无线设备",Kind="device",Battery=new BatteryView {Name="无线设备"},Subtitle=discovered.Count>0?"设备已隐藏，可在设备管理中恢复":owner.GenericScanning?"正在识别设备…":!String.IsNullOrEmpty(owner.GenericError)?"设备读取组件暂不可用":owner.GenericFailureCount>0||!String.IsNullOrEmpty(owner.GenericHealthSummary)?"部分读取器暂不可用":!owner.GenericReady?"设备读取组件尚未就绪":"尚未连接兼容设备"});
             layout.Start=Math.Max(0,Math.Min(offset,layout.All.Count-1));
             float y=0;int end=layout.Start;
             foreach(var card in layout.All.GetRange(layout.Start,layout.All.Count-layout.Start)) {
-                if(layout.Cards.Count>0&&y+card.Height+30>maximumHeight)break;
+                if(layout.Cards.Count>0&&y+card.Height+VisualDesign.CardGap+VisualDesign.SystemVolumeHeight+VisualDesign.FooterHeight>maximumHeight)break;
                 card.Top=y;layout.Cards.Add(card);y+=card.Height+VisualDesign.CardGap;end++;
             }
-            layout.End=end;layout.Footer=Math.Max(0,y-VisualDesign.CardGap);return layout;
+            layout.End=end;layout.VolumeTop=Math.Max(0,y);layout.Footer=layout.VolumeTop+VisualDesign.SystemVolumeHeight;return layout;
         }
         internal static BatteryView View(WirelessDevice device) {
             bool system=device.SourceQuality=="system_property";

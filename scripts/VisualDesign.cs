@@ -10,8 +10,9 @@ namespace AtkBatteryTray {
         internal static bool? HighContrastOverride=null;
         public static bool HighContrast {get{return HighContrastOverride??System.Windows.Forms.SystemInformation.HighContrast;}}
         public const int CardGap=8,GenericCardHeight=60;
+        public const int SystemVolumeHeight=48;
         public const float BatteryRingSize=25,BatteryDigitSize=18;
-        public static Size PanelSize {get{return new Size(260,126);}}
+        public static Size PanelSize {get{return PanelSizeFor(false);}}
         public static float PanelRadius {get{return 16;}}
         public static int MouseCardHeight(DpiConfig dpi){return dpi!=null&&dpi.Stages!=null&&dpi.Stages.Count>4?126:96;}
         public static bool ShouldShowHeadset(HeadsetReading headset) {
@@ -19,12 +20,13 @@ namespace AtkBatteryTray {
         }
         public static Size PanelSizeFor(HeadsetReading headset){return PanelSizeFor(headset,null);}
         public static Size PanelSizeFor(HeadsetReading headset,DpiConfig dpi){return PanelSizeFor(ShouldShowHeadset(headset),dpi);}
-        public static Size PanelSizeFor(bool headset,DpiConfig dpi=null){return new Size(260,MouseCardHeight(dpi)+(headset?104:0)+30);}
+        public static Size PanelSizeFor(bool headset,DpiConfig dpi=null){return new Size(260,(int)FooterRectFor(headset,dpi).Bottom);}
         public static RectangleF MouseNameRect {get{return new RectangleF(10,6,150,44);}}
         public static RectangleF MouseMeterRect {get{return new RectangleF(168,6,84,44);}}
         public static RectangleF HeadsetNameRectFor(DpiConfig dpi){return new RectangleF(10,MouseCardHeight(dpi)+14,150,44);}
         public static RectangleF HeadsetMeterRectFor(DpiConfig dpi){return new RectangleF(168,MouseCardHeight(dpi)+14,84,44);}
-        public static RectangleF FooterRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,MouseCardHeight(dpi)+(headset?104:0),260,30);}
+        public static RectangleF SystemVolumeRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,MouseCardHeight(dpi)+(headset?104:0)+CardGap,260,SystemVolumeHeight);}
+        public static RectangleF FooterRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,SystemVolumeRectFor(headset,dpi).Bottom,260,FooterHeight);}
         public static RectangleF RefreshRectFor(bool headset,DpiConfig dpi){var footer=FooterRectFor(headset,dpi);return new RectangleF(8,footer.Y+1,208,28);}
         public static RectangleF MoreRectFor(bool headset,DpiConfig dpi){var footer=FooterRectFor(headset,dpi);return new RectangleF(226,footer.Y+1,28,28);}
         public static RectangleF RefreshRect {get{return RefreshRectFor(false,null);}}

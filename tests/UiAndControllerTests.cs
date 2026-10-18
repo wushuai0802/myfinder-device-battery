@@ -80,12 +80,12 @@ static class UiAndControllerTests {
                 Check(Math.Abs(point.X-150)<.81&&Math.Abs(point.Y-160)<.81,"hit coordinate maps correctly at "+scale);
                 using(var image=Render(mouse,headset,null,false,scale)) {
                     Check(image.GetPixel((int)(130*scale),(int)(100*scale)).A==0,"separate cards keep a transparent gap at "+scale);
-                    Check(image.Width==(int)Math.Round(260*scale)&&image.Height==(int)Math.Round(230*scale),"compact layout size matches scale "+scale);
+                    Check(image.Width==(int)Math.Round(260*scale)&&image.Height==(int)Math.Round(286*scale),"compact layout includes one shared system volume row at scale "+scale);
                     image.Save(Path.Combine(output,"cards-"+scale.ToString(System.Globalization.CultureInfo.InvariantCulture)+".png"));
                 }
             }
             var eight=Dpi(1);foreach(int value in new[]{2400,3200,4800,6400})eight.Stages.Add(new DpiStage {XDpi=value,YDpi=value});
-            Check(VisualDesign.PanelSizeFor(true,eight).Height==260,"eight-stage panel reserves the second DPI row");
+            Check(VisualDesign.PanelSizeFor(true,eight).Height==316,"eight-stage panel reserves the second DPI row and shared system volume");
             for(int i=0;i<8;i++)Check(VisualDesign.StageRect(i,8).Bottom<=VisualDesign.MouseCardHeight(eight),"eight-stage hit area stays inside the mouse card");
             using(var image=Render(mouse,headset,null,false,2,eight))image.Save(Path.Combine(output,"cards-eight-stages.png"));
             using(var image=Render(new BatteryReading {Percent=100,TimestampUtc=now},null,null,true,2))image.Save(Path.Combine(output,"mouse-only-100.png"));
