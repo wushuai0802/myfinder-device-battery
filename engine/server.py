@@ -139,7 +139,7 @@ def normalise(status, previous, now, cached=False):
 
 
 def historical(value):
-    return dict(value, fresh=False, charging=None, chargingKnown=False,
+    return dict(value, online=False, fresh=False, charging=None, chargingKnown=False,
                 chargingCheckedAtUtc=None, connectionState="unconfirmed",
                 sourceQuality="cached", measurementState="cached" if value.get("percent") is not None else "unknown")
 
@@ -498,15 +498,21 @@ class BatteryEngine:
                                 self._ambiguous_providers.add(provider_name)
                             elif not target_name:
                                 self._ambiguous_providers.discard(provider_name)
-                        if not target_name:
-                            for key in list(self.by_provider):
-                                if key not in live_readers:
-                                    self.by_provider.pop(key, None)
-                                    self.health.pop(key, None)
-                            self._affinity = {key: value for key, value in self._affinity.items()
-                                              if key in live_readers or key in ("topology", "package")}
-                            self.retry_after = {key: value for key, value in self.retry_after.items() if key in live_readers}
-                            self.failures = {key: value for key, value in self.failures.items() if key in live_readers}
+                        # Reconcile physical readers even if their first query
+                        # failed and never produced a by_provider entry. A
+                        # targeted round only supersedes its selected reader;
+                        # independent manager/provider faults retain ownership.
+                        states = (self.by_provider, self.health, self.last_poll,
+                                  self._affinity, self.retry_after, self.failures)
+                        if target_name:
+                            removed = ({target_name + "|" + target_physical} - live_readers
+                                       if target_physical else set())
+                        else:
+                            removed = {key for state in states for key in state
+                                       if "|" in key and key not in live_readers}
+                        for state in states:
+                            for key in removed:
+                                state.pop(key, None)
                     elif action == "smoke":
                         self.health["package"] = {"provider": "package", "state": "ok", "scope": "provider", "deviceCount": 0}
                     else:

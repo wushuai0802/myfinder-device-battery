@@ -310,6 +310,130 @@ class IdentityTests(unittest.TestCase):
         engine.close()
 
 
+class TopologyReconciliationTests(unittest.TestCase):
+    def setUp(self):
+        paths = patch.object(hidlist, "interface_paths", return_value=frozenset())
+        paths.start()
+        self.addCleanup(paths.stop)
+
+    def fixture(self, pool, providers=("lofree",)):
+        engine = poll_fixture(pool, providers)
+        self.addCleanup(engine.close)
+        return engine
+
+    def assert_reader_removed(self, engine, key):
+        for state in (engine.by_provider, engine.health, engine.last_poll,
+                      engine._affinity, engine.retry_after, engine.failures):
+            self.assertNotIn(key, state)
+
+    def test_targeted_removal_keeps_history_and_other_receiver_unchanged(self):
+        pool = FakePool([receiver("a"), receiver("b")], {
+            ("lofree", "physical-a"): (0, [DeviceStatus("a", "A", 25, source="lofree")]),
+            ("lofree", "physical-b"): (0, [DeviceStatus("b", "B", 75, source="lofree")])})
+        engine = self.fixture(pool)
+        first = {d["name"]: d for d in engine.poll()["devices"]}
+        other_health = dict(engine.health["lofree|physical-b"])
+        other_poll = engine.last_poll["lofree|physical-b"]
+        other_slot = engine._affinity["lofree|physical-b"]
+        pool.inventory[:] = [receiver("b")]
+        pool.calls.clear()
+        frames = []
+        second = engine.poll(force=True, device_id=first["A"]["id"], progress=frames.append)
+        current = {d["name"]: d for d in second["devices"]}
+        self.assertEqual(pool.calls, [("topology", "")])
+        self.assertEqual(current["A"]["percent"], first["A"]["percent"])
+        for field in ("confirmedAtUtc", "measuredAtUtc", "queriedAtUtc", "connectionCheckedAtUtc"):
+            self.assertEqual(current["A"][field], first["A"][field])
+        self.assertEqual(current["A"]["connectionState"], "unconfirmed")
+        self.assertEqual(current["A"]["measurementState"], "cached")
+        self.assertFalse(current["A"]["fresh"])
+        self.assertFalse(current["A"]["online"])
+        self.assertEqual(current["B"], first["B"])
+        self.assertEqual(engine.health["lofree|physical-b"], other_health)
+        self.assertEqual(engine.last_poll["lofree|physical-b"], other_poll)
+        self.assertEqual(engine._affinity["lofree|physical-b"], other_slot)
+        self.assert_reader_removed(engine, "lofree|physical-a")
+        self.assertTrue(all(not d["fresh"] and d["connectionState"] == "unconfirmed"
+                            for frame in frames for d in frame["devices"] if d["name"] == "A"))
+
+    def test_full_removal_keeps_original_measurement_as_unconfirmed_history(self):
+        pool = FakePool([receiver("a")], {
+            ("lofree", "physical-a"): (0, [DeviceStatus("a", "A", 25, source="lofree")])})
+        engine = self.fixture(pool)
+        first = engine.poll()["devices"][0]
+        pool.inventory.clear()
+        second = engine.poll(force=True)["devices"][0]
+        self.assertEqual(second["percent"], first["percent"])
+        self.assertEqual(second["measuredAtUtc"], first["measuredAtUtc"])
+        self.assertEqual(second["confirmedAtUtc"], first["confirmedAtUtc"])
+        self.assertEqual(second["connectionState"], "unconfirmed")
+        self.assertFalse(second["fresh"])
+        self.assertFalse(second["online"])
+        self.assert_reader_removed(engine, "lofree|physical-a")
+
+    def test_first_failed_reader_is_removed_and_empty_round_parks_children(self):
+        pool = FakePool([receiver("a")], {
+            ("lofree", "physical-a"): (0, IsolationError("timeout"))})
+        engine = self.fixture(pool)
+        first = engine.poll()
+        self.assertEqual(first["errors"], ["lofree: timeout"])
+        self.assertNotIn("lofree|physical-a", engine.by_provider)
+        self.assertIn("lofree|physical-a", engine.health)
+        pool.inventory.clear()
+        frames = []
+        second = engine.poll(park_empty_readers=True, progress=frames.append)
+        self.assertEqual(second["devices"], [])
+        self.assertEqual(second["errors"], [])
+        self.assertTrue(all(frame["errors"] == [] for frame in frames))
+        self.assertTrue(any(h["provider"] == "lofree" and h["state"] == "no_devices"
+                            for h in second["health"]))
+        self.assertTrue(all(child.closed == 1 for child in pool.children))
+        self.assert_reader_removed(engine, "lofree|physical-a")
+
+    def test_full_removal_retains_live_receiver_failure_and_backoff(self):
+        pool = FakePool([receiver("a"), receiver("b")], {
+            ("lofree", "physical-a"): (0, IsolationError("timeout")),
+            ("lofree", "physical-b"): (0, IsolationError("read_failed"))})
+        engine = self.fixture(pool)
+        engine.poll()
+        retry = engine.retry_after["lofree|physical-b"]
+        slot = engine._affinity["lofree|physical-b"]
+        pool.inventory[:] = [receiver("b")]
+        second = engine.poll(park_empty_readers=True)
+        self.assertEqual(second["errors"], ["lofree: read_failed"])
+        self.assertEqual(engine.health["lofree|physical-b"]["state"], "backoff")
+        self.assertEqual(engine.retry_after["lofree|physical-b"], retry)
+        self.assertEqual(engine.failures["lofree|physical-b"], 1)
+        self.assertEqual(engine._affinity["lofree|physical-b"], slot)
+        self.assertTrue(all(child.closed == 0 for child in pool.children))
+        self.assert_reader_removed(engine, "lofree|physical-a")
+
+    def test_reconnected_reader_does_not_inherit_removed_poll_interval(self):
+        pool = FakePool([receiver("a")])
+        engine = self.fixture(pool, ("standard_hid",))
+        engine.poll()
+        self.assertIn("standard_hid|physical-a", engine.last_poll)
+        pool.inventory.clear()
+        engine.poll()
+        self.assert_reader_removed(engine, "standard_hid|physical-a")
+        pool.inventory[:] = [receiver("a")]
+        pool.calls.clear()
+        engine.poll()
+        self.assertIn(("standard_hid", "physical-a"), pool.calls)
+
+    def test_failed_topology_does_not_discard_target_reader(self):
+        pool = FakePool([receiver("a")], {
+            ("lofree", "physical-a"): (0, [DeviceStatus("a", "A", 25, source="lofree")])})
+        engine = self.fixture(pool)
+        first = engine.poll()["devices"][0]
+        pool.inventory.clear()
+        pool.outcomes[("topology", "")] = (0, IsolationError("timeout"))
+        second = engine.poll(force=True, device_id=first["id"])
+        self.assertIn("topology: timeout", second["errors"])
+        self.assertEqual(second["devices"], [first])
+        self.assertIn("lofree|physical-a", engine.by_provider)
+
+
 class SchedulerTests(unittest.TestCase):
     def test_successful_topology_clears_only_its_prior_failure_and_partial_error(self):
         pool = FakePool([], {("topology", ""): (0, IsolationError("read_failed"))})
@@ -321,6 +445,8 @@ class SchedulerTests(unittest.TestCase):
             self.assertIn("topology", engine.retry_after)
             self.assertEqual(engine.failures["topology"], 1)
             engine._failure("independent", "independent", "read_failed")
+            independent_retry = engine.retry_after["independent"]
+            engine._affinity["independent"] = 1
             pool.outcomes[("topology", "")] = (0, [])
             second = engine.poll(park_empty_readers=True, progress=frames.append)
         self.assertNotIn("topology", engine.health)
@@ -329,6 +455,9 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(all("topology: read_failed" not in frame["errors"] for frame in frames))
         self.assertIn("independent: read_failed", second["errors"])
         self.assertIn("independent", engine.health)
+        self.assertEqual(engine.failures["independent"], 1)
+        self.assertEqual(engine.retry_after["independent"], independent_retry)
+        self.assertEqual(engine._affinity["independent"], 1)
         self.assertTrue(all(child.closed == 0 for child in pool.children))
         engine.close()
 
