@@ -8,11 +8,13 @@ namespace AtkBatteryTray {
     internal enum PopupPage { Main, More, Audio, Preferences, Mouse, Headset, Diagnostics, Bindings, PickBinding, ChoosePreference, Devices, Device, ManageDevice }
     internal sealed class PopupControl {
         public int Id;
+        public int DpiValue;
         public RectangleF Rect;
-        public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey;
+        public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken;
         public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy;
         public string StableKey {get {
             string action=ActionKey;
+            if(DpiValue>0)action="wireless-dpi:"+DpiValue+":"+(TargetToken??"");
             if(String.IsNullOrEmpty(action))action=Id>=2000&&Id<3000?"refresh":Id>=1000&&Id<2000?"details":Id>=300&&Id<400?"binding:"+(EndpointId??"auto"):"action:"+Id;
             return (DeviceKey??"global")+"|"+action;
         }}
@@ -160,6 +162,13 @@ namespace AtkBatteryTray {
                 rows.Add(Row(222,"显示名称",nav.SelectedDeviceName));
                 if(device!=null){var reading=WirelessLayout.View(device);rows.Add(Info("类型",device.Kind=="keyboard"?"键盘":device.Kind=="mouse"?"鼠标":device.Kind=="headset"?"耳机":"无线设备"));rows.Add(Info("连接",device.Transport));rows.Add(Info("适配验证",String.IsNullOrEmpty(device.VerificationLabel)?"待型号实测":device.VerificationLabel));rows.Add(Info("电量",device.Percent.HasValue?(device.Approximate?"约":"")+device.Percent+"%":"暂不可读"));rows.Add(Info("数据",reading.SystemProvided?"系统提供":reading.Fresh?device.Approximate?"估算 / 档位":"设备上报":"历史读数"));rows.Add(Info(reading.SystemProvided?"最近查询":"最近确认",reading.SystemProvided?reading.QueryText:reading.TimeText));}
                 else rows.Add(Info("状态","设备已断开"));
+                if(device!=null&&device.Kind=="mouse"&&device.Dpi!=null&&device.Dpi.Supported) {
+                    var dpi=device.Dpi;string failure=owner.WirelessDpiFailure(device.Id,dpi.TargetToken)??dpi.Error;bool fresh=WirelessLayout.DpiFresh(device)&&String.IsNullOrEmpty(failure);
+                    rows.Insert(3,Info(WirelessLayout.DpiLabel(device),dpi.Current.HasValue?(fresh?"":"上次 ")+dpi.Current.Value:"未读取"));
+                    rows.Insert(4,Info("DPI来源",dpi.StageSource=="onboard"?"设备板载档位":dpi.StageSource=="quick"?"快捷值，非板载":"未确认"));
+                    rows.Add(Info("DPI最近确认",dpi.CheckedTime==DateTime.MinValue?"时间未知":BatteryView.FormatTime(dpi.CheckedTime)));
+                    rows.Add(Info("DPI状态",!String.IsNullOrEmpty(failure)?failure:!fresh?"连接或读数待确认":owner.CanSetWirelessDpi(device.Id,dpi.TargetToken)?"可切换":"只读"));
+                }
                 var pin=Toggle(218,"固定为托盘主设备",!String.IsNullOrEmpty(nav.SelectedDeviceKey)&&pref.TrayDeviceId==nav.SelectedDeviceKey);pin.Enabled=device!=null;rows.Add(pin);
                 var sync=Row(251,WirelessLayout.RefreshText(device),null,"refresh");sync.Enabled=device!=null;rows.Add(sync);
                 if(device!=null&&device.Kind=="headset")rows.Add(Row(200,"音源与麦克风",null,"speaker"));
@@ -190,6 +199,11 @@ namespace AtkBatteryTray {
                 if(row.Id>=10&&row.Id<18)row.ActionKey="dpi:"+(row.Id-10);
                 if(nav.Page==PopupPage.PickBinding&&row.Id>=300&&row.Id<400)row.ActionKey="binding:"+nav.BindingRole+":"+(row.EndpointId??"auto");
                 if(row.Id>=10&&row.Id<18){row.Selected=owner.Dpi!=null&&owner.Dpi.ActiveStage==row.Id-10;row.Busy=feedback.PendingStage==row.Id-10;}
+                if(row.DpiValue>0) {
+                    var device=Array.Find(owner.WirelessDevices,delegate(WirelessDevice item){return item.Id==row.DeviceKey&&item.Dpi!=null&&item.Dpi.TargetToken==row.TargetToken;});
+                    row.Enabled&=device!=null&&owner.CanSetWirelessDpi(row.DeviceKey,row.TargetToken);
+                    row.Selected=device!=null&&WirelessLayout.DpiFresh(device)&&String.IsNullOrEmpty(owner.WirelessDpiFailure(row.DeviceKey,row.TargetToken))&&device.Dpi.Current==row.DpiValue;row.Busy=owner.DesiredWirelessDpi(row.DeviceKey,row.TargetToken)==row.DpiValue;
+                }
                 if(row.Id==100||row.Id==101){row.Selected=owner.AudioControlsAvailable&&owner.Audio!=null&&owner.Audio.ActiveOutput==(row.Id==100?"speaker":"headset");row.Busy=feedback.PendingOutput==(row.Id==100?"speaker":"headset");}
                 if(row.Id==102){row.Toggle=true;row.Checked=owner.AudioControlsAvailable&&owner.Audio!=null&&owner.Audio.MicrophoneMuted==true;row.Busy=feedback.MicrophonePending;}
                 if(row.Id==100||row.Id==101||row.Id==102||row.Id==240)row.Enabled&=owner.AudioControlsAvailable;
@@ -236,6 +250,11 @@ namespace AtkBatteryTray {
                     int index=layout.All.IndexOf(card);
                     rows.Add(new PopupControl {Id=1000+index,Text=card.Name,Rect=new RectangleF(10,card.Top+6,150,44),DeviceKey=card.Id,Enabled=card.Id!="empty"});
                     rows.Add(new PopupControl {Id=2000+index,Text=card.Battery.Tooltip+"，"+WirelessLayout.RefreshText(card.Device),Rect=new RectangleF(168,card.Top+6,84,44),DeviceKey=card.Id,Enabled=card.Id!="empty"});
+                    int count=WirelessLayout.DpiStageCount(card.Device);
+                    for(int i=0;i<count;i++) {
+                        var dpi=card.Device.Dpi;int value=dpi.Stages[i];var rect=WirelessLayout.DpiRect(card,i);rect.Inflate(0,count>4?1:2);
+                        rows.Add(new PopupControl {Id=WirelessLayout.DpiActionId(index,i),DpiValue=value,TargetToken=dpi.TargetToken,DeviceKey=card.Id,Rect=rect,Text=card.Name+"，设置"+WirelessLayout.DpiLabel(card.Device)+"为 "+value,Value=value+" DPI",Detail=dpi.StageSource=="quick"?"软件快捷值，不代表设备板载预设":"设备板载DPI档位",Enabled=owner.CanSetWirelessDpi(card.Id,dpi.TargetToken)});
+                    }
                 }
             }
             if(layout.Paged){rows.Add(new PopupControl {Id=902,Text="上一组设备",Rect=new RectangleF(158,layout.Footer+1,28,28),Enabled=layout.Start>0});rows.Add(new PopupControl {Id=903,Text="下一组设备",Rect=new RectangleF(192,layout.Footer+1,28,28),Enabled=layout.End<layout.All.Count});}

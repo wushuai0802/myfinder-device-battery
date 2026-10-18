@@ -38,6 +38,8 @@ class DeviceStatus:
     legacy_key: str = ""         # exact former key, not a name/PID based migration
     unit_id: str = ""            # optional proven cross-provider slot/unit identity
     refresh_scope: str = ""      # device only when this reader queries one unit
+    dpi: Optional[dict] = None   # independently timestamped public DPI evidence
+    dpi_target: Optional[dict] = None  # internal exact identity; never public JSON
 
 
 class Provider:

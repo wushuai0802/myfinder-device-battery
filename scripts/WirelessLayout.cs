@@ -9,7 +9,7 @@ namespace AtkBatteryTray {
         internal BatteryView Battery;
         internal WirelessDevice Device;
         internal bool NativeMouse,NativeHeadset,Hidden;
-        internal int Height {get{return NativeMouse?VisualDesign.MouseCardHeight(Dpi):NativeHeadset?96:VisualDesign.GenericCardHeight;}}
+        internal int Height {get{return NativeMouse?VisualDesign.MouseCardHeight(Dpi):NativeHeadset?96:WirelessLayout.DpiStageCount(Device)>0?WirelessLayout.DpiStageCount(Device)>4?126:96:VisualDesign.GenericCardHeight;}}
         internal DpiConfig Dpi;
         internal float Top;
     }
@@ -63,5 +63,18 @@ namespace AtkBatteryTray {
             return value.Fresh?device.Transport+" · 已连接":device.Online?"电量暂不可读":"连接待确认";
         }
         internal static string RefreshText(WirelessDevice device){return device!=null&&device.RefreshScope=="provider"?"同步同组设备":"同步此设备";}
+        internal static int DpiStageCount(WirelessDevice device){return device!=null&&device.Kind=="mouse"&&device.Dpi!=null&&device.Dpi.Supported&&device.Dpi.Stages!=null?Math.Min(8,device.Dpi.Stages.Length):0;}
+        internal static string DpiLabel(WirelessDevice device){return device!=null&&device.Dpi!=null&&device.Dpi.StageSource=="quick"?"快捷DPI":"DPI";}
+        internal static bool DpiFresh(WirelessDevice device) {
+            return device!=null&&device.Dpi!=null&&device.Dpi.Supported&&device.Dpi.Current.HasValue&&WirelessDpi.ValidValue(device.Dpi.Current.Value)&&String.IsNullOrEmpty(device.Dpi.Error)&&WirelessDpi.ValidToken(device.Dpi.TargetToken)&&device.Online&&device.ConnectionState=="connected"&&UiState.Recent(device.Dpi.CheckedTime,DateTime.UtcNow,90);
+        }
+        internal static string DpiSubtitle(WirelessDevice device,int? pending,string failure) {
+            string label=DpiLabel(device);if(pending.HasValue)return label+" · 等待 "+pending.Value;
+            if(!String.IsNullOrEmpty(failure))return label+" · 状态待确认";
+            if(device.Dpi.Current.HasValue)return label+" · "+(DpiFresh(device)?"":"上次 ")+device.Dpi.Current.Value;
+            return label+" · 未读取";
+        }
+        internal static RectangleF DpiRect(WirelessCard card,int stage) {var rect=VisualDesign.StageRect(stage,DpiStageCount(card.Device));rect.Y+=card.Top;return rect;}
+        internal static int DpiActionId(int cardIndex,int stage){return 3000+cardIndex*8+stage;}
     }
 }

@@ -42,7 +42,11 @@ Registers are only ever read, and only when no 2.0 feature answered.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 import hid
@@ -61,6 +65,9 @@ ASLEEP_KEEP = 300        # how long a silent device keeps its (greyed-out) icon,
 F_ROOT, F_INFO, F_NAME = 0x0000, 0x0003, 0x0005
 F_UNIFIED, F_STATUS, F_VOLTAGE, F_ADC = 0x1004, 0x1000, 0x1001, 0x1F20
 BATTERY_FEATURES = (F_UNIFIED, F_STATUS, F_VOLTAGE, F_ADC)
+F_DPI = 0x2201
+GPW_DPI_MODELS = {(0xC547, "PRO X Wireless")}
+QUICK_DPI = (400, 800, 1600, 3200)
 
 # HID++ 1.0 battery registers, for devices without a feature table (Solaar's
 # hidpp10): read with a short report, tried in this order when nothing else
@@ -187,6 +194,7 @@ class _Channel:
         self.error = False       # the last request got an error reply (not a timeout)
         self.error_code = 0      # the error code of that reply
         self._swid = 0
+        self.last_reply_length = 0
         self.long = hid.device()
         self.long.open_path(long_path)
         self.long.set_nonblocking(True)
@@ -211,6 +219,7 @@ class _Channel:
                 timeout: float = TIMEOUT) -> Optional[List[int]]:
         """Params of the reply, or None on an error reply (self.error set) or timeout."""
         self.error, self.error_code = False, 0
+        self.last_reply_length = 0
         self._swid = (self._swid + 1) % len(SWIDS)
         fn = (func << 4) | SWIDS[self._swid]
         req = [0x11, idx, feat, fn] + list(params)
@@ -227,6 +236,7 @@ class _Channel:
                     self.error, self.error_code = True, r[5]
                     return None
                 if r[2] == feat and r[3] == fn:
+                    self.last_reply_length = len(r) - 4
                     return list(r[4:]) + [0] * 16
             time.sleep(0.005)
         return None
@@ -316,6 +326,206 @@ def _instance(d) -> str:
     return inst.rsplit("&", 1)[0]
 
 
+def _dpi_now():
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _gpw_identity(pid, name, kind, unit):
+    return ((pid, name) in GPW_DPI_MODELS and kind == "mouse"
+            and isinstance(unit, str) and re.fullmatch(r"[0-9A-Fa-f]{8}", unit) is not None
+            and int(unit, 16) != 0)
+
+
+def _target_token(target):
+    identity = {key: target.get(key) for key in ("pid", "instance", "slot", "unit", "name", "sensor")}
+    for key in ("long_path", "short_path"):
+        path = target.get(key)
+        identity[key] = (bytes(path).hex() if isinstance(path, (bytes, bytearray)) else path)
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _dpi_view(target=None, current=None, supported=(), error=None, can_set=False):
+    choices = sorted({value for value in QUICK_DPI if value in supported}
+                     | ({current} if current in supported else set()))[:8]
+    return {"supported": bool(supported), "canSet": bool(can_set and target and current in supported),
+            "current": current, "stages": choices, "stageSource": "quick", "checkedAtUtc": _dpi_now(),
+            "targetToken": _target_token(target or {}), "error": error}
+
+
+def _dpi_reply(ch, slot, feature, function, params=(), minimum=1):
+    reply = ch.request(slot, feature, function, params)
+    if reply is None:
+        raise ValueError("dpi_read_failed")
+    actual = getattr(ch, "last_reply_length", len(reply))
+    if actual < minimum:
+        raise ValueError("dpi_invalid_reply")
+    return reply[:actual]
+
+
+def parse_dpi_list(reply):
+    """Decode 0x2201 supported values, not stored profile presets.
+
+    Protocol facts independently checked against Solaar settings_templates.py
+    at e7304c4c451cc9bb4f206a914844525e67856a28: fn 0x10, sensor prefix,
+    0xE000|step range descriptors; fn 0x20 current/default; fn 0x30 volatile set.
+    Only the bounded, terminated first-page format observed on this GPW is used.
+    """
+    if not reply or reply[0] != 0:
+        raise ValueError("dpi_invalid_supported_list")
+    values, offset = [], 1
+    while offset + 1 < len(reply):
+        word = (reply[offset] << 8) | reply[offset + 1]
+        offset += 2
+        if word == 0:
+            if values:
+                return tuple(values)
+            break
+        if word & 0xE000 == 0xE000:
+            if not values or offset + 1 >= len(reply):
+                break
+            step = word & 0x1FFF
+            last = (reply[offset] << 8) | reply[offset + 1]
+            offset += 2
+            if not step or last <= values[-1] or (last - values[-1]) % step:
+                break
+            count = (last - values[-1]) // step
+            if len(values) + count > 4096:
+                break
+            first = values[-1]
+            values.extend(first + step * index for index in range(1, count + 1))
+        elif values and word <= values[-1]:
+            break
+        else:
+            values.append(word)
+    raise ValueError("dpi_invalid_supported_list")
+
+
+def _dpi_current(ch, slot, feature):
+    reply = _dpi_reply(ch, slot, feature, 2, [0], minimum=5)
+    if reply[0] != 0:
+        raise ValueError("dpi_invalid_reply")
+    current = (reply[1] << 8) | reply[2]
+    default = (reply[3] << 8) | reply[4]
+    value = current or default
+    if value <= 0:
+        raise ValueError("dpi_current_unknown")
+    return value
+
+
+def _dpi_state(ch, slot, target):
+    feature = ch.feature_index(slot, F_DPI)
+    if not feature:
+        raise ValueError("dpi_not_supported")
+    sensors = _dpi_reply(ch, slot, feature, 0)
+    if sensors[0] != 1:
+        raise ValueError("dpi_sensor_not_supported")
+    supported = parse_dpi_list(_dpi_reply(ch, slot, feature, 1, [0], minimum=3))
+    current = _dpi_current(ch, slot, feature)
+    if current not in supported:
+        raise ValueError("dpi_current_unsupported")
+    return _dpi_view(target, current, supported, can_set=True), feature, supported
+
+
+def _fresh_unit(ch, slot):
+    feature = ch.feature_index(slot, F_INFO)
+    if not feature:
+        return ""
+    reply = _dpi_reply(ch, slot, feature, 0, minimum=5)
+    return bytes(reply[1:5]).hex().upper() if any(reply[1:5]) else ""
+
+
+def _capture_gpw_dpi(ch, pid, slot, instance, paths, name, kind, unit, identity_live):
+    if not identity_live or not _gpw_identity(pid, name, kind, unit) or not instance or not paths or 2 not in paths:
+        return _dpi_view(error="dpi_identity_unconfirmed"), None
+    target = {"provider": "logitech", "pid": pid, "instance": instance, "slot": slot,
+              "unit": unit, "name": name, "sensor": 0,
+              "long_path": paths[2], "short_path": paths.get(1)}
+    try:
+        view, _feature, _supported = _dpi_state(ch, slot, target)
+        return view, target
+    except (OSError, IOError, ValueError, TypeError, IndexError) as error:
+        code = str(error) if isinstance(error, ValueError) and str(error).startswith("dpi_") else "dpi_read_failed"
+        return _dpi_view(target, error=code), None
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token):
+    """Single volatile 0x2201 write to a freshly revalidated exact GPW target.
+
+    No onboard mode/profile/flash command, retry or uncertain rollback is sent.
+    The server must provide the selected physical receiver's scoped inventory.
+    """
+    view = _dpi_view(error="dpi_invalid_target")
+    def result(error, success=False, unknown=False, confirmed=None):
+        answer = dict(view)
+        answer["error"] = error
+        if error:
+            answer["canSet"] = False
+        if unknown:
+            answer.update(current=None, canSet=False)
+        return {"dpi": answer, "success": success, "outcomeUnknown": unknown,
+                "error": error, "confirmedDpi": None if unknown else confirmed}
+    if (not isinstance(target, dict) or target.get("pid") != 0xC547
+            or target.get("name") != "PRO X Wireless" or type(target.get("slot")) is not int
+            or target["slot"] not in range(1, 7) or type(target.get("sensor")) is not int or target["sensor"] != 0
+            or not isinstance(target.get("instance"), str) or not target["instance"]
+            or not isinstance(target.get("long_path"), (bytes, str)) or not target["long_path"]
+            or target.get("short_path") is not None and not isinstance(target["short_path"], (bytes, str))
+            or not _gpw_identity(target["pid"], target["name"], "mouse", target.get("unit"))):
+        return result("dpi_invalid_target")
+    if not isinstance(target_token, str) or target_token != _target_token(target):
+        return result("dpi_stale_target")
+    if type(value) is not int or type(expected_dpi) is not int or not 0 < value <= 65535 or not 0 < expected_dpi <= 65535:
+        return result("dpi_invalid_value")
+    if not isinstance(inventory, (list, tuple)):
+        return result("dpi_invalid_target")
+    filtered = [entry for entry in inventory if isinstance(entry, dict) and "product_id" in entry
+                and "path" in entry and entry.get("vendor_id", LOGITECH_VID) == LOGITECH_VID]
+    paths = LogitechProvider._collections(filtered).get((target["pid"], target["instance"]))
+    if not paths or paths.get(2) != target.get("long_path") or paths.get(1) != target.get("short_path"):
+        return result("dpi_receiver_changed")
+    channel, attempted = None, False
+    try:
+        channel = _Channel(paths.get(1), paths[2])
+        slot = target["slot"]
+        if channel.request(slot, F_ROOT, 1, timeout=PING_TIMEOUT) is None:
+            return result("dpi_device_unavailable")
+        name, kind, unit = channel.identity(slot)
+        if not _gpw_identity(target["pid"], name, kind, unit) or unit != target["unit"]:
+            return result("dpi_target_changed")
+        view, feature, supported = _dpi_state(channel, slot, target)
+        if value not in supported:
+            return result("dpi_unsupported_value", confirmed=view["current"])
+        if view["current"] != expected_dpi:
+            return result("dpi_current_changed", confirmed=view["current"])
+        # The unit and current value are checked again immediately before the
+        # write, after capability queries which may have taken time.
+        if _fresh_unit(channel, slot) != target["unit"]:
+            return result("dpi_target_changed")
+        current = _dpi_current(channel, slot, feature)
+        if current != expected_dpi:
+            view = _dpi_view(target, current, supported, can_set=current in supported)
+            return result("dpi_current_changed", confirmed=current)
+        if value == current:
+            return result(None, success=True, confirmed=current)
+        attempted = True
+        acknowledged = channel.request(slot, feature, 3, [0, value >> 8, value & 0xFF]) is not None
+        try:
+            confirmed = _dpi_current(channel, slot, feature)
+            if _fresh_unit(channel, slot) != target["unit"]:
+                return result("dpi_target_changed", unknown=True)
+        except (OSError, IOError, ValueError):
+            return result("dpi_readback_unconfirmed", unknown=True)
+        view = _dpi_view(target, confirmed, supported, can_set=confirmed in supported)
+        if confirmed == value:
+            return result(None, success=True, confirmed=confirmed)
+        return result("dpi_readback_mismatch", unknown=not acknowledged, confirmed=confirmed)
+    except (OSError, IOError, ValueError, TypeError, KeyError):
+        return result("dpi_readback_unconfirmed" if attempted else "dpi_read_failed", unknown=attempted)
+    finally:
+        if channel is not None:
+            channel.close()
+
+
 class LogitechProvider(Provider):
     name = "logitech"
 
@@ -355,7 +565,7 @@ class LogitechProvider(Provider):
         return False
 
     def _read(self, ch: _Channel, pid: int, idx: int,
-              instance: str = "", multi: bool = False) -> Optional[DeviceStatus]:
+              instance: str = "", multi: bool = False, paths=None) -> Optional[DeviceStatus]:
         slot = (pid, instance, idx)
         if not self._ping(ch, slot):
             if ch.error and ch.error_code == ERR_OLD_PROTOCOL:
@@ -365,8 +575,19 @@ class LogitechProvider(Provider):
                     self._diag.append(f"  idx={idx}: no battery register answered")
                 return st
             return None
+        identity_live = slot not in self._ids
         if slot in self._ids:
             name, kind, unit = self._ids[slot]
+            if (pid, name) in GPW_DPI_MODELS:
+                # DPI controls never rely on the battery reader's cached unit.
+                try:
+                    fresh = ch.identity(idx)
+                    if all(fresh):
+                        name, kind, unit = fresh
+                        self._ids[slot] = fresh
+                        identity_live = True
+                except (OSError, IOError, ValueError):
+                    pass
         else:
             name, kind, unit = ch.identity(idx)
             # keep it only when the read worked; a device that just woke up can miss
@@ -389,6 +610,7 @@ class LogitechProvider(Provider):
             self._diag.append(f"  idx={idx} '{name}' unit={unit or '?'} feature {feature:04x}: "
                               f"{hexdump(r, 4)} -> {approx or f'{level}%'}{' (charging)' if chg else ''}")
             if level is not None:
+                battery_time = _dpi_now()
                 # The unit id is stable across receiver and cable and tells identical
                 # devices apart; without one, fall back to the receiver slot. Two
                 # receivers of the same kind hand out the same unit ids, so the
@@ -403,8 +625,13 @@ class LogitechProvider(Provider):
                 if old and old != key:
                     self._last.pop(old, None)
                 self._slot_key[slot] = key
+                dpi, target = None, None
+                if (pid, name) in GPW_DPI_MODELS:
+                    dpi, target = _capture_gpw_dpi(ch, pid, idx, instance, paths, name, kind, unit, identity_live)
                 return DeviceStatus(key, name, level, chg, True, "logitech", approx=approx,
-                                    kind=kind)
+                                    kind=kind, dpi=dpi, dpi_target=target,
+                                    measured_at_utc=battery_time if dpi is not None else None,
+                                    queried_at_utc=battery_time if dpi is not None else None)
         # nothing from the 2.0 features: an older device may answer its
         # registers instead (it has no feature table at all)
         st = self._register_battery(ch, slot, pid, idx, instance, multi)
@@ -491,7 +718,7 @@ class LogitechProvider(Provider):
                 continue
             try:
                 for idx in (range(1, 7) if receiver else (0xFF,)):
-                    st = self._read(ch, pid, idx, inst, pid in repeats)
+                    st = self._read(ch, pid, idx, inst, pid in repeats, paths)
                     # the same device on the cable and through the receiver: charging wins
                     if st and (st.key not in found or st.charging):
                         found[st.key] = st

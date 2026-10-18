@@ -1,8 +1,9 @@
 """Private offline manager; bounded readers and request-tagged partial snapshots.
 
-No new protocol probes, GUI, socket, updater or persistent service. Vendor
+No GUI, socket, updater or persistent service. Vendor
 readers see only one proven physical instance at a time. Two lazy child slots
 are controlled by kill-on-close jobs, including nested Bluetooth PowerShell.
+Verified Logitech DPI controls share the same bounded, identity-scoped readers.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import importlib
 import json
 import logging
 import math
+import re
 import sys
 import time
 from collections import Counter
@@ -89,6 +91,26 @@ def valid_time(value, now=None):
         return None
 
 
+def normalise_dpi(value, usable=False):
+    """DPI evidence is independent of battery evidence and never cache-authorises writes."""
+    if not isinstance(value, dict) or value.get("supported") is not True:
+        return None
+    current = value.get("current")
+    if type(current) is not int or not 50 <= current <= 65535:
+        current = None
+    stages = value.get("stages")
+    stages = list(dict.fromkeys(v for v in stages if type(v) is int and 50 <= v <= 65535))[:8] if isinstance(stages, list) else []
+    stamp = valid_time(value.get("checkedAtUtc"))
+    recent = bool(stamp and (datetime.now(timezone.utc) - datetime.fromisoformat(stamp.replace("Z", "+00:00"))).total_seconds() <= 90)
+    token = value.get("targetToken")
+    writable = bool(usable and recent and current is not None and stages and
+                    value.get("canSet") is True and isinstance(token, str) and re.fullmatch(r"[a-f0-9]{64}", token))
+    return {"supported": True, "canSet": writable, "current": current, "stages": stages,
+            "stageSource": "onboard" if value.get("stageSource") == "onboard" else "quick",
+            "checkedAtUtc": stamp, "targetToken": token if writable else None,
+            "error": clean_name(value.get("error")) if value.get("error") else None}
+
+
 def normalise(status, previous, now, cached=False):
     """Keep measurement evidence: querying history cannot renew sample time."""
     old = previous or {}
@@ -135,13 +157,17 @@ def normalise(status, previous, now, cached=False):
         "refreshScope": (status.refresh_scope if status.refresh_scope in ("device", "provider")
                          else "provider" if system or status.source in ("logitech", "standard_hid")
                          else "device" if status.physical_id else "provider"),
+        "dpi": normalise_dpi(getattr(status, "dpi", None) or old.get("dpi"),
+                             usable=bool(getattr(status, "dpi", None)) and online and not cached
+                             and status.source == "logitech" and kind_of(status) == "mouse"),
     }
 
 
 def historical(value):
     return dict(value, online=False, fresh=False, charging=None, chargingKnown=False,
                 chargingCheckedAtUtc=None, connectionState="unconfirmed",
-                sourceQuality="cached", measurementState="cached" if value.get("percent") is not None else "unknown")
+                sourceQuality="cached", measurementState="cached" if value.get("percent") is not None else "unknown",
+                dpi=normalise_dpi(value.get("dpi")))
 
 
 def provider_class(name):
@@ -225,6 +251,18 @@ def reader_child():
                     candidates = recognized_candidate_count(name, command.get("inventory", []))
                 response = {"statuses": [asdict(s) for s in statuses[:MAX_DEVICES]], "checkedAtUtc": utcnow(),
                             "candidateCount": candidates}
+            elif action == "set_dpi":
+                # Only the selected physical receiver reaches the provider. The
+                # provider re-reads slot/unit, current value and supported range
+                # immediately before its one volatile write.
+                if command.get("provider") != "logitech":
+                    raise ValueError("invalid dpi provider")
+                from providers.logitech import set_device_dpi
+                selected = [d for d in command.get("inventory", [])
+                            if d.get("physical_id") == command.get("physicalId")
+                            and d.get("vendor_id") == 0x046D]
+                response = set_device_dpi(selected, command.get("target"), command.get("dpi"),
+                                          command.get("expectedDpi"), command.get("targetToken"))
             else:
                 raise ValueError("invalid action")
             response["sequence"] = sequence
@@ -272,6 +310,7 @@ class BatteryEngine:
         self.failures = {}
         self.retry_after = {}
         self.physical_by_id = {}
+        self.dpi_targets = {}
         self.provider_by_id = {}
         self.errors = []
         self._affinity = {}
@@ -312,6 +351,8 @@ class BatteryEngine:
                 if 0 <= age < MAX_RETAIN_SECONDS:
                     live[key] = historical(value)
         for key, value in list(live.items()):
+            if value.get("dpi"):
+                live[key] = value = dict(value, dpi=normalise_dpi(value["dpi"], usable=value["dpi"].get("canSet") is True))
             stamp = value.get("confirmedAtUtc")
             valid = valid_time(stamp, now)
             if value.get("measurementState") == "cached" and (not valid or
@@ -321,6 +362,7 @@ class BatteryEngine:
         self.previous = dict(list(live.items())[:MAX_DEVICES])
         self.provider_by_id = {key: value for key, value in self.provider_by_id.items() if key in self.previous}
         self.physical_by_id = {key: value for key, value in self.physical_by_id.items() if key in self.previous}
+        self.dpi_targets = {key: value for key, value in self.dpi_targets.items() if key in self.previous}
         devices = sorted(self.previous.values(), key=lambda d: ({"mouse": 0, "keyboard": 1, "headset": 2}.get(d["kind"], 3), d["name"], d["id"]))
         health = list(self.health.values())[:128]
         errors = [h["provider"] + ": " + h["errorCode"] for h in health if h.get("errorCode")]
@@ -331,6 +373,8 @@ class BatteryEngine:
 
     def _accept(self, reader_key, name, statuses, now, physical="", candidate_count=0):
         group = {}
+        for key in self.by_provider.get(reader_key, {}):
+            self.dpi_targets.pop(key, None)
         for status in statuses:
             if status.kind == "gamepad":
                 continue
@@ -341,6 +385,8 @@ class BatteryEngine:
             if previous is None and status.legacy_key:
                 previous = self.previous.get(public_id(status.legacy_key))
             group[key] = normalise(status, previous, now)
+            if group[key].get("dpi", {}) and group[key]["dpi"].get("canSet") and isinstance(getattr(status, "dpi_target", None), dict):
+                self.dpi_targets[key] = dict(status.dpi_target)
             self.provider_by_id[key] = name
             self.physical_by_id[key] = physical
         self.by_provider[reader_key] = group
@@ -355,6 +401,7 @@ class BatteryEngine:
     def _failure(self, reader_key, name, code):
         for key, value in self.by_provider.get(reader_key, {}).items():
             self.by_provider[reader_key][key] = historical(value)
+            self.dpi_targets.pop(key, None)
         count = self.failures.get(reader_key, 0) + 1
         self.failures[reader_key] = count
         wait = min(300, 5 * (2 ** min(count - 1, 6)))
@@ -363,6 +410,105 @@ class BatteryEngine:
                                   "deviceCount": len(self.by_provider.get(reader_key, {})), "errorCode": code,
                                   "scope": "provider", "checkedAtUtc": utcnow(),
                                   "nextRetryAtUtc": (datetime.now(timezone.utc) + timedelta(seconds=wait)).isoformat().replace("+00:00", "Z")}
+
+    def _dpi_update(self, device_id, dpi):
+        """Change only DPI evidence; a control read never renews battery time."""
+        if device_id in self.previous:
+            self.previous[device_id] = dict(self.previous[device_id], dpi=dpi)
+        for group in self.by_provider.values():
+            if device_id in group:
+                group[device_id] = dict(group[device_id], dpi=dpi)
+
+    def _single_reader(self, slot, command, budget):
+        from isolation import IsolationError
+        child = self.children[slot]
+        try:
+            child.start(command, budget)
+            while True:
+                result = child.result()
+                if result is not None:
+                    if not isinstance(result, dict):
+                        raise IsolationError("invalid_response")
+                    return result
+                time.sleep(.01)
+        except Exception:
+            child.close()
+            raise
+
+    def set_dpi(self, device_id, value, target_token, expected_dpi, request_id=0, generation=0):
+        """One identity-bound volatile write with readback, never a retry."""
+        result = {"deviceId": device_id, "targetToken": target_token,
+                  "requestedDpi": value, "confirmedDpi": None, "success": False,
+                  "outcomeUnknown": False, "error": "invalid_target", "checkedAtUtc": utcnow()}
+
+        def finish(error=None, unknown=False):
+            if error:
+                result.update(error=error, outcomeUnknown=unknown)
+            if not result["success"]:
+                old = self.previous.get(device_id, {}).get("dpi") if isinstance(device_id, str) else None
+                if old:
+                    stale = dict(old, canSet=False, targetToken=None, error=result["error"])
+                    if result["outcomeUnknown"]:
+                        stale.update(current=None, checkedAtUtc=None)
+                    self._dpi_update(device_id, stale)
+                self.dpi_targets.pop(device_id, None)
+            snapshot = self._snapshot(request_id, generation)
+            snapshot["dpiResult"] = result
+            return snapshot
+
+        if (not isinstance(device_id, str) or not re.fullmatch(r"device-[a-f0-9]{24}", device_id)
+                or type(value) is not int or not 50 <= value <= 65535
+                or type(expected_dpi) is not int or not 50 <= expected_dpi <= 65535
+                or not isinstance(target_token, str) or not re.fullmatch(r"[a-f0-9]{64}", target_token)):
+            return finish("invalid_request")
+        live = self._snapshot(request_id, generation)
+        device = next((d for d in live["devices"] if d["id"] == device_id), {})
+        dpi = device.get("dpi") or {}
+        target = self.dpi_targets.get(device_id)
+        physical = self.physical_by_id.get(device_id)
+        if (self._direct or self.package_smoke or self.provider_by_id.get(device_id) != "logitech"
+                or not physical or not target or not device.get("online")
+                or dpi.get("canSet") is not True or dpi.get("targetToken") != target_token):
+            return finish("stale_target")
+        if dpi.get("current") != expected_dpi:
+            return finish("current_changed")
+        if value not in dpi.get("stages", []):
+            return finish("unsupported_dpi")
+        reader_key = "logitech|" + physical
+        slot = self._affinity.get(reader_key, 0)
+        try:
+            paths = self._hidlist.interface_paths()
+            topology = self._single_reader(slot, {"action": "topology", "paths": sorted(paths) if paths is not None else None}, 6)
+            inventory = topology.get("inventory", [])
+            if not isinstance(inventory, list) or len(inventory) > 512:
+                return finish("invalid_topology")
+            selected = [d for d in inventory if d.get("physical_id") == physical
+                        and d.get("vendor_id") == 0x046D]
+            if not selected:
+                return finish("disconnected")
+        except Exception:
+            return finish("topology_unavailable")
+        try:
+            response = self._single_reader(slot, {"action": "set_dpi", "provider": "logitech",
+                    "physicalId": physical, "inventory": selected, "target": dict(target),
+                    "dpi": value, "expectedDpi": expected_dpi, "targetToken": target_token}, 12)
+            updated = normalise_dpi(response.get("dpi"), usable=True)
+            confirmed = response.get("confirmedDpi")
+            success = (response.get("success") is True and response.get("outcomeUnknown") is not True
+                       and updated is not None and updated.get("current") == value
+                       and updated.get("targetToken") == target_token and confirmed == value)
+            if updated:
+                self._dpi_update(device_id, updated)
+            result.update(success=success, confirmedDpi=confirmed if type(confirmed) is int else None,
+                          outcomeUnknown=response.get("outcomeUnknown") is True,
+                          error=None if success else clean_name(response.get("error") or "readback_failed"),
+                          checkedAtUtc=utcnow())
+            return finish()
+        except Exception:
+            # A pipe/driver timeout after dispatch cannot prove whether the one
+            # command reached the mouse. Kill the child, drop capability, and
+            # require a fresh read before another user-initiated command.
+            return finish("outcome_unknown", unknown=True)
 
     def poll(self, force=False, device_id=None, request_id=0, generation=0, progress=None, park_empty_readers=False):
         self._generation += 1
@@ -567,7 +713,8 @@ def main():
                 command = json.loads(line.lstrip("\ufeff"))
                 if command.get("command") == "exit":
                     break
-                if command.get("command") != "poll":
+                action = command.get("command")
+                if action not in ("poll", "set_dpi"):
                     continue
                 request_id, generation = command.get("requestId", 0), command.get("generation", 0)
                 if type(request_id) is not int or type(generation) is not int or min(request_id, generation) < 0:
@@ -576,9 +723,13 @@ def main():
                 if target is not None and (not isinstance(target, str) or not target.startswith("device-") or len(target) > 64):
                     continue
                 emit = lambda result: print(json.dumps(result, ensure_ascii=True), flush=True)
-                result = engine.poll(force=command.get("force") is True, device_id=target,
-                                     request_id=request_id, generation=generation, progress=emit,
-                                     park_empty_readers=command.get("parkEmptyReaders") is True)
+                if action == "set_dpi":
+                    result = engine.set_dpi(target, command.get("dpi"), command.get("targetToken"),
+                                            command.get("expectedDpi"), request_id, generation)
+                else:
+                    result = engine.poll(force=command.get("force") is True, device_id=target,
+                                         request_id=request_id, generation=generation, progress=emit,
+                                         park_empty_readers=command.get("parkEmptyReaders") is True)
                 emit(result)
             except Exception:
                 print(json.dumps({"schema": 2, "requestId": 0, "generation": 0, "complete": True,

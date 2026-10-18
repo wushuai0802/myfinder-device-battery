@@ -224,13 +224,25 @@ namespace AtkBatteryTray {
                     Paint(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,dark,owner.Headset,owner.Audio,1,-1,false,1,feedback.HoverAction>=100&&feedback.HoverAction<=102?feedback.HoverAction-100:-1,feedback);
                 }else {
                     int index=layout.All.IndexOf(card);
-                    DrawSurface(g,new RectangleF(.5f,card.Top+.5f,259,59),dark);
+                    DrawSurface(g,new RectangleF(.5f,card.Top+.5f,259,card.Height-1),dark);
                     string subtitle=card.Subtitle;
                     if(subtitle==null)subtitle=WirelessLayout.Subtitle(card.Device,card.Battery);
+                    int dpiCount=WirelessLayout.DpiStageCount(card.Device);
+                    if(dpiCount>0)subtitle=WirelessLayout.DpiSubtitle(card.Device,owner.DesiredWirelessDpi(card.Id,card.Device.Dpi.TargetToken),owner.WirelessDpiFailure(card.Id,card.Device.Dpi.TargetToken)??card.Device.Dpi.Error);
                     string icon=card.Kind=="keyboard"?"keyboard":card.Kind=="headset"?"headset":card.Kind=="mouse"?"mouse":"info";
                     Header(g,card.Name,subtitle,icon,card.Top,dark,feedback,1000+index);Meter(g,card.Battery,card.Top,dark,feedback,2000+index);
                     if(feedback.KeyboardFocus==1000+index)Outline(g,new RectangleF(10,card.Top+6,150,44),Blue(dark),1);
                     if(feedback.KeyboardFocus==2000+index)Outline(g,new RectangleF(168,card.Top+6,84,44),Blue(dark),1);
+                    if(dpiCount>0) {
+                        var dpi=card.Device.Dpi;bool enabled=owner.CanSetWirelessDpi(card.Id,dpi.TargetToken);int? pending=owner.DesiredWirelessDpi(card.Id,dpi.TargetToken);bool confirmed=WirelessLayout.DpiFresh(card.Device)&&String.IsNullOrEmpty(owner.WirelessDpiFailure(card.Id,dpi.TargetToken));
+                        var last=WirelessLayout.DpiRect(card,dpiCount-1);Fill(g,new RectangleF(10,card.Top+53,240,last.Bottom-card.Top-51),Track(dark),9);
+                        for(int i=0;i<dpiCount;i++) {
+                            var rect=WirelessLayout.DpiRect(card,i);int id=WirelessLayout.DpiActionId(index,i);bool waiting=pending==dpi.Stages[i],selected=confirmed&&dpi.Current==dpi.Stages[i];
+                            Selection(g,rect,dpi.Stages[i].ToString(),null,selected,enabled||selected&&pending.HasValue,enabled&&feedback.HoverAction==id,enabled&&feedback.PressedAction==id,waiting,dark);
+                            if(waiting&&!enabled)Outline(g,rect,Blue(dark),1.2f);
+                            if(feedback.KeyboardFocus==id)Outline(g,rect,Blue(dark),1.1f);
+                        }
+                    }
                 }
                 g.Restore(saved);
             }

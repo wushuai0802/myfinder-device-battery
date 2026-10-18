@@ -228,6 +228,7 @@ namespace AtkBatteryTray {
             if(id==0||id==4||id==5){owner.RefreshDevice(id==4?"mouse":id==5?"headset":"all");return;}
             if(id==1){Go(PopupPage.More);return;}if(id==6){Back();return;}
             if(id>=10&&id<18){owner.SelectDpiStage(id-10);SchedulePendingHint();return;}
+            if(id>=3000&&control.DpiValue>0){owner.SelectWirelessDpi(control.DeviceKey,control.TargetToken,control.DpiValue);SchedulePendingHint();return;}
             if(id==100||id==101){owner.SelectAudioOutput(id==100?"speaker":"headset");SchedulePendingHint();return;}
             if(id==102){owner.ToggleMicrophoneMute();SchedulePendingHint();return;}
             if(id==2){Go(PopupPage.Mouse);return;}if(id==3){Go(PopupPage.Headset);return;}
@@ -513,6 +514,7 @@ namespace AtkBatteryTray {
             if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name);
             visible.Append('|').Append(owner.DesiredVolume).Append('|').Append(hoverAction).Append('|').Append(pressedAction);
             visible.Append('|').Append(owner.NativeMousePresent).Append('|').Append(owner.GenericReady).Append('|').Append(owner.GenericScanning).Append('|').Append(navigation.DeviceScroll).Append('|').Append(navigation.SelectedDeviceKey).Append('|').Append(navigation.SelectedDeviceName);
+            visible.Append('|').Append(owner.WirelessDpiPresentationKey);
             foreach(var device in owner.WirelessDevices){visible.Append('|').Append(device.Key);string alias;if(preferences.DeviceAliases.TryGetValue(device.Id,out alias))visible.Append('|').Append(alias);}
             foreach(string id in preferences.HiddenDeviceIds)visible.Append("|hidden:").Append(id);
             foreach(string id in preferences.DeviceOrder)visible.Append("|order:").Append(id);
@@ -592,6 +594,13 @@ namespace AtkBatteryTray {
         GenericBatteryWorker genericWorker;
         int genericBusy;
         bool genericQueued;string genericQueuedTarget,genericTarget;
+        readonly Queue<WirelessDpiRequest> pendingWirelessDpi=new Queue<WirelessDpiRequest>();
+        WirelessDpiRequest wirelessDpiInFlight;
+        bool wirelessDpiNeedsReconcile;
+        int wirelessDpiGeneration,wirelessDpiEpoch;
+        sealed class DpiFailureState {internal string Token,Error;internal DateTime At;}
+        readonly Dictionary<string,DpiFailureState> wirelessDpiFailures=new Dictionary<string,DpiFailureState>(StringComparer.Ordinal);
+        WirelessDpiResult lastWirelessDpiResult;
         int historyGeneration;bool clearingHistory;
         DateTime genericChecked=DateTime.MinValue;
         readonly Dictionary<string,WirelessDevice> wirelessCache=new Dictionary<string,WirelessDevice>();
@@ -671,12 +680,13 @@ namespace AtkBatteryTray {
             try {string path=Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt");if(File.Exists(path)&&new FileInfo(path).Length<65536){string text=File.ReadAllText(path);lowBattery.Restore("mouse",text.Contains("mouse=1"));lowBattery.Restore("headset",text.Contains("headset=1"));foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text,@"(?m)^(device-[a-f0-9]{24})=1\r?$"))lowBattery.Restore(match.Groups[1].Value,true);}}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select) : this(showPanel,read,select,null,null) {}
-        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null) {
+        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null) {
             persistStatus=diagnostics;
             readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;writeVolume=volumeWriter;
             writeAudioCommand=audioCommandRunner;
+            genericWorker=wirelessReader;
             readLeftButton=leftButtonReader??new Func<bool>(NativeDisplay.IsLeftButtonPressed);
-            if(diagnostics){genericWorker=new GenericBatteryWorker();try{NativeMousePresent=MouseBattery.Enumerate().Count>0;}catch{NativeMousePresent=false;}}
+            if(diagnostics){if(genericWorker==null)genericWorker=new GenericBatteryWorker();try{NativeMousePresent=MouseBattery.Enumerate().Count>0;}catch{NativeMousePresent=false;}}
             var unused=dispatch.Handle;
             var menu=new ContextMenuStrip();
             var detail=new ToolStripMenuItem("设备电量与音频");detail.Click+=delegate {ShowDetails();};menu.Items.Add(detail);
@@ -794,7 +804,7 @@ namespace AtkBatteryTray {
         void ScheduleExpiry(){
             expiryTimer.Stop();var now=DateTime.UtcNow;DateTime earliest=DateTime.MaxValue;
             Action<DateTime> add=delegate(DateTime time){if(time==DateTime.MinValue||time>now.AddSeconds(5))return;var expiry=time.AddSeconds(90.1);if(expiry>now&&expiry<earliest)earliest=expiry;};
-            if(Current!=null)add(Current.TimestampUtc);if(Headset!=null){add(Headset.BatteryTimestampUtc);add(Headset.ChargingTimestampUtc);}foreach(var device in WirelessDevices)if(device.Fresh)add(device.ConfirmedTime);
+            if(Current!=null)add(Current.TimestampUtc);if(Headset!=null){add(Headset.BatteryTimestampUtc);add(Headset.ChargingTimestampUtc);}foreach(var device in WirelessDevices){if(device.Fresh)add(device.ConfirmedTime);if(device.Dpi!=null&&device.Dpi.Supported)add(device.Dpi.CheckedTime);}
             if(earliest!=DateTime.MaxValue){expiryTimer.Interval=Math.Max(250,Math.Min(91000,(int)(earliest-now).TotalMilliseconds));expiryTimer.Start();}
         }
         TrayView WirelessTray(string source) {
@@ -869,7 +879,11 @@ namespace AtkBatteryTray {
                     ",\"speakerAvailable\":"+(Audio!=null&&Audio.SpeakerAvailable?"true":"false")+
                     ",\"volumePercent\":"+(Audio!=null&&Audio.OutputVolumePercent.HasValue?Audio.OutputVolumePercent.Value.ToString():"null")+
                     ",\"microphoneMuted\":"+(Audio!=null&&Audio.MicrophoneMuted.HasValue?Audio.MicrophoneMuted.Value.ToString().ToLower():"null")+
-                    ",\"error\":\""+Escape(Audio==null?"":SafeDiagnostic.Clean(Audio.Error))+"\"},\"universalReady\":"+GenericReady.ToString().ToLower()+",\"universalDeviceCount\":"+WirelessDevices.Length+",\"universalError\":\""+Escape(GenericError)+"\",\"readerHealth\":\""+Escape(GenericHealthSummary)+"\",\"readerFailures\":"+GenericFailureCount+",\"audioReconcilePending\":"+audioNeedsReconcile.ToString().ToLower()+"}";
+                    ",\"error\":\""+Escape(Audio==null?"":SafeDiagnostic.Clean(Audio.Error))+"\"},\"universalReady\":"+GenericReady.ToString().ToLower()+",\"universalDeviceCount\":"+WirelessDevices.Length+",\"universalError\":\""+Escape(GenericError)+"\",\"readerHealth\":\""+Escape(GenericHealthSummary)+"\",\"readerFailures\":"+GenericFailureCount+",\"audioReconcilePending\":"+audioNeedsReconcile.ToString().ToLower()+
+                    ",\"genericDpi\":{\"busy\":"+(wirelessDpiInFlight!=null).ToString().ToLower()+",\"pendingCount\":"+pendingWirelessDpi.Count+",\"reconcilePending\":"+wirelessDpiNeedsReconcile.ToString().ToLower()+
+                    ",\"lastRequestedDpi\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.RequestedDpi.ToString())+",\"lastConfirmedDpi\":"+(lastWirelessDpiResult!=null&&lastWirelessDpiResult.ConfirmedDpi.HasValue?lastWirelessDpiResult.ConfirmedDpi.Value.ToString():"null")+
+                    ",\"lastSuccess\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.Success.ToString().ToLower())+",\"outcomeUnknown\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.OutcomeUnknown.ToString().ToLower())+
+                    ",\"error\":\""+Escape(lastWirelessDpiResult==null?"":SafeDiagnostic.Clean(lastWirelessDpiResult.Error))+"\",\"checkedAtUtc\":\""+Escape(lastWirelessDpiResult==null?"":lastWirelessDpiResult.CheckedAtUtc)+"\"}}";
                 fileWriter.Enqueue(path,json);
             } catch(IOException) {}catch(UnauthorizedAccessException){}
         }
@@ -888,6 +902,82 @@ namespace AtkBatteryTray {
             UpdateIcon();
         }
         public void RefreshWireless(string deviceId=null){manualRefresh=true;RequestWirelessRead(true,deviceId);UpdateIcon();}
+        WirelessDevice FindWirelessDpiDevice(string id){return Array.Find(WirelessDevices,delegate(WirelessDevice device){return device!=null&&device.Id==id;});}
+        bool HasPendingWirelessDpi(string id){if(wirelessDpiInFlight!=null&&wirelessDpiInFlight.DeviceId==id)return true;foreach(var request in pendingWirelessDpi)if(request.DeviceId==id)return true;return false;}
+        public bool CanSetWirelessDpi(string deviceId,string targetToken){
+            var device=FindWirelessDpiDevice(deviceId);
+            return !disposed&&!clearingHistory&&!wirelessDpiNeedsReconcile&&!HasPendingWirelessDpi(deviceId)&&device!=null&&device.Dpi!=null&&device.Dpi.CanWrite(device,targetToken);
+        }
+        public int? DesiredWirelessDpi(string deviceId,string targetToken){
+            foreach(var request in pendingWirelessDpi)if(request.DeviceId==deviceId&&request.TargetToken==targetToken)return request.Dpi;
+            return wirelessDpiInFlight!=null&&wirelessDpiInFlight.DeviceId==deviceId&&wirelessDpiInFlight.TargetToken==targetToken?(int?)wirelessDpiInFlight.Dpi:null;
+        }
+        public string WirelessDpiFailure(string deviceId,string targetToken){
+            DpiFailureState failure;if(wirelessDpiFailures.TryGetValue(deviceId??"",out failure)&&failure.Token==targetToken&&(DateTime.UtcNow-failure.At).TotalSeconds<15)return DpiFailureText(failure.Error);
+            if(wirelessDpiNeedsReconcile)return "DPI状态待确认，正在重新读取。";
+            var device=FindWirelessDpiDevice(deviceId);return device==null||device.Dpi==null?null:DpiFailureText(device.Dpi.Error);
+        }
+        static string DpiFailureText(string error){
+            if(String.IsNullOrEmpty(error))return null;
+            switch(error){
+                case "current_changed":return "DPI已被其他程序更改，请重新同步。";
+                case "invalid_target":case "target_changed":case "stale_target":case "stale_snapshot":return "设备或接收器已改变，请重新同步。";
+                case "unsupported":case "unsupported_dpi":case "invalid_dpi":return "此设备不支持该DPI值。";
+                case "offline":case "device_offline":case "device_missing":return "鼠标未连接或正在休眠。";
+                case "timeout":case "write_timeout":case "outcome_unknown":return "DPI结果未确认，请先同步；未自动重试。";
+                case "read_failed":case "write_failed":case "verify_failed":case "dpi_read_failed":return "DPI读写未能确认，请先同步。";
+                default:return System.Text.RegularExpressions.Regex.IsMatch(error,@"^[a-z][a-z0-9_:-]*$")?"DPI控制暂不可用，请重新同步。":error;
+            }
+        }
+        internal string WirelessDpiPresentationKey {get{
+            var key=new StringBuilder(wirelessDpiNeedsReconcile?"blocked":"ready");
+            foreach(var device in WirelessDevices)if(device.Dpi!=null)key.Append('|').Append(device.Id).Append(':').Append(DesiredWirelessDpi(device.Id,device.Dpi.TargetToken)).Append(':').Append(WirelessDpiFailure(device.Id,device.Dpi.TargetToken)).Append(':').Append(CanSetWirelessDpi(device.Id,device.Dpi.TargetToken));
+            return key.ToString();
+        }}
+        public void SelectWirelessDpi(string deviceId,string targetToken,int dpi){
+            if(genericWorker==null||!genericWorker.Available||!CanSetWirelessDpi(deviceId,targetToken))return;
+            var device=FindWirelessDpiDevice(deviceId);if(!WirelessDpi.ValidValue(dpi)||!device.Dpi.HasStage(dpi)||device.Dpi.Current==dpi)return;
+            pendingWirelessDpi.Enqueue(new WirelessDpiRequest(device.Id,targetToken,dpi,device.Dpi.Current.Value,device.Provider,device.Kind,wirelessDpiEpoch));
+            wirelessDpiFailures.Remove(deviceId);RunPendingWirelessDpi();UpdateIcon();
+        }
+        void FailWirelessDpi(WirelessDpiRequest request,string error){wirelessDpiFailures[request.DeviceId]=new DpiFailureState {Token=request.TargetToken,Error=error,At=DateTime.UtcNow};}
+        void BlockWirelessDpi(){
+            Interlocked.Increment(ref wirelessDpiEpoch);wirelessDpiNeedsReconcile=true;pendingWirelessDpi.Clear();
+            foreach(var device in WirelessDevices)GenericBatteryWorker.DisableDpi(device.Dpi);
+        }
+        void ContinueWirelessQueue(){
+            if(disposed||clearingHistory||genericBusy!=0)return;
+            if(genericQueued){string target=genericQueuedTarget;genericQueued=false;genericQueuedTarget=null;RequestWirelessRead(true,target);}
+            else RunPendingWirelessDpi();
+        }
+        void RunPendingWirelessDpi(){
+            if(disposed||clearingHistory||genericBusy!=0||wirelessDpiNeedsReconcile||genericWorker==null)return;
+            while(pendingWirelessDpi.Count>0){
+                var request=pendingWirelessDpi.Dequeue();var device=FindWirelessDpiDevice(request.DeviceId);
+                if(request.Epoch!=wirelessDpiEpoch||device==null||device.Provider!=request.Provider||device.Kind!=request.Kind||device.Dpi==null||!device.Dpi.CanWrite(device,request.TargetToken)||device.Dpi.Current!=request.ExpectedDpi||!device.Dpi.HasStage(request.Dpi)){
+                    FailWirelessDpi(request,"设备或DPI状态已改变，请重新同步后选择。");continue;
+                }
+                wirelessDpiInFlight=request;genericBusy=1;genericTarget=request.DeviceId;
+                ThreadPool.QueueUserWorkItem(delegate{
+                    WirelessSnapshot snapshot;
+                    try {snapshot=Thread.VolatileRead(ref wirelessDpiEpoch)==request.Epoch?genericWorker.SetDpi(request.DeviceId,request.TargetToken,request.Dpi,request.ExpectedDpi):new WirelessSnapshot {Error="读取组件已重置，DPI操作已取消。"};}
+                    catch(Exception){snapshot=new WirelessSnapshot {Error="DPI控制结果未确认。",DpiResult=new WirelessDpiResult {DeviceId=request.DeviceId,TargetToken=request.TargetToken,RequestedDpi=request.Dpi,OutcomeUnknown=true,Error="DPI控制结果未确认。"}};}
+                    if(disposed)return;
+                    try{dispatch.BeginInvoke((MethodInvoker)delegate{
+                        if(disposed)return;genericBusy=0;genericTarget=null;wirelessDpiInFlight=null;genericChecked=DateTime.UtcNow;
+                        if(request.Epoch==wirelessDpiEpoch){
+                            lastWirelessDpiResult=snapshot.DpiResult;
+                            ApplyWireless(snapshot,true);
+                            if(snapshot.DpiResult==null||!snapshot.DpiResult.Success||snapshot.DpiResult.OutcomeUnknown||!String.IsNullOrEmpty(snapshot.Error)){
+                                string error=snapshot.DpiResult==null?snapshot.Error:snapshot.DpiResult.Error;FailWirelessDpi(request,String.IsNullOrEmpty(error)?"DPI操作未确认，请先同步。":error);BlockWirelessDpi();genericQueued=true;genericQueuedTarget=null;
+                            }else wirelessDpiFailures.Remove(request.DeviceId);
+                        }else{BlockWirelessDpi();genericQueued=true;genericQueuedTarget=null;}
+                        UpdateIcon();ContinueWirelessQueue();
+                    });}catch(InvalidOperationException){}
+                });
+                return;
+            }
+        }
         void RequestWirelessRead(bool force,string deviceId=null) {
             if(disposed||genericWorker==null)return;
             if(clearingHistory){genericQueued=true;genericQueuedTarget=null;return;}
@@ -900,13 +990,15 @@ namespace AtkBatteryTray {
                 try{dispatch.BeginInvoke((MethodInvoker)delegate {
                     if(disposed)return;genericBusy=0;genericTarget=null;genericChecked=DateTime.UtcNow;
                     if(epoch==historyGeneration)ApplyWireless(snapshot,true);
-                    UpdateIcon();if(genericQueued){string target=genericQueuedTarget;genericQueued=false;genericQueuedTarget=null;RequestWirelessRead(true,target);}
+                    UpdateIcon();ContinueWirelessQueue();
                 });}catch(InvalidOperationException){}
             });
         }
         void ApplyWireless(WirelessSnapshot snapshot,bool complete){
             if(clearingHistory)return;
             if(String.IsNullOrEmpty(snapshot.Error)){
+                if(snapshot.Generation>0&&snapshot.Generation!=wirelessDpiGeneration){wirelessDpiGeneration=snapshot.Generation;Interlocked.Increment(ref wirelessDpiEpoch);pendingWirelessDpi.Clear();wirelessDpiFailures.Clear();}
+                if(complete&&snapshot.DpiResult==null)wirelessDpiNeedsReconcile=false;
                 GenericReady=true;GenericError=null;WirelessDevices=snapshot.Devices??new WirelessDevice[0];GenericHealth=snapshot.Health??new ReaderHealth[0];GenericFailureCount=0;
                 foreach(var health in GenericHealth)if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
@@ -915,18 +1007,18 @@ namespace AtkBatteryTray {
                     // A legacy PID-only key cannot prove which physical device
                     // produced a historical reading, even if only one is here now.
                     if(pref.RememberReadings&&!device.Percent.HasValue&&wirelessCache.TryGetValue(device.Id,out cached)&&device.SameCacheIdentity(cached)&&(DateTime.UtcNow-cached.ConfirmedTime).TotalDays<=7){device.Percent=cached.Percent;device.ConfirmedAtUtc=cached.ConfirmedAtUtc;device.Fresh=false;device.Approximate=cached.Approximate;device.Charging=null;device.SourceQuality="cached";}
-                    if(device.Percent.HasValue)wirelessCache[device.Id]=device;
+                    if(device.Percent.HasValue)wirelessCache[device.Id]=device.BatteryCacheCopy();
                 }
                 foreach(string key in new List<string>(wirelessCache.Keys))if((DateTime.UtcNow-wirelessCache[key].ConfirmedTime).TotalDays>7)wirelessCache.Remove(key);
                 if(complete&&!clearingHistory&&pref.RememberReadings)fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json"),ReadingCache.EncodeWireless(wirelessCache.Values));
                 bool previous=NativeMousePresent;if(snapshot.NativeMousePresent.HasValue)NativeMousePresent=snapshot.NativeMousePresent.Value;if(NativeMousePresent&&!previous)RequestRead(true,false);
-            }else{GenericError=snapshot.Error;GenericHealthSummary="读取组件暂不可用";foreach(var device in WirelessDevices){device.Fresh=false;device.Charging=null;}}
+            }else{GenericError=snapshot.Error;GenericHealthSummary="读取组件暂不可用";BlockWirelessDpi();foreach(var device in WirelessDevices){device.Fresh=false;device.Charging=null;}}
             if(complete){string state=GenericError??GenericHealthSummary??"ready";ThreadPool.QueueUserWorkItem(delegate{SafeDiagnostic.Transition("device_readers",state);});}
             UpdateIcon();
         }
         public bool IsDeviceRefreshing(string id){return genericBusy!=0&&(genericTarget==null||genericTarget==id);}
         public void ClearReadingHistory(){
-            if(clearingHistory)return;clearingHistory=true;historyGeneration++;wirelessCache.Clear();if(Current==null||!UiState.Recent(Current.TimestampUtc,DateTime.UtcNow,90)){Current=null;LastGood=null;}else LastGood=Current;lastKnownHeadset=null;
+            if(clearingHistory)return;clearingHistory=true;Interlocked.Increment(ref historyGeneration);BlockWirelessDpi();wirelessCache.Clear();if(Current==null||!UiState.Recent(Current.TimestampUtc,DateTime.UtcNow,90)){Current=null;LastGood=null;}else LastGood=Current;lastKnownHeadset=null;
             foreach(var device in WirelessDevices)if(!device.Fresh){device.Percent=null;device.ConfirmedAtUtc=null;device.Charging=null;device.SourceQuality="unknown";}
             if(Headset!=null&&!UiState.Recent(Headset.BatteryTimestampUtc,DateTime.UtcNow,90))Headset.Percent=null;
             ThreadPool.QueueUserWorkItem(delegate{bool ok=fileWriter.Flush(5000);if(ok)foreach(string name in new[]{"readings-cache.json","wireless-cache.json"}){string path=Path.Combine(DeviceSettings.DataDirectory,name);fileWriter.Forget(path);try{if(File.Exists(path))File.Delete(path);}catch(IOException){ok=false;}catch(UnauthorizedAccessException){ok=false;}}
