@@ -28,6 +28,14 @@ $uiTest=Join-Path $OutputDirectory 'UiAndControllerTests.exe'
 if($LASTEXITCODE -ne 0){throw 'UI/controller test build failed.'}
 & $uiTest $OutputDirectory
 if($LASTEXITCODE -ne 0){throw 'UI/controller tests failed.'}
+foreach($regressionName in @('AudioStateRegressionTests','PopupStateRegressionTests')) {
+    $regression=Join-Path $OutputDirectory ($regressionName+'.exe')
+    & $compiler /nologo /target:exe /platform:x64 /optimize+ ("/main:"+$regressionName) /reference:System.Runtime.Serialization.dll `
+        /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll ("/out:"+$regression) $menuSources (Join-Path $PSScriptRoot ($regressionName+'.cs'))
+    if($LASTEXITCODE -ne 0){throw ($regressionName+' build failed.')}
+    & $regression $OutputDirectory
+    if($LASTEXITCODE -ne 0){throw ($regressionName+' failed.')}
+}
 $trayTest=Join-Path $OutputDirectory 'TrayInteractionTests.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:TrayInteractionTests /reference:System.Runtime.Serialization.dll `
     /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll "/out:$trayTest" $menuSources (Join-Path $PSScriptRoot 'TrayInteractionTests.cs')
@@ -52,4 +60,11 @@ if($LASTEXITCODE -ne 0){throw 'Windows PowerShell installer tests failed.'}
 if(Get-Command pwsh.exe -ErrorAction SilentlyContinue){
     & pwsh.exe -NoProfile -File $installer -OutputDirectory $OutputDirectory
     if($LASTEXITCODE -ne 0){throw 'PowerShell 7 installer tests failed.'}
+}
+$samplerTests=Join-Path $PSScriptRoot 'RuntimeSamplerTests.ps1'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $samplerTests -OutputDirectory (Join-Path $OutputDirectory 'runtime-sampler')
+if($LASTEXITCODE -ne 0){throw 'Windows PowerShell runtime sampler tests failed.'}
+if(Get-Command pwsh.exe -ErrorAction SilentlyContinue){
+    & pwsh.exe -NoProfile -File $samplerTests -OutputDirectory (Join-Path $OutputDirectory 'runtime-sampler')
+    if($LASTEXITCODE -ne 0){throw 'PowerShell 7 runtime sampler tests failed.'}
 }

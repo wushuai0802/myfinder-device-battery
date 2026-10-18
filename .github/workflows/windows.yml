@@ -11,10 +11,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
       - name: Build and run isolated checks
         shell: powershell
         run: ./scripts/Build.ps1 -OutputDirectory "$env:RUNNER_TEMP/device-battery-build"
+      - name: Measure isolated rendering and repeated interaction lifecycle
+        shell: powershell
+        run: ./tests/Run-Performance.ps1 -OutputDirectory "$env:RUNNER_TEMP/device-battery-performance" -Animate
       - name: Build portable device reader and run protocol fixtures
         shell: powershell
         run: |
@@ -32,7 +35,7 @@ jobs:
           $zip = Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/device-battery-release" -Filter '*.zip' -File
           if (@($zip).Count -ne 1) { throw 'Expected exactly one final release ZIP.' }
           ./tests/PackageSmoke.ps1 -ZipPath $zip.FullName -OutputDirectory "$env:RUNNER_TEMP/device-battery-package-smoke"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node 24
         with:
           name: windows-x64-complete-package
           path: |
@@ -42,4 +45,6 @@ jobs:
             ${{ runner.temp }}/device-battery-release/*/engine/dependencies.lock.json
             ${{ runner.temp }}/device-battery-build/appearance-preview.png
             ${{ runner.temp }}/device-battery-package-smoke/**/package-smoke-result.json
+            ${{ runner.temp }}/device-battery-performance/*.json
+            ${{ runner.temp }}/device-battery-performance/*.csv
           if-no-files-found: error

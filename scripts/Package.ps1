@@ -44,7 +44,12 @@ if(Test-Path -LiteralPath (Join-Path $root 'docs\images')){
     New-Item -ItemType Directory -Path (Join-Path $stage 'docs')|Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'docs\images') -Destination (Join-Path $stage 'docs') -Recurse
 }
-if(Test-Path -LiteralPath (Join-Path $root 'docs\compatibility.md')){Copy-Item -LiteralPath (Join-Path $root 'docs\compatibility.md') -Destination (Join-Path $stage 'docs\compatibility.md')}
+foreach($document in @('compatibility.md','verification.md')) {
+    if(Test-Path -LiteralPath (Join-Path $root ('docs\'+$document))){
+        New-Item -ItemType Directory -Path (Join-Path $stage 'docs') -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $root ('docs\'+$document)) -Destination (Join-Path $stage ('docs\'+$document))
+    }
+}
 $manifest=New-DeviceBatteryPackageManifest $stage
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
