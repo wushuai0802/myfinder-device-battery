@@ -112,9 +112,19 @@ namespace AtkBatteryTray {
             bool enabled=!blocked&&audio!=null&&audio.OutputVolumePercent.HasValue&&!String.IsNullOrEmpty(audio.VolumeEndpointId);
             int preview=feedback==null?-1:feedback.VolumePreview;
             int? value=enabled?(int?)(preview>=0?Math.Max(0,Math.Min(100,preview)):audio.OutputVolumePercent.Value):null;
-            DrawSurface(g,new RectangleF(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1),dark);
+            var surface=new RectangleF(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1);
+            DrawSurface(g,surface,dark);
             var hit=new RectangleF(rect.X+4,rect.Y+2,rect.Width-8,rect.Height-4);
-            if(enabled)Highlight(g,hit,240,feedback,dark);
+            if(enabled&&feedback!=null&&(feedback.HoverAction==240||feedback.PressedAction==240))using(var shape=VisualDesign.RoundRect(surface.X,surface.Y,surface.Width,surface.Height,16)) {
+                if(VisualDesign.HighContrast) {
+                    var saved=g.Save();g.SetClip(shape,CombineMode.Intersect);
+                    using(var pen=new Pen(Blue(dark),feedback.PressedAction==240?2:1))g.DrawPath(pen,shape);
+                    g.Restore(saved);
+                }else {
+                    using(var brush=new SolidBrush(Color.FromArgb(feedback.PressedAction==240?dark?30:19:dark?18:10,Fg(dark))))g.FillPath(brush,shape);
+                    using(var pen=new Pen(dark?Color.FromArgb(75,83,94):Color.FromArgb(220,226,235),1))g.DrawPath(pen,shape);
+                }
+            }
             string endpoint=enabled?UiState.CurrentOutputName(audio):blocked?"待确认":"不可用";
             string label="系统音量 · "+(enabled&&preview>=0?"待应用 · ":"")+endpoint;
             DrawLabel(g,label,new RectangleF(rect.X+11,rect.Y+2,rect.Width-64,23),11,false,enabled?Fg(dark):Muted(dark),StringAlignment.Near);

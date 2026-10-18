@@ -291,12 +291,52 @@ static class PopupStateRegressionTests {
             Check(!fixture.Popup.Visible&&!owner.DiagnosticsEnabled&&fixture.VolumeWrites==0,"tray checks use no visible UI, persistence or physical writes");
         }
     }
+    static Bitmap VolumeSurface(AudioReading audio,PanelFeedback feedback,bool dark,float scale) {
+        var size=UiState.ScaleSize(new Size(268,56),scale);var image=new Bitmap(size.Width,size.Height,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using(var drawing=Graphics.FromImage(image)) {
+            drawing.Clear(Color.Transparent);drawing.ScaleTransform(scale,scale);
+            drawing.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;drawing.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;drawing.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            CompactRenderer.SystemVolume(drawing,new RectangleF(4,4,260,48),audio,dark,feedback);
+        }
+        return image;
+    }
+    static bool PixelsChanged(Bitmap before,Bitmap after,RectangleF logical,float scale) {
+        int left=Math.Max(0,(int)Math.Floor(logical.Left*scale)),top=Math.Max(0,(int)Math.Floor(logical.Top*scale));
+        int right=Math.Min(before.Width,(int)Math.Ceiling(logical.Right*scale)),bottom=Math.Min(before.Height,(int)Math.Ceiling(logical.Bottom*scale));
+        for(int y=top;y<bottom;y++)for(int x=left;x<right;x++)if(before.GetPixel(x,y)!=after.GetPixel(x,y))return true;return false;
+    }
+    static void VolumeSurfaceFeedback() {
+        string output=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"volume-surface-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(output);
+        var audio=Audio(13);audio.Devices=new[]{new AudioDeviceChoice {Id="speaker",Name="扬声器 (Realtek(R) Audio)",Flow=0}};
+        var full=new RectangleF(0,0,268,56);var leftEdge=new RectangleF(4,25,3,6);var topEdge=new RectangleF(104,4,50,2);
+        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})foreach(bool dark in new[]{false,true})foreach(bool highContrast in new[]{false,true}) {
+            VisualDesign.HighContrastOverride=highContrast;
+            using(var normal=VolumeSurface(audio,new PanelFeedback(),dark,scale))
+            using(var hover=VolumeSurface(audio,new PanelFeedback {HoverAction=240},dark,scale))
+            using(var pressed=VolumeSurface(audio,new PanelFeedback {PressedAction=240},dark,scale))
+            using(var focused=VolumeSurface(audio,new PanelFeedback {HoverAction=240,KeyboardFocus=240},dark,scale))
+            using(var disabled=VolumeSurface(null,new PanelFeedback(),dark,scale))
+            using(var disabledHover=VolumeSurface(null,new PanelFeedback {HoverAction=240,PressedAction=240},dark,scale)) {
+                Check(PixelsChanged(normal,hover,leftEdge,scale)&&PixelsChanged(normal,hover,topEdge,scale),"volume hover reaches the outer card edge bands without an inset background plate at "+scale+" dark="+dark+" contrast="+highContrast);
+                Check(PixelsChanged(normal,pressed,leftEdge,scale)&&PixelsChanged(normal,pressed,topEdge,scale),"volume press reaches the same outer card edge bands at "+scale);
+                Check(PixelsChanged(hover,focused,full,scale),"keyboard focus remains visually distinct from card hover at "+scale);
+                Check(!PixelsChanged(disabled,disabledHover,full,scale),"disabled volume does not gain interactive background feedback at "+scale);
+                bool clear=true;foreach(var image in new[]{normal,hover,pressed,focused})clear&=image.GetPixel((int)(4*scale),(int)(4*scale)).A==0&&image.GetPixel((int)(2*scale),(int)(28*scale)).A==0&&image.GetPixel((int)(134*scale),(int)(2*scale)).A==0;
+                Check(clear,"volume feedback preserves transparent rounded corners and the external gap at "+scale);
+                if(scale==1f||scale==1.25f||scale==1.75f) {
+                    string suffix=scale.ToString(System.Globalization.CultureInfo.InvariantCulture)+(dark?"-dark":"-light")+(highContrast?"-contrast":"");
+                    normal.Save(Path.Combine(output,"normal-"+suffix+".png"));hover.Save(Path.Combine(output,"hover-"+suffix+".png"));pressed.Save(Path.Combine(output,"pressed-"+suffix+".png"));focused.Save(Path.Combine(output,"focus-"+suffix+".png"));
+                }
+            }
+        }
+        VisualDesign.HighContrastOverride=null;Console.WriteLine("Volume surface previews: "+output);
+    }
     [STAThread] static int Main() {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=cached.GetValue(null);
         try {
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
             NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
-            CaptureCancellation();PinRendering();TraySelectionAndTooltips();InputModeAndTooltips();DeviceSettingsAndOrganization();DeviceAudioNavigation();MainSystemVolume();
+            CaptureCancellation();PinRendering();TraySelectionAndTooltips();InputModeAndTooltips();DeviceSettingsAndOrganization();DeviceAudioNavigation();MainSystemVolume();VolumeSurfaceFeedback();
             Console.WriteLine("PASS "+checks+" popup/tray state regression checks; hidden owned windows, transient settings and fake hardware only");
             return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
