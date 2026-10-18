@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><defs>
+    <linearGradient id="deep" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="#2a4567"/><stop offset=".5" stop-color="#18304e"/><stop offset="1" stop-color="#081c37"/></linearGradient>
+    <linearGradient id="mint" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="#71baff"/><stop offset=".47" stop-color="#4195e8"/><stop offset="1" stop-color="#2566b4"/></linearGradient>
+    <linearGradient id="ivory" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="#fff"/><stop offset=".65" stop-color="#f3f5f7"/><stop offset="1" stop-color="#dce3ea"/></linearGradient>
+    <linearGradient id="mist" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="#f9fcff"/><stop offset=".55" stop-color="#edf4fb"/><stop offset="1" stop-color="#d9e5f0"/></linearGradient>
+    <linearGradient id="slate" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="#476c95"/><stop offset=".55" stop-color="#2d4e76"/><stop offset="1" stop-color="#203d60"/></linearGradient>
+    <linearGradient id="glass" x1="0%" y1="0%" x2="100%" y2="80%"><stop stop-color="#fff" stop-opacity=".98"/><stop offset=".4" stop-color="#f2f8ff" stop-opacity=".82"/><stop offset="1" stop-color="#c9d7e7" stop-opacity=".91"/></linearGradient>
+    <linearGradient id="cap" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="#b8c5d3"/><stop offset="1" stop-color="#899aac"/></linearGradient>
+    <linearGradient id="shine" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="#fff" stop-opacity=".2"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <filter id="tileShadow" color-interpolation-filters="sRGB" x="-25%" y="-20%" width="150%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#1e2b3b" flood-opacity=".17"/></filter>
+    <filter id="cardShadow" color-interpolation-filters="sRGB" x="-40%" y="-30%" width="180%" height="180%"><feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#15243b" flood-opacity=".24"/></filter>
+    <filter id="glassShadow" color-interpolation-filters="sRGB" x="-50%" y="-30%" width="200%" height="170%"><feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#2b486a" flood-opacity=".21"/></filter>
+  </defs><rect x="16" y="12" width="224" height="224" rx="52" fill="url(#mist)" /><rect x="17" y="13" width="222" height="222" rx="51" fill="url(#shine)"/><rect x="17" y="13" width="222" height="222" rx="51" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="1.5"/><g ><g transform="rotate(-11 108 117)">
+      <rect x="53" y="51" width="111" height="133" rx="28" fill="url(#slate)"/>
+
+      </g><g transform="rotate(9 154 149)">
+      <rect x="96" y="85" width="112" height="132" rx="28" fill="url(#ivory)"/>
+      <rect x="97" y="86" width="110" height="130" rx="27" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="2"/>
+      <rect x="125" y="111" width="54" height="77" rx="26" fill="url(#mint)"/>
+      <path d="M152 121v14" stroke="#f4f9ff" stroke-width="7" stroke-linecap="round"/>
+    </g></g></svg>

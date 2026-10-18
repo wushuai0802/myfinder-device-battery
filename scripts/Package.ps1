@@ -12,8 +12,9 @@ $exe=Join-Path $BuildDirectory 'AtkMouseBattery.exe'
 $buildInfoPath=Join-Path $BuildDirectory 'build-info.json'
 if(-not (Test-Path -LiteralPath $buildInfoPath -PathType Leaf)){throw 'Build with Build.ps1 and use its complete validated build directory.'}
 $info=Get-Content -LiteralPath $buildInfoPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if($info.schema -ne 1 -or $info.version -cne $release.version -or
+if($info.schema -ne 2 -or $info.version -cne $release.version -or
     $info.releaseSha256 -ine (Get-FileHash -LiteralPath (Join-Path $root 'release.json') -Algorithm SHA256).Hash) {throw 'Build metadata does not match this release.'}
+if(@($info.sources | Where-Object {$_.path -ceq 'assets/app-icon.ico'}).Count -ne 1){throw 'Build metadata does not include the application icon. Build again before packaging.'}
 foreach($entry in @($info.files)) {
     $file=Resolve-DeviceBatteryPayloadPath $BuildDirectory $entry.path
     if(-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ine $entry.sha256){throw 'Built binaries changed after validation.'}

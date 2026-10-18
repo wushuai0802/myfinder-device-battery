@@ -1,8 +1,12 @@
 # MyFinder Device Battery
 
+<img src="docs/images/app-icon.png" alt="MyFinder Device Battery 冰川蓝双卡图标" width="96" height="96">
+
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前正式版 **1.3.0**，适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。旧版本保留在历史Release中。
+当前版本 **1.3.1**，适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。旧版本保留在历史Release中。
+
+1.3.1 使用新的冰川蓝双卡应用图标，统一 EXE、开始菜单与启动快捷方式的显示；小尺寸采用简化轮廓。顶栏仍实时显示设备电量，独立于静态应用图标。
 
 1.3.0 加入USB鼠标活动后的定向补读：读数过期或状态未确认时，移动对应鼠标会触发一次检查，读到新数据后及时更新卡片和顶栏。重复活动合并处理，保留后台定时同步。
 

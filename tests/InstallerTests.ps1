@@ -6,11 +6,16 @@ $project=Split-Path -Parent $PSScriptRoot
 $script:passed=0
 $script:disabledForTest=$false
 $script:unknownForTest=$false
-# All folders and launched children belong to this fixture. Real registry is not read.
+$script:iconRefreshPaths=@();$script:iconRefreshCount=0;$script:failIconRefresh=$false
+# All folders and launched children belong to this fixture. No real registry or desktop notification access.
 function Get-DeviceBatteryStartupApproval([string]$Name) {
     if($script:disabledForTest){return ,([byte[]]@(3,0,0,0))}
     if($script:unknownForTest){return ,([byte[]]@(255,0,0,0))}
     return $null
+}
+function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShortcut,[string]$ManualShortcut) {
+    $script:iconRefreshPaths=@($Executable,$StartupShortcut,$ManualShortcut);$script:iconRefreshCount++
+    if($script:failIconRefresh){throw 'Isolated shell notification failure.'}
 }
 function Assert([bool]$Condition,[string]$Name){if(-not $Condition){throw ('FAIL '+$Name)};$script:passed++}
 function Assert-Rejected([scriptblock]$Operation,[string]$Name){$failed=$false;try{& $Operation|Out-Null}catch{$failed=$true};Assert $failed $Name}
@@ -68,6 +73,9 @@ try {
     Assert (@(Get-ChildItem -LiteralPath $startup -Filter '*.lnk').Count -eq 1) 'exactly one startup entry remains'
     Assert ($shell.CreateShortcut((Join-Path $startup $correct)).TargetPath -ieq $installed.InstalledExecutable) 'startup points to the installed executable'
     Assert ($shell.CreateShortcut((Join-Path $programs $correct)).Arguments -ceq '--show') 'manual launcher opens the panel'
+    Assert ($shell.CreateShortcut((Join-Path $startup $correct)).IconLocation -ceq ($installed.InstalledExecutable+',0')) 'startup uses the installed executable icon'
+    Assert ($shell.CreateShortcut((Join-Path $programs $correct)).IconLocation -ceq ($installed.InstalledExecutable+',0')) 'manual launcher uses the installed executable icon'
+    Assert ($script:iconRefreshPaths.Count -eq 3 -and $script:iconRefreshPaths[0] -ceq $installed.InstalledExecutable -and $script:iconRefreshPaths[1] -ceq $installed.StartupShortcut -and $script:iconRefreshPaths[2] -ceq $installed.ManualShortcut) 'shell refresh targets only the installed executable and its two shortcuts'
     $receipt=Read-DeviceBatteryReceipt $data
     Assert ($receipt.Schema -eq 2 -and $receipt.Version -ceq (Read-DeviceBatteryRelease $source).version) 'receipt records version and schema'
     Assert (@($receipt.Files | Where-Object {$_.path -eq 'engine/providers/base.py' -and $_.sha256.Length -eq 64}).Count -eq 1) 'receipt owns each file with SHA256'
@@ -82,8 +90,11 @@ try {
     $script:unknownForTest=$false
     $uiProcess=Start-Process -FilePath $installed.InstalledExecutable -WindowStyle Hidden -PassThru
     Assert (-not $uiProcess.HasExited) 'isolated real process fixture is running'
+    $script:failIconRefresh=$true
     $result=Install-DeviceBattery @arguments
+    $script:failIconRefresh=$false
     Assert (-not $result.PayloadChanged) 'identical payload may safely re-register shortcuts while active'
+    Assert ($result.InstalledExecutable -ceq $installed.InstalledExecutable) 'shell refresh failure does not roll back a successful registration'
     $oldReceipt=[IO.File]::ReadAllText((Join-Path $data 'install.json'))
     $oldEngineHash=(Get-FileHash -LiteralPath (Join-Path $target 'engine\providers\base.py')).Hash
     [IO.File]::WriteAllText((Join-Path $engine 'providers\base.py'),'# version two')
@@ -114,7 +125,9 @@ try {
     # A late shortcut failure occurs after the candidate has copied. Roll back both binaries and metadata.
     $block=Join-Path $fixtureRoot 'not a directory';[IO.File]::WriteAllText($block,'block')
     $failing=@{};foreach($key in $arguments.Keys){$failing[$key]=$arguments[$key]};$failing.ProgramsDirectory=$block
+    $refreshCountBeforeFailure=$script:iconRefreshCount
     Assert-Rejected {Install-DeviceBattery @failing} 'late shortcut failure aborts the transaction'
+    Assert ($script:iconRefreshCount -eq $refreshCountBeforeFailure) 'failed transactions never notify the shell about candidate icons'
     Assert ((Get-FileHash -LiteralPath (Join-Path $target 'engine\providers\base.py')).Hash -eq $oldEngineHash) 'late failure restores the old engine exactly'
     Assert ((Get-FileHash -LiteralPath $installed.InstalledExecutable).Hash -eq $oldExeHash) 'late failure preserves the old executable exactly'
     Assert ([IO.File]::ReadAllText((Join-Path $data 'install.json')) -ceq $oldReceipt) 'late failure restores user receipt bytes'

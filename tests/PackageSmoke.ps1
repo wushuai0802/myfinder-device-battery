@@ -20,12 +20,21 @@ try {
 . (Join-Path $extracted 'scripts\Install.Common.ps1')
 # Never inspect or change the real user's StartupApproved registry values.
 function Get-DeviceBatteryStartupApproval([string]$Name){return $null}
+# Keep shell icon refresh inside this fixture instead of notifying the real desktop.
+$script:iconRefreshPaths=@()
+function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShortcut,[string]$ManualShortcut) {
+    $script:iconRefreshPaths=@($Executable,$StartupShortcut,$ManualShortcut)
+}
 $manifest=Read-DeviceBatteryPackageManifest $extracted
 $checksum=Join-Path (Split-Path -Parent $ZipPath) 'SHA256SUMS.txt'
 $actualHash=(Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $expectedLine=$actualHash+'  '+[IO.Path]::GetFileName($ZipPath)
 if(-not (Test-Path -LiteralPath $checksum) -or $expectedLine -cnotin @(Get-Content -LiteralPath $checksum -Encoding UTF8)){throw 'The final ZIP does not match SHA256SUMS.txt.'}
 $installed=Install-DeviceBattery -SourceRoot $extracted -InstallDirectory $target -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs
+$shortcutShell=New-DeviceBatteryShortcutShell
+if($shortcutShell.CreateShortcut($installed.StartupShortcut).IconLocation -cne ($installed.InstalledExecutable+',0')){throw 'The installed startup shortcut does not use the application icon.'}
+if($shortcutShell.CreateShortcut($installed.ManualShortcut).IconLocation -cne ($installed.InstalledExecutable+',0')){throw 'The installed manual shortcut does not use the application icon.'}
+if($script:iconRefreshPaths.Count -ne 3 -or $script:iconRefreshPaths[0] -cne $installed.InstalledExecutable -or $script:iconRefreshPaths[1] -cne $installed.StartupShortcut -or $script:iconRefreshPaths[2] -cne $installed.ManualShortcut){throw 'Shell icon refresh escaped the isolated installed paths.'}
 if(Test-Path -LiteralPath (Join-Path $target 'engine\tests')){throw 'Development protocol fixtures leaked into the release.'}
 $preview=Join-Path $testRoot 'preview'
 $previewProcess=Start-Process -FilePath $installed.InstalledExecutable -ArgumentList @('--preview',('"'+$preview+'"')) -WindowStyle Hidden -PassThru

@@ -13,6 +13,9 @@ $audioSource = Join-Path $PSScriptRoot 'AudioControl.cs'
 $visualSource = Join-Path $PSScriptRoot 'VisualDesign.cs'
 $traySource = Join-Path $PSScriptRoot 'TrayGlyph.cs'
 $settingsSource = Join-Path $PSScriptRoot 'DeviceSettings.cs'
+$iconRelative = 'assets/app-icon.ico'
+$iconPath = Join-Path $projectRoot $iconRelative
+if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw 'The application icon is missing. Restore assets/app-icon.ico or rebuild it with tools/Build-AppIcon.cjs.' }
 & $compiler /nologo /target:exe /platform:x64 /optimize+ "/out:$(Join-Path $buildOutput 'AtkBatteryProbe.exe')" $hidSource (Join-Path $PSScriptRoot 'Probe.cs') (Join-Path $PSScriptRoot 'Tests.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Probe build failed.' }
 $assembly=Join-Path $buildOutput 'AssemblyInfo.generated.cs'
@@ -27,7 +30,7 @@ using System.Reflection;
 '@
 [IO.File]::WriteAllText($assembly,$metadata.Replace('{ASSEMBLY}',$release.assemblyVersion).Replace('{VERSION}',$release.version),(New-Object Text.UTF8Encoding($false)))
 $uiSources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $uiSources $assembly
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ "/win32icon:$iconPath" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $uiSources $assembly
 if ($LASTEXITCODE -ne 0) { throw 'Tray build failed.' }
 & (Join-Path $buildOutput 'AtkBatteryProbe.exe') --self-test
 if ($LASTEXITCODE -ne 0) { throw 'Offline tests failed.' }
@@ -35,7 +38,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Offline tests failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Appearance preview failed.' }
 & (Join-Path $projectRoot 'tests\Run.ps1') -OutputDirectory (Join-Path $buildOutput 'tests')
 if(-not $?){throw 'Regression checks failed.'}
-$buildInfo=[ordered]@{schema=1;version=$release.version;releaseSha256=(Get-FileHash -LiteralPath (Join-Path $projectRoot 'release.json') -Algorithm SHA256).Hash.ToLowerInvariant();
+$buildInfo=[ordered]@{schema=2;version=$release.version;releaseSha256=(Get-FileHash -LiteralPath (Join-Path $projectRoot 'release.json') -Algorithm SHA256).Hash.ToLowerInvariant();
     files=@('AtkMouseBattery.exe','AtkBatteryProbe.exe' | ForEach-Object {[pscustomobject]@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $buildOutput $_) -Algorithm SHA256).Hash.ToLowerInvariant()}});
-    sources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Sort-Object Name | ForEach-Object {[pscustomobject]@{path=('scripts/'+$_.Name);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})}
+    sources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Sort-Object Name | ForEach-Object {[pscustomobject]@{path=('scripts/'+$_.Name);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})+@([pscustomobject]@{path=$iconRelative;sha256=(Get-FileHash -LiteralPath $iconPath -Algorithm SHA256).Hash.ToLowerInvariant()})}
 [IO.File]::WriteAllText((Join-Path $buildOutput 'build-info.json'),($buildInfo | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))

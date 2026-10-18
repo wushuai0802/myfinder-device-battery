@@ -70,6 +70,28 @@ namespace DeviceBatterySetup {
     New-Object DeviceBatterySetup.ShortcutShell
 }
 
+function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShortcut,[string]$ManualShortcut) {
+    if (-not ('DeviceBatterySetup.ShellIconNotifications' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace DeviceBatterySetup {
+    public static class ShellIconNotifications {
+        [DllImport("shell32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
+        static extern void SHChangeNotify(int eventId,uint flags,[MarshalAs(UnmanagedType.LPWStr)] string item1,IntPtr item2);
+        public static void Updated(string path) {
+            // SHCNE_UPDATEITEM; SHCNF_PATHW | SHCNF_FLUSHNOWAIT.
+            SHChangeNotify(0x00002000,0x00002005,path,IntPtr.Zero);
+        }
+    }
+}
+'@
+    }
+    foreach($path in @($Executable,$StartupShortcut,$ManualShortcut)) {
+        [DeviceBatterySetup.ShellIconNotifications]::Updated($path)
+    }
+}
+
 function Get-DeviceBatteryDataDirectory {
     Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'MyFinderDeviceBattery'
 }
@@ -312,7 +334,7 @@ function Install-DeviceBattery {
             $shortcut=$shell.CreateShortcut($entry.Path);$shortcut.TargetPath=$exe;$shortcut.Arguments=$entry.Arguments
             $shortcut.WorkingDirectory=Split-Path -Parent $exe;$shortcut.Description=$entry.Description;$shortcut.IconLocation=$exe+',0';$shortcut.WindowStyle=1;$shortcut.Save()
             $verified=$shell.CreateShortcut($entry.Path)
-            if($verified.TargetPath -ine $exe -or $verified.Arguments -cne $entry.Arguments){throw 'Shortcut verification failed.'}
+            if($verified.TargetPath -ine $exe -or $verified.Arguments -cne $entry.Arguments -or $verified.IconLocation -cne ($exe+',0')){throw 'Shortcut verification failed.'}
         }
         foreach($oldName in (Get-DeviceBatteryShortcutNames | Where-Object {$_ -cne $name})) {
             foreach($folder in @($StartupDirectory,$ProgramsDirectory)) {
@@ -322,6 +344,9 @@ function Install-DeviceBattery {
                 }
             }
         }
+        # Refresh only this installation after every transactional change succeeded.
+        # A shell notification failure must never undo a valid installation.
+        try {Update-DeviceBatteryShellIcons $exe $links[0].Path $links[1].Path} catch {}
         [pscustomobject]@{Version=$package.version;PayloadChanged=$payloadChanged;InstalledExecutable=$exe;StartupShortcut=$links[0].Path;ManualShortcut=$links[1].Path;SettingsDirectory=$DataDirectory}
     } catch {
         $failure=$_
