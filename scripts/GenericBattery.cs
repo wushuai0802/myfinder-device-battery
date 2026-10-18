@@ -54,6 +54,7 @@ namespace AtkBattery {
     [DataContract] public sealed class WirelessDevice {
         [DataMember(Name="id")] public string Id;
         [DataMember(Name="legacyId")] public string LegacyId;
+        [DataMember(Name="physicalId",EmitDefaultValue=false)] public string PhysicalId;
         [DataMember(Name="name")] public string Name;
         [DataMember(Name="kind")] public string Kind;
         [DataMember(Name="percent")] public int? Percent;
@@ -79,9 +80,10 @@ namespace AtkBattery {
         public DateTime QueryTime {get{DateTime value;return DateTime.TryParse(QueriedAtUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out value)?value.ToUniversalTime():DateTime.MinValue;}}
         internal bool SameCacheIdentity(WirelessDevice other){return other!=null&&Id==other.Id&&Kind==other.Kind&&Provider==other.Provider;}
         internal WirelessDevice BatteryCacheCopy(){var copy=(WirelessDevice)MemberwiseClone();copy.Dpi=null;return copy;}
-        public string Key {get{return Id+"|"+Name+"|"+Percent+"|"+Charging+"|"+Online+"|"+Fresh+"|"+Approximate+"|"+ConfirmedAtUtc+"|"+SourceQuality+"|"+QueriedAtUtc+"|"+(Dpi==null?"":Dpi.Key);}}
+        public string Key {get{return Id+"|"+PhysicalId+"|"+Name+"|"+Percent+"|"+Charging+"|"+Online+"|"+Fresh+"|"+Approximate+"|"+ConfirmedAtUtc+"|"+SourceQuality+"|"+QueriedAtUtc+"|"+(Dpi==null?"":Dpi.Key);}}
     }
     [DataContract] public sealed class ReaderHealth {
+        [DataMember(Name="physicalId",EmitDefaultValue=false)] public string PhysicalId;
         [DataMember(Name="provider")] public string Provider;
         [DataMember(Name="state")] public string State;
         [DataMember(Name="scope")] public string Scope;
@@ -145,11 +147,11 @@ namespace AtkBattery {
             generation++;
             return process;
         }}
-        internal WirelessSnapshot Poll(bool force=false,string deviceId=null,Action<WirelessSnapshot> progress=null,bool parkEmptyReaders=false) {lock(query){
+        internal WirelessSnapshot Poll(bool force=false,string deviceId=null,Action<WirelessSnapshot> progress=null,bool parkEmptyReaders=false,string physicalId=null) {lock(query){
             try {
+                if(deviceId!=null&&physicalId!=null||deviceId!=null&&!Regex.IsMatch(deviceId,@"^device-[a-f0-9]{24}$")||physicalId!=null&&!Regex.IsMatch(physicalId,@"^device-[a-f0-9]{24}$"))return new WirelessSnapshot {Error="无效或冲突的设备刷新目标。"};
                 var child=Start();int currentGeneration=generation;long request=Interlocked.Increment(ref sequence);
-                if(deviceId!=null&&!Regex.IsMatch(deviceId,@"^device-[a-f0-9]{24}$"))return new WirelessSnapshot {Error="无效的设备刷新目标。"};
-                child.StandardInput.WriteLine("{\"command\":\"poll\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"force\":"+(force?"true":"false")+",\"parkEmptyReaders\":"+(parkEmptyReaders?"true":"false")+(deviceId==null?"":",\"deviceId\":\""+deviceId+"\"")+"}");child.StandardInput.Flush();
+                child.StandardInput.WriteLine("{\"command\":\"poll\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"force\":"+(force?"true":"false")+",\"parkEmptyReaders\":"+(parkEmptyReaders?"true":"false")+(deviceId==null?"":",\"deviceId\":\""+deviceId+"\"")+(physicalId==null?"":",\"physicalId\":\""+physicalId+"\"")+"}");child.StandardInput.Flush();
                 return Receive(child,request,currentGeneration,progress,null);
             }catch(Exception){Stop();return new WirelessSnapshot {Error="设备读取组件暂不可用，保留最近数据。"};}
         }}
@@ -217,6 +219,7 @@ namespace AtkBattery {
                 if(devices.Count>=64)break;
                 if(value==null||!Regex.IsMatch(value.Id??"",@"^device-[a-f0-9]{24}$")||!seen.Add(value.Id))continue;
                 if(!Regex.IsMatch(value.LegacyId??"",@"^device-[a-f0-9]{24}$"))value.LegacyId=null;
+                if(!Regex.IsMatch(value.PhysicalId??"",@"^device-[a-f0-9]{24}$"))value.PhysicalId=null;
                 value.Name=Clean(value.Name,80,"无线设备");value.Provider=Clean(value.Provider,48,"");value.Transport=Clean(value.Transport,32,"");
                 if(value.Kind!="mouse"&&value.Kind!="headset"&&value.Kind!="keyboard")value.Kind="device";
                 if(value.Percent<0||value.Percent>100)value.Percent=null;
@@ -238,7 +241,7 @@ namespace AtkBattery {
                 devices.Add(value);
             }
             var errors=new List<string>();foreach(var error in snapshot.Errors??new string[0])if(errors.Count<32)errors.Add(Clean(error,96,"read_failed"));snapshot.Errors=errors.ToArray();
-            var health=new List<ReaderHealth>();foreach(var item in snapshot.Health??new ReaderHealth[0])if(item!=null&&health.Count<64){item.Provider=Clean(item.Provider,48,"unknown");item.State=Clean(item.State,24,"unknown");item.ErrorCode=Clean(item.ErrorCode,48,"");item.Scope=item.Scope=="device"?"device":"provider";item.DeviceCount=Math.Max(0,Math.Min(64,item.DeviceCount));health.Add(item);}snapshot.Health=health.ToArray();
+            var health=new List<ReaderHealth>();foreach(var item in snapshot.Health??new ReaderHealth[0])if(item!=null&&health.Count<64){if(!Regex.IsMatch(item.PhysicalId??"",@"^device-[a-f0-9]{24}$"))item.PhysicalId=null;item.Provider=Clean(item.Provider,48,"unknown");item.State=Clean(item.State,24,"unknown");item.ErrorCode=Clean(item.ErrorCode,48,"");item.Scope=item.Scope=="device"?"device":"provider";item.DeviceCount=Math.Max(0,Math.Min(64,item.DeviceCount));health.Add(item);}snapshot.Health=health.ToArray();
             if(snapshot.DpiResult!=null){
                 var result=snapshot.DpiResult;result.Error=Clean(result.Error,160,"");
                 if(!Regex.IsMatch(result.DeviceId??"",@"^device-[a-f0-9]{24}$"))result.DeviceId=null;

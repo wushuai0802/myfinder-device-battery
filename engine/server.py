@@ -67,6 +67,28 @@ def public_id(key):
     return "device-" + hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:24]
 
 
+def valid_public_target(value):
+    return value is None or isinstance(value, str) and re.fullmatch(r"device-[a-f0-9]{24}", value) is not None
+
+
+def physical_topology(paths, physical_id):
+    """Resolve a public physical ID before opening only its HID descriptors."""
+    from topology import discover, physical_instance
+    if paths is None:
+        raise ValueError("topology_unavailable")
+    selected = []
+    for path in paths:
+        text = path.decode("utf-8", "replace") if isinstance(path, bytes) else path
+        if re.search(r"bthenum|bthledevice|vid&[0-9a-f]{8}", text, re.I):
+            continue
+        native = re.search(r"vid[_&]([0-9a-f]{4,8}).*?pid[_&]([0-9a-f]{4})", text, re.I)
+        if native and (int(native[1][-4:], 16), int(native[2], 16)) in NATIVE:
+            continue
+        if public_id(physical_instance({"path": text})) == physical_id:
+            selected.append(text)
+    return discover(selected, NATIVE)
+
+
 def kind_of(status):
     if status.kind in ("mouse", "headset", "keyboard"):
         return status.kind
@@ -224,14 +246,26 @@ def reader_child():
                 response = {"providerCount": len(PROVIDERS) + 1, "devices": []}
             elif action == "topology":
                 current = command.get("paths")
-                # Retry inaccessible descriptors at a bounded rate. Ordinary
-                # polls share a single topology and do not enumerate 26 times.
-                if current != topology_paths or time.monotonic() - topology_at >= 30:
-                    inventory = discover(current, NATIVE)
-                    topology_paths, topology_at = current, time.monotonic()
-                present = {d["physical_id"] for d in inventory}
-                instances = {k: v for k, v in instances.items() if k[1] in present or k[0] == "bluetooth"}
-                response = {"inventory": inventory}
+                physical = command.get("physicalId")
+                if physical is not None:
+                    if not valid_public_target(physical):
+                        raise ValueError("invalid physical target")
+                    selected = physical_topology(current, physical)
+                    present = {d["physical_id"] for d in selected}
+                    # A partial discovery cannot replace the full topology cache
+                    # or evict another receiver's provider/identity instance.
+                    instances = {k: v for k, v in instances.items()
+                                 if k[0] == "bluetooth" or public_id(k[1]) != physical or k[1] in present}
+                    response = {"inventory": selected}
+                else:
+                    # Retry inaccessible descriptors at a bounded rate. Ordinary
+                    # polls share one topology and do not enumerate 26 times.
+                    if current != topology_paths or time.monotonic() - topology_at >= 30:
+                        inventory = discover(current, NATIVE)
+                        topology_paths, topology_at = current, time.monotonic()
+                    present = {d["physical_id"] for d in inventory}
+                    instances = {k: v for k, v in instances.items() if k[1] in present or k[0] == "bluetooth"}
+                    response = {"inventory": inventory}
             elif action == "query":
                 name, physical = command["provider"], command.get("physicalId", "")
                 key = (name, physical)
@@ -364,7 +398,10 @@ class BatteryEngine:
         self.physical_by_id = {key: value for key, value in self.physical_by_id.items() if key in self.previous}
         self.dpi_targets = {key: value for key, value in self.dpi_targets.items() if key in self.previous}
         devices = sorted(self.previous.values(), key=lambda d: ({"mouse": 0, "keyboard": 1, "headset": 2}.get(d["kind"], 3), d["name"], d["id"]))
-        health = list(self.health.values())[:128]
+        health = [dict(value, physicalId=public_id(key.split("|", 1)[1]) if "|" in key else
+                       key[len("topology:"):] if key.startswith("topology:device-")
+                       and valid_public_target(key[len("topology:"):]) else None)
+                  for key, value in self.health.items()][:128]
         errors = [h["provider"] + ": " + h["errorCode"] for h in health if h.get("errorCode")]
         return {"schema": 2, "requestId": request_id, "generation": generation, "complete": complete,
                 "devices": devices, "nativeMousePresent": self.native_mouse,
@@ -510,7 +547,13 @@ class BatteryEngine:
             # require a fresh read before another user-initiated command.
             return finish("outcome_unknown", unknown=True)
 
-    def poll(self, force=False, device_id=None, request_id=0, generation=0, progress=None, park_empty_readers=False):
+    def poll(self, force=False, device_id=None, request_id=0, generation=0, progress=None, park_empty_readers=False,
+             physical_id=None):
+        if (not valid_public_target(device_id) or not valid_public_target(physical_id)
+                or device_id is not None and physical_id is not None
+                or physical_id is not None and (self._direct or self.package_smoke)):
+            self._failure("selection", "selection", "unknown_target")
+            return self._snapshot(request_id, generation)
         self._generation += 1
         token = self._generation
         if self._direct:
@@ -528,12 +571,12 @@ class BatteryEngine:
                     progress(self._snapshot(request_id, generation, False))
             return self._snapshot(request_id, generation)
         try:
-            result = self._isolated_poll(force, device_id, request_id, generation, progress, token)
+            result = self._isolated_poll(force, device_id, request_id, generation, progress, token, physical_id)
             # Closed-panel, native-only PCs do not need two idle Python readers.
             # Never discard protocol grace/cached state or a known candidate
             # waiting for a usable reply. Foreground polls retain discovery
             # caches, and package smoke keeps children for lifecycle checks.
-            if (park_empty_readers and device_id is None and not self.package_smoke
+            if (park_empty_readers and device_id is None and physical_id is None and not self.package_smoke
                     and not any(self.by_provider.values()) and self.health
                     and not result.get("errors")
                     and all(h.get("state") in ("no_devices", "unsupported") for h in self.health.values())):
@@ -544,28 +587,41 @@ class BatteryEngine:
             self.close()
             return self._snapshot(request_id, generation)
 
-    def _isolated_poll(self, force, device_id, request_id, generation, progress, token):
+    def _isolated_poll(self, force, device_id, request_id, generation, progress, token, physical_id=None):
         from isolation import IsolationError
         from providers.base import DeviceStatus
         from topology import physical_groups
         if device_id and device_id not in self.provider_by_id:
             self._failure("selection", "selection", "unknown_target")
             return self._snapshot(request_id, generation)
-        self.health.pop("selection", None)
-        self.health.pop("manager", None)
+        if physical_id is None:
+            self.health.pop("selection", None)
+            self.health.pop("manager", None)
         paths = frozenset() if self.package_smoke else self._hidlist.interface_paths()
-        self.native_mouse = False if self.package_smoke else None if paths is None else any("vid_373b&pid_1278" in p for p in paths)
+        if physical_id is None:
+            self.native_mouse = False if self.package_smoke else None if paths is None else any("vid_373b&pid_1278" in p for p in paths)
         deadline = time.monotonic() + MAX_ROUND_SECONDS
         target_name = self.provider_by_id.get(device_id) if device_id else None
         target_physical = self.physical_by_id.get(device_id) if device_id else None
         pending, active = [], {}
         partial_count = 0
+        full_round = device_id is None and physical_id is None
+
+        def task_key(item):
+            action, name, physical, command, _budget = item
+            if action == "topology" and command.get("physicalId") is not None:
+                return "topology:" + command["physicalId"]
+            return name + ("|" + physical if physical else "")
+
         if self.package_smoke:
             pending.append(("smoke", "package", "", {"action": "smoke"}, 5))
         else:
             if not device_id or target_name != "bluetooth":
-                pending.append(("topology", "topology", "", {"action": "topology", "paths": sorted(paths) if paths is not None else None}, 6))
-            if not device_id or target_name == "bluetooth":
+                command = {"action": "topology", "paths": sorted(paths) if paths is not None else None}
+                if physical_id is not None:
+                    command["physicalId"] = physical_id
+                pending.append(("topology", "topology", "", command, 6))
+            if physical_id is None and (not device_id or target_name == "bluetooth"):
                 pending.append(("query", "bluetooth", "", {"action": "query", "provider": "bluetooth"}, 14))
         while pending or active:
             if self._generation != token:
@@ -576,7 +632,7 @@ class BatteryEngine:
                     continue
                 for index, item in enumerate(pending):
                     action, name, physical, command, budget = item
-                    reader_key = name + ("|" + physical if physical else "")
+                    reader_key = task_key(item)
                     if reader_key in self._affinity and self._affinity[reader_key] != slot:
                         continue
                     if physical and any(v[2] == physical for v in active.values()):
@@ -597,8 +653,9 @@ class BatteryEngine:
                         self._failure(reader_key, name, error.code)
                     break
             for slot in list(active):
-                action, name, physical, command, budget = active[slot]
-                reader_key = name + ("|" + physical if physical else "")
+                item = active[slot]
+                action, name, physical, command, budget = item
+                reader_key = task_key(item)
                 try:
                     result = self.children[slot].result()
                     if result is None:
@@ -610,11 +667,22 @@ class BatteryEngine:
                             raise IsolationError("invalid_response")
                         inventory = [d for d in inventory if (d.get("vendor_id"), d.get("product_id")) not in NATIVE]
                         groups = dict(list(physical_groups(inventory).items())[:MAX_DEVICES])
+                        if physical_id is not None:
+                            groups = {key: infos for key, infos in groups.items() if public_id(key) == physical_id}
                         # A successful new topology supersedes its own previous
                         # failure. Do not clear independent reader faults.
-                        self.health.pop("topology", None)
-                        self.failures.pop("topology", None)
-                        self.retry_after.pop("topology", None)
+                        self.health.pop(reader_key, None)
+                        self.failures.pop(reader_key, None)
+                        self.retry_after.pop(reader_key, None)
+                        if physical_id is not None:
+                            self._affinity.pop(reader_key, None)
+                        elif full_round:
+                            # A complete successful discovery also supersedes
+                            # earlier failures of our partial topology requests.
+                            for state in (self.health, self.failures, self.retry_after, self._affinity):
+                                for key in list(state):
+                                    if key.startswith("topology:device-"):
+                                        state.pop(key, None)
                         live_readers = {"bluetooth"}
                         for provider_name in self.providers:
                             if provider_name == "bluetooth" or (target_name and provider_name != target_name):
@@ -627,9 +695,9 @@ class BatteryEngine:
                                 if provider_name != "standard_hid" and not vids.intersection(PROVIDER_VIDS.get(provider_name, ())):
                                     continue
                                 matches.append((group_id, infos))
-                            if not matches and not target_name:
+                            if not matches and full_round:
                                 self.health[provider_name] = {"provider": provider_name, "readerId": public_id(provider_name), "state": "no_devices", "deviceCount": 0, "scope": "provider"}
-                            elif matches:
+                            elif matches and physical_id is None:
                                 self.health.pop(provider_name, None)
                             for group_id, infos in matches:
                                 key = provider_name + "|" + group_id
@@ -640,9 +708,9 @@ class BatteryEngine:
                                 seconds = 10 if provider_name == "lofree" else 12 if provider_name == "logitech" else 5 if provider_name == "standard_hid" else 7
                                 pending.append(("query", provider_name, group_id,
                                                 {"action": "query", "provider": provider_name, "physicalId": group_id, "inventory": infos}, seconds))
-                            if len(matches) > 1:
+                            if len(matches) > 1 and physical_id is None:
                                 self._ambiguous_providers.add(provider_name)
-                            elif not target_name:
+                            elif full_round:
                                 self._ambiguous_providers.discard(provider_name)
                         # Reconcile physical readers even if their first query
                         # failed and never produced a by_provider entry. A
@@ -650,12 +718,19 @@ class BatteryEngine:
                         # independent manager/provider faults retain ownership.
                         states = (self.by_provider, self.health, self.last_poll,
                                   self._affinity, self.retry_after, self.failures)
-                        if target_name:
+                        if physical_id is not None:
+                            removed = {key for state in states for key in state
+                                       if "|" in key and public_id(key.split("|", 1)[1]) == physical_id
+                                       and key not in live_readers}
+                        elif target_name:
                             removed = ({target_name + "|" + target_physical} - live_readers
                                        if target_physical else set())
                         else:
                             removed = {key for state in states for key in state
                                        if "|" in key and key not in live_readers}
+                        for key in removed:
+                            for device_key in self.by_provider.get(key, {}):
+                                self.dpi_targets.pop(device_key, None)
                         for state in states:
                             for key in removed:
                                 state.pop(key, None)
@@ -666,6 +741,10 @@ class BatteryEngine:
                         if not isinstance(raw, list) or len(raw) > MAX_DEVICES:
                             raise IsolationError("invalid_response")
                         statuses = [DeviceStatus(**value) for value in raw]
+                        if physical_id is not None:
+                            # One receiver cannot establish a unique global
+                            # legacy identity or authorise a cache migration.
+                            statuses = [replace(status, legacy_key="") for status in statuses]
                         self._accept(reader_key, name, statuses, valid_time(result.get("checkedAtUtc")) or utcnow(), physical,
                                      candidate_count=max(0, min(512, int(result.get("candidateCount", 0)))))
                     if progress and partial_count < MAX_PARTIALS:
@@ -674,15 +753,17 @@ class BatteryEngine:
                 except IsolationError as error:
                     active.pop(slot, None)
                     self._failure(reader_key, name, error.code)
+                    if physical_id is not None and action == "topology":
+                        self._affinity.pop(reader_key, None)
                     if progress and partial_count < MAX_PARTIALS:
                         partial_count += 1
                         progress(self._snapshot(request_id, generation, False))
             if time.monotonic() >= deadline:
                 for slot, item in active.items():
                     self.children[slot].close()
-                    self._failure(item[1] + ("|" + item[2] if item[2] else ""), item[1], "timeout")
+                    self._failure(task_key(item), item[1], "timeout")
                 for item in pending:
-                    self._failure(item[1] + ("|" + item[2] if item[2] else ""), item[1], "round_budget")
+                    self._failure(task_key(item), item[1], "round_budget")
                 break
             if pending or active:
                 time.sleep(0.01)
@@ -720,7 +801,10 @@ def main():
                 if type(request_id) is not int or type(generation) is not int or min(request_id, generation) < 0:
                     continue
                 target = command.get("deviceId")
-                if target is not None and (not isinstance(target, str) or not target.startswith("device-") or len(target) > 64):
+                physical = command.get("physicalId")
+                if (not valid_public_target(target) or not valid_public_target(physical)
+                        or target is not None and physical is not None
+                        or "physicalId" in command and (physical is None or "deviceId" in command or action != "poll")):
                     continue
                 emit = lambda result: print(json.dumps(result, ensure_ascii=True), flush=True)
                 if action == "set_dpi":
@@ -729,7 +813,7 @@ def main():
                 else:
                     result = engine.poll(force=command.get("force") is True, device_id=target,
                                          request_id=request_id, generation=generation, progress=emit,
-                                         park_empty_readers=command.get("parkEmptyReaders") is True)
+                                         park_empty_readers=command.get("parkEmptyReaders") is True, physical_id=physical)
                 emit(result)
             except Exception:
                 print(json.dumps({"schema": 2, "requestId": 0, "generation": 0, "complete": True,
