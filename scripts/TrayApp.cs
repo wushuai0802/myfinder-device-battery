@@ -227,7 +227,7 @@ namespace AtkBatteryTray {
             }
             if(id==0||id==4||id==5){owner.RefreshDevice(id==4?"mouse":id==5?"headset":"all");return;}
             if(id==1){Go(PopupPage.More);return;}if(id==6){Back();return;}
-            if(id>=10&&id<18){owner.SelectDpiStage(id-10);SchedulePendingHint();return;}
+            if(id>=10&&id<18){owner.SelectDpiStage(id-10,control.TargetToken);SchedulePendingHint();return;}
             if(id>=3000&&control.DpiValue>0){owner.SelectWirelessDpi(control.DeviceKey,control.TargetToken,control.DpiValue);SchedulePendingHint();return;}
             if(id==100||id==101){owner.SelectAudioOutput(id==100?"speaker":"headset");SchedulePendingHint();return;}
             if(id==102){owner.ToggleMicrophoneMute();SchedulePendingHint();return;}
@@ -519,6 +519,8 @@ namespace AtkBatteryTray {
             foreach(string id in preferences.HiddenDeviceIds)visible.Append("|hidden:").Append(id);
             foreach(string id in preferences.DeviceOrder)visible.Append("|order:").Append(id);
             visible.Append('|').Append(UiState.Mouse(owner.Current,owner.LastGood,now).Key).Append('|').Append(UiState.Headset(displayHeadset,now).Key);
+            visible.Append('|').Append(UiState.SyncText(UiState.Mouse(owner.Current,owner.LastGood,now),now)).Append('|').Append(owner.NativeDpiToken);
+            if(navigation.Page==PopupPage.Diagnostics)visible.Append('|').Append(owner.StorageHealthText);
             if(displayAudio!=null)visible.Append('|').Append(displayAudio.MicrophoneAvailable);
             string key=visible.ToString();
             if(key==lastPresentedKey)return true;
@@ -576,6 +578,7 @@ namespace AtkBatteryTray {
         readonly Control dispatch=new Control();
         readonly Func<bool,MouseSnapshot> readSnapshot;
         readonly Func<int,DpiConfig> selectStage;
+        readonly Func<NativeDpiRequest,DpiConfig> writeNativeDpi;
         readonly Func<HeadsetReading> readHeadset;
         readonly Func<AudioReading> readAudio;
         readonly Func<string,AudioReading> writeOutput;
@@ -645,6 +648,13 @@ namespace AtkBatteryTray {
         Icon icon;Details details;int busy;volatile bool disposed;
         bool switching,panelOpen,pendingRead,pendingBattery;
         int pendingStage=-1;
+        NativeDpiRequest pendingNativeDpi;
+        int nativeEpoch,discardedNativeResults;
+        bool nativeNeedsReconcile;
+        string nativeDeviceKey;
+        readonly string instanceId=Guid.NewGuid().ToString("N");
+        readonly int processId=Process.GetCurrentProcess().Id;
+        readonly DateTime processStartedAtUtc=Process.GetCurrentProcess().StartTime.ToUniversalTime();
         DateTime lastSyncUtc=DateTime.MinValue;
         int completedReads,completedSwitches;
         string lastIconKey,lastTooltip;
@@ -664,13 +674,17 @@ namespace AtkBatteryTray {
         public AudioBindings AudioScopeSettings {get{return DeviceSettings.ForAudioDevice(audioScopeDeviceId);}}
         public int? DesiredVolume {get{return pendingVolume??volumeTargetInFlight;}}
         internal bool DiagnosticsEnabled {get{return persistStatus;}}
+        internal bool NativeDpiVerified {get{return !nativeNeedsReconcile&&NativeMousePresent&&Dpi!=null&&Dpi.Stages!=null&&Dpi.Stages.Count>0&&Dpi.Stages.Count<=8&&Dpi.ActiveStage>=0&&Dpi.ActiveStage<Dpi.Stages.Count&&MouseBattery.ValidDeviceKey(Dpi.DeviceKey)&&String.IsNullOrEmpty(DpiError)&&UiState.Recent(Dpi.TimestampUtc,DateTime.UtcNow,90);}}
+        internal bool CanSetNativeDpi {get{return !disposed&&!sessionLocked&&NativeDpiVerified;}}
+        internal string NativeDpiToken {get{if(!CanSetNativeDpi)return null;var key=new StringBuilder(Dpi.DeviceKey+"@"+nativeEpoch);foreach(var stage in Dpi.Stages)key.Append('|').Append(stage.XDpi).Append('/').Append(stage.YDpi);return key.ToString();}}
+        internal string StorageHealthText {get{return fileWriter.GetHealth(Path.Combine(DeviceSettings.DataDirectory,"status.json")).Describe(DateTime.UtcNow);}}
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
         static MouseSnapshot ReadWithRetry(bool includeBattery) {
             MouseSnapshot result=null;
             for(int attempt=0;attempt<2;attempt++) {
                 try {
                     var next=MouseBattery.ReadSnapshot(includeBattery&&(result==null||result.Battery==null));
-                    if(result!=null&&result.Battery!=null&&next.Battery==null){next.Battery=result.Battery;next.BatteryError=null;}
+                    if(result!=null&&result.Battery!=null&&next.Battery==null&&result.DeviceKey==next.DeviceKey){next.Battery=result.Battery;next.BatteryError=null;}
                     result=next;
                     if(result.Dpi!=null&&(!includeBattery||result.Battery!=null))break;
                 } catch(Exception e) {
@@ -680,7 +694,7 @@ namespace AtkBatteryTray {
             }
             return result;
         }
-        public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute) {
+        public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute,null,null,MouseBattery.SetActiveDpiStage) {
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
             deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}});
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
@@ -689,10 +703,11 @@ namespace AtkBatteryTray {
             try {string path=Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt");if(File.Exists(path)&&new FileInfo(path).Length<65536){string text=File.ReadAllText(path);lowBattery.Restore("mouse",text.Contains("mouse=1"));lowBattery.Restore("headset",text.Contains("headset=1"));foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text,@"(?m)^(device-[a-f0-9]{24})=1\r?$"))lowBattery.Restore(match.Groups[1].Value,true);}}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select) : this(showPanel,read,select,null,null) {}
-        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null) {
+        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null,Func<NativeDpiRequest,DpiConfig> nativeDpiWriter=null) {
             persistStatus=diagnostics;
             readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;writeVolume=volumeWriter;
             writeAudioCommand=audioCommandRunner;
+            writeNativeDpi=nativeDpiWriter;
             genericWorker=wirelessReader;
             activityClock=activityTime??new Func<DateTime>(delegate{return DateTime.UtcNow;});
             activityTimer.Tick+=delegate{activityTimer.Stop();DrainActivityRefresh();};
@@ -860,17 +875,22 @@ namespace AtkBatteryTray {
             if(!persistStatus)return;
             try {
                 if(!clearingHistory&&DeviceSettings.Current.RememberReadings)fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"readings-cache.json"),ReadingCache.EncodeNative(Current??LastGood,Headset??lastKnownHeadset));
+                fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"status.json"),BuildStatusJson());
+            } catch(IOException) {}catch(UnauthorizedAccessException){}
+        }
+        internal string BuildStatusJson() {
                 string path=Path.Combine(DeviceSettings.DataDirectory,"status.json");
+                var persistence=fileWriter.GetHealth(path);
                 string safe=Escape(ErrorMessage);
                 var stages=new StringBuilder("[");
                 if(Dpi!=null&&Dpi.Stages!=null)for(int i=0;i<Dpi.Stages.Count;i++) {
                     if(i>0)stages.Append(',');stages.Append("{\"x\":").Append(Dpi.Stages[i].XDpi).Append(",\"y\":").Append(Dpi.Stages[i].YDpi).Append('}');
                 }
                 stages.Append(']');
-                string json="{\"version\":\""+Escape(AppRuntime.Version)+"\",\"page\":\""+(details==null||details.IsDisposed?"closed":details.CurrentPage)+"\",\"liveVerified\":"+(Current!=null&&UiState.Recent(Current.TimestampUtc,DateTime.UtcNow,90)?"true":"false")+
+                string json="{\"version\":\""+Escape(AppRuntime.Version)+"\",\"instanceId\":\""+instanceId+"\",\"processId\":"+processId+",\"processStartedAtUtc\":\""+processStartedAtUtc.ToString("o")+"\",\"snapshotGeneratedAtUtc\":\""+DateTime.UtcNow.ToString("o")+"\",\"page\":\""+(details==null||details.IsDisposed?"closed":details.CurrentPage)+"\",\"liveVerified\":"+(Current!=null&&UiState.Recent(Current.TimestampUtc,DateTime.UtcNow,90)?"true":"false")+
                     ",\"percent\":"+(Current!=null?Current.Percent.ToString():"null")+
                     ",\"charging\":"+(Current!=null?Current.Charging.ToString().ToLower():"null")+
-                    ",\"dpiLiveVerified\":"+(Dpi!=null&&String.IsNullOrEmpty(DpiError)?"true":"false")+
+                    ",\"dpiLiveVerified\":"+NativeDpiVerified.ToString().ToLower()+",\"nativeDpiReconcilePending\":"+nativeNeedsReconcile.ToString().ToLower()+",\"discardedNativeResults\":"+discardedNativeResults+
                     ",\"dpi\":"+(Dpi!=null&&Dpi.Stages!=null&&Dpi.ActiveStage>=0&&Dpi.ActiveStage<Dpi.Stages.Count?Dpi.Stages[Dpi.ActiveStage].XDpi.ToString():"null")+
                     ",\"activeStage\":"+(Dpi!=null?Dpi.ActiveStage.ToString():"null")+
                     ",\"stages\":"+stages+
@@ -895,10 +915,11 @@ namespace AtkBatteryTray {
                     ",\"lastRequestedDpi\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.RequestedDpi.ToString())+",\"lastConfirmedDpi\":"+(lastWirelessDpiResult!=null&&lastWirelessDpiResult.ConfirmedDpi.HasValue?lastWirelessDpiResult.ConfirmedDpi.Value.ToString():"null")+
                     ",\"lastSuccess\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.Success.ToString().ToLower())+",\"outcomeUnknown\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.OutcomeUnknown.ToString().ToLower())+
                     ",\"error\":\""+Escape(lastWirelessDpiResult==null?"":SafeDiagnostic.Clean(lastWirelessDpiResult.Error))+"\",\"checkedAtUtc\":\""+Escape(lastWirelessDpiResult==null?"":lastWirelessDpiResult.CheckedAtUtc)+"\"},\"activityRefresh\":{\"listener\":\""+activityListenerState+"\",\"registered\":"+(mouseActivity!=null&&mouseActivity.Registered).ToString().ToLower()+",\"rawInputMessages\":"+(mouseActivity==null?0:mouseActivity.RawInputMessages)+",\"mousePackets\":"+(mouseActivity==null?0:mouseActivity.MousePackets)+",\"headerReadFailures\":"+(mouseActivity==null?0:mouseActivity.HeaderReadFailures)+",\"resolvedSources\":"+(mouseActivity==null?0:mouseActivity.ResolvedSourceCount)+",\"unresolvedSources\":"+(mouseActivity==null?0:mouseActivity.UnresolvedSourceCount)+",\"events\":"+activityRefresh.Events+",\"freshSkipped\":"+activityRefresh.FreshSkipped+",\"coalesced\":"+activityRefresh.Coalesced+",\"cooldownSkipped\":"+activityRefresh.CooldownSkipped+",\"unsupportedSkipped\":"+activityRefresh.UnsupportedSkipped+",\"reads\":"+activityRefresh.Reads+",\"retries\":"+activityRefresh.Retries+",\"failures\":"+activityRefresh.Failures+",\"deferred\":"+activityRefresh.Deferred+",\"pendingSources\":"+activityRefresh.Pending+"}}";
-                fileWriter.Enqueue(path,json);
-            } catch(IOException) {}catch(UnauthorizedAccessException){}
+                json=json.Substring(0,json.Length-1)+",\"persistence\":{\"lastSuccessfulStatusWriteUtc\":"+JsonTime(persistence.LastSuccessUtc)+",\"lastFailureUtc\":"+JsonTime(persistence.LastFailureUtc)+",\"failureCount\":"+persistence.FailureCount+",\"errorCode\":\""+Escape(persistence.ErrorCode)+"\",\"inFlight\":"+persistence.InFlight.ToString().ToLower()+"}}";
+                return json;
         }
         static string Escape(string value) {return (value??"").Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r"," ").Replace("\n"," ");}
+        static string JsonTime(DateTime value){return value==DateTime.MinValue?"null":"\""+value.ToString("o")+"\"";}
         public void RefreshBattery(bool manual=true) {
             manualRefresh|=manual;
             RequestRead(true,true);
@@ -919,7 +940,9 @@ namespace AtkBatteryTray {
             if(activityRefresh.Record(source.PhysicalId,source.IsNativeAtk,FreshActivitySource(source.PhysicalId,source.IsNativeAtk),activityClock()))DrainActivityRefresh();
         }
         internal void ActivityTopologyChanged(){
-            if(disposed)return;if(mouseActivity!=null)mouseActivity.InvalidateTopology();activityRefresh.TopologyChanged();nativeActivityInFlight=null;genericActivityInFlight=null;activityTimer.Stop();
+            if(disposed)return;Interlocked.Increment(ref nativeEpoch);pendingNativeDpi=null;pendingStage=-1;nativeNeedsReconcile=true;
+            DpiError="设备连接已变化，等待重新确认";Current=null;ErrorMessage="设备连接已变化，保留上次读数";
+            if(mouseActivity!=null)mouseActivity.InvalidateTopology();activityRefresh.TopologyChanged();nativeActivityInFlight=null;genericActivityInFlight=null;activityTimer.Stop();UpdateIcon();
         }
         bool FreshActivitySource(string physicalId,bool native){
             DateTime now=activityClock();
@@ -1074,7 +1097,7 @@ namespace AtkBatteryTray {
         }
         public string DiagnosticSummary() {
             var now=DateTime.UtcNow;var mouse=UiState.Mouse(Current,LastGood,now);var headset=UiState.Headset(Headset,now);
-            var text="MyFinder Device Battery "+AppRuntime.Version+"\r\n鼠标："+mouse.Tooltip+"\r\n耳机："+headset.Tooltip+
+            var text="MyFinder Device Battery "+AppRuntime.Version+"\r\n当前实例："+processId+" / "+processStartedAtUtc.ToString("o")+"\r\n诊断写入："+StorageHealthText+"\r\n鼠标："+mouse.Tooltip+"\r\n耳机："+headset.Tooltip+
                 "\r\n耳机无线："+(ShowHeadset(Headset,Audio)?"已确认连接":"未确认连接")+"\r\n音源："+(Audio==null?"未确认":Audio.ActiveOutput)+
                 "\r\n后台间隔："+DeviceSettings.Current.BackgroundSeconds+"秒\r\n自启："+PopupPages.StartupState();
             if(!String.IsNullOrEmpty(ErrorMessage))text+="\r\n鼠标读取："+SafeDiagnostic.Clean(ErrorMessage);
@@ -1241,36 +1264,46 @@ namespace AtkBatteryTray {
             if(disposed||busy!=0&&!queueWhenBusy)return;
             pendingRead=true;pendingBattery|=includeBattery;RunNext();
         }
-        public void SelectDpiStage(int stage) {
-            if(disposed||Dpi==null||Dpi.Stages==null||stage<0||stage>=Dpi.Stages.Count)return;
+        public void SelectDpiStage(int stage,string expectedToken=null) {
+            if(!CanSetNativeDpi||Dpi.Stages==null||stage<0||stage>=Dpi.Stages.Count||expectedToken!=null&&expectedToken!=NativeDpiToken)return;
             if(UiState.SkipConfirmedStage(Dpi,DpiError,stage,switching||pendingStage>=0,DateTime.UtcNow))return;
             if(pendingStage==stage||stageInFlight==stage&&pendingStage<0)return;
             dpiActionFailure=null;actionRequestedAt=DateTime.UtcNow;
+            int epoch=Thread.VolatileRead(ref nativeEpoch);
+            pendingNativeDpi=new NativeDpiRequest(Dpi,stage,epoch,delegate{return !disposed&&Thread.VolatileRead(ref nativeEpoch)==epoch;});
             pendingStage=stage;RunNext();if(details!=null&&!details.IsDisposed)details.Invalidate();SaveStatus();
         }
         void RunNext() {
             if(disposed||busy!=0||pendingStage<0&&!pendingRead)return;
-            int stage=pendingStage;bool includeBattery=pendingBattery;
-            if(stage>=0)pendingStage=-1;
+            int stage=pendingStage,epoch=Thread.VolatileRead(ref nativeEpoch);bool includeBattery=pendingBattery;var request=pendingNativeDpi;
+            if(stage>=0){pendingStage=-1;pendingNativeDpi=null;}
             else {pendingRead=false;pendingBattery=false;}
             busy=1;switching=stage>=0;stageInFlight=stage;
             if(details!=null&&!details.IsDisposed)details.Invalidate();SaveStatus();
             ThreadPool.QueueUserWorkItem(delegate {
                 MouseSnapshot snapshot=null;DpiConfig switched=null;string failure=null;
-                try {if(stage>=0)switched=selectStage(stage);else snapshot=readSnapshot(includeBattery);}catch(Exception e){failure=e.Message;}
+                try {if(stage>=0){if(request==null)throw new InvalidOperationException("Missing DPI target identity.");request.CheckCurrent();switched=writeNativeDpi!=null?writeNativeDpi(request):selectStage(stage);}else snapshot=readSnapshot(includeBattery);}catch(Exception e){failure=e.Message;}
                 if(disposed)return;
                 try {dispatch.BeginInvoke((MethodInvoker)delegate {
                     if(disposed)return;
+                    if(epoch!=Thread.VolatileRead(ref nativeEpoch)){
+                        discardedNativeResults++;busy=0;switching=false;stageInFlight=-1;nativeNeedsReconcile=true;pendingRead=true;pendingBattery=true;UpdateIcon();RunNext();DrainActivityRefresh();return;
+                    }
                     if(stage>=0) {
-                        if(switched!=null){Dpi=switched;DpiError=switched.RefreshError??"";completedSwitches++;}
-                        else {DpiError=failure??"DPI switch did not return a verified result";dpiActionFailure=DpiError;dpiFailureAt=DateTime.UtcNow;}
+                        bool matched=switched!=null&&request!=null&&switched.DeviceKey==request.DeviceKey&&switched.ActiveStage==request.Stage&&switched.Stages!=null&&switched.Stages.Count==request.StageCount&&switched.Stages[request.Stage].XDpi==request.XDpi&&switched.Stages[request.Stage].YDpi==request.YDpi&&UiState.Recent(switched.TimestampUtc,DateTime.UtcNow,90);
+                        if(matched){Dpi=switched;DpiError=switched.RefreshError??"";completedSwitches++;nativeNeedsReconcile=!String.IsNullOrEmpty(DpiError);}
+                        else {DpiError=failure??"DPI switch did not return a verified target result";dpiActionFailure=DpiError;dpiFailureAt=DateTime.UtcNow;nativeNeedsReconcile=true;pendingStage=-1;pendingNativeDpi=null;}
                         pendingRead=true;pendingBattery=true;
                     } else {
                         completedReads++;
                         if(snapshot!=null) {
+                            string key=snapshot.DeviceKey??(snapshot.Dpi==null?null:snapshot.Dpi.DeviceKey);
+                            if(MouseBattery.ValidDeviceKey(key)&&nativeDeviceKey!=null&&key!=nativeDeviceKey){Interlocked.Increment(ref nativeEpoch);pendingStage=-1;pendingNativeDpi=null;Dpi=null;LastGood=null;}
+                            if(MouseBattery.ValidDeviceKey(key))nativeDeviceKey=key;
                             if(includeBattery){Current=snapshot.Battery;ErrorMessage=snapshot.BatteryError;if(Current!=null)LastGood=Current;}
                             if(snapshot.Dpi!=null){Dpi=snapshot.Dpi;DpiError=snapshot.DpiError??"";}else DpiError=snapshot.DpiError??failure??"DPI read did not return a verified result";
-                        } else {if(includeBattery){Current=null;ErrorMessage=failure;}DpiError=failure;}
+                            nativeNeedsReconcile=snapshot.Dpi==null||!MouseBattery.ValidDeviceKey(snapshot.Dpi.DeviceKey)||!String.IsNullOrEmpty(DpiError);
+                        } else {if(includeBattery){Current=null;ErrorMessage=failure;}DpiError=failure;nativeNeedsReconcile=true;}
                     }
                     busy=0;switching=false;stageInFlight=-1;lastSyncUtc=DateTime.UtcNow;if(stage<0&&includeBattery)CompleteNativeActivity();UpdateIcon();RunNext();DrainActivityRefresh();
                 });}catch(ObjectDisposedException){}catch(InvalidOperationException){}

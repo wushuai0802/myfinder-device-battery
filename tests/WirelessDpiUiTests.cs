@@ -20,7 +20,7 @@ static class WirelessDpiUiTests {
         var watch=Stopwatch.StartNew();while(!done()&&watch.ElapsedMilliseconds<3000){Application.DoEvents();Thread.Sleep(2);}Check(done(),"fake readers settle");
     }
     static DpiConfig NativeDpi() {
-        var result=new DpiConfig {ActiveStage=7,TimestampUtc=DateTime.UtcNow};
+        var result=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=7,TimestampUtc=DateTime.UtcNow};
         foreach(int value in new[]{400,800,1200,1600,2400,3200,4800,6400})result.Stages.Add(new DpiStage {XDpi=value,YDpi=value});return result;
     }
     static WirelessDevice Device(string suffix,string source="onboard",int[] stages=null) {

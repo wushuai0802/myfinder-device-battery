@@ -1,4 +1,16 @@
 # Pure observation-gap accounting, shared with the sampler's synthetic tests.
+function Test-RuntimeStatusInstance($Status,[int]$ProcessId,[datetime]$StartedAtUtc,[datetime]$NowUtc) {
+    $hasPid=$null -ne $Status.PSObject.Properties['processId']
+    $hasStart=$null -ne $Status.PSObject.Properties['processStartedAtUtc']
+    $hasGenerated=$null -ne $Status.PSObject.Properties['snapshotGeneratedAtUtc']
+    if(-not $hasPid -and -not $hasStart -and -not $hasGenerated){return $true} # Legacy snapshots still require version and file-time checks.
+    if(-not ($hasPid -and $hasStart -and $hasGenerated)){return $false}
+    try {
+        $started=([datetime]$Status.processStartedAtUtc).ToUniversalTime()
+        $generated=([datetime]$Status.snapshotGeneratedAtUtc).ToUniversalTime()
+        return [int]$Status.processId -eq $ProcessId -and $started.Ticks -eq $StartedAtUtc.ToUniversalTime().Ticks -and $generated -ge $started -and $generated -le $NowUtc.ToUniversalTime().AddSeconds(5)
+    }catch{return $false}
+}
 function Test-RuntimeSampleCompletesDuration([double]$SampleElapsedSeconds,[double]$DurationSeconds) {
     $SampleElapsedSeconds -ge $DurationSeconds
 }

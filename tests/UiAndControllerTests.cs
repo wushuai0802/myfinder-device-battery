@@ -19,7 +19,7 @@ static class UiAndControllerTests {
         Check(done(),"queued fake operation completes within its time budget");
     }
     static DpiConfig Dpi(int active) {
-        var result=new DpiConfig {ActiveStage=active,TimestampUtc=DateTime.UtcNow};
+        var result=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=active,TimestampUtc=DateTime.UtcNow};
         foreach(int value in new[]{400,800,1200,1600})result.Stages.Add(new DpiStage {XDpi=value,YDpi=value});
         return result;
     }

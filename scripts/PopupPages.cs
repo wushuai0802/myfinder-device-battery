@@ -138,6 +138,7 @@ namespace AtkBatteryTray {
                 rows.Add(Info("版本",AppRuntime.Version));rows.Add(Info("鼠标读取",UiState.Mouse(owner.Current,owner.LastGood,DateTime.UtcNow).Fresh?"已确认":"历史 / 未知"));
                 rows.Add(Info("耳机无线",headset?"已确认连接":"未确认连接"));rows.Add(Info("后台同步",pref.BackgroundSeconds+"秒"));
                 rows.Add(Info("配置状态",DeviceSettings.UsingDefaults?"读取失败，使用默认":"正常"));
+                rows.Add(Info("诊断写入",owner.StorageHealthText));
                 rows.Add(Info("开机启动",StartupState()));rows.Add(Info("通用设备",owner.GenericReady?owner.WirelessDevices.Length+"个":owner.GenericScanning?"正在识别":"尚未就绪"));
                 if(!String.IsNullOrEmpty(owner.GenericHealthSummary))rows.Add(Info("读取器健康",owner.GenericHealthSummary));
                 else if(!String.IsNullOrEmpty(owner.GenericError))rows.Add(Info("读取器状态","暂不可用，详情见诊断摘要"));
@@ -196,7 +197,7 @@ namespace AtkBatteryTray {
                     else if(row.Id==3||row.Id==5||row.Id>=100&&row.Id<=102)row.DeviceKey=nav.AudioDeviceKey??"native:headset";
                     else if(context!=null&&row.Id!=6)row.DeviceKey=context;
                 }
-                if(row.Id>=10&&row.Id<18)row.ActionKey="dpi:"+(row.Id-10);
+                if(row.Id>=10&&row.Id<18){row.TargetToken=owner.NativeDpiToken;row.ActionKey="dpi:"+(row.Id-10)+":"+(row.TargetToken??"unconfirmed");row.Enabled&=owner.CanSetNativeDpi;}
                 if(nav.Page==PopupPage.PickBinding&&row.Id>=300&&row.Id<400)row.ActionKey="binding:"+nav.BindingRole+":"+(row.EndpointId??"auto");
                 if(row.Id>=10&&row.Id<18){row.Selected=owner.Dpi!=null&&owner.Dpi.ActiveStage==row.Id-10;row.Busy=feedback.PendingStage==row.Id-10;}
                 if(row.DpiValue>0) {

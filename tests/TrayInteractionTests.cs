@@ -107,7 +107,7 @@ static class TrayInteractionTests {
             Check(!Notify.Visible&&!Context.DiagnosticsEnabled,"fixture neither publishes an icon nor enables persistence/hardware diagnostics");
         }
         static DpiConfig Dpi() {
-            var result=new DpiConfig {ActiveStage=1,TimestampUtc=DateTime.UtcNow};
+            var result=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=1,TimestampUtc=DateTime.UtcNow};
             foreach(int value in new[]{400,800,1200,1600})result.Stages.Add(new DpiStage {XDpi=value,YDpi=value});
             return result;
         }

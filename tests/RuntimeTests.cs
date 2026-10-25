@@ -32,10 +32,33 @@ static class RuntimeTests {
             string binary=Path.Combine(root,"audio broker.exe");File.Copy(Assembly.GetExecutingAssembly().Location,binary);
             using(var broker=new AudioBrokerClient(binary,1200)){var initial=broker.Query(new AudioCommand {Operation="read"});Check(initial.OperationSucceeded,"audio broker uses local JSON with fake endpoints: "+initial.Error);watch.Restart();var timeout=broker.Query(new AudioCommand {Operation="output",Target="hang"});Check(timeout.OutcomeUnknown&&!timeout.OperationSucceeded&&watch.ElapsedMilliseconds<4500,"hanging write cannot be reported successful");Check(broker.Query(new AudioCommand {Operation="read"}).OperationSucceeded,"audio state can be reread after contained timeout");}
             string path=Path.Combine(root,"atomic.json");using(var writer=new SnapshotWriter()){for(int i=0;i<100;i++)writer.Enqueue(path,"{\"sequence\":"+i+"}");Check(writer.Flush(5000),"coalesced writer completes");Check(File.ReadAllText(path)=="{\"sequence\":99}","atomic writer retains newest pending snapshot");}Check(Directory.GetFiles(root,"*.tmp").Length==0,"atomic writes leave no staging files");
+            SnapshotRegressions(root);
             Check(StartupDiagnostics.Evaluate(binary,"",binary,null)=="已启用","missing approval follows Windows default");Check(StartupDiagnostics.Evaluate(binary,"",binary,new byte[]{3})=="Windows 已禁用","disabled startup is visible");Check(StartupDiagnostics.Evaluate(binary,"",binary,new byte[0])=="无法确认","empty approval stays unknown");Check(StartupDiagnostics.Evaluate(binary,"",binary,new byte[]{9})=="无法确认","unrecognized approval stays unknown");Check(StartupDiagnostics.Evaluate(binary,"--bad",binary,null)=="目标失效","invalid startup arguments are detected");
             bool limited=false;try{AppRuntime.ReadLineBounded(new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes("12345\n"))),4);}catch(InvalidDataException){limited=true;}Check(limited,"IPC line length is bounded before parsing");
             Console.WriteLine("PASS "+checks+" runtime isolation/IPC/atomic-write checks; no hardware accessed");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
     static void MakeWorker(string path){Directory.CreateDirectory(Path.Combine(path,"runtime"));File.Copy(Assembly.GetExecutingAssembly().Location,Path.Combine(path,"runtime","python.exe"));File.WriteAllText(Path.Combine(path,"server.py"),"# fixture: no hardware");}
+    static void SnapshotRegressions(string root) {
+        string path=Path.Combine(root,"latest.json");
+        using(var entered=new ManualResetEvent(false))using(var release=new ManualResetEvent(false))using(var writer=new SnapshotWriter(delegate(string target,string value){if(value=="B"){entered.Set();release.WaitOne(3000);}AtomicText.Write(target,value);})) {
+            writer.Enqueue(path,"A");Check(writer.Flush(3000),"initial A is committed");writer.Enqueue(path,"B");
+            try {Check(entered.WaitOne(3000),"B entered a controlled in-flight write");writer.Enqueue(path.ToUpperInvariant(),"A");Check(!writer.Flush(10),"flush does not pretend an in-flight write is complete");bool refused=false;try{writer.Forget(path);}catch(InvalidOperationException){refused=true;}Check(refused,"history cannot forget an active path before flush");}
+            finally {release.Set();}
+            Check(writer.Flush(3000)&&File.ReadAllText(path)=="A","A-B-A preserves latest A including path case aliases");
+            var health=writer.GetHealth(path);Check(health.LastSuccessUtc!=DateTime.MinValue&&health.FailureCount==0&&!health.InFlight&&!health.Pending,"successful persistence exposes an idle healthy snapshot");
+        }
+        int attempts=0;bool fail=true;
+        using(var writer=new SnapshotWriter(delegate(string target,string value){Interlocked.Increment(ref attempts);if(fail)throw new UnauthorizedAccessException("sensitive path must not be exposed");AtomicText.Write(target,value);})) {
+            writer.Enqueue(path,"C");Check(writer.Flush(5000)&&attempts==3,"failed persistence retries only twice and settles");
+            var health=writer.GetHealth(path);Check(health.FailureCount==3&&health.ErrorCode=="access_denied"&&health.Describe(DateTime.UtcNow).IndexOf("sensitive",StringComparison.Ordinal)<0,"failure counters and safe access-denied feedback survive a failed log path");
+            fail=false;writer.Enqueue(path,"C");Check(writer.Flush(3000)&&File.ReadAllText(path)=="C","a later enqueue recovers without a permanent watchdog");
+            health=writer.GetHealth(path);Check(health.FailureCount==3&&health.ErrorCode==null&&health.LastSuccessUtc!=DateTime.MinValue,"success clears current failure but retains lifetime counters");
+        }
+        using(var entered=new ManualResetEvent(false))using(var release=new ManualResetEvent(false))using(var writer=new SnapshotWriter(delegate(string target,string value){if(value=="old"){entered.Set();release.WaitOne(3000);throw new IOException("fixture");}AtomicText.Write(target,value);})) {
+            writer.Enqueue(path,"old");try{Check(entered.WaitOne(3000),"failed old write is in flight");writer.Enqueue(path,"new");}finally{release.Set();}
+            Check(writer.Flush(3000)&&File.ReadAllText(path)=="new","retry never replaces a newer queued snapshot");
+        }
+        Check(new SnapshotHealth {InFlight=true,LastAttemptUtc=DateTime.UtcNow.AddSeconds(-6)}.Describe(DateTime.UtcNow)=="写入响应较慢","stalled writes remain busy and observable without starting overlapping workers");
+    }
 }

@@ -16,16 +16,59 @@ namespace AtkBattery {
             finally{try{if(File.Exists(temp))File.Delete(temp);}catch(IOException){}catch(UnauthorizedAccessException){}}
         }
     }
+    internal sealed class SnapshotHealth {
+        internal DateTime LastAttemptUtc,LastSuccessUtc,LastFailureUtc;
+        internal long FailureCount;
+        internal string ErrorCode;
+        internal bool InFlight,Pending;
+        internal string Describe(DateTime now){
+            if(InFlight&&LastAttemptUtc!=DateTime.MinValue&&(now-LastAttemptUtc).TotalSeconds>=5)return "写入响应较慢";
+            if(!String.IsNullOrEmpty(ErrorCode))return ErrorCode=="access_denied"?"保存失败：访问被拒绝":"保存失败：文件写入异常";
+            return LastSuccessUtc!=DateTime.MinValue?"正常":InFlight||Pending?"正在保存":"尚未保存";
+        }
+    }
     internal sealed class SnapshotWriter:IDisposable {
-        readonly object gate=new object();readonly Dictionary<string,string> pending=new Dictionary<string,string>(),written=new Dictionary<string,string>();
-        readonly ManualResetEvent idle=new ManualResetEvent(true);bool running,disposed;
-        internal void Enqueue(string path,string text){lock(gate){if(disposed||pending.Count>=16&&!pending.ContainsKey(path))return;string old;if(written.TryGetValue(path,out old)&&old==text&&!pending.ContainsKey(path))return;pending[path]=text;if(!running){running=true;idle.Reset();ThreadPool.QueueUserWorkItem(delegate{Run();});}}}
-        void Run(){Thread.Sleep(100);for(;;){string path=null,text=null;lock(gate){foreach(var item in pending){path=item.Key;text=item.Value;break;}if(path==null){running=false;idle.Set();return;}pending.Remove(path);}
-            try{AtomicText.Write(path,text);lock(gate)written[path]=text;}catch(IOException){}catch(UnauthorizedAccessException){}
+        sealed class Item {internal string Text;internal int Retries;internal Item(string text){Text=text;}}
+        readonly object gate=new object();
+        readonly Dictionary<string,Item> pending=new Dictionary<string,Item>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string,string> written=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string,SnapshotHealth> health=new Dictionary<string,SnapshotHealth>(StringComparer.OrdinalIgnoreCase);
+        readonly Action<string,string> write;
+        readonly ManualResetEvent idle=new ManualResetEvent(true);
+        string writingPath;bool running,disposed;
+        internal SnapshotWriter(Action<string,string> writer=null){write=writer??AtomicText.Write;}
+        internal void Enqueue(string path,string text){lock(gate){
+            if(disposed||!health.ContainsKey(path)&&health.Count>=16)return;
+            if(!health.ContainsKey(path))health[path]=new SnapshotHealth();
+            string old;
+            // A previous committed A cannot suppress a new A while B is in flight.
+            if(!String.Equals(writingPath,path,StringComparison.OrdinalIgnoreCase)&&written.TryGetValue(path,out old)&&old==text&&!pending.ContainsKey(path)&&String.IsNullOrEmpty(health[path].ErrorCode))return;
+            pending[path]=new Item(text);
+            if(!running){running=true;idle.Reset();ThreadPool.QueueUserWorkItem(delegate{Run();});}
+        }}
+        internal SnapshotHealth GetHealth(string path){lock(gate){
+            SnapshotHealth value;if(!health.TryGetValue(path,out value))return new SnapshotHealth();
+            return new SnapshotHealth {LastAttemptUtc=value.LastAttemptUtc,LastSuccessUtc=value.LastSuccessUtc,LastFailureUtc=value.LastFailureUtc,FailureCount=value.FailureCount,ErrorCode=value.ErrorCode,InFlight=String.Equals(path,writingPath,StringComparison.OrdinalIgnoreCase),Pending=pending.ContainsKey(path)};
+        }}
+        void Run(){Thread.Sleep(100);for(;;){
+            string path=null;Item item=null;
+            lock(gate){foreach(var entry in pending){path=entry.Key;item=entry.Value;break;}if(path==null){writingPath=null;running=false;idle.Set();return;}pending.Remove(path);writingPath=path;health[path].LastAttemptUtc=DateTime.UtcNow;}
+            string failure=null;
+            try{write(path,item.Text);}catch(UnauthorizedAccessException){failure="access_denied";}catch(System.Security.SecurityException){failure="access_denied";}catch(IOException){failure="io_error";}catch(ArgumentException){failure="invalid_path";}catch(NotSupportedException){failure="invalid_path";}catch(Exception){failure="write_error";}
+            int retryDelay=0;
+            lock(gate){
+                var state=health[path];writingPath=null;
+                if(failure==null){written[path]=item.Text;state.LastSuccessUtc=DateTime.UtcNow;state.ErrorCode=null;}
+                else {state.FailureCount++;state.LastFailureUtc=DateTime.UtcNow;state.ErrorCode=failure;
+                    // Do not overwrite a newer queued value, or spawn unbounded retries.
+                    if(!disposed&&!pending.ContainsKey(path)&&item.Retries<2){item.Retries++;pending[path]=item;retryDelay=100*item.Retries;}
+                }
+            }
+            if(retryDelay>0)Thread.Sleep(retryDelay);
         }}
         internal bool Flush(int milliseconds){return idle.WaitOne(milliseconds);}
-        internal void Forget(string path){lock(gate){pending.Remove(path);written.Remove(path);}}
-        public void Dispose(){lock(gate)disposed=true;if(Flush(2000))idle.Dispose();}
+        internal void Forget(string path){lock(gate){if(String.Equals(writingPath,path,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Flush pending writes before clearing history.");pending.Remove(path);written.Remove(path);health.Remove(path);}}
+        public void Dispose(){lock(gate){if(disposed)return;disposed=true;}if(Flush(2000))idle.Dispose();}
     }
     internal static class SafeDiagnostic {
         static readonly object gate=new object();static readonly Dictionary<string,string> last=new Dictionary<string,string>();

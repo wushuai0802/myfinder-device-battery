@@ -64,7 +64,7 @@ static class ActivityRefreshTests {
             Check(invalid.Devices[0].PhysicalId==null&&invalid.Health[0].PhysicalId==null,"invalid device and health physical identifiers are removed");
         }
     }
-    static DpiConfig NativeDpi(){var dpi=new DpiConfig {ActiveStage=0,TimestampUtc=DateTime.UtcNow};dpi.Stages.Add(new DpiStage {XDpi=1200,YDpi=1200});return dpi;}
+    static DpiConfig NativeDpi(){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=0,TimestampUtc=DateTime.UtcNow};dpi.Stages.Add(new DpiStage {XDpi=1200,YDpi=1200});return dpi;}
     static TrayContext Context(GenericBatteryWorker worker,Func<bool,MouseSnapshot> read,Func<DateTime> clock){
         var context=new TrayContext(false,read,delegate(int stage){throw new Exception("Native DPI must never be written");},null,null,false,null,null,null,delegate{return false;},null,worker,clock);
         Check(((System.Windows.Forms.Timer)Field(context,"refresh")).Enabled&&Field(context,"mouseActivity")==null,"test constructor preserves timer fallback without registering a live input listener");

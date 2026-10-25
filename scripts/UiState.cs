@@ -66,6 +66,12 @@ namespace AtkBatteryTray {
         public static bool SkipConfirmedStage(DpiConfig dpi,string error,int requested,bool switching,DateTime now) {
             return !switching&&dpi!=null&&dpi.ActiveStage==requested&&String.IsNullOrEmpty(error)&&Recent(dpi.TimestampUtc,now,5);
         }
+        public static string SyncText(BatteryView reading,DateTime now) {
+            if(reading==null||!reading.Percent.HasValue)return "等待设备回读";
+            if(!reading.Fresh||!Recent(reading.ConfirmedAt,now,90))return "上次确认 "+reading.TimeText;
+            int seconds=(int)Math.Max(0,(now-reading.ConfirmedAt).TotalSeconds);
+            return seconds<5?"刚刚确认":seconds<60?(seconds/5*5)+"秒前确认":(seconds/60)+"分钟前确认";
+        }
         public static Size ScaleSize(Size logical,float scale) {
             return new Size((int)Math.Round(logical.Width*scale),(int)Math.Round(logical.Height*scale));
         }

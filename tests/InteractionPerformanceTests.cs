@@ -41,7 +41,7 @@ static class InteractionPerformanceTests {
         Check(!owner.IsRefreshing&&!owner.IsAudioBusy&&!owner.IsHeadsetRefreshing,"fake reads settle");
     }
     static DpiConfig Dpi() {
-        var value=new DpiConfig {ActiveStage=1,TimestampUtc=DateTime.UtcNow};
+        var value=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=1,TimestampUtc=DateTime.UtcNow};
         foreach(int dpi in new[]{400,800,1200,1600})value.Stages.Add(new DpiStage {XDpi=dpi,YDpi=dpi});
         return value;
     }

@@ -18,7 +18,7 @@ static class AudioStateRegressionTests {
         Check(done(),"fake operation completes within its deadline");
     }
     static void Wait(WaitHandle signal){if(!signal.WaitOne(5000))throw new Exception("Fake gate timed out");}
-    static DpiConfig Dpi(){var result=new DpiConfig {ActiveStage=0,TimestampUtc=DateTime.UtcNow};result.Stages.Add(new DpiStage {XDpi=800,YDpi=800});return result;}
+    static DpiConfig Dpi(){var result=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=0,TimestampUtc=DateTime.UtcNow};result.Stages.Add(new DpiStage {XDpi=800,YDpi=800});return result;}
     static MouseSnapshot Mouse(bool battery){return new MouseSnapshot {Dpi=Dpi(),Battery=battery?new BatteryReading {Percent=80,TimestampUtc=DateTime.UtcNow}:null};}
     static AudioBindings Bindings(string suffix){return new AudioBindings {SpeakerEndpointId="speaker-"+suffix,HeadsetEndpointId="headset-"+suffix,MicrophoneEndpointId="mic-"+suffix};}
     static AudioReading Audio(AudioBindings settings,bool muted=false){

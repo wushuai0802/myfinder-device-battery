@@ -28,7 +28,7 @@ $uiTest=Join-Path $OutputDirectory 'UiAndControllerTests.exe'
 if($LASTEXITCODE -ne 0){throw 'UI/controller test build failed.'}
 & $uiTest $OutputDirectory
 if($LASTEXITCODE -ne 0){throw 'UI/controller tests failed.'}
-foreach($regressionName in @('AudioStateRegressionTests','PopupStateRegressionTests','GenericDpiTests','WirelessDpiUiTests','MouseActivityTests','ActivityRefreshTests')) {
+foreach($regressionName in @('AudioStateRegressionTests','PopupStateRegressionTests','GenericDpiTests','WirelessDpiUiTests','MouseActivityTests','ActivityRefreshTests','NativeIdentityTests')) {
     $regression=Join-Path $OutputDirectory ($regressionName+'.exe')
     & $compiler /nologo /target:exe /platform:x64 /optimize+ ("/main:"+$regressionName) /reference:System.Runtime.Serialization.dll `
         /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll ("/out:"+$regression) $menuSources (Join-Path $PSScriptRoot ($regressionName+'.cs'))

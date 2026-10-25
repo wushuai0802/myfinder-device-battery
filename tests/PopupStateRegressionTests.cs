@@ -27,7 +27,7 @@ static class PopupStateRegressionTests {
         return new AudioReading {OperationSucceeded=true,ConsoleOutputId="speaker",MultimediaOutputId="speaker",ActiveOutput="speaker",SpeakerId="speaker",HeadsetId="headset",MicrophoneId="mic",SpeakerAvailable=true,HeadsetAvailable=true,MicrophoneAvailable=true,MicrophoneMuted=false,OutputVolumePercent=volume,VolumeEndpointId="speaker",Devices=new AudioDeviceChoice[0]};
     }
     static DpiConfig Dpi() {
-        var value=new DpiConfig {ActiveStage=1,TimestampUtc=DateTime.UtcNow};
+        var value=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=1,TimestampUtc=DateTime.UtcNow};
         foreach(int dpi in new[]{400,800,1200,1600})value.Stages.Add(new DpiStage {XDpi=dpi,YDpi=dpi});
         return value;
     }
