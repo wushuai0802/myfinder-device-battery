@@ -132,7 +132,7 @@ ATK写入只选择已有DPI档位，核验设备身份、系统行、档位及�
 
 ## 构建和验证
 
-源码仓库不包含预编译程序，请从 [Releases](https://github.com/wushuai0802/myfinder-device-battery/releases) 下载完整发行包，或运行 `scripts/Build.ps1` 自行构建。
+源码仓库不包含预编译程序，请从 [Releases](https://github.com/wushuai0802/myfinder-device-battery/releases) 下载完整发行包；从源码运行需在源码根目录依次完成两步：先不带参数运行 `scripts\Build.ps1`（默认输出到 `outputs\`），再运行 `scripts\Build-Backend.ps1 -OutputDirectory .\engine\runtime` 准备通用设备读取组件。
 
 从源码仓库运行：
 

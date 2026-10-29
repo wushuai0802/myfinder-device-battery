@@ -3,7 +3,6 @@ import io
 import json
 from pathlib import Path
 import sys
-import types
 import unittest
 from unittest.mock import patch
 

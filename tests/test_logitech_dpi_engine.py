@@ -1,6 +1,5 @@
 """Identity-bound DPI IPC regressions. No live HID or Windows settings."""
 import sys
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
