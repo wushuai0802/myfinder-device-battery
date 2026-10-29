@@ -59,8 +59,43 @@ static class NativeIdentityTests {
         [DataMember(Name="failureCount")] public long Failures {get;set;}
     }
     static Status ReadStatus(TrayContext owner){using(var stream=new MemoryStream(Encoding.UTF8.GetBytes(owner.BuildStatusJson())))return (Status)new DataContractJsonSerializer(typeof(Status)).ReadObject(stream);}
+    static void TopologyChangePreservesFreshBatteryUntilReconciled(){
+        using(var f=new Fixture()) {
+            var reading=f.Owner.Current;string error=f.Owner.ErrorMessage,token=f.Owner.NativeDpiToken;
+            Check(reading!=null&&f.Owner.CanSetNativeDpi,"fixture starts with a fresh battery and confirmed DPI");
+            f.Owner.ActivityTopologyChanged();
+            Check(Object.ReferenceEquals(f.Owner.Current,reading)&&f.Owner.ErrorMessage==error,"unrelated topology preserves the current battery and its error state");
+            var mouse=UiState.Mouse(f.Owner.Current,f.Owner.LastGood,DateTime.UtcNow);
+            Check(mouse.Fresh&&UiState.Tray("mouse",mouse,UiState.Headset(null,DateTime.UtcNow)).Battery.Fresh,"the card and tray retain fresh battery evidence after topology changes");
+            Check(!f.Owner.CanSetNativeDpi&&!ReadStatus(f.Owner).DpiVerified&&!String.IsNullOrEmpty(f.Owner.DpiError),"topology still invalidates DPI until the receiver is reread");
+            Check(!UiState.Mouse(f.Owner.Current,f.Owner.LastGood,reading.TimestampUtc.AddSeconds(91)).Fresh,"retained battery evidence still expires naturally after ninety seconds");
+            f.ReadGateAt=f.Reads+1;f.Owner.RefreshBattery(false);Pump(delegate{return f.ReadEntered.WaitOne(0);});
+            Check(Object.ReferenceEquals(f.Owner.Current,reading)&&!f.Owner.CanSetNativeDpi,"a pending same-receiver reread preserves battery evidence without enabling DPI");
+            f.Owner.SelectDpiStage(1);Check(f.Attempts==0&&f.Owner.GetFeedback().PendingStage==-1,"unconfirmed DPI controls cannot queue a write");
+            f.ReadRelease.Set();Pump(delegate{return !f.Owner.IsRefreshing&&f.Owner.CanSetNativeDpi;});
+            Check(f.Owner.Current.DeviceKey==KeyA&&f.Owner.NativeDpiToken!=token,"successful same-receiver reread restores DPI with the new connection epoch");
+        }
+        Console.WriteLine("PASS TopologyChangePreservesFreshBatteryUntilReconciled");
+    }
+    static void ReceiverIdentityChangeClearsPreviousBattery(){
+        using(var f=new Fixture()) {
+            var reading=f.Owner.Current;
+            f.Key=KeyB;f.FailRead=true;f.Owner.ActivityTopologyChanged();
+            Check(Object.ReferenceEquals(f.Owner.Current,reading),"the event alone does not claim that the receiver changed");
+            f.ReadGateAt=f.Reads+1;f.Owner.RefreshBattery(false);Pump(delegate{return f.ReadEntered.WaitOne(0);});
+            Check(Object.ReferenceEquals(f.Owner.Current,reading)&&!f.Owner.CanSetNativeDpi,"battery evidence remains while the new receiver identity is pending");
+            f.ReadRelease.Set();Pump(delegate{return !f.Owner.IsRefreshing;});
+            Check(f.Owner.Current==null&&f.Owner.LastGood==null&&f.Owner.Dpi==null,"confirmed receiver identity change clears the old battery, history and DPI");
+            Check(!UiState.Mouse(f.Owner.Current,f.Owner.LastGood,DateTime.UtcNow).Percent.HasValue&&!f.Owner.CanSetNativeDpi,"a receiver without a new reading cannot reuse the old receiver's evidence");
+            f.FailRead=false;f.Owner.RefreshBattery(false);Pump(delegate{return !f.Owner.IsRefreshing&&f.Owner.CanSetNativeDpi;});
+            Check(f.Owner.Current.DeviceKey==KeyB&&Object.ReferenceEquals(f.Owner.Current,f.Owner.LastGood),"new receiver recovery uses only its own confirmed battery");
+        }
+        Console.WriteLine("PASS ReceiverIdentityChangeClearsPreviousBattery");
+    }
     [STAThread] static int Main(){
         try {
+            TopologyChangePreservesFreshBatteryUntilReconciled();
+            ReceiverIdentityChangeClearsPreviousBattery();
             Check(KeyA!=KeyB&&KeyA==MouseBattery.DeviceKey("FIXTURE-RECEIVER-A"),"receiver keys distinguish instances and normalize path case");
             bool rejected=false;try{new NativeDpiRequest(Dpi(null),1,0,null);}catch(ArgumentException){rejected=true;}Check(rejected,"missing receiver evidence is rejected without HID access");
             var cancelled=new NativeDpiRequest(Dpi(KeyA),1,0,delegate{return false;});rejected=false;

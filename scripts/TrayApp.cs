@@ -941,7 +941,7 @@ namespace AtkBatteryTray {
         }
         internal void ActivityTopologyChanged(){
             if(disposed)return;Interlocked.Increment(ref nativeEpoch);pendingNativeDpi=null;pendingStage=-1;nativeNeedsReconcile=true;
-            DpiError="设备连接已变化，等待重新确认";Current=null;ErrorMessage="设备连接已变化，保留上次读数";
+            DpiError="设备连接已变化，等待重新确认";
             if(mouseActivity!=null)mouseActivity.InvalidateTopology();activityRefresh.TopologyChanged();nativeActivityInFlight=null;genericActivityInFlight=null;activityTimer.Stop();UpdateIcon();
         }
         bool FreshActivitySource(string physicalId,bool native){
@@ -1092,7 +1092,7 @@ namespace AtkBatteryTray {
             if(clearingHistory)return;clearingHistory=true;Interlocked.Increment(ref historyGeneration);BlockWirelessDpi();wirelessCache.Clear();if(Current==null||!UiState.Recent(Current.TimestampUtc,DateTime.UtcNow,90)){Current=null;LastGood=null;}else LastGood=Current;lastKnownHeadset=null;
             foreach(var device in WirelessDevices)if(!device.Fresh){device.Percent=null;device.ConfirmedAtUtc=null;device.Charging=null;device.SourceQuality="unknown";}
             if(Headset!=null&&!UiState.Recent(Headset.BatteryTimestampUtc,DateTime.UtcNow,90))Headset.Percent=null;
-            ThreadPool.QueueUserWorkItem(delegate{bool ok=fileWriter.Flush(5000);if(ok)foreach(string name in new[]{"readings-cache.json","wireless-cache.json"}){string path=Path.Combine(DeviceSettings.DataDirectory,name);fileWriter.Forget(path);try{if(File.Exists(path))File.Delete(path);}catch(IOException){ok=false;}catch(UnauthorizedAccessException){ok=false;}}
+            ThreadPool.QueueUserWorkItem(delegate{bool ok=fileWriter.Flush(5000);if(ok)foreach(string name in new[]{"readings-cache.json","wireless-cache.json"}){string path=Path.Combine(DeviceSettings.DataDirectory,name);try{fileWriter.Forget(path);if(File.Exists(path))File.Delete(path);}catch(IOException){ok=false;}catch(UnauthorizedAccessException){ok=false;}catch(InvalidOperationException){ok=false;}}
                 if(genericWorker!=null)genericWorker.Reset();if(!disposed)try{dispatch.BeginInvoke((MethodInvoker)delegate{clearingHistory=false;genericQueued=false;genericQueuedTarget=null;if(details!=null&&!details.IsDisposed)details.Notice(ok?"历史读数已清除":"本地缓存仍被占用，请稍后重试");RefreshBattery(false);});}catch(InvalidOperationException){}});UpdateIcon();
         }
         public string DiagnosticSummary() {
