@@ -94,7 +94,7 @@ static class GenericDpiTests {
             confirm=true;Check(worker.Poll().Error==null&&!Object.ReferenceEquals(Field(worker,"process"),old),"a confirmed exit permits a fresh read and a new worker lifetime");
         }
     }
-    static DpiConfig NativeDpi(){var dpi=new DpiConfig {ActiveStage=0,TimestampUtc=DateTime.UtcNow};dpi.Stages.Add(new DpiStage {XDpi=1200,YDpi=1200});return dpi;}
+    static DpiConfig NativeDpi(){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("fixture-native"),ActiveStage=0,TimestampUtc=DateTime.UtcNow};dpi.Stages.Add(new DpiStage {XDpi=1200,YDpi=1200});return dpi;}
     static TrayContext Context(GenericBatteryWorker worker,Action nativeWrite){return new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Dpi=NativeDpi(),Battery=battery?new BatteryReading {Percent=60,TimestampUtc=DateTime.UtcNow}:null};},delegate(int stage){nativeWrite();return NativeDpi();},null,null,false,null,null,null,delegate{return false;},null,worker);}
     static void Controller(string root){
         string folder=MakeWorker(root,"wait-write");using(var worker=new GenericBatteryWorker(folder,false,2000)){

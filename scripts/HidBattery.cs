@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
@@ -14,6 +15,7 @@ namespace AtkBattery {
         public ushort UsagePage, Usage, InputLength, OutputLength, FeatureLength;
     }
     public sealed class BatteryReading {
+        public string DeviceKey;
         public int Percent;
         public bool Charging;
         public int Millivolts;
@@ -37,6 +39,7 @@ namespace AtkBattery {
         public string RawHex { get { return MouseBattery.Hex(Raw); } }
     }
     public sealed class DpiConfig {
+        public string DeviceKey;
         public string Product;
         public int Cid;
         public int Mid;
@@ -52,11 +55,28 @@ namespace AtkBattery {
         public string RefreshError = "";
     }
     public sealed class MouseSnapshot {
+        public string DeviceKey;
         public BatteryReading Battery;
         public DpiConfig Dpi;
         public string BatteryError;
         public string DpiError;
         public DateTime CheckedAtUtc = DateTime.UtcNow;
+    }
+    public sealed class NativeDpiRequest {
+        public readonly string DeviceKey;
+        public readonly int Stage,StageCount,XDpi,YDpi,Epoch;
+        readonly Func<bool> stillCurrent;
+        public NativeDpiRequest(DpiConfig display,int stage,int epoch,Func<bool> current) {
+            if(display==null||!MouseBattery.ValidDeviceKey(display.DeviceKey)||display.Stages==null)throw new ArgumentException("A current receiver identity is required.");
+            MouseBattery.ValidateActiveDpiIndex(stage,display.Stages.Count);
+            DeviceKey=display.DeviceKey;Stage=stage;StageCount=display.Stages.Count;XDpi=display.Stages[stage].XDpi;YDpi=display.Stages[stage].YDpi;Epoch=epoch;stillCurrent=current;
+        }
+        public void CheckCurrent(){if(stillCurrent!=null&&!stillCurrent())throw new OperationCanceledException("Mouse connection changed; the old DPI request was cancelled.");}
+        public void Validate(DpiConfig actual) {
+            CheckCurrent();
+            if(actual==null||actual.DeviceKey!=DeviceKey||actual.Stages==null||actual.Stages.Count!=StageCount||actual.Stages[Stage].XDpi!=XDpi||actual.Stages[Stage].YDpi!=YDpi)
+                throw new IOException("Mouse identity or DPI table changed; refresh before switching.");
+        }
     }
     public static class MouseBattery {
         static readonly Guid HidGuid = new Guid("4d1e55b2-f16f-11cf-88cb-001111000030");
@@ -91,6 +111,12 @@ namespace AtkBattery {
         [DllImport("kernel32.dll", SetLastError=true)] static extern bool WriteFile(SafeFileHandle handle, IntPtr buffer, uint count, IntPtr written, IntPtr overlap);
         [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetOverlappedResult(SafeFileHandle handle, IntPtr overlap, out uint count, bool wait);
         [DllImport("kernel32.dll", SetLastError=true)] static extern bool CancelIoEx(SafeFileHandle handle, IntPtr overlap);
+
+        public static string DeviceKey(string path) {
+            if(String.IsNullOrWhiteSpace(path))return null;
+            using(var sha=SHA256.Create())return "receiver-"+BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(path.ToLowerInvariant()))).Replace("-","").ToLowerInvariant();
+        }
+        public static bool ValidDeviceKey(string key){return key!=null&&System.Text.RegularExpressions.Regex.IsMatch(key,@"^receiver-[a-f0-9]{64}$");}
 
         public static List<HidDevice> Enumerate() {
             var result = new List<HidDevice>(); var guid = HidGuid;
@@ -239,6 +265,7 @@ namespace AtkBattery {
         }
         static DpiConfig ReadDpiConfigFromHandle(SafeFileHandle file,HidDevice device,byte[] system) {
             var config=ParseDpiSystem(system);int count=config.MaxStages;
+            config.DeviceKey=DeviceKey(device.Path);
             for(int i=0;i<count;i++) {
                 ushort address=(ushort)(0x1b00+i*6);var frame=EepromGet(file,device,address,6);var raw=new byte[6];Array.Copy(frame,6,raw,0,6);
                 config.Stages.Add(ParsePaw3955Stage(raw,i,address));
@@ -254,11 +281,11 @@ namespace AtkBattery {
             var snapshot=new MouseSnapshot();
             var devices=Enumerate().FindAll(d=>d.UsagePage==0xff02&&d.Usage==2&&d.InputLength==17&&d.OutputLength==17);
             if(devices.Count!=1)throw new IOException("Expected one ATK 17-byte I/O collection");
-            var device=devices[0];using(var file=CreateFile(device.Path,READ|WRITE,3,IntPtr.Zero,3,OVERLAPPED,IntPtr.Zero)) {
+            var device=devices[0];snapshot.DeviceKey=DeviceKey(device.Path);using(var file=CreateFile(device.Path,READ|WRITE,3,IntPtr.Zero,3,OVERLAPPED,IntPtr.Zero)) {
                 if(file.IsInvalid)throw new IOException("Cannot open receiver");
                 Query(file,device,1);
                 if(includeBattery) {
-                    try { snapshot.Battery=ParseBattery(Query(file,device,4));snapshot.Battery.Product=device.Product; }
+                    try { snapshot.Battery=ParseBattery(Query(file,device,4));snapshot.Battery.Product=device.Product;snapshot.Battery.DeviceKey=snapshot.DeviceKey; }
                     catch(Exception error) { snapshot.BatteryError=error.Message; }
                 }
                 try { var system=EepromGet(file,device,0,10);snapshot.Dpi=ReadDpiConfigFromHandle(file,device,system); }
@@ -299,12 +326,18 @@ namespace AtkBattery {
             // Reject globally invalid indices before enumeration, opening HID,
             // or sending any packet. Device-specific bounds are checked below.
             ValidateActiveDpiIndex(index,8);
-            return WithGate<DpiConfig>(delegate { return SetActiveDpiStageUnlocked(index); });
+            return WithGate<DpiConfig>(delegate { return SetActiveDpiStageUnlocked(index,null); });
         }
-        static DpiConfig SetActiveDpiStageUnlocked(int index) {
+        public static DpiConfig SetActiveDpiStage(NativeDpiRequest request) {
+            if(request==null)throw new ArgumentNullException("request");request.CheckCurrent();
+            return WithGate<DpiConfig>(delegate {return SetActiveDpiStageUnlocked(request.Stage,request);});
+        }
+        static DpiConfig SetActiveDpiStageUnlocked(int index,NativeDpiRequest request) {
+            if(request!=null)request.CheckCurrent();
             var devices=Enumerate().FindAll(d=>d.UsagePage==0xff02&&d.Usage==2&&d.InputLength==17&&d.OutputLength==17);
             if(devices.Count!=1)throw new IOException("Expected one ATK 17-byte I/O collection");
-            var device=devices[0];using(var file=CreateFile(device.Path,READ|WRITE,3,IntPtr.Zero,3,OVERLAPPED,IntPtr.Zero)) {
+            var device=devices[0];if(request!=null&&DeviceKey(device.Path)!=request.DeviceKey)throw new IOException("The selected mouse receiver is no longer connected.");
+            using(var file=CreateFile(device.Path,READ|WRITE,3,IntPtr.Zero,3,OVERLAPPED,IntPtr.Zero)) {
                 if(file.IsInvalid)throw new IOException("Cannot open receiver");
                 Query(file,device,1);var identity=Query(file,device,16);
                 // RID is byte 0. The paired mouse CID/MID are bytes 6/7;
@@ -312,9 +345,11 @@ namespace AtkBattery {
                 if(identity[6]!=1||identity[7]!=54)throw new IOException("Paired device is not the verified ATK A9 Air+");
                 var system=EepromGet(file,device,0,10);var original=ReadDpiConfigFromHandle(file,device,system);
                 ValidateActiveDpiIndex(index,original.MaxStages);
+                if(request!=null)request.Validate(original);
                 if(original.ActiveStage==index)return original;
                 byte[] before=new byte[]{system[10],system[11]};byte[] target=new byte[]{(byte)index,(byte)((0x55-index)&255)};
                 byte[] confirmed;
+                if(request!=null)request.CheckCurrent();
                 try {
                     EepromSet(file,device,4,target);
                     confirmed=EepromGet(file,device,0,10);var confirmedSystem=ParseDpiSystem(confirmed);

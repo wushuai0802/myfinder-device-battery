@@ -20,6 +20,16 @@ function Check([bool]$value,[string]$label){if(-not $value){throw ('FAIL '+$labe
 function Reject([scriptblock]$action,[string]$label){$rejected=$false;try{& $action | Out-Null}catch{$rejected=$true};Check $rejected $label}
 . (Join-Path $PSScriptRoot 'RuntimeObservation.Common.ps1')
 $origin=[datetime]::SpecifyKind([datetime]'2020-01-01',[DateTimeKind]::Utc)
+$statusIdentity=[pscustomobject]@{processId=123;processStartedAtUtc=$origin.ToString('o');snapshotGeneratedAtUtc=$origin.AddSeconds(1).ToString('o')}
+Check (Test-RuntimeStatusInstance $statusIdentity 123 $origin $origin.AddSeconds(2)) 'current snapshot matches PID/start/generation evidence'
+Check (-not (Test-RuntimeStatusInstance $statusIdentity 124 $origin $origin.AddSeconds(2))) 'same-version snapshot from another PID is rejected'
+Check (-not (Test-RuntimeStatusInstance $statusIdentity 123 $origin.AddSeconds(1) $origin.AddSeconds(2))) 'reused PID with a different start time is rejected'
+Check (-not (Test-RuntimeStatusInstance ([pscustomobject]@{processId=123}) 123 $origin $origin.AddSeconds(2))) 'partial new identity metadata is not silently treated as legacy'
+$statusIdentity.snapshotGeneratedAtUtc=$origin.AddSeconds(-1).ToString('o')
+Check (-not (Test-RuntimeStatusInstance $statusIdentity 123 $origin $origin.AddSeconds(2))) 'snapshot generation cannot predate the target instance'
+$statusIdentity.snapshotGeneratedAtUtc=$origin.AddSeconds(20).ToString('o')
+Check (-not (Test-RuntimeStatusInstance $statusIdentity 123 $origin $origin.AddSeconds(2))) 'implausibly future generation is rejected'
+Check (Test-RuntimeStatusInstance ([pscustomobject]@{version='1.3.1'}) 123 $origin $origin.AddSeconds(2)) 'legacy identity remains subject to existing version/file-time checks'
 $continuous=New-RuntimeObservationState $origin 30
 for($index=0;$index -le 960;$index++){Add-RuntimeObservationSample $continuous $origin.AddSeconds(30*$index)}
 $continuity=Get-RuntimeObservationContinuity $continuous $origin.AddHours(8) $true

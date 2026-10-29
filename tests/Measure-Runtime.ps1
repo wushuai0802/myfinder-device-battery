@@ -82,6 +82,7 @@ function Read-DeviceScenario {
                 ([datetime]::UtcNow-$file.LastWriteTimeUtc).TotalSeconds -gt 600){throw 'Status is stale, oversized, or predates this process.'}
         $status=Get-Content -LiteralPath $StatusPath -Raw | ConvertFrom-Json
         if($status.version -ne $boundBinary.ProductVersion){throw 'Status version does not match the bound executable.'}
+        if(-not (Test-RuntimeStatusInstance $status $TargetProcessId $boundStart ([datetime]::UtcNow))){throw 'Status instance does not match the bound process.'}
         $state='app_snapshot'
         if($status.universalReady -and $status.universalDeviceCount -eq 0 -and
                 -not $status.liveVerified -and -not $status.headset.receiverPresent){$state='no_current_battery_devices_reported'}
@@ -90,7 +91,7 @@ function Read-DeviceScenario {
             PanelOpen=$(if($status.PSObject.Properties['panelOpen']){[bool]$status.panelOpen}else{$null});
             SyncIntervalMs=$(if($status.PSObject.Properties['syncIntervalMs']){[int]$status.syncIntervalMs}else{$null});
             SnapshotWrittenAtUtc=$file.LastWriteTimeUtc.ToString('o');
-            Boundary='Shared app-produced snapshot, correlated by version and write time; no hardware inventory was queried.'}
+            Boundary='Shared app-produced snapshot, correlated by version/write time and process identity when supplied; no hardware inventory was queried.'}
     }catch{[pscustomobject]@{State='unverified';Reason='App snapshot unavailable, stale, incompatible, or not correlated with this process.'}}
 }
 

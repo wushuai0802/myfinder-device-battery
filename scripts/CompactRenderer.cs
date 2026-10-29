@@ -194,7 +194,7 @@ namespace AtkBatteryTray {
             else if(feedback!=null&&feedback.ShowPendingHints&&!String.IsNullOrEmpty(feedback.PendingOutput))status="音源等待确认…";
             else if(mouse.Percent.HasValue&&!mouse.Fresh)status="上次确认 "+mouse.TimeText;
             else if(visible&&ear.Percent.HasValue&&!ear.Fresh)status="耳机上次 "+ear.TimeText;
-            else status=mouse.Fresh?"刚刚同步":"等待设备回读";
+            else status=UiState.SyncText(mouse,now);
             Fill(g,new RectangleF(8,footer+3,208,24),dark?Color.FromArgb(225,41,45,52):Color.FromArgb(225,250,251,253),7);
             Highlight(g,new RectangleF(8,footer+3,208,24),0,feedback,dark);
             DrawSymbol(g,"refresh",new RectangleF(11,footer+10,12,12),Muted(dark));
