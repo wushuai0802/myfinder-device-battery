@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
-sys.modules["hid"] = types.SimpleNamespace(enumerate=lambda *a: [])
+sys.path.insert(0, str(ENGINE / "tests"))
+import _hidstub
 from providers.base import DeviceStatus
 from providers import hidlist
 from server import BatteryEngine, normalise, public_id, PROVIDERS
