@@ -132,6 +132,8 @@ ATK写入只选择已有DPI档位，核验设备身份、系统行、档位及�
 
 ## 构建和验证
 
+源码仓库不包含预编译程序，请从 [Releases](https://github.com/wushuai0802/myfinder-device-battery/releases) 下载完整发行包，或运行 `scripts/Build.ps1` 自行构建。
+
 从源码仓库运行：
 
 ```powershell
