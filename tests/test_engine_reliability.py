@@ -12,14 +12,14 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-import types
 import unittest
 from dataclasses import asdict
 from unittest.mock import patch
 
 ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
-sys.modules.setdefault("hid", types.SimpleNamespace(enumerate=lambda *args: []))
+sys.path.insert(0, str(ENGINE / "tests"))
+import _hidstub
 from providers.base import DeviceStatus
 from providers.bluetooth import BluetoothProvider, K_BAT
 from providers import hidlist
@@ -716,6 +716,7 @@ class ProcessIsolationTests(unittest.TestCase):
         finally:
             kernel.CloseHandle(handle)
 
+    @unittest.skipUnless(sys.platform == "win32", "Requires Windows portable runtime paths and hidapi in -I children")
     def test_private_package_smoke_accepts_windows_utf8_bom(self):
         command = [sys.executable, "-I", "-B", str(ENGINE / "server.py"), "--package-smoke"]
         request = b"\xef\xbb\xbf" + b'{"command":"poll","requestId":9,"generation":2,"force":true}\n'
@@ -727,6 +728,7 @@ class ProcessIsolationTests(unittest.TestCase):
         self.assertTrue(all(f["requestId"] == 9 and f["generation"] == 2 for f in frames))
         self.assertEqual(frames[-1]["errors"], [])
 
+    @unittest.skipUnless(sys.platform == "win32", "Requires Windows portable runtime paths and hidapi in -I children")
     def test_private_real_package_smoke_accepts_ids_and_eof(self):
         # Imports all shipped readers inside a controlled child but never
         # enumerates HID, reads Windows Bluetooth or sends vendor commands.

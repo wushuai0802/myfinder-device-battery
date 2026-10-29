@@ -13,6 +13,7 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+import _hidstub  # noqa: E402, F401
 
 from providers import audeze  # noqa: E402
 

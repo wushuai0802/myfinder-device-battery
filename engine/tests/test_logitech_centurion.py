@@ -18,6 +18,7 @@ import types
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _hidstub  # noqa: E402, F401
 
 from providers import logitech_centurion as L  # noqa: E402
 

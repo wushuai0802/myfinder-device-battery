@@ -1,12 +1,12 @@
 """Identity-bound DPI IPC regressions. No live HID or Windows settings."""
 import sys
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
-sys.modules.setdefault("hid", types.SimpleNamespace(enumerate=lambda *args: []))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine" / "tests"))
+import _hidstub
 from providers.base import DeviceStatus
 from server import BatteryEngine, historical, normalise, public_id, utcnow
 from isolation import IsolationError

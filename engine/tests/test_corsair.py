@@ -23,6 +23,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _hidstub  # noqa: E402, F401
 
 from providers import corsair as C  # noqa: E402
 

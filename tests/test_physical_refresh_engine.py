@@ -9,6 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine" / "tests"))
+import _hidstub
 import server
 from providers.base import DeviceStatus
 from isolation import IsolationError, wire_encode, wire_decode

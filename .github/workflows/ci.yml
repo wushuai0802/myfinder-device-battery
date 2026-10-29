@@ -1,4 +1,4 @@
-name: Windows build and regression checks
+name: Build and regression checks
 on:
   push:
     branches: [main, 'codex/**']
@@ -7,6 +7,18 @@ on:
 permissions:
   contents: read
 jobs:
+  protocols:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0, Node 24
+        with:
+          python-version: '3.14'
+      - name: Run device protocol fixtures without hidapi
+        run: python -I -B -m unittest discover -s ./engine/tests -q
+      - name: Run engine bridge regressions without hidapi
+        run: python -I -B -m unittest discover -s ./tests -p 'test_*.py' -q
   windows:
     runs-on: windows-latest
     timeout-minutes: 20

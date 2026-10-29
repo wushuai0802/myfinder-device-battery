@@ -11,6 +11,8 @@ outputs/backend-runtime/
 __pycache__/
 *.pyc
 outputs/*.json
+outputs/*.exe
+outputs/appearance-preview.png
 outputs/active-ui-render.png
 outputs/releases/
 *.zip
