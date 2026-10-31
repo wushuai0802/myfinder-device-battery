@@ -354,14 +354,15 @@ class BatteryEngine:
         self._ambiguous_providers = set()
         self._bluetooth_empty_polls = 0
         self._bluetooth_paths = None
+        self._bluetooth_slot = None
         self.children = [(process_factory or ReaderProcess)(), (process_factory or ReaderProcess)()]
         self.native_mouse = None
-        self._generation = 0
         if self._direct and not include_native:
             original = hidlist.enumerate
             hidlist.enumerate = lambda vid=0: [d for d in original(vid) if (d.get("vendor_id"), d.get("product_id")) not in NATIVE]
 
     def close(self):
+        self._bluetooth_slot = None
         for child in self.children:
             child.close()
 
@@ -480,8 +481,32 @@ class BatteryEngine:
             child.close()
             raise
 
+    def _collect_bluetooth(self):
+        """Harvest a bounded query without waiting or changing its evidence."""
+        from isolation import IsolationError
+        from providers.base import DeviceStatus
+        if self._bluetooth_slot is None:
+            return False
+        try:
+            result = self.children[self._bluetooth_slot].result()
+            if result is None:
+                return False
+            self._bluetooth_slot = None
+            raw = result.get("statuses", [])
+            if not isinstance(raw, list) or len(raw) > MAX_DEVICES:
+                raise IsolationError("invalid_response")
+            statuses = [DeviceStatus(**value) for value in raw]
+            self._accept("bluetooth", "bluetooth", statuses,
+                         valid_time(result.get("checkedAtUtc")) or utcnow(),
+                         candidate_count=max(0, min(512, int(result.get("candidateCount", 0)))))
+        except (IsolationError, TypeError, ValueError, AttributeError) as error:
+            self._bluetooth_slot = None
+            self._failure("bluetooth", "bluetooth", error.code if isinstance(error, IsolationError) else "invalid_response")
+        return True
+
     def set_dpi(self, device_id, value, target_token, expected_dpi, request_id=0, generation=0):
         """One identity-bound volatile write with readback, never a retry."""
+        self._collect_bluetooth()
         result = {"deviceId": device_id, "targetToken": target_token,
                   "requestedDpi": value, "confirmedDpi": None, "success": False,
                   "outcomeUnknown": False, "error": "invalid_target", "checkedAtUtc": utcnow()}
@@ -521,6 +546,11 @@ class BatteryEngine:
             return finish("unsupported_dpi")
         reader_key = "logitech|" + physical
         slot = self._affinity.get(reader_key, 0)
+        if slot == self._bluetooth_slot:
+            # Reclaim only an unfinished read, before any DPI command. This
+            # cancellation is not a provider failure or a completed poll.
+            self.children[slot].close()
+            self._bluetooth_slot = None
         try:
             paths = self._hidlist.interface_paths()
             topology = self._single_reader(slot, {"action": "topology", "paths": sorted(paths) if paths is not None else None}, 6)
@@ -556,14 +586,13 @@ class BatteryEngine:
             return finish("outcome_unknown", unknown=True)
 
     def poll(self, force=False, device_id=None, request_id=0, generation=0, progress=None, park_empty_readers=False,
-             physical_id=None):
+             physical_id=None, wait_bluetooth=False):
+        self._collect_bluetooth()
         if (not valid_public_target(device_id) or not valid_public_target(physical_id)
                 or device_id is not None and physical_id is not None
                 or physical_id is not None and (self._direct or self.package_smoke)):
             self._failure("selection", "selection", "unknown_target")
             return self._snapshot(request_id, generation)
-        self._generation += 1
-        token = self._generation
         if self._direct:
             for provider in self.providers:
                 if device_id and self.provider_by_id.get(device_id) != provider.name:
@@ -579,12 +608,13 @@ class BatteryEngine:
                     progress(self._snapshot(request_id, generation, False))
             return self._snapshot(request_id, generation)
         try:
-            result = self._isolated_poll(force, device_id, request_id, generation, progress, token, physical_id)
+            result = self._isolated_poll(force, device_id, request_id, generation, progress, physical_id, wait_bluetooth)
             # Closed-panel, native-only PCs do not need two idle Python readers.
             # Never discard protocol grace/cached state or a known candidate
             # waiting for a usable reply. Foreground polls retain discovery
             # caches, and package smoke keeps children for lifecycle checks.
             if (park_empty_readers and device_id is None and physical_id is None and not self.package_smoke
+                    and self._bluetooth_slot is None
                     and not any(self.by_provider.values()) and self.health
                     and not result.get("errors")
                     and all(h.get("state") in ("no_devices", "unsupported") for h in self.health.values())):
@@ -595,7 +625,7 @@ class BatteryEngine:
             self.close()
             return self._snapshot(request_id, generation)
 
-    def _isolated_poll(self, force, device_id, request_id, generation, progress, token, physical_id=None):
+    def _isolated_poll(self, force, device_id, request_id, generation, progress, physical_id=None, wait_bluetooth=False):
         from isolation import IsolationError
         from providers.base import DeviceStatus
         from topology import physical_groups
@@ -614,6 +644,7 @@ class BatteryEngine:
         deadline = time.monotonic() + MAX_ROUND_SECONDS
         target_name = self.provider_by_id.get(device_id) if device_id else None
         target_physical = self.physical_by_id.get(device_id) if device_id else None
+        wait_bluetooth = wait_bluetooth or target_name == "bluetooth"
         pending, active = [], {}
         partial_count = 0
         full_round = device_id is None and physical_id is None
@@ -632,19 +663,18 @@ class BatteryEngine:
                 if physical_id is not None:
                     command["physicalId"] = physical_id
                 pending.append(("topology", "topology", "", command, 6))
-            if physical_id is None and (not device_id or target_name == "bluetooth"):
+            if self._bluetooth_slot is None and physical_id is None and (not device_id or target_name == "bluetooth"):
                 pending.append(("query", "bluetooth", "", {"action": "query", "provider": "bluetooth"}, 14))
-        while pending or active:
-            if self._generation != token:
-                self.close()
-                break
+        while pending or active or wait_bluetooth and self._bluetooth_slot is not None:
             for slot, child in enumerate(self.children):
-                if slot in active:
+                if slot in active or slot == self._bluetooth_slot:
                     continue
                 for index, item in enumerate(pending):
                     action, name, physical, command, budget = item
                     reader_key = task_key(item)
                     if reader_key in self._affinity and self._affinity[reader_key] != slot:
+                        continue
+                    if name == "bluetooth" and slot != self._affinity.get(reader_key, 1):
                         continue
                     if physical and any(v[2] == physical for v in active.values()):
                         continue
@@ -662,10 +692,16 @@ class BatteryEngine:
                     try:
                         child.start(command, min(budget, max(0.01, deadline - time.monotonic())))
                         self._affinity[reader_key] = slot
-                        active[slot] = item
+                        if name == "bluetooth":
+                            self._bluetooth_slot = slot
+                        else:
+                            active[slot] = item
                     except IsolationError as error:
                         self._failure(reader_key, name, error.code)
                     break
+            if self._collect_bluetooth() and progress and partial_count < MAX_PARTIALS:
+                partial_count += 1
+                progress(self._snapshot(request_id, generation, False))
             for slot in list(active):
                 item = active[slot]
                 action, name, physical, command, budget = item
@@ -716,7 +752,7 @@ class BatteryEngine:
                             for group_id, infos in matches:
                                 key = provider_name + "|" + group_id
                                 live_readers.add(key)
-                                if len(pending) + len(active) >= MAX_READER_TASKS:
+                                if len(pending) + len(active) + int(self._bluetooth_slot is not None) >= MAX_READER_TASKS:
                                     self._failure(key, provider_name, "capacity_limit")
                                     continue
                                 seconds = 10 if provider_name == "lofree" else 12 if provider_name == "logitech" else 5 if provider_name == "standard_hid" else 7
@@ -776,10 +812,14 @@ class BatteryEngine:
                 for slot, item in active.items():
                     self.children[slot].close()
                     self._failure(task_key(item), item[1], "timeout")
+                if self._bluetooth_slot is not None:
+                    self.children[self._bluetooth_slot].close()
+                    self._bluetooth_slot = None
+                    self._failure("bluetooth", "bluetooth", "timeout")
                 for item in pending:
                     self._failure(task_key(item), item[1], "round_budget")
                 break
-            if pending or active:
+            if pending or active or wait_bluetooth and self._bluetooth_slot is not None:
                 time.sleep(0.01)
         return self._snapshot(request_id, generation)
 
@@ -797,7 +837,7 @@ def main():
     engine = BatteryEngine(package_smoke="--package-smoke" in sys.argv)
     try:
         if "--once" in sys.argv:
-            print(json.dumps(engine.poll(), ensure_ascii=True), flush=True)
+            print(json.dumps(engine.poll(wait_bluetooth=True), ensure_ascii=True), flush=True)
             return
         for line in sys.stdin:
             if len(line) > 4096:

@@ -6,6 +6,7 @@ its descendant. Protocol tests replace HID queries before scoped_poll is used.
 from __future__ import annotations
 
 import ctypes
+import io
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
 sys.path.insert(0, str(ENGINE / "tests"))
 import _hidstub
+import server
 from providers.base import DeviceStatus
 from providers.bluetooth import BluetoothProvider, BluetoothWatcher, K_BAT
 from providers import hidlist
@@ -73,7 +75,7 @@ class FakeReader:
             self.pool.physical_overlap = True
         self.pool.active[id(self)] = physical
         self.pool.max_active = max(self.pool.max_active, len(self.pool.active))
-        name = command.get("provider", command["action"])
+        name = "set_dpi" if command["action"] == "set_dpi" else command.get("provider", command["action"])
         self.pool.calls.append((name, physical))
         delay, outcome = self.pool.outcomes.get((name, physical), (0, []))
         self.pending = (time.monotonic(), delay, budget, command, outcome)
@@ -96,6 +98,8 @@ class FakeReader:
             return {"inventory": self.pool.inventory}
         if command["action"] == "smoke":
             return {"providerCount": 26, "devices": []}
+        if command["action"] == "set_dpi":
+            return outcome
         physical = command.get("physicalId", "")
         statuses = []
         for value in outcome:
@@ -207,6 +211,191 @@ class MeasurementEvidenceTests(unittest.TestCase):
         self.assertIsNone(device["percent"])
         self.assertEqual(device["measurementState"], "unknown")
         engine.close()
+
+
+class BluetoothBackgroundPollingTests(unittest.TestCase):
+    def setUp(self):
+        self.pool = FakePool([receiver("a")], {
+            ("bluetooth", ""): (100, []),
+            ("lofree", "physical-a"): (.02, [DeviceStatus("one", "Hyzen", 88, source="lofree")]),
+        })
+        self.engine = poll_fixture(self.pool, ("lofree", "bluetooth"))
+        self.addCleanup(self.engine.close)
+        clock = patch("server.time.monotonic", return_value=1000.0)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        sleeper = patch("server.time.sleep", side_effect=self.advance)
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+        paths = patch.object(hidlist, "interface_paths", return_value=frozenset())
+        paths.start()
+        self.addCleanup(paths.stop)
+
+    def advance(self, seconds):
+        self.clock.return_value += seconds
+
+    def test_full_poll_returns_after_hid_while_bluetooth_is_pending(self):
+        result = self.engine.poll()
+        self.assertLess(self.clock.return_value - 1000, 1)
+        self.assertTrue(result["complete"])
+        self.assertEqual([device["percent"] for device in result["devices"]], [88])
+        self.assertTrue(any(child.pending and child.pending[3].get("provider") == "bluetooth"
+                            for child in self.pool.children))
+
+    def test_next_poll_collects_bluetooth_battery_and_restores_normal_interval(self):
+        status = DeviceStatus("bt:keyboard", "Bluetooth Keyboard", 55, source="bluetooth", kind="keyboard")
+        self.pool.outcomes[("bluetooth", "")] = (.5, [status])
+        self.engine.poll()
+        self.engine._bluetooth_empty_polls = 3
+        self.advance(1)
+        result = self.engine.poll()
+        bluetooth = next(d for d in result["devices"] if d["provider"] == "bluetooth")
+        self.assertEqual(bluetooth["percent"], 55)
+        self.assertEqual(self.engine._bluetooth_empty_polls, 0)
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+        self.advance(60)
+        self.engine.poll()
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 2)
+
+    def test_next_poll_counts_empty_completion_toward_backoff(self):
+        self.pool.outcomes[("bluetooth", "")] = (.5, [])
+        self.engine.poll()
+        self.engine._bluetooth_empty_polls = 2
+        self.advance(1)
+        self.engine.poll()
+        self.assertEqual(self.engine._bluetooth_empty_polls, 3)
+        collected_at = self.engine.last_poll["bluetooth"]
+        self.clock.return_value = collected_at + 299
+        self.engine.poll()
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+        self.clock.return_value = collected_at + 300
+        self.engine.poll()
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 2)
+
+    def test_pending_bluetooth_is_not_duplicated_even_by_force(self):
+        self.engine.poll()
+        pending = self.pool.children[1].pending
+        for force in (False, True, True):
+            result = self.engine.poll(force=force)
+            self.assertTrue(result["complete"])
+            self.assertEqual(result["errors"], [])
+            self.assertIs(self.pool.children[1].pending, pending)
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+        self.assertEqual(self.engine._affinity["bluetooth"], 1)
+        self.assertNotIn("bluetooth", self.engine.last_poll)
+
+    def test_pending_bluetooth_preserves_previous_current_device(self):
+        status = DeviceStatus("bt:keyboard", "Bluetooth Keyboard", 55, source="bluetooth", kind="keyboard")
+        self.engine._accept("bluetooth", "bluetooth", [status], utcnow())
+        previous = self.engine._snapshot()["devices"][0]
+        for _ in range(2):
+            result = self.engine.poll(force=True)
+            current = next(d for d in result["devices"] if d["id"] == previous["id"])
+            self.assertEqual(current, previous)
+            self.assertTrue(current["online"])
+            self.assertEqual(current["measurementState"], "current")
+
+    def test_background_timeout_is_reported_without_counting_empty_success(self):
+        self.engine.poll()
+        self.engine._bluetooth_empty_polls = 2
+        self.advance(14.1)
+        result = self.engine.poll()
+        self.assertIn("bluetooth: timeout", result["errors"])
+        self.assertEqual(self.engine.failures["bluetooth"], 1)
+        self.assertEqual(self.engine._bluetooth_empty_polls, 2)
+        self.assertNotIn("bluetooth", self.engine.last_poll)
+        self.assertGreater(self.engine.retry_after["bluetooth"], self.clock.return_value)
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+        self.assertIsNone(self.pool.children[1].pending)
+
+    def test_background_failure_uses_existing_failure_backoff(self):
+        self.pool.outcomes[("bluetooth", "")] = (.5, IsolationError("read_failed"))
+        self.engine.poll()
+        self.advance(1)
+        result = self.engine.poll()
+        self.assertIn("bluetooth: read_failed", result["errors"])
+        self.assertEqual(self.engine.failures["bluetooth"], 1)
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+
+    def seed_bluetooth_target(self):
+        status = DeviceStatus("bt:keyboard", "Bluetooth Keyboard", 55, source="bluetooth", kind="keyboard")
+        self.engine._accept("bluetooth", "bluetooth", [status], utcnow())
+        self.engine._snapshot()
+        return public_id(status.key)
+
+    def test_targeted_bluetooth_waits_for_existing_query_without_restarting(self):
+        device_id = self.seed_bluetooth_target()
+        self.pool.outcomes[("bluetooth", "")] = (.5, [DeviceStatus("bt:keyboard", "Bluetooth Keyboard", 66, source="bluetooth")])
+        self.engine.poll(force=True)
+        before = self.clock.return_value
+        result = self.engine.poll(force=True, device_id=device_id)
+        self.assertGreaterEqual(self.clock.return_value - before, .4)
+        self.assertEqual(next(d["percent"] for d in result["devices"] if d["id"] == device_id), 66)
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+        self.assertEqual(self.pool.calls.count(("topology", "")), 1)
+
+    def test_targeted_bluetooth_starts_and_waits_for_new_query(self):
+        device_id = self.seed_bluetooth_target()
+        self.pool.outcomes[("bluetooth", "")] = (.5, [DeviceStatus("bt:keyboard", "Bluetooth Keyboard", 66, source="bluetooth")])
+        result = self.engine.poll(force=True, device_id=device_id)
+        self.assertGreaterEqual(self.clock.return_value - 1000, .5)
+        self.assertEqual(self.pool.calls, [("bluetooth", "")])
+        self.assertEqual(result["devices"][0]["percent"], 66)
+
+    def test_once_waits_for_bluetooth_and_emits_one_complete_snapshot(self):
+        self.pool.outcomes[("bluetooth", "")] = (.5, [DeviceStatus("bt:keyboard", "Bluetooth Keyboard", 55, source="bluetooth")])
+        with patch("server.BatteryEngine", return_value=self.engine), \
+                patch("server.sys.argv", ["server.py", "--once"]), \
+                patch("server.sys.stdin", io.StringIO()), \
+                patch("server.sys.stdout", new_callable=io.StringIO) as output:
+            server.main()
+        frames = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len(frames), 1)
+        self.assertTrue(frames[0]["complete"])
+        self.assertEqual(frames[0]["errors"], [])
+        self.assertEqual({d["percent"] for d in frames[0]["devices"]}, {55, 88})
+        self.assertGreaterEqual(self.clock.return_value - 1000, .5)
+        self.assertTrue(all(child.pending is None for child in self.pool.children))
+
+    def test_parking_waits_until_background_query_is_collected(self):
+        self.pool.inventory.clear()
+        self.pool.outcomes[("bluetooth", "")] = (.5, [])
+        result = self.engine.poll(park_empty_readers=True)
+        self.assertEqual(result["devices"], [])
+        self.assertTrue(all(child.closed == 0 for child in self.pool.children))
+        self.assertIsNotNone(self.pool.children[1].pending)
+        self.advance(1)
+        self.engine.poll(park_empty_readers=True)
+        self.assertTrue(all(child.closed == 1 for child in self.pool.children))
+        self.assertIsNone(self.engine._bluetooth_slot)
+
+    def test_hid_affinity_waits_for_bluetooth_slot_without_reader_busy(self):
+        self.engine._affinity["lofree|physical-a"] = 1
+        self.pool.outcomes[("bluetooth", "")] = (.5, [])
+        result = self.engine.poll()
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["devices"][0]["percent"], 88)
+        self.assertGreaterEqual(self.clock.return_value - 1000, .5)
+        self.assertEqual(self.engine._affinity["lofree|physical-a"], 1)
+        self.assertLessEqual(self.pool.max_active, 2)
+        self.assertFalse(self.pool.physical_overlap)
+
+    def test_topology_affinity_cannot_reenter_background_slot(self):
+        self.engine._affinity["topology"] = 1
+        self.pool.outcomes[("bluetooth", "")] = (.5, [])
+        self.engine.poll()
+        result = self.engine.poll(force=True)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+        self.assertEqual(self.pool.calls.count(("topology", "")), 2)
+
+    def test_close_clears_background_record_and_allows_fresh_query(self):
+        self.engine.poll()
+        self.engine.close()
+        self.assertIsNone(self.engine._bluetooth_slot)
+        self.assertTrue(all(child.pending is None for child in self.pool.children))
+        self.assertEqual(self.engine.poll()["errors"], [])
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 2)
 
 
 class BluetoothPollingTests(unittest.TestCase):
