@@ -112,6 +112,7 @@ class _Attributes(c.Structure):
 
 
 _descriptor_cache = {}
+_descriptor_paths = None
 
 
 def discover(paths, excluded=(), *, full=False):
@@ -121,9 +122,11 @@ def discover(paths, excluded=(), *, full=False):
     results are subsequently filtered. Here cfgmgr32 already supplied present
     paths; read only attributes/caps/strings for remaining paths, with access 0.
     No keyboard input reports, feature queries or feature writes are read here.
-    Cache complete descriptors only; enrich recomputes physical identity on
-    every call. Partial discoveries cannot evict another receiver's entries.
+    Cache complete descriptors while the full path set is unchanged: product
+    strings can encode connection state. Partial discoveries always refresh
+    their selected paths. enrich recomputes physical identity on every call.
     """
+    global _descriptor_paths
     if os.name != "nt":
         from providers import hidlist
         return enrich(hidlist.enumerate(), excluded)
@@ -131,8 +134,12 @@ def discover(paths, excluded=(), *, full=False):
         # Do not fall back to global hidapi enumeration on Windows: native
         # collections must remain excluded before any descriptor handle opens.
         raise RuntimeError("topology_unavailable")
+    paths = frozenset(paths)
     selected_paths = sorted(paths)[:512]
     if full:
+        if paths != _descriptor_paths:
+            _descriptor_cache.clear()
+            _descriptor_paths = paths
         present = set(selected_paths)
         for path in list(_descriptor_cache):
             if path not in present:
@@ -158,6 +165,8 @@ def discover(paths, excluded=(), *, full=False):
         if match and (int(match[1][-4:], 16), int(match[2], 16)) in excluded:
             _descriptor_cache.pop(path, None)
             continue
+        if not full:
+            _descriptor_cache.pop(path, None)
         cached = _descriptor_cache.get(path)
         if cached is not None:
             if (cached["vendor_id"], cached["product_id"]) in excluded:
