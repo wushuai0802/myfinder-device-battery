@@ -674,7 +674,10 @@ class BatteryEngine:
                     reader_key = task_key(item)
                     if reader_key in self._affinity and self._affinity[reader_key] != slot:
                         continue
-                    if name == "bluetooth" and slot != self._affinity.get(reader_key, 1):
+                    # Topology can enqueue more HID work. Leave its slots free
+                    # until every other pending and active task has finished.
+                    if name == "bluetooth" and (slot != self._affinity.get(reader_key, 1)
+                            or active or any(other[1] != "bluetooth" for other in pending)):
                         continue
                     if physical and any(v[2] == physical for v in active.values()):
                         continue
@@ -867,7 +870,8 @@ def main():
                 else:
                     result = engine.poll(force=command.get("force") is True, device_id=target,
                                          request_id=request_id, generation=generation, progress=emit,
-                                         park_empty_readers=command.get("parkEmptyReaders") is True, physical_id=physical)
+                                         park_empty_readers=command.get("parkEmptyReaders") is True, physical_id=physical,
+                                         wait_bluetooth=command.get("parkEmptyReaders") is True)
                 emit(result)
             except Exception:
                 print(json.dumps({"schema": 2, "requestId": 0, "generation": 0, "complete": True,
