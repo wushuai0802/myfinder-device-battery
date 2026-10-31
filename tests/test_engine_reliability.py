@@ -21,7 +21,7 @@ sys.path.insert(0, str(ENGINE))
 sys.path.insert(0, str(ENGINE / "tests"))
 import _hidstub
 from providers.base import DeviceStatus
-from providers.bluetooth import BluetoothProvider, K_BAT
+from providers.bluetooth import BluetoothProvider, BluetoothWatcher, K_BAT
 from providers import hidlist
 from server import BatteryEngine, normalise, public_id, scoped_poll, utcnow, recognized_candidate_count
 from isolation import ReaderProcess, IsolationError
@@ -207,6 +207,151 @@ class MeasurementEvidenceTests(unittest.TestCase):
         self.assertIsNone(device["percent"])
         self.assertEqual(device["measurementState"], "unknown")
         engine.close()
+
+
+class BluetoothPollingTests(unittest.TestCase):
+    def setUp(self):
+        self.pool = FakePool()
+        self.engine = poll_fixture(self.pool, ("bluetooth",))
+        self.addCleanup(self.engine.close)
+        clock = patch("server.time.monotonic", return_value=1000.0)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        paths = patch.object(hidlist, "interface_paths", return_value=frozenset())
+        self.paths = paths.start()
+        self.addCleanup(paths.stop)
+
+    def poll_at(self, stamp, queried=True, **kwargs):
+        self.clock.return_value = stamp
+        before = self.pool.calls.count(("bluetooth", ""))
+        result = self.engine.poll(**kwargs)
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")) - before, int(queried))
+        return result
+
+    def empty_backoff(self):
+        for stamp in (1000, 1060, 1120):
+            self.poll_at(stamp)
+
+    def test_three_empty_successes_change_interval_from_60_to_300_seconds(self):
+        self.poll_at(1000)
+        self.poll_at(1059, queried=False)
+        self.poll_at(1060)
+        self.poll_at(1119, queried=False)
+        self.poll_at(1120)
+        for stamp in (1180, 1300, 1419):
+            self.poll_at(stamp, queried=False)
+        self.poll_at(1421)
+
+    def test_devices_without_battery_also_count_as_empty_successes(self):
+        unknown = DeviceStatus("bt:unknown", "Keyboard", None, source="bluetooth")
+        self.pool.outcomes[("bluetooth", "")] = (0, [unknown])
+        self.empty_backoff()
+        self.poll_at(1180, queried=False)
+        self.poll_at(1420)
+
+    def test_battery_result_restores_60_seconds_and_clears_empty_count(self):
+        self.empty_backoff()
+        unknown = DeviceStatus("bt:unknown", "Keyboard", None, source="bluetooth")
+        battery = DeviceStatus("bt:battery", "Mouse", 0, source="bluetooth")
+        self.pool.outcomes[("bluetooth", "")] = (0, [unknown, battery])
+        self.poll_at(1121, force=True)
+        self.poll_at(1180, queried=False)
+        self.poll_at(1181)
+        self.pool.outcomes[("bluetooth", "")] = (0, [])
+        for stamp in (1241, 1301, 1361):
+            self.poll_at(stamp)
+        self.poll_at(1421, queried=False)
+
+    def assert_failure_does_not_count(self, code):
+        self.poll_at(1000)
+        self.pool.outcomes[("bluetooth", "")] = (0, IsolationError(code))
+        failed = self.poll_at(1060)
+        self.assertIn("bluetooth: " + code, failed["errors"])
+        self.assertEqual(self.engine.failures["bluetooth"], 1)
+        self.assertEqual(self.engine.retry_after["bluetooth"], 1065)
+        self.assertEqual(self.engine.last_poll["bluetooth"], 1000)
+        self.poll_at(1061, queried=False)
+        self.pool.outcomes[("bluetooth", "")] = (0, [])
+        self.poll_at(1065)
+        self.poll_at(1125)
+        self.poll_at(1185, queried=False)
+
+    def test_failures_do_not_advance_or_reset_empty_count(self):
+        self.assert_failure_does_not_count("read_failed")
+
+    def test_timeouts_do_not_advance_or_reset_empty_count(self):
+        self.assert_failure_does_not_count("timeout")
+
+    def test_force_always_queries_and_its_results_count(self):
+        for _ in range(3):
+            self.poll_at(1000, force=True)
+        self.poll_at(1060, queried=False)
+        self.poll_at(1060, force=True)
+        self.pool.outcomes[("bluetooth", "")] = (0, IsolationError("read_failed"))
+        self.poll_at(1060, force=True)
+        self.pool.outcomes[("bluetooth", "")] = (0, [])
+        self.poll_at(1060, force=True)
+        self.poll_at(1120, queried=False)
+
+    def test_hid_path_changes_restore_60_seconds_and_clear_empty_count(self):
+        self.empty_backoff()
+        self.poll_at(1180, queried=False)
+        self.paths.return_value = frozenset({r"\\?\hid#bthenum#fixture"})
+        for stamp in (1180, 1240, 1300):
+            self.poll_at(stamp)
+        self.poll_at(1360, queried=False)
+        self.paths.return_value = frozenset()
+        self.poll_at(1360)
+
+
+class BluetoothCommandTests(unittest.TestCase):
+    def test_query_and_watcher_use_systemroot_absolute_powershell_path(self):
+        system_root = str(Path(__file__).resolve().parent / "Windows fixture")
+        process = subprocess.CompletedProcess([], 0, stdout=b"{}", stderr=b"")
+        with patch.dict(os.environ, {"SystemRoot": system_root}, clear=True), \
+                patch("providers.bluetooth.subprocess.run", return_value=process) as run:
+            provider = BluetoothProvider()
+            self.assertEqual(provider._query(), "{}")
+            query = run.call_args.args[0]
+            watcher = BluetoothWatcher(provider, lambda _: None).command()
+        expected = os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+        for command in (query, watcher):
+            self.assertTrue(os.path.isabs(command[0]))
+            self.assertEqual(command[0], expected)
+            self.assertEqual(command[1:6], ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
+
+    def test_missing_systemroot_fails_without_starting_powershell(self):
+        with patch.dict(os.environ, {}, clear=True), \
+                patch("providers.bluetooth.subprocess.run") as run, \
+                patch("providers.bluetooth.subprocess.Popen") as popen:
+            provider = BluetoothProvider()
+            self.assertIsNone(provider._query())
+            with patch("providers.bluetooth.sys.platform", "win32"):
+                engine = BatteryEngine([provider], include_native=True)
+                self.addCleanup(engine.close)
+                self.assertIn("bluetooth: read_failed", engine.poll()["errors"])
+            watcher = BluetoothWatcher(provider, lambda _: None)
+            with self.assertRaises(OSError):
+                watcher.command()
+            with self.assertLogs("halo_battery", level="WARNING"):
+                watcher._run()
+            self.assertTrue(watcher.failed)
+            run.assert_not_called()
+            popen.assert_not_called()
+
+    def test_unusable_query_output_is_a_poll_failure(self):
+        provider = BluetoothProvider()
+        for raw in (None, "", "invalid json"):
+            with self.subTest(raw=raw), patch("providers.bluetooth.sys.platform", "win32"), \
+                    patch.object(provider, "_query", return_value=raw):
+                with self.assertRaises(RuntimeError):
+                    provider.poll()
+
+    def test_unsuccessful_powershell_exit_is_a_query_failure(self):
+        process = subprocess.CompletedProcess([], 1, stdout=b"{}", stderr=b"failed")
+        with patch.dict(os.environ, {"SystemRoot": str(ENGINE)}, clear=True), \
+                patch("providers.bluetooth.subprocess.run", return_value=process):
+            self.assertIsNone(BluetoothProvider()._query())
 
 
 class IdentityTests(unittest.TestCase):

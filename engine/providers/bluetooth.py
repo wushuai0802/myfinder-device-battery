@@ -310,6 +310,13 @@ def group_devices(data: dict, diag: List[str],
 MISS_LIMIT = 2
 
 
+def powershell_path() -> str:
+    system_root = os.environ.get("SystemRoot")
+    if not system_root:
+        raise OSError("SystemRoot is not set")
+    return os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
 class BluetoothProvider(Provider):
     name = "bluetooth"
 
@@ -325,7 +332,7 @@ class BluetoothProvider(Provider):
         try:
             flags = 0x08000000  # CREATE_NO_WINDOW
             proc = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                [powershell_path(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                  "-Command", PS_SCRIPT],
                 stdin=subprocess.DEVNULL,       # pythonw has no console: pass an explicit empty stdin
                 capture_output=True, timeout=60, creationflags=flags)
@@ -335,6 +342,7 @@ class BluetoothProvider(Provider):
                 self._diag.append(f"[Bluetooth] stderr: {err[:300]}")
             if proc.returncode != 0:
                 self._diag.append(f"[Bluetooth] PowerShell exited with code {proc.returncode}")
+                return None
             self._diag.append(f"[Bluetooth] PowerShell: {len(raw)} bytes of output")
             return raw
         except subprocess.TimeoutExpired:
@@ -352,6 +360,8 @@ class BluetoothProvider(Provider):
         result = self.merge(fresh)
         for line in self._diag:          # every poll goes to the log in detail, to investigate disappearing icons
             log.info(line)
+        if fresh is None:
+            raise RuntimeError("Bluetooth query failed")
         return result
 
     def handle(self, raw: str) -> List[DeviceStatus]:
@@ -441,7 +451,7 @@ class BluetoothWatcher:
 
     def command(self) -> List[str]:
         script = WATCH_SCRIPT.replace("%PPID%", str(os.getpid()))
-        return ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
+        return [powershell_path(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
 
     def start(self) -> "BluetoothWatcher":
         self._thread.start()

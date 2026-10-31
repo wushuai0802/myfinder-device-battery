@@ -52,6 +52,9 @@ MAX_RETAIN_SECONDS = 300
 MAX_ROUND_SECONDS = 36
 MAX_PARTIALS = 96
 MAX_READER_TASKS = 96
+BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
+BLUETOOTH_POLL_SECONDS = 60
+BLUETOOTH_EMPTY_POLL_SECONDS = 300
 NO_CHARGING_EVIDENCE = {"bluetooth", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
 
 
@@ -349,6 +352,8 @@ class BatteryEngine:
         self.errors = []
         self._affinity = {}
         self._ambiguous_providers = set()
+        self._bluetooth_empty_polls = 0
+        self._bluetooth_paths = None
         self.children = [(process_factory or ReaderProcess)(), (process_factory or ReaderProcess)()]
         self.native_mouse = None
         self._generation = 0
@@ -427,6 +432,9 @@ class BatteryEngine:
             self.provider_by_id[key] = name
             self.physical_by_id[key] = physical
         self.by_provider[reader_key] = group
+        if name == "bluetooth":
+            self._bluetooth_empty_polls = (0 if any(v["percent"] is not None for v in group.values())
+                                           else min(BLUETOOTH_EMPTY_POLL_THRESHOLD, self._bluetooth_empty_polls + 1))
         self.last_poll[reader_key] = time.monotonic()
         self.failures.pop(reader_key, None)
         self.retry_after.pop(reader_key, None)
@@ -598,6 +606,9 @@ class BatteryEngine:
             self.health.pop("selection", None)
             self.health.pop("manager", None)
         paths = frozenset() if self.package_smoke else self._hidlist.interface_paths()
+        if paths != self._bluetooth_paths:
+            self._bluetooth_paths = paths
+            self._bluetooth_empty_polls = 0
         if physical_id is None:
             self.native_mouse = False if self.package_smoke else None if paths is None else any("vid_373b&pid_1278" in p for p in paths)
         deadline = time.monotonic() + MAX_ROUND_SECONDS
@@ -638,7 +649,10 @@ class BatteryEngine:
                     if physical and any(v[2] == physical for v in active.values()):
                         continue
                     pending.pop(index)
-                    minimum = 60 if name == "bluetooth" else 30 if name == "standard_hid" else 0
+                    minimum = 30 if name == "standard_hid" else 0
+                    if name == "bluetooth":
+                        minimum = (BLUETOOTH_EMPTY_POLL_SECONDS if self._bluetooth_empty_polls >= BLUETOOTH_EMPTY_POLL_THRESHOLD
+                                   else BLUETOOTH_POLL_SECONDS)
                     if action == "query" and not force:
                         if time.monotonic() < self.retry_after.get(reader_key, 0):
                             self.health[reader_key] = dict(self.health.get(reader_key, {}), provider=name, state="backoff")
