@@ -264,7 +264,7 @@ def reader_child():
                     # Retry inaccessible descriptors at a bounded rate. Ordinary
                     # polls share one topology and do not enumerate 26 times.
                     if current != topology_paths or time.monotonic() - topology_at >= 30:
-                        inventory = discover(current, NATIVE)
+                        inventory = discover(current, NATIVE, full=True)
                         topology_paths, topology_at = current, time.monotonic()
                     present = {d["physical_id"] for d in inventory}
                     instances = {k: v for k, v in instances.items() if k[1] in present or k[0] == "bluetooth"}
