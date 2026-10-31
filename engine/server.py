@@ -264,7 +264,7 @@ def reader_child():
                     # Retry inaccessible descriptors at a bounded rate. Ordinary
                     # polls share one topology and do not enumerate 26 times.
                     if current != topology_paths or time.monotonic() - topology_at >= 30:
-                        inventory = discover(current, NATIVE)
+                        inventory = discover(current, NATIVE, full=True)
                         topology_paths, topology_at = current, time.monotonic()
                     present = {d["physical_id"] for d in inventory}
                     instances = {k: v for k, v in instances.items() if k[1] in present or k[0] == "bluetooth"}
@@ -351,6 +351,7 @@ class BatteryEngine:
         self.provider_by_id = {}
         self.errors = []
         self._affinity = {}
+        self._deferred = set()
         self._ambiguous_providers = set()
         self._bluetooth_empty_polls = 0
         self._bluetooth_paths = None
@@ -615,6 +616,7 @@ class BatteryEngine:
             # caches, and package smoke keeps children for lifecycle checks.
             if (park_empty_readers and device_id is None and physical_id is None and not self.package_smoke
                     and self._bluetooth_slot is None
+                    and not self._deferred
                     and not any(self.by_provider.values()) and self.health
                     and not result.get("errors")
                     and all(h.get("state") in ("no_devices", "unsupported") for h in self.health.values())):
@@ -646,6 +648,7 @@ class BatteryEngine:
         target_physical = self.physical_by_id.get(device_id) if device_id else None
         wait_bluetooth = wait_bluetooth or target_name == "bluetooth"
         pending, active = [], {}
+        priority = set(self._deferred)
         partial_count = 0
         full_round = device_id is None and physical_id is None
 
@@ -654,6 +657,14 @@ class BatteryEngine:
             if action == "topology" and command.get("physicalId") is not None:
                 return "topology:" + command["physicalId"]
             return name + ("|" + physical if physical else "")
+
+        def defer(item):
+            reader_key = task_key(item)
+            self._deferred.add(reader_key)
+            self.health[reader_key] = {"provider": item[1], "readerId": public_id(reader_key),
+                                      "state": "deferred", "deviceCount": len(self.by_provider.get(reader_key, {})),
+                                      "reason": "round_budget", "scope": "device" if item[2] else "provider",
+                                      "checkedAtUtc": utcnow()}
 
         if self.package_smoke:
             pending.append(("smoke", "package", "", {"action": "smoke"}, 5))
@@ -666,34 +677,50 @@ class BatteryEngine:
             if self._bluetooth_slot is None and physical_id is None and (not device_id or target_name == "bluetooth"):
                 pending.append(("query", "bluetooth", "", {"action": "query", "provider": "bluetooth"}, 14))
         while pending or active or wait_bluetooth and self._bluetooth_slot is not None:
-            for slot, child in enumerate(self.children):
-                if slot in active or slot == self._bluetooth_slot:
+            # Choose tasks before slots so affinity cannot let a new query
+            # overtake an eligible query deferred from the previous round.
+            for item in sorted(pending, key=lambda item: (item[0] == "query", task_key(item) not in priority)):
+                action, name, physical, command, budget = item
+                reader_key = task_key(item)
+                minimum = 30 if name == "standard_hid" else 0
+                if name == "bluetooth":
+                    minimum = (BLUETOOTH_EMPTY_POLL_SECONDS if self._bluetooth_empty_polls >= BLUETOOTH_EMPTY_POLL_THRESHOLD
+                               else BLUETOOTH_POLL_SECONDS)
+                if action == "query" and not force:
+                    if time.monotonic() < self.retry_after.get(reader_key, 0):
+                        self.health[reader_key] = dict(self.health.get(reader_key, {}), provider=name, state="backoff")
+                        pending.remove(item)
+                        continue
+                    if time.monotonic() - self.last_poll.get(reader_key, -1e20) < minimum:
+                        pending.remove(item)
+                        continue
+                if action == "query" and deadline - time.monotonic() < budget:
+                    pending.remove(item)
+                    defer(item)
                     continue
-                for index, item in enumerate(pending):
-                    action, name, physical, command, budget = item
-                    reader_key = task_key(item)
+                for slot, child in enumerate(self.children):
+                    if slot in active or slot == self._bluetooth_slot:
+                        continue
                     if reader_key in self._affinity and self._affinity[reader_key] != slot:
                         continue
-                    # Topology can enqueue more HID work. Leave its slots free
-                    # until every other pending and active task has finished.
-                    if name == "bluetooth" and (slot != self._affinity.get(reader_key, 1)
-                            or active or any(other[1] != "bluetooth" for other in pending)):
-                        continue
+                    if name == "bluetooth":
+                        if slot != self._affinity.get(reader_key, 1):
+                            continue
+                        if any(other[0] != "query" for other in pending) or any(other[0] != "query" for other in active.values()):
+                            continue
+                        # Ordinary Bluetooth queries follow HID; a deferred
+                        # query gets the same next-round priority as HID.
+                        if reader_key not in priority and (active or any(other[1] != "bluetooth" for other in pending)):
+                            continue
                     if physical and any(v[2] == physical for v in active.values()):
                         continue
-                    pending.pop(index)
-                    minimum = 30 if name == "standard_hid" else 0
-                    if name == "bluetooth":
-                        minimum = (BLUETOOTH_EMPTY_POLL_SECONDS if self._bluetooth_empty_polls >= BLUETOOTH_EMPTY_POLL_THRESHOLD
-                                   else BLUETOOTH_POLL_SECONDS)
-                    if action == "query" and not force:
-                        if time.monotonic() < self.retry_after.get(reader_key, 0):
-                            self.health[reader_key] = dict(self.health.get(reader_key, {}), provider=name, state="backoff")
-                            break
-                        if time.monotonic() - self.last_poll.get(reader_key, -1e20) < minimum:
-                            break
+                    pending.remove(item)
+                    if action == "query" and deadline - time.monotonic() < budget:
+                        defer(item)
+                        break
+                    self._deferred.discard(reader_key)
                     try:
-                        child.start(command, min(budget, max(0.01, deadline - time.monotonic())))
+                        child.start(command, budget if action == "query" else min(budget, max(0.01, deadline - time.monotonic())))
                         self._affinity[reader_key] = slot
                         if name == "bluetooth":
                             self._bluetooth_slot = slot
@@ -787,6 +814,7 @@ class BatteryEngine:
                         for state in states:
                             for key in removed:
                                 state.pop(key, None)
+                        self._deferred.difference_update(removed)
                     elif action == "smoke":
                         self.health["package"] = {"provider": "package", "state": "ok", "scope": "provider", "deviceCount": 0}
                     else:
@@ -820,7 +848,10 @@ class BatteryEngine:
                     self._bluetooth_slot = None
                     self._failure("bluetooth", "bluetooth", "timeout")
                 for item in pending:
-                    self._failure(task_key(item), item[1], "round_budget")
+                    if item[0] == "query":
+                        defer(item)
+                    else:
+                        self._failure(task_key(item), item[1], "round_budget")
                 break
             if pending or active or wait_bluetooth and self._bluetooth_slot is not None:
                 time.sleep(0.01)

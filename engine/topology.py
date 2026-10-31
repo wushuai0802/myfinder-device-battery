@@ -111,14 +111,22 @@ class _Attributes(c.Structure):
                 ("product", c.c_uint16), ("release", c.c_uint16)]
 
 
-def discover(paths, excluded=()):
+_descriptor_cache = {}
+_descriptor_paths = None
+
+
+def discover(paths, excluded=(), *, full=False):
     """Serialized descriptor discovery with native paths excluded BEFORE open.
 
     hidapi's global enumeration opens every HID collection, even when its
     results are subsequently filtered. Here cfgmgr32 already supplied present
     paths; read only attributes/caps/strings for remaining paths, with access 0.
     No keyboard input reports, feature queries or feature writes are read here.
+    Cache complete descriptors while the full path set is unchanged: product
+    strings can encode connection state. Partial discoveries always refresh
+    their selected paths. enrich recomputes physical identity on every call.
     """
+    global _descriptor_paths
     if os.name != "nt":
         from providers import hidlist
         return enrich(hidlist.enumerate(), excluded)
@@ -126,6 +134,16 @@ def discover(paths, excluded=()):
         # Do not fall back to global hidapi enumeration on Windows: native
         # collections must remain excluded before any descriptor handle opens.
         raise RuntimeError("topology_unavailable")
+    paths = frozenset(paths)
+    selected_paths = sorted(paths)[:512]
+    if full:
+        if paths != _descriptor_paths:
+            _descriptor_cache.clear()
+            _descriptor_paths = paths
+        present = set(selected_paths)
+        for path in list(_descriptor_cache):
+            if path not in present:
+                _descriptor_cache.pop(path)
     from standardhid import Caps
     kernel = c.WinDLL("kernel32", use_last_error=True)
     hid = c.WinDLL("hid", use_last_error=True)
@@ -142,9 +160,19 @@ def discover(paths, excluded=()):
         getattr(hid, getter).argtypes = [c.c_void_p, c.c_void_p, c.c_uint32]
         getattr(hid, getter).restype = c.c_ubyte
     inventory = []
-    for path in sorted(paths)[:512]:
+    for path in selected_paths:
         match = re.search(r"vid[_&]([0-9a-f]{4,8}).*?pid[_&]([0-9a-f]{4})", path, re.I)
         if match and (int(match[1][-4:], 16), int(match[2], 16)) in excluded:
+            _descriptor_cache.pop(path, None)
+            continue
+        if not full:
+            _descriptor_cache.pop(path, None)
+        cached = _descriptor_cache.get(path)
+        if cached is not None:
+            if (cached["vendor_id"], cached["product_id"]) in excluded:
+                _descriptor_cache.pop(path)
+                continue
+            inventory.append(dict(cached))
             continue
         handle = kernel.CreateFileW(path, 0, 3, None, 3, 0, None)
         if handle in (None, c.c_void_p(-1).value):
@@ -160,15 +188,19 @@ def discover(paths, excluded=()):
                     "product_id": attrs.product, "release_number": attrs.release,
                     "interface_number": int(iface[1], 16) if iface else -1,
                     "usage_page": 0, "usage": 0}
+            caps_complete = False
             if hid.HidD_GetPreparsedData(handle, c.byref(data)):
                 caps = Caps()
                 if hid.HidP_GetCaps(data, c.byref(caps)) == 0x00110000:
                     info.update(usage_page=caps.page, usage=caps.usage)
+                    caps_complete = True
             for field, getter in (("product_string", "HidD_GetProductString"),
                                   ("manufacturer_string", "HidD_GetManufacturerString"),
                                   ("serial_number", "HidD_GetSerialNumberString")):
                 value = c.create_unicode_buffer(256)
                 info[field] = value.value if getattr(hid, getter)(handle, value, c.sizeof(value)) else ""
+            if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
+                _descriptor_cache[path] = dict(info)
             inventory.append(info)
         finally:
             if data.value:
