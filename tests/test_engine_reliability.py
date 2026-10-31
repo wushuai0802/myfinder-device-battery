@@ -50,6 +50,7 @@ class FakePool:
         self.inventory = list(inventory)
         self.outcomes = outcomes or {}
         self.calls = []
+        self.budgets = []
         self.active = {}
         self.max_active = 0
         self.physical_overlap = False
@@ -77,6 +78,7 @@ class FakeReader:
         self.pool.max_active = max(self.pool.max_active, len(self.pool.active))
         name = "set_dpi" if command["action"] == "set_dpi" else command.get("provider", command["action"])
         self.pool.calls.append((name, physical))
+        self.pool.budgets.append((name, physical, budget))
         delay, outcome = self.pool.outcomes.get((name, physical), (0, []))
         self.pending = (time.monotonic(), delay, budget, command, outcome)
 
@@ -845,6 +847,153 @@ class TopologyReconciliationTests(unittest.TestCase):
         self.assertIn("lofree|physical-a", engine.by_provider)
 
 
+class RoundBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.pool = FakePool([receiver("a")], {("lofree", "physical-a"): (100, [])})
+        self.engine = poll_fixture(self.pool)
+        self.addCleanup(self.engine.close)
+        clock = patch("server.time.monotonic", return_value=1000.0)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        sleeper = patch("server.time.sleep", side_effect=self.advance)
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+        limit = patch("server.MAX_ROUND_SECONDS", 6)
+        limit.start()
+        self.addCleanup(limit.stop)
+        paths = patch.object(hidlist, "interface_paths", return_value=frozenset())
+        paths.start()
+        self.addCleanup(paths.stop)
+        self.engine._bluetooth_paths = frozenset()
+        self.engine.last_poll["bluetooth"] = 1000
+
+    def advance(self, seconds):
+        self.clock.return_value += seconds
+
+    def test_deferred_reader_keeps_evidence_without_failure_or_backoff(self):
+        status = DeviceStatus("one", "Hyzen", 88, source="lofree", physical_id="physical-a")
+        self.engine._accept("lofree|physical-a", "lofree", [status], utcnow(), "physical-a")
+        previous = self.engine._snapshot()["devices"]
+        result = self.engine.poll()
+        self.assertEqual(result["devices"], previous)
+        self.assertEqual(result["errors"], [])
+        self.assertNotIn("lofree|physical-a", self.engine.failures)
+        self.assertNotIn("lofree|physical-a", self.engine.retry_after)
+        self.assertEqual(self.engine.last_poll["lofree|physical-a"], 1000)
+        self.assertEqual(self.engine.health["lofree|physical-a"]["state"], "deferred")
+        self.assertNotIn("errorCode", self.engine.health["lofree|physical-a"])
+        self.assertNotIn(("lofree", "physical-a"), self.pool.calls)
+
+    def test_long_query_does_not_block_a_short_query_that_fits(self):
+        self.engine.providers = ["lofree", "standard_hid"]
+        result = self.engine.poll()
+        self.assertEqual(result["errors"], [])
+        self.assertNotIn(("lofree", "physical-a"), self.pool.calls)
+        self.assertIn(("standard_hid", "physical-a", 5), self.pool.budgets)
+        self.assertEqual(self.engine.health["lofree|physical-a"]["state"], "deferred")
+        self.assertEqual(self.engine.health["standard_hid|physical-a"]["state"], "unsupported")
+
+    def test_round_finishes_early_when_no_query_can_fit(self):
+        result = self.engine.poll()
+        self.assertLess(self.clock.return_value - 1000, .5)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(self.pool.calls, [("topology", "")])
+        self.assertFalse(self.pool.active)
+
+    def test_deferred_reader_has_priority_next_round_even_with_slot_affinity(self):
+        self.engine._affinity["lofree|physical-a"] = 1
+        self.engine.poll()
+        self.pool.inventory[:] = [receiver("b"), receiver("a")]
+        self.pool.outcomes[("lofree", "physical-a")] = (0, [DeviceStatus("one", "Hyzen", 88, source="lofree")])
+        self.pool.calls.clear()
+        with patch("server.MAX_ROUND_SECONDS", 12):
+            result = self.engine.poll()
+        self.assertEqual([physical for name, physical in self.pool.calls if name == "lofree"],
+                         ["physical-a", "physical-b"])
+        self.assertEqual(self.engine._affinity["lofree|physical-a"], 1)
+        self.assertEqual(self.engine.health["lofree|physical-a"]["state"], "ok")
+        self.assertEqual(result["devices"][0]["percent"], 88)
+        self.assertEqual(result["errors"], [])
+        self.assertFalse(self.pool.physical_overlap)
+
+    def test_bluetooth_deferral_preserves_empty_count_and_does_not_wait(self):
+        self.pool.inventory.clear()
+        self.engine._accept("bluetooth", "bluetooth", [], utcnow())
+        self.engine._bluetooth_empty_polls = 2
+        self.engine.last_poll["bluetooth"] = 900
+        result = self.engine.poll(wait_bluetooth=True)
+        self.assertLess(self.clock.return_value - 1000, .5)
+        self.assertEqual(self.engine._bluetooth_empty_polls, 2)
+        self.assertEqual(self.engine.last_poll["bluetooth"], 900)
+        self.assertNotIn("bluetooth", self.engine.failures)
+        self.assertNotIn("bluetooth", self.engine.retry_after)
+        self.assertEqual(self.engine.health["bluetooth"]["state"], "deferred")
+        self.assertEqual(result["errors"], [])
+        self.assertNotIn(("bluetooth", ""), self.pool.calls)
+
+    def test_deferred_bluetooth_precedes_new_queries_next_round(self):
+        self.pool.inventory.clear()
+        self.engine.last_poll["bluetooth"] = 900
+        self.engine.poll(wait_bluetooth=True)
+        self.pool.inventory[:] = [receiver("a")]
+        self.pool.outcomes[("lofree", "physical-a")] = (0, [])
+        self.pool.calls.clear()
+        with patch("server.MAX_ROUND_SECONDS", 20):
+            result = self.engine.poll(wait_bluetooth=True)
+        self.assertEqual(self.pool.calls, [("topology", ""), ("bluetooth", ""), ("lofree", "physical-a")])
+        self.assertEqual(result["errors"], [])
+
+    def test_deferred_round_does_not_park_empty_readers(self):
+        self.pool.inventory.clear()
+        self.engine.last_poll["bluetooth"] = 900
+        result = self.engine.poll(park_empty_readers=True, wait_bluetooth=True)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(self.engine.health["bluetooth"]["state"], "deferred")
+        self.assertTrue(all(child.closed == 0 for child in self.pool.children))
+
+    def test_started_query_keeps_full_budget_and_real_timeout(self):
+        with patch("server.MAX_ROUND_SECONDS", 12):
+            result = self.engine.poll()
+        self.assertIn(("lofree", "physical-a", 10), self.pool.budgets)
+        self.assertIn("lofree: timeout", result["errors"])
+        self.assertEqual(self.engine.failures["lofree|physical-a"], 1)
+        self.assertEqual(self.engine.health["lofree|physical-a"]["state"], "timeout")
+        self.assertFalse(self.pool.active)
+
+    def test_removed_deferred_reader_no_longer_prevents_parking(self):
+        self.engine.poll()
+        self.pool.inventory.clear()
+        result = self.engine.poll(park_empty_readers=True)
+        self.assertEqual(result["errors"], [])
+        self.assertNotIn("lofree|physical-a", self.engine.health)
+        self.assertTrue(all(child.closed == 1 for child in self.pool.children))
+
+    def test_round_deadline_times_out_active_queries_but_defers_pending_query(self):
+        self.pool.inventory[:] = [receiver("a"), receiver("b"), receiver("c")]
+        self.pool.outcomes[("lofree", "physical-b")] = (100, [])
+
+        def oversleep(seconds):
+            running_query = any(child.pending and child.pending[3].get("provider") == "lofree"
+                                for child in self.pool.children)
+            self.advance(13 if running_query else seconds)
+
+        with patch("server.MAX_ROUND_SECONDS", 12), patch("server.time.sleep", side_effect=oversleep):
+            result = self.engine.poll()
+        for physical in ("physical-a", "physical-b"):
+            self.assertEqual(self.engine.health["lofree|" + physical]["state"], "timeout")
+        self.assertEqual(self.engine.health["lofree|physical-c"]["state"], "deferred")
+        self.assertNotIn("lofree|physical-c", self.engine.failures)
+        self.assertNotIn("lofree|physical-c", self.engine.retry_after)
+        self.assertNotIn("lofree|physical-c", self.engine.last_poll)
+        self.assertEqual(result["errors"], ["lofree: timeout", "lofree: timeout"])
+
+    def test_topology_still_starts_with_its_existing_compressed_budget(self):
+        with patch("server.MAX_ROUND_SECONDS", .12):
+            self.engine.poll()
+        self.assertEqual(self.pool.budgets[0][:2], ("topology", ""))
+        self.assertAlmostEqual(self.pool.budgets[0][2], .12)
+
+
 class SchedulerTests(unittest.TestCase):
     def test_successful_topology_clears_only_its_prior_failure_and_partial_error(self):
         pool = FakePool([], {("topology", ""): (0, IsolationError("read_failed"))})
@@ -962,16 +1111,26 @@ class SchedulerTests(unittest.TestCase):
 
     def test_round_budget_bounds_slow_reader_and_keeps_fast_partial(self):
         outcomes = {("lofree", "physical-a"): (0.01, [DeviceStatus("a", "Fast", 25, source="lofree")]),
-                    ("lofree", "physical-b"): (10, [])}
-        pool = FakePool([receiver("a"), receiver("b")], outcomes)
+                    ("lofree", "physical-b"): (100, [])}
+        pool = FakePool([receiver("a"), receiver("b"), receiver("c")], outcomes)
         engine = poll_fixture(pool)
+        engine._affinity["lofree|physical-c"] = 1
+        engine.last_poll["bluetooth"] = 1000
         frames = []
-        with patch.object(hidlist, "interface_paths", return_value=frozenset()), patch("server.MAX_ROUND_SECONDS", 0.12):
-            start = time.monotonic()
-            result = engine.poll(progress=frames.append)
-        self.assertLess(time.monotonic() - start, 0.5)
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()), \
+                patch("server.MAX_ROUND_SECONDS", 12), \
+                patch("server.time.monotonic", return_value=1000.0) as clock:
+            def advance(seconds):
+                clock.return_value += seconds
+            start = time.perf_counter()
+            with patch("server.time.sleep", side_effect=advance):
+                result = engine.poll(progress=frames.append)
+        self.assertLess(time.perf_counter() - start, 0.5)
         self.assertTrue(any(d["name"] == "Fast" for frame in frames for d in frame["devices"]))
-        self.assertTrue(any("timeout" in error for error in result["errors"]))
+        self.assertIn("lofree: timeout", result["errors"])
+        self.assertEqual(engine.health["lofree|physical-c"]["state"], "deferred")
+        self.assertNotIn("lofree|physical-c", engine.failures)
+        self.assertNotIn(("lofree", "physical-c"), pool.calls)
         self.assertFalse(pool.active)
         engine.close()
 
