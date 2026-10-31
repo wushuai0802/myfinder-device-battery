@@ -10,6 +10,7 @@ import _hidstub
 from providers.base import DeviceStatus
 from server import BatteryEngine, historical, normalise, public_id, utcnow
 from isolation import IsolationError
+from test_engine_reliability import FakePool
 
 
 TOKEN = "a" * 64
@@ -136,6 +137,115 @@ class LogitechDpiEngineTests(unittest.TestCase):
         reply = engine.change()
         self.assertEqual(reply["dpiResult"]["error"], "stale_target")
         self.assertEqual(engine.commands, [])
+
+
+class BluetoothDpiSchedulingTests(unittest.TestCase):
+    def setUp(self):
+        status = DeviceStatus("gpw-fixture", "PRO X Wireless", 75, source="logitech", kind="mouse",
+                              dpi=evidence(), dpi_target={"slot": 1, "unit": "private-fixture"})
+        self.pool = FakePool([{"physical_id": PHYSICAL, "vendor_id": 0x046D, "product_id": 0xC547}], {
+            ("bluetooth", ""): (100, []),
+            ("logitech", PHYSICAL): (0, [status]),
+            ("set_dpi", PHYSICAL): (0, {"dpi": evidence(800), "success": True,
+                                       "outcomeUnknown": False, "error": None, "confirmedDpi": 800}),
+        })
+        self.engine = BatteryEngine(process_factory=self.pool.factory)
+        self.engine.providers = ["logitech", "bluetooth"]
+        self.addCleanup(self.engine.close)
+        clock = patch("server.time.monotonic", return_value=1000.0)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        sleeper = patch("server.time.sleep", side_effect=self.advance)
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+        paths = patch.object(self.engine._hidlist, "interface_paths", return_value=frozenset())
+        paths.start()
+        self.addCleanup(paths.stop)
+        self.device_id = public_id(status.key + ":instance:" + PHYSICAL)
+
+    def advance(self, seconds):
+        self.clock.return_value += seconds
+
+    def change(self):
+        return self.engine.set_dpi(self.device_id, 800, TOKEN, 400, 7, 2)
+
+    def test_dpi_proceeds_while_bluetooth_uses_other_slot(self):
+        original = self.engine.poll()["devices"][0]
+        pending = self.pool.children[1].pending
+        started = self.clock.return_value
+        result = self.change()
+        self.assertTrue(result["dpiResult"]["success"])
+        self.assertLess(self.clock.return_value - started, .1)
+        self.assertEqual(self.pool.calls.count(("set_dpi", PHYSICAL)), 1)
+        self.assertIs(self.pool.children[1].pending, pending)
+        self.assertEqual(self.pool.children[1].closed, 0)
+        self.assertEqual((result["requestId"], result["generation"]), (7, 2))
+        for field in ("measuredAtUtc", "confirmedAtUtc", "queriedAtUtc", "chargingCheckedAtUtc"):
+            self.assertEqual(result["devices"][0][field], original[field])
+
+    def test_dpi_reclaims_bluetooth_slot_without_failure_or_backoff_changes(self):
+        self.engine.poll()
+        self.engine._affinity["logitech|" + PHYSICAL] = 1
+        self.engine._bluetooth_empty_polls = 2
+        self.engine.last_poll["bluetooth"] = 900
+        started = self.clock.return_value
+        result = self.change()
+        self.assertTrue(result["dpiResult"]["success"])
+        self.assertLess(self.clock.return_value - started, .1)
+        self.assertEqual(self.pool.children[1].closed, 1)
+        self.assertEqual(self.engine._bluetooth_empty_polls, 2)
+        self.assertEqual(self.engine.last_poll["bluetooth"], 900)
+        for state in (self.engine.failures, self.engine.retry_after, self.engine.health):
+            self.assertNotIn("bluetooth", state)
+        self.assertIsNone(self.engine._bluetooth_slot)
+        self.pool.outcomes[("bluetooth", "")] = (0, [])
+        self.assertEqual(self.engine.poll()["errors"], [])
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 2)
+        self.assertEqual(self.pool.calls.count(("set_dpi", PHYSICAL)), 1)
+
+    def test_completed_bluetooth_is_collected_before_dpi(self):
+        self.pool.outcomes[("bluetooth", "")] = (.5, [DeviceStatus("bt:keyboard", "Bluetooth Keyboard", 55, source="bluetooth")])
+        self.engine.poll()
+        self.engine._bluetooth_empty_polls = 3
+        self.advance(1)
+        result = self.change()
+        self.assertTrue(result["dpiResult"]["success"])
+        self.assertEqual(next(d["percent"] for d in result["devices"] if d["provider"] == "bluetooth"), 55)
+        self.assertEqual(self.engine._bluetooth_empty_polls, 0)
+        self.assertEqual(self.engine.last_poll["bluetooth"], self.clock.return_value)
+        self.assertIsNone(self.pool.children[1].pending)
+        self.assertEqual(self.pool.calls.count(("bluetooth", "")), 1)
+
+    def test_bluetooth_timeout_is_collected_before_dpi(self):
+        self.engine.poll()
+        self.advance(14.1)
+        result = self.change()
+        self.assertTrue(result["dpiResult"]["success"])
+        self.assertIn("bluetooth: timeout", result["errors"])
+        self.assertEqual(self.engine.failures["bluetooth"], 1)
+        self.assertEqual(self.pool.calls.count(("set_dpi", PHYSICAL)), 1)
+
+    def test_unknown_dpi_after_reclaim_is_never_retried(self):
+        self.engine.poll()
+        self.engine._affinity["logitech|" + PHYSICAL] = 1
+        self.pool.outcomes[("set_dpi", PHYSICAL)] = (0, IsolationError("timeout"))
+        result = self.change()
+        self.assertTrue(result["dpiResult"]["outcomeUnknown"])
+        self.assertFalse(result["devices"][0]["dpi"]["canSet"])
+        self.assertFalse(self.change()["dpiResult"]["success"])
+        self.assertEqual(self.pool.calls.count(("set_dpi", PHYSICAL)), 1)
+        self.assertNotIn("bluetooth", self.engine.failures)
+        self.assertNotIn("bluetooth", self.engine.retry_after)
+
+    def test_invalid_dpi_target_does_not_cancel_bluetooth(self):
+        self.engine.poll()
+        self.engine._affinity["logitech|" + PHYSICAL] = 1
+        pending = self.pool.children[1].pending
+        result = self.engine.set_dpi(self.device_id, 800, "b" * 64, 400)
+        self.assertFalse(result["dpiResult"]["success"])
+        self.assertIs(self.pool.children[1].pending, pending)
+        self.assertEqual(self.pool.children[1].closed, 0)
+        self.assertNotIn(("set_dpi", PHYSICAL), self.pool.calls)
 
 
 if __name__ == "__main__":
