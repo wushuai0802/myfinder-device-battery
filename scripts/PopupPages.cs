@@ -145,6 +145,7 @@ namespace AtkBatteryTray {
                 rows.Add(Info("许可证","AGPL-3.0-only"));rows.Add(Info("无担保","按现状提供"));
                 var source=Info("源码",null);source.Detail="https://github.com/\nwushuai0802/\nmyfinder-device-battery";rows.Add(source);
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));
+                var feedbackRow=Row(258,"反馈到 GitHub",null,"info");feedbackRow.Detail="提交前可检查内容\n提交需要 GitHub 账号";rows.Add(feedbackRow);
             }else if(nav.Page==PopupPage.Devices) {
                 var devices=WirelessLayout.Build(owner,0,100000,true).All;
                 nav.Offset=Math.Max(0,Math.Min(nav.Offset,Math.Max(0,devices.Count-nav.VisibleChoices)));

@@ -70,6 +70,52 @@ def public_id(key):
     return "device-" + hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:24]
 
 
+def suppress_old_connections(devices):
+    """Presentation only. Complete-link groups protect current cards and slots."""
+    def same(a, b):
+        if (a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
+                or not a.get("physicalId") or not b.get("physicalId")
+                or a["physicalId"] == b["physicalId"]
+                or a.get("percent") is None or b.get("percent") is None
+                or abs(a["percent"] - b["percent"]) > 5
+                or a.get("measurementState") == b.get("measurementState") == "current"):
+            return False
+        names = [clean_name(d.get("name")).casefold() for d in (a, b)]
+        return names[0] == names[1] or any(re.search(r"dongle|receiver|接收器|wireless mouse|2\.4g", n) for n in names)
+
+    def rank(d):
+        stamp = valid_time(d.get("confirmedAtUtc"))
+        time_value = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp() if stamp else 0
+        return (d.get("measurementState") != "current", -time_value, d["id"])
+
+    groups = []
+    hidden = set()
+    for device in sorted(devices, key=rank):
+        group = next((group for group in groups if all(same(device, member) for member in group)), None)
+        if group is None:
+            groups.append([device])
+        else:
+            group.append(device)
+            hidden.add(device["id"])
+    return ([d for d in devices if d["id"] not in hidden],
+            [{"name": d["name"], "kind": d["kind"]} for d in devices if d["id"] in hidden][:16])
+
+
+def inventory_safe_name(name, inventory):
+    # Strip known private strings before clean_name truncates them. A product
+    # can echo its serial/path; these are never useful in a public report.
+    name = str(name or "Wireless device")
+    secrets = set()
+    for info in inventory:
+        for field in ("serial_number", "path", "physical_id"):
+            value = info.get(field)
+            if value:
+                secrets.add(value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value))
+    for secret in sorted(secrets, key=lambda value: (-len(value), value)):
+        name = re.sub(re.escape(secret), "[redacted]", name, flags=re.I)
+    return name
+
+
 def unadapted_devices(inventory, previous):
     """Allowlisted model metadata from existing inventory only; never probe HID."""
     from topology import physical_groups
@@ -382,6 +428,7 @@ class BatteryEngine:
         self.package_smoke = package_smoke
         self.previous = {}
         self.unadapted = []
+        self._inventory_groups = {}
         self.by_provider = {}
         self.health = {}
         self.last_poll = {}
@@ -446,6 +493,19 @@ class BatteryEngine:
         self.physical_by_id = {key: value for key, value in self.physical_by_id.items() if key in self.previous}
         self.dpi_targets = {key: value for key, value in self.dpi_targets.items() if key in self.previous}
         devices = sorted(self.previous.values(), key=lambda d: ({"mouse": 0, "keyboard": 1, "headset": 2}.get(d["kind"], 3), d["name"], d["id"]))
+        # Metadata is derived only from the already discovered inventory, and
+        # added to outgoing copies. Ambiguous models have no public VID:PID.
+        public_devices = []
+        for device in devices:
+            device = dict(device)
+            infos = self._inventory_groups.get(self.physical_by_id.get(device["id"]), [])
+            models = {(d.get("vendor_id"), d.get("product_id")) for d in infos}
+            if len(models) == 1:
+                vid, pid = next(iter(models))
+                if all(type(v) is int and 0 <= v <= 65535 for v in (vid, pid)):
+                    device.update(vendorId=vid, productId=pid)
+            public_devices.append(device)
+        devices, suppressed = suppress_old_connections(public_devices)
         health = [dict(value, physicalId=public_id(key.split("|", 1)[1]) if "|" in key else
                        key[len("topology:"):] if key.startswith("topology:device-")
                        and valid_public_target(key[len("topology:"):]) else None)
@@ -456,6 +516,7 @@ class BatteryEngine:
         return {"schema": 2, "requestId": request_id, "generation": generation, "complete": complete,
                 "devices": devices, "nativeMousePresent": self.native_mouse,
                 "unadapted": self.unadapted,
+                "suppressed": suppressed,
                 "providerCount": len(self.providers), "errors": (list(self.errors) + errors)[:32],
                 "health": health, "checkedAtUtc": utcnow(), "packageSmoke": self.package_smoke}
 
@@ -466,6 +527,7 @@ class BatteryEngine:
         for status in statuses:
             if status.kind == "gamepad":
                 continue
+            status = replace(status, name=inventory_safe_name(status.name, self._inventory_groups.get(physical, [])))
             key = public_id(status.key)
             if name in self._ambiguous_providers:
                 status = replace(status, legacy_key="")
@@ -796,6 +858,13 @@ class BatteryEngine:
                         groups = dict(list(physical_groups(inventory).items())[:MAX_DEVICES])
                         if physical_id is not None:
                             groups = {key: infos for key, infos in groups.items() if public_id(key) == physical_id}
+                        if full_round:
+                            self._inventory_groups = dict(groups)
+                        else:
+                            if physical_id is not None:
+                                self._inventory_groups = {key: infos for key, infos in self._inventory_groups.items()
+                                                          if public_id(key) != physical_id}
+                            self._inventory_groups.update(groups)
                         # A successful new topology supersedes its own previous
                         # failure. Do not clear independent reader faults.
                         self.health.pop(reader_key, None)

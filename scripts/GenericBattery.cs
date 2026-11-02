@@ -11,6 +11,65 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace AtkBattery {
+    // An explicit public-data projection, independent of local diagnostics.
+    // Construction is offline. Only the click handler copies/opens anything.
+    internal sealed class FeedbackReport {
+        const string IssueBase="https://github.com/wushuai0802/myfinder-device-battery/issues/new?template=device-request.yml";
+        const string Title="[设备反馈] 电量与连接";
+        const int UrlLimit=6000;
+        readonly List<string> devices=new List<string>(),suppressed=new List<string>(),unadapted=new List<string>(),health=new List<string>();
+        readonly string header;
+        internal FeedbackReport(string version,string windows,IEnumerable<WirelessDevice> cards,IEnumerable<SuppressedDevice> hidden,IEnumerable<UnadaptedDevice> unknown,IEnumerable<ReaderHealth> readers,IEnumerable<string> privateValues){
+            var secrets=new List<string>();foreach(string value in privateValues)if(!String.IsNullOrEmpty(value))secrets.Add(value);
+            secrets.Sort(delegate(string a,string b){return b.Length.CompareTo(a.Length);});
+            Func<string,string> clean=delegate(string value){
+                foreach(string secret in secrets)value=Regex.Replace(value??"",Regex.Escape(secret),"[redacted]",RegexOptions.IgnoreCase);
+                return CleanField(value);
+            };
+            header="MyFinder Device Battery "+CleanField(version)+"\r\nWindows "+CleanField(windows);
+            foreach(var d in cards){
+                // The worker permits 64 cards, plus the two native readers.
+                if(d==null||devices.Count>=66)continue;
+                string model=d.VendorId.HasValue&&d.ProductId.HasValue&&UnadaptedDevice.Word(d.VendorId.Value)&&UnadaptedDevice.Word(d.ProductId.Value)?" | "+d.VendorId.Value.ToString("X4")+":"+d.ProductId.Value.ToString("X4"):"";
+                devices.Add(clean(d.Name)+" | "+clean(d.Kind)+" | "+clean(d.Provider)+" | "+(d.Percent.HasValue?(d.Approximate?"约":"")+d.Percent+"%":"未知")+" | 当前读数："+(d.MeasurementState=="current"?"是":"否")+model);
+            }
+            foreach(var d in hidden)if(d!=null&&suppressed.Count<16)suppressed.Add(clean(d.Name)+" | "+clean(d.Kind));
+            foreach(var d in unknown)if(d!=null&&unadapted.Count<16&&UnadaptedDevice.Word(d.VendorId)&&UnadaptedDevice.Word(d.ProductId)){
+                var line=new StringBuilder(d.VendorId.ToString("X4")+":"+d.ProductId.ToString("X4")+" \""+clean(d.Product)+"\"");
+                int count=0;foreach(var c in d.Collections??new UnadaptedCollection[0])if(c!=null&&UnadaptedDevice.Word(c.UsagePage)&&UnadaptedDevice.Word(c.Usage)&&count++<8)line.Append(" "+c.UsagePage.ToString("X4")+":"+c.Usage.ToString("X4"));
+                unadapted.Add(line.ToString());
+            }
+            foreach(var r in readers)if(r!=null&&health.Count<64&&r.State!="ok"&&r.State!="no_devices"&&r.State!="unsupported")health.Add(clean(r.Provider)+" | "+clean(r.State)+" | "+clean(r.ErrorCode));
+        }
+        internal static string CleanField(string value){
+            value=Regex.Replace(value??"",@"(?i)(?:[a-z]:[\\/]|\\\\|(?:hid|usb|bthenum|bthledevice)[\\#]|(?<!\w)/(?:[^\s/]+/))[^\r\n""']*","[path]");
+            value=Regex.Replace(value,@"(?i)(?:\b(?:serial(?:[_ -]?number)?|s/n|sn|physical[_ -]?id|process[_ -]?id|pid|instance[_ -]?(?:id|time)|endpoint[_ -]?(?:id|name))\b|序列号|进程号)\s*[:=#：]?\s*(?:""[^""]*""|'[^']*'|[^\s]+)","[private]");
+            value=Regex.Replace(value,@"(?i)\bdevice-[a-f0-9]{24}\b|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b|\b\d{4}-\d{2}-\d{2}T\S+","[device]");
+            var text=new StringBuilder();foreach(char c in value)if(text.Length<80)text.Append(Char.IsControl(c)?' ':c);
+            return text.ToString().Trim();
+        }
+        static void Section(StringBuilder text,string title,List<string> items,int count){
+            text.Append("\r\n\r\n").Append(title);if(count==0)text.Append("\r\n无记录");
+            for(int i=0;i<count;i++)text.Append("\r\n").Append(items[i]);
+        }
+        string Render(int dc,int sc,int uc,int hc,bool truncated){
+            var text=new StringBuilder(header);Section(text,"有卡片的设备",devices,dc);Section(text,"已隐藏的重复连接",suppressed,sc);Section(text,"未取得电量的设备",unadapted,uc);
+            if(hc>0)Section(text,"读取器健康",health,hc);
+            if(truncated)text.Append("\r\n\r\n已截断");return text.ToString();
+        }
+        internal string FullText {get{return Render(devices.Count,suppressed.Count,unadapted.Count,health.Count,false);}}
+        internal static string EncodeUrl(string title,string diagnostics){return IssueBase+"&title="+Uri.EscapeDataString(title)+"&diagnostics="+Uri.EscapeDataString(diagnostics);}
+        internal string IssueUrl {get{
+            int dc=devices.Count,sc=suppressed.Count,uc=unadapted.Count,hc=health.Count;bool truncated=false;
+            while(true){
+                string url=EncodeUrl(Title,Render(dc,sc,uc,hc,truncated));if(url.Length<=UrlLimit)return url;
+                truncated=true;
+                if(hc>0)hc=0;else if(uc>0)uc--;else if(sc>0)sc--;else if(dc>0)dc--;
+                else throw new InvalidOperationException("Feedback header exceeds URL budget.");
+            }
+        }}
+    }
+
     [DataContract] public sealed class WirelessDpi {
         [DataMember(Name="supported")] public bool Supported;
         public bool CanSet;
@@ -56,6 +115,8 @@ namespace AtkBattery {
         [DataMember(Name="legacyId")] public string LegacyId;
         [DataMember(Name="physicalId",EmitDefaultValue=false)] public string PhysicalId;
         [DataMember(Name="name")] public string Name;
+        [DataMember(Name="vendorId",EmitDefaultValue=false)] public int? VendorId;
+        [DataMember(Name="productId",EmitDefaultValue=false)] public int? ProductId;
         [DataMember(Name="kind")] public string Kind;
         [DataMember(Name="percent")] public int? Percent;
         [DataMember(Name="charging")] public bool? Charging;
@@ -116,6 +177,10 @@ namespace AtkBattery {
             return line.ToString();
         }
     }
+    [DataContract] public sealed class SuppressedDevice {
+        [DataMember(Name="name")] public string Name;
+        [DataMember(Name="kind")] public string Kind;
+    }
     [DataContract] public sealed class WirelessSnapshot {
         [DataMember(Name="schema")] public int Schema;
         [DataMember(Name="requestId")] public long RequestId;
@@ -123,6 +188,7 @@ namespace AtkBattery {
         [DataMember(Name="complete")] public bool Complete;
         [DataMember(Name="devices")] public WirelessDevice[] Devices;
         [DataMember(Name="unadapted",EmitDefaultValue=false)] public UnadaptedDevice[] Unadapted;
+        [DataMember(Name="suppressed",EmitDefaultValue=false)] public SuppressedDevice[] Suppressed;
         [DataMember(Name="nativeMousePresent")] public bool? NativeMousePresent;
         [DataMember(Name="providerCount")] public int ProviderCount;
         [DataMember(Name="health")] public ReaderHealth[] Health;
@@ -247,6 +313,7 @@ namespace AtkBattery {
                 if(!Regex.IsMatch(value.LegacyId??"",@"^device-[a-f0-9]{24}$"))value.LegacyId=null;
                 if(!Regex.IsMatch(value.PhysicalId??"",@"^device-[a-f0-9]{24}$"))value.PhysicalId=null;
                 value.Name=Clean(value.Name,80,"无线设备");value.Provider=Clean(value.Provider,48,"");value.Transport=Clean(value.Transport,32,"");
+                if(!value.VendorId.HasValue||!value.ProductId.HasValue||!UnadaptedDevice.Word(value.VendorId.Value)||!UnadaptedDevice.Word(value.ProductId.Value)){value.VendorId=null;value.ProductId=null;}
                 if(value.Kind!="mouse"&&value.Kind!="headset"&&value.Kind!="keyboard")value.Kind="device";
                 if(value.Percent<0||value.Percent>100)value.Percent=null;
                 DateTime time=value.ConfirmedTime;
@@ -267,6 +334,16 @@ namespace AtkBattery {
                 devices.Add(value);
             }
             var errors=new List<string>();foreach(var error in snapshot.Errors??new string[0])if(errors.Count<32)errors.Add(Clean(error,96,"read_failed"));snapshot.Errors=errors.ToArray();
+            if(snapshot.Suppressed!=null){
+                var suppressed=new List<SuppressedDevice>();
+                foreach(var item in snapshot.Suppressed){
+                    if(suppressed.Count>=16)break;if(item==null)continue;
+                    item.Name=FeedbackReport.CleanField(item.Name);
+                    if(item.Kind!="mouse"&&item.Kind!="keyboard"&&item.Kind!="headset")item.Kind="device";
+                    suppressed.Add(item);
+                }
+                snapshot.Suppressed=suppressed.ToArray();
+            }
             if(snapshot.Unadapted!=null){
                 var unadapted=new List<UnadaptedDevice>();
                 foreach(var item in snapshot.Unadapted){

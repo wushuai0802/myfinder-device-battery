@@ -1,12 +1,13 @@
 name: 设备适配反馈
-description: 提交未取得电量的设备信息，帮助确认型号和协议范围
+description: 反馈设备电量、重复连接或未取得电量的问题，帮助确认型号和协议范围
 title: "[设备适配] 品牌与型号"
 body:
   - type: markdown
     attributes:
       value: |
-        请在“状态与诊断”页主动复制诊断摘要。未取得电量可能是尚未适配，也可能是设备休眠。
-        摘要包含型号级 VID:PID 和 HID 集合。发布前请自行检查内容，删除序列号、设备路径或其他个人信息。
+        可点击“状态与诊断”中的“反馈到 GitHub”，预填本表并复制完整反馈报告；预填失败或显示“已截断”时，可粘贴剪贴板中的完整报告。
+        报告仅包含版本、设备原始名称与电量、明确匹配的型号级 VID:PID、隐藏连接、未取得电量的设备与异常读取器状态，不含用户别名、音频端点、进程/实例身份、路径或序列号。
+        提交前可检查内容；提交需要 GitHub 账号。未取得电量可能是尚未适配，也可能是设备休眠。
   - type: input
     id: model
     attributes:
@@ -35,8 +36,8 @@ body:
   - type: textarea
     id: diagnostics
     attributes:
-      label: 诊断摘要
-      description: 移动或唤醒设备后重新同步，再主动复制摘要；发布前自行检查。
+      label: 反馈报告
+      description: 移动或唤醒设备后重新同步，再点击“反馈到 GitHub”；检查预填内容，必要时粘贴完整报告。请勿粘贴含本机实例信息的普通诊断摘要。
       render: text
     validations:
       required: true

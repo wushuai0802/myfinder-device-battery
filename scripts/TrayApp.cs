@@ -267,6 +267,7 @@ namespace AtkBatteryTray {
                 else if(id==7||id==8){navigation.Offset=Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
                 else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
                 else if(id==250){Clipboard.SetText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
+                else if(id==258){navigation.Notice=owner.OpenFeedback();Invalidate();return;}
                 else return;
                 DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
             }catch(Exception error){navigation.Notice="未保存："+error.Message;Invalidate();}
@@ -609,6 +610,7 @@ namespace AtkBatteryTray {
         readonly Dictionary<string,WirelessDevice> wirelessCache=new Dictionary<string,WirelessDevice>();
         public WirelessDevice[] WirelessDevices=new WirelessDevice[0];
         UnadaptedDevice[] unadaptedDevices=new UnadaptedDevice[0];
+        SuppressedDevice[] suppressedDevices=new SuppressedDevice[0];
         public bool NativeMousePresent=true,GenericReady;
         public string GenericError;
         public string GenericHealthSummary;
@@ -968,7 +970,10 @@ namespace AtkBatteryTray {
         static bool HealthyPhysicalWithoutMouse(WirelessSnapshot snapshot,string physicalId){
             if(snapshot==null||!String.IsNullOrEmpty(snapshot.Error))return false;
             foreach(var device in snapshot.Devices??new WirelessDevice[0])if(device.PhysicalId==physicalId&&device.Kind=="mouse")return false;
-            bool matched=false;foreach(var health in snapshot.Health??new ReaderHealth[0])if(health.PhysicalId==physicalId){matched=true;if(health.State!="ok"&&health.State!="unsupported"&&health.State!="no_devices")return false;}
+            // A reader can have a mouse even when its card was suppressed.
+            // Do not disable activity recovery based on presentation alone.
+            bool hiddenMouse=Array.Exists(snapshot.Suppressed??new SuppressedDevice[0],delegate(SuppressedDevice d){return d!=null&&d.Kind=="mouse";});
+            bool matched=false;foreach(var health in snapshot.Health??new ReaderHealth[0])if(health.PhysicalId==physicalId){matched=true;if(hiddenMouse&&health.DeviceCount>0||health.State!="ok"&&health.State!="unsupported"&&health.State!="no_devices")return false;}
             return matched;
         }
         void ApplyWirelessRead(WirelessSnapshot snapshot,bool complete,bool physical){bool previous=applyingPhysicalSnapshot;applyingPhysicalSnapshot=physical;try{ApplyWireless(snapshot,complete);}finally{applyingPhysicalSnapshot=previous;}}
@@ -1072,6 +1077,7 @@ namespace AtkBatteryTray {
                 if(complete&&snapshot.DpiResult==null)wirelessDpiNeedsReconcile=false;
                 GenericReady=true;GenericError=null;WirelessDevices=snapshot.Devices??new WirelessDevice[0];GenericHealth=snapshot.Health??new ReaderHealth[0];GenericFailureCount=0;
                 if(snapshot.Unadapted!=null)unadaptedDevices=snapshot.Unadapted;
+                if(snapshot.Suppressed!=null)suppressedDevices=snapshot.Suppressed;
                 foreach(var device in WirelessDevices)if(device.Kind=="mouse")activityRefresh.ObserveMouse(device.PhysicalId);
                 foreach(var health in GenericHealth)if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
@@ -1109,7 +1115,35 @@ namespace AtkBatteryTray {
             text+="\r\n未取得电量的设备（可能未适配，也可能正在休眠）";
             if(unadaptedDevices.Length==0)text+="\r\n无记录";
             foreach(var device in unadaptedDevices)text+="\r\n"+device.DiagnosticLine();
+            text+="\r\n已隐藏的重复连接";
+            if(suppressedDevices.Length==0)text+="\r\n无记录";
+            foreach(var device in suppressedDevices)text+="\r\n"+FeedbackReport.CleanField(device.Name)+" | "+device.Kind;
             return String.Join(Environment.NewLine,Array.ConvertAll(text.Split(new[]{"\r\n"},StringSplitOptions.None),delegate(string line){return SafeDiagnostic.Clean(line);}));
+        }
+        internal FeedbackReport CreateFeedbackReport(){
+            var cards=new List<WirelessDevice>();
+            foreach(var card in WirelessLayout.Build(this,0,100000).All){
+                if(card.Device!=null)cards.Add(card.Device);
+                else if(card.NativeMouse){var reading=Current??LastGood;cards.Add(new WirelessDevice {Name=reading==null?"原生 ATK（未读到名称）":reading.Product,Kind="mouse",Provider="native_atk",Percent=card.Battery.Percent,MeasurementState=card.Battery.Fresh?"current":"cached",VendorId=0x373B,ProductId=0x1278});}
+                else if(card.NativeHeadset)cards.Add(new WirelessDevice {Name=Headset.Product,Kind="headset",Provider="native_hyperx",Percent=card.Battery.Percent,MeasurementState=card.Battery.Fresh?"current":"cached",VendorId=0x03F0,ProductId=0x098D});
+            }
+            var privateValues=new List<string> {processId.ToString(),processStartedAtUtc.ToString("o"),instanceId};
+            foreach(var device in WirelessDevices){privateValues.Add(device.Id);privateValues.Add(device.PhysicalId);}
+            if(Current!=null)privateValues.Add(Current.DeviceKey);if(LastGood!=null)privateValues.Add(LastGood.DeviceKey);
+            if(Audio!=null){
+                privateValues.AddRange(new[]{Audio.SpeakerName,Audio.HeadsetName,Audio.MicrophoneName,Audio.SpeakerId,Audio.HeadsetId,Audio.MicrophoneId,Audio.ConsoleOutputId,Audio.MultimediaOutputId,Audio.CommunicationsOutputId,Audio.VolumeEndpointId});
+                foreach(var device in Audio.Devices??new AudioDeviceChoice[0])if(device!=null){privateValues.Add(device.Name);privateValues.Add(device.Id);}
+            }
+            return new FeedbackReport(AppRuntime.Version,Environment.OSVersion.Version.ToString(),cards,suppressedDevices,unadaptedDevices,GenericHealth,privateValues);
+        }
+        internal string OpenFeedback(Action<string> copy=null,Action<string> open=null){
+            const string review="提交前可检查内容；提交需要 GitHub 账号。";
+            var report=CreateFeedbackReport();bool copied=false;
+            try{(copy??Clipboard.SetText)(report.FullText);copied=true;}catch(Exception){}
+            try{
+                if(open!=null)open(report.IssueUrl);else Process.Start(new ProcessStartInfo(report.IssueUrl) {UseShellExecute=true});
+                return (copied?"完整报告已复制。":"剪贴板不可用，请检查浏览器预填内容。")+review;
+            }catch(Exception){return (copied?"无法打开浏览器，完整报告已复制。":"无法打开浏览器或复制报告，请稍后重试。")+review;}
         }
         internal static bool ShowHeadset(HeadsetReading headset,AudioReading audio) {
             return VisualDesign.ShouldShowHeadset(headset);

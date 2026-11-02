@@ -875,7 +875,10 @@ class RoundBudgetTests(unittest.TestCase):
         self.engine._accept("lofree|physical-a", "lofree", [status], utcnow(), "physical-a")
         previous = self.engine._snapshot()["devices"]
         result = self.engine.poll()
-        self.assertEqual(result["devices"], previous)
+        # Discovery may add model metadata while the deferred battery evidence
+        # stays byte-for-byte identical. It must not enter the reading cache.
+        self.assertEqual(result["devices"], [dict(d, vendorId=0x388D, productId=0x0025) for d in previous])
+        self.assertEqual(self.engine.previous, {d["id"]: d for d in previous})
         self.assertEqual(result["errors"], [])
         self.assertNotIn("lofree|physical-a", self.engine.failures)
         self.assertNotIn("lofree|physical-a", self.engine.retry_after)
