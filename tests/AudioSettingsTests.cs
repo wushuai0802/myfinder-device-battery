@@ -68,9 +68,68 @@ static class AudioSettingsTests {
         foreach(var thread in threads)Check(thread.Join(5000),"concurrent fake endpoint resolver completes");
         Check(errors==0,"concurrent scoped reads cannot overwrite remembered global output");
     }
+    static AudioBindings HeadsetBindings(AudioEndpointInfo receiver,bool hyperx){
+        if(hyperx){receiver.InterfaceName="HyperX Cloud Alpha Wireless";return new AudioBindings();}
+        return new AudioBindings {HeadsetEndpointId=receiver.Id.ToUpperInvariant()};
+    }
+    static void SpeakerExcludesHeadset(){
+        foreach(bool hyperx in new[]{false,true}){
+            bool ambiguous;var receiver=Output("receiver",1);var realSpeaker=Output("speaker",1);
+            var bindings=HeadsetBindings(receiver,hyperx);var endpoints=new List<AudioEndpointInfo> {receiver,realSpeaker};
+            var headset=AudioControl.FindEndpoint(endpoints,"headset",bindings,out ambiguous);
+            Check(headset==receiver&&!ambiguous,"speaker-form-factor receiver resolves as the bound or HyperX headset");
+            var speaker=new SpeakerEndpointMemory().FindSpeaker(endpoints,bindings,"RECEIVER",out ambiguous);
+            Check(speaker==realSpeaker&&!ambiguous&&speaker.Id!=headset.Id,"default speaker-form-factor headset cannot also become the automatic speaker");
+        }
+    }
+    static void HeadsetPreservesSpeakerMemory(){
+        foreach(bool hyperx in new[]{false,true}){
+            bool ambiguous;var receiver=Output("receiver",1);var hdmi=Output("hdmi",9);
+            var bindings=HeadsetBindings(receiver,hyperx);var endpoints=new List<AudioEndpointInfo> {receiver,Output("speaker",1),hdmi,Output("spdif",8)};
+            var memory=new SpeakerEndpointMemory();
+            Check(memory.FindSpeaker(endpoints,bindings,"HDMI",out ambiguous)==hdmi&&!ambiguous,"a real HDMI default seeds memory before switching to the headset");
+            Check(memory.FindSpeaker(endpoints,bindings,"RECEIVER",out ambiguous)==hdmi&&!ambiguous,"switching to the speaker-form-factor headset retains the remembered HDMI target");
+            Check(memory.FindSpeaker(endpoints,bindings,null,out ambiguous)==hdmi&&!ambiguous,"the headset default does not overwrite HDMI memory");
+        }
+    }
+    static void HeadsetOnlyHasNoSpeaker(){
+        foreach(bool hyperx in new[]{false,true}){
+            bool ambiguous;var receiver=Output("receiver",1);var bindings=HeadsetBindings(receiver,hyperx);
+            var endpoints=new List<AudioEndpointInfo> {receiver};
+            var headset=AudioControl.FindEndpoint(endpoints,"headset",bindings,out ambiguous);
+            Check(headset==receiver&&!ambiguous,"the only output remains available as the headset");
+            Check(new SpeakerEndpointMemory().FindSpeaker(endpoints,bindings,"RECEIVER",out ambiguous)==null&&!ambiguous,"a lone speaker-form-factor headset leaves the speaker unavailable");
+        }
+    }
+    static void HeadsetSpeakerFallbackRules(){
+        bool ambiguous;var receiver=Output("receiver",1);var realSpeaker=Output("speaker",1);var hdmi=Output("hdmi",9);
+        var endpoints=new List<AudioEndpointInfo> {receiver,realSpeaker,hdmi};var bindings=HeadsetBindings(receiver,false);
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",bindings,null,"RECEIVER",out ambiguous)==realSpeaker&&!ambiguous,"headset memory is skipped and the headset is excluded from unique-speaker counting");
+        var memory=new SpeakerEndpointMemory();
+        Check(memory.FindSpeaker(endpoints,new AudioBindings(),"receiver",out ambiguous)==receiver,"an output can be remembered before it is assigned to the headset button");
+        Check(memory.FindSpeaker(endpoints,bindings,null,out ambiguous)==realSpeaker&&!ambiguous,"new headset bindings invalidate a previously remembered speaker target");
+        endpoints.Remove(realSpeaker);receiver.FormFactor=9;
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",bindings,null,"RECEIVER",out ambiguous)==hdmi&&!ambiguous,"the bound headset is excluded from unique-other-output counting");
+        endpoints.Add(Output("spdif",8));
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",bindings,null,"RECEIVER",out ambiguous)==null&&ambiguous,"multiple remaining other outputs stay ambiguous");
+        endpoints.Add(realSpeaker);endpoints.Add(Output("second-speaker",1));receiver.FormFactor=1;
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",bindings,null,"RECEIVER",out ambiguous)==null&&ambiguous,"multiple remaining speakers stay ambiguous");
+        bindings.SpeakerEndpointId="receiver";
+        Check(memory.FindSpeaker(endpoints,bindings,"receiver",out ambiguous)==receiver&&!ambiguous,"explicit speaker bindings retain priority even when shared with the headset");
+        bindings.SpeakerEndpointId=null;receiver.InterfaceName="Realtek(R) Audio";
+        Check(memory.FindSpeaker(endpoints,bindings,"receiver",out ambiguous)==receiver&&!ambiguous,"the legacy Realtek rule retains priority even when bound as the headset");
+        bindings.ExplicitAudioBindingsOnly=true;
+        Check(memory.FindSpeaker(endpoints,bindings,"receiver",out ambiguous)==null&&!ambiguous,"device-only scopes still require an explicit speaker binding");
+        bindings.SpeakerEndpointId="receiver";
+        Check(memory.FindSpeaker(endpoints,bindings,"receiver",out ambiguous)==receiver&&!ambiguous,"device-only scopes preserve explicit shared endpoint bindings");
+    }
     static int Main(string[] args) {
         try {
             SpeakerFallbacks();
+            SpeakerExcludesHeadset();
+            HeadsetPreservesSpeakerMemory();
+            HeadsetOnlyHasNoSpeaker();
+            HeadsetSpeakerFallbackRules();
             string root=Path.Combine(Path.GetFullPath(args[0]),"audio-settings-"+Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             string path=Path.Combine(root,"audio-settings.json");

@@ -54,12 +54,17 @@ namespace AtkBattery {
         readonly object gate=new object();
         string rememberedOutputId;
         internal AudioEndpointInfo FindSpeaker(IList<AudioEndpointInfo> endpoints,AudioBindings bindings,string defaultOutputId,out bool ambiguous){
+            bool headsetAmbiguous;
+            var headset=AudioControl.FindEndpoint(endpoints,"headset",bindings,out headsetAmbiguous);
+            return FindSpeaker(endpoints,bindings,defaultOutputId,headset==null?null:headset.Id,out ambiguous);
+        }
+        internal AudioEndpointInfo FindSpeaker(IList<AudioEndpointInfo> endpoints,AudioBindings bindings,string defaultOutputId,string headsetId,out bool ambiguous){
             lock(gate){
                 if(!bindings.ExplicitAudioBindingsOnly){
-                    var current=AudioControl.KnownNonHeadphoneOutput(endpoints,defaultOutputId);
+                    var current=AudioControl.KnownNonHeadphoneOutput(endpoints,defaultOutputId,headsetId);
                     if(current!=null)rememberedOutputId=current.Id;
                 }
-                return AudioControl.FindEndpoint(endpoints,"speaker",bindings,defaultOutputId,rememberedOutputId,out ambiguous);
+                return AudioControl.FindEndpoint(endpoints,"speaker",bindings,defaultOutputId,rememberedOutputId,headsetId,out ambiguous);
             }
         }
     }
@@ -279,11 +284,11 @@ namespace AtkBattery {
             result.ConsoleOutputId = session.DefaultOutput(Role.Console);
             result.MultimediaOutputId = session.DefaultOutput(Role.Multimedia);
             result.CommunicationsOutputId = session.DefaultOutput(Role.Communications);
-            bool ambiguous;
-            var speaker = SpeakerMemory.FindSpeaker(endpoints, bindings, result.ConsoleOutputId, out ambiguous);
+            bool ambiguous, headsetAmbiguous;
+            var headset = FindEndpoint(endpoints, "headset", bindings, out headsetAmbiguous);
+            var speaker = SpeakerMemory.FindSpeaker(endpoints, bindings, result.ConsoleOutputId, headset == null ? null : headset.Id, out ambiguous);
             if (ambiguous) result.Error = AddError(result.Error, "扬声器端点不唯一，请到音频设置中绑定。");
-            var headset = FindEndpoint(endpoints, "headset", bindings, out ambiguous);
-            if (ambiguous) result.Error = AddError(result.Error, "耳机端点不唯一，未选择。");
+            if (headsetAmbiguous) result.Error = AddError(result.Error, "耳机端点不唯一，未选择。");
             var microphone = FindEndpoint(endpoints, "microphone", bindings, out ambiguous);
             if (ambiguous) result.Error = AddError(result.Error, "麦克风端点不唯一，未选择。");
             result.SpeakerAvailable = speaker != null;
@@ -337,9 +342,14 @@ namespace AtkBattery {
         internal static AudioEndpointInfo FindEndpoint(IList<AudioEndpointInfo> endpoints, string target, AudioBindings bindings, out bool ambiguous) {
             return FindEndpoint(endpoints,target,bindings,null,null,out ambiguous);
         }
-        // COM-free selection: explicit bindings and legacy vendor identities
-        // keep priority; the caller supplies the default and session memory.
         internal static AudioEndpointInfo FindEndpoint(IList<AudioEndpointInfo> endpoints, string target, AudioBindings bindings, string defaultOutputId, string rememberedOutputId, out bool ambiguous) {
+            bool headsetAmbiguous;
+            var headset=target=="speaker"?FindEndpoint(endpoints,"headset",bindings,out headsetAmbiguous):null;
+            return FindEndpoint(endpoints,target,bindings,defaultOutputId,rememberedOutputId,headset==null?null:headset.Id,out ambiguous);
+        }
+        // COM-free selection: explicit bindings and legacy vendor identities
+        // keep priority; the caller supplies the default, memory and resolved headset.
+        internal static AudioEndpointInfo FindEndpoint(IList<AudioEndpointInfo> endpoints, string target, AudioBindings bindings, string defaultOutputId, string rememberedOutputId, string headsetId, out bool ambiguous) {
             AudioEndpointInfo match = null;
             ambiguous = false;
             if(target!="speaker"&&target!="headset"&&target!="microphone")return null;
@@ -383,7 +393,7 @@ namespace AtkBattery {
                 if(endpoint.Flow!=0||!IsHeadphone(endpoint.FormFactor))continue;
                 if(match!=null){ambiguous=true;return null;}match=endpoint;
             }
-            if(match==null&&target=="speaker")return FindAutomaticSpeaker(endpoints,defaultOutputId,rememberedOutputId,out ambiguous);
+            if(match==null&&target=="speaker")return FindAutomaticSpeaker(endpoints,defaultOutputId,rememberedOutputId,headsetId,out ambiguous);
             return match;
         }
 
@@ -391,8 +401,8 @@ namespace AtkBattery {
             // ENDPOINT_FORM_FACTOR values 0..9 are known; UnknownFormFactor=10.
             return endpoint.Flow==0&&!String.IsNullOrEmpty(endpoint.Id)&&endpoint.FormFactor.HasValue&&endpoint.FormFactor.Value>=0&&endpoint.FormFactor.Value<10&&!IsHeadphone(endpoint.FormFactor);
         }
-        internal static AudioEndpointInfo KnownNonHeadphoneOutput(IList<AudioEndpointInfo> endpoints,string id){
-            if(String.IsNullOrEmpty(id))return null;
+        internal static AudioEndpointInfo KnownNonHeadphoneOutput(IList<AudioEndpointInfo> endpoints,string id,string headsetId){
+            if(String.IsNullOrEmpty(id)||SameId(id,headsetId))return null;
             AudioEndpointInfo match=null;
             foreach(var endpoint in endpoints){
                 if(!SameId(endpoint.Id,id)||!IsKnownNonHeadphoneOutput(endpoint))continue;
@@ -400,13 +410,14 @@ namespace AtkBattery {
             }
             return match;
         }
-        static AudioEndpointInfo FindAutomaticSpeaker(IList<AudioEndpointInfo> endpoints,string defaultOutputId,string rememberedOutputId,out bool ambiguous){
+        static AudioEndpointInfo FindAutomaticSpeaker(IList<AudioEndpointInfo> endpoints,string defaultOutputId,string rememberedOutputId,string headsetId,out bool ambiguous){
             ambiguous=false;
-            var current=KnownNonHeadphoneOutput(endpoints,defaultOutputId);if(current!=null)return current;
-            var remembered=KnownNonHeadphoneOutput(endpoints,rememberedOutputId);if(remembered!=null)return remembered;
+            var current=KnownNonHeadphoneOutput(endpoints,defaultOutputId,headsetId);if(current!=null)return current;
+            var remembered=KnownNonHeadphoneOutput(endpoints,rememberedOutputId,headsetId);if(remembered!=null)return remembered;
             AudioEndpointInfo speaker=null,other=null;int speakerCount=0,otherCount=0;
             foreach(var endpoint in endpoints){
-                if(!IsKnownNonHeadphoneOutput(endpoint))continue;
+                // USB headset receivers can report a non-headphone form factor.
+                if(SameId(endpoint.Id,headsetId)||!IsKnownNonHeadphoneOutput(endpoint))continue;
                 if(endpoint.FormFactor==1){speaker=endpoint;speakerCount++;}
                 else{other=endpoint;otherCount++;}
             }
