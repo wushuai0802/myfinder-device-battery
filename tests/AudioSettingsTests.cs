@@ -15,7 +15,7 @@ static class AudioSettingsTests {
             string path=Path.Combine(root,"audio-settings.json");
             var defaults=DeviceSettings.LoadBindings(path);
             Check(defaults.EndpointFor("speaker")==null&&defaults.EndpointFor("headset")==null&&defaults.EndpointFor("microphone")==null,"missing file uses automatic bindings");
-            Check(defaults.TraySource=="auto"&&!defaults.LowBatteryNotifications,"new installations automatically select an available battery source");
+            Check(defaults.TraySource=="active"&&!defaults.LowBatteryNotifications,"new installations follow active USB mice with automatic battery fallback");
             Check(defaults.Theme=="auto"&&defaults.RememberReadings&&defaults.WarningThreshold==20&&defaults.BackgroundSeconds==60,"display preferences have conservative defaults");
             var settings=new AudioBindings();
             settings.SetEndpoint("speaker","{render}.USB-\u626c\u58f0\u5668");

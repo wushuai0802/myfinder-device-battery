@@ -28,9 +28,9 @@ namespace AtkBatteryTray {
             AddRow(layout,0,"扬声器按钮",speaker);AddRow(layout,1,"耳机按钮",headset);AddRow(layout,2,"麦克风按钮",microphone);
             layout.Controls.Add(actual,0,3);layout.SetColumnSpan(actual,2);
             AddRow(layout,4,"托盘电量",traySource);
-            traySource.Items.AddRange(new object[]{new Choice {Id="auto",Name="自动选择有数据的设备"},new Choice {Id="mouse",Name="鼠标优先"},new Choice {Id="headset",Name="耳机优先"},new Choice {Id="keyboard",Name="键盘优先"},new Choice {Id="lowest",Name="新鲜读数中的最低电量"}});
+            traySource.Items.AddRange(new object[]{new Choice {Id="active",Name="当前使用的设备"},new Choice {Id="auto",Name="自动选择有数据的设备"},new Choice {Id="mouse",Name="鼠标优先"},new Choice {Id="headset",Name="耳机优先"},new Choice {Id="keyboard",Name="键盘优先"},new Choice {Id="lowest",Name="新鲜读数中的最低电量"}});
             layout.Controls.Add(notify,0,5);layout.SetColumnSpan(notify,2);
-            var help=new Label {Text="保存不会切换音源或改变静音。\n全屏、演示或系统不允许通知时延后提醒。",AutoSize=true,ForeColor=SystemColors.GrayText,Margin=new Padding(0,8,0,4)};
+            var help=new Label {Text="当前使用的设备：仅跟随 USB 鼠标活动，固定设备优先。\n保存不会切换音源或改变静音。\n全屏、演示或系统不允许通知时延后提醒。",AutoSize=true,ForeColor=SystemColors.GrayText,Margin=new Padding(0,8,0,4)};
             layout.Controls.Add(help,0,6);layout.SetColumnSpan(help,2);
             layout.Controls.Add(status,0,7);layout.SetColumnSpan(status,2);
             var actions=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};

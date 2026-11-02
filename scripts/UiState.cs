@@ -23,6 +23,10 @@ namespace AtkBatteryTray {
         public BatteryView Battery;
         public string Tooltip;
     }
+    internal sealed class AudioCardView {
+        internal string Subtitle,EndpointId;
+        internal bool HasTarget {get{return !String.IsNullOrEmpty(EndpointId);}}
+    }
     public sealed class PanelFeedback {
         public int PendingStage=-1;
         public string PendingOutput, DpiFailure, AudioFailure;
@@ -34,6 +38,18 @@ namespace AtkBatteryTray {
         public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction+"|"+VolumePreview;}}
     }
     public static class UiState {
+        internal static AudioCardView AudioCard(AudioReading audio,AudioBindings preferences) {
+            if(audio==null||audio.Devices==null)return null;
+            string bound=preferences.HeadsetEndpointId;
+            if(!String.IsNullOrEmpty(bound))foreach(var endpoint in audio.Devices)
+                if(endpoint!=null&&endpoint.Flow==0&&AudioControl.SameId(endpoint.Id,bound))
+                    return new AudioCardView {EndpointId=endpoint.Id,Subtitle=endpoint.Name??"耳机端点"};
+            AudioDeviceChoice single=null;int count=0;
+            foreach(var endpoint in audio.Devices)if(endpoint!=null&&endpoint.Flow==0&&AudioControl.IsHeadphone(endpoint.FormFactor)){single=endpoint;count++;}
+            if(count==0)return null;
+            if(count>1)return new AudioCardView {Subtitle="多个耳机端点，请在音频设置中绑定"};
+            return new AudioCardView {EndpointId=String.IsNullOrEmpty(bound)?single.Id:null,Subtitle=String.IsNullOrEmpty(bound)?single.Name??"耳机端点":"已绑定耳机未连接，请在音频设置中绑定"};
+        }
         public static bool Recent(DateTime timestamp,DateTime now,double seconds) {
             return timestamp!=DateTime.MinValue&&timestamp<=now.AddSeconds(5)&&(now-timestamp).TotalSeconds<=seconds;
         }

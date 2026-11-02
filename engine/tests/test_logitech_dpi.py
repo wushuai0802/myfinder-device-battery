@@ -28,8 +28,9 @@ def device(name="PRO X Wireless"):
 
 
 class DpiBus(FakeBus):
-    def __init__(self, mouse):
-        super().__init__({LONG: ({1: mouse}, SHORT)})
+    def __init__(self, mouse, slot=1):
+        super().__init__({LONG: ({slot: mouse}, SHORT)})
+        self.slot = slot
         self.current, self.default = 400, 800
         self.current_reads = 0
         self.set_calls = []
@@ -39,22 +40,22 @@ class DpiBus(FakeBus):
         self.change_unit_after_state = self.change_unit_after_write = False
 
     def write(self, path, data):
-        if data[1] == 1 and data[2] == 10 and data[3] >> 4 in (2, 3):
+        if data[1] == self.slot and data[2] == 10 and data[3] >> 4 in (2, 3):
             self.writes.append((path, list(data)))
             fn = data[3]
             if fn >> 4 == 2:
                 self.current_reads += 1
                 if self.fail_readback and self.set_calls:
-                    return self._error(path, 1, 10, fn, 0x05)
+                    return self._error(path, self.slot, 10, fn, 0x05)
                 if self.change_before_write is not None and self.current_reads == 2:
                     self.current = self.change_before_write
                 if self.short_current:
-                    self.queues[path].append([0x11, 1, 10, fn, 0, 0, 0])
+                    self.queues[path].append([0x11, self.slot, 10, fn, 0, 0, 0])
                     return
-                self._reply(path, 1, 10, fn, [0, self.current >> 8, self.current & 255,
+                self._reply(path, self.slot, 10, fn, [0, self.current >> 8, self.current & 255,
                                             self.default >> 8, self.default & 255])
                 if self.change_unit_after_state and self.current_reads == 1:
-                    self.slots[LONG][1].features[L.F_INFO] = (2, {0: [1, 1, 2, 3, 4]})
+                    self.slots[LONG][self.slot].features[L.F_INFO] = (2, {0: [1, 1, 2, 3, 4]})
                 return
             self.set_calls.append(list(data))
             if self.raise_set:
@@ -62,9 +63,9 @@ class DpiBus(FakeBus):
             if not self.ignore_set:
                 self.current = (data[5] << 8) | data[6]
             if self.change_unit_after_write:
-                self.slots[LONG][1].features[L.F_INFO] = (2, {0: [1, 1, 2, 3, 4]})
+                self.slots[LONG][self.slot].features[L.F_INFO] = (2, {0: [1, 1, 2, 3, 4]})
             if not self.missing_ack:
-                return self._reply(path, 1, 10, fn, [0])
+                return self._reply(path, self.slot, 10, fn, [0])
             return
         return super().write(path, data)
 
@@ -264,6 +265,132 @@ class GpwDpiTests(unittest.TestCase):
                       [0, 0, 100, 0xE0, 50, 0, 50, 0, 0], [1, 0, 100, 0, 0], [0, 0, 100]):
             with self.assertRaises(ValueError):
                 L.parse_dpi_list(reply)
+
+    def configure_g_pro(self, pid=0xC539, slot=1):
+        self.mouse.name = "G Pro Wireless Gaming Mouse"
+        self.inventory[:] = [dict(value, product_id=pid) for value in self.inventory]
+        self.bus.slot = slot
+        self.bus.slots[LONG] = {slot: self.mouse}
+
+    def test_g_pro_wireless_exact_name_all_listed_lightspeed_receivers(self):
+        for pid in (0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC54D):
+            with self.subTest(pid=hex(pid)):
+                self.configure_g_pro(pid)
+                self.bus.current = 400
+                self.bus.set_calls.clear()
+                self.prime()
+                result = self.change()
+                self.assertTrue(result["success"])
+                self.assertEqual(result["confirmedDpi"], 800)
+                self.assertEqual(len(self.bus.set_calls), 1)
+
+    def test_g_pro_wireless_cable_uses_same_unit_and_volatile_readback(self):
+        self.configure_g_pro(0xC088, 0xFF)
+        self.prime()
+        self.assertEqual(self.target["slot"], 0xFF)
+        self.assertEqual(self.target["unit"], "12345678")
+        self.assertTrue(self.change()["success"])
+        self.assertEqual(len(self.bus.set_calls), 1)
+        self.assertEqual(self.bus.set_calls[0][1:3], [0xFF, 10])
+
+    def test_g_pro_wireless_rejects_close_names_other_models_and_receivers(self):
+        for name in ("G Pro Wireless Gaming Mousf", "G Pro Wireless Gaming Mouse X", "G Pro Wireless", "PRO X Wireless"):
+            with self.subTest(name=name):
+                self.configure_g_pro()
+                self.mouse.name = name
+                [status] = L.LogitechProvider().poll()
+                self.assertIsNone(status.dpi)
+                self.assertEqual(self.bus.set_calls, [])
+        for pid in (0xC548, 0xC52B, 0xC500):
+            with self.subTest(pid=hex(pid)):
+                self.configure_g_pro(pid)
+                self.inventory[:] = [dict(value, product_string="Receiver") for value in self.inventory]
+                [status] = L.LogitechProvider().poll()
+                self.assertIsNone(status.dpi)
+                self.assertEqual(self.bus.set_calls, [])
+
+    def test_g_pro_wireless_preserves_identity_current_and_readback_guards(self):
+        for wired in (False, True):
+            for failure in ("unit", "current", "readback", "unit-after-write"):
+                with self.subTest(wired=wired, failure=failure):
+                    self.configure_g_pro(0xC088 if wired else 0xC539, 0xFF if wired else 1)
+                    self.mouse.features[L.F_INFO] = (2, {0: [1, 0x12, 0x34, 0x56, 0x78]})
+                    self.bus.current = 400
+                    self.bus.set_calls.clear()
+                    self.bus.fail_readback = self.bus.change_unit_after_write = False
+                    self.prime()
+                    if failure == "unit":
+                        self.mouse.features[L.F_INFO] = (2, {0: [1, 1, 2, 3, 4]})
+                    elif failure == "current":
+                        self.bus.current = 1600
+                    elif failure == "readback":
+                        self.bus.fail_readback = True
+                    else:
+                        self.bus.change_unit_after_write = True
+                    result = self.change()
+                    self.assertFalse(result["success"])
+                    self.assertEqual(len(self.bus.set_calls), int(failure in ("readback", "unit-after-write")))
+                    self.assertEqual(result["outcomeUnknown"], failure in ("readback", "unit-after-write"))
+
+    def test_g_pro_wireless_no_dpi_without_unit_or_long_collection(self):
+        self.configure_g_pro(0xC088, 0xFF)
+        self.mouse.features[L.F_INFO] = (2, {0: [1, 0, 0, 0, 0]})
+        [status] = L.LogitechProvider().poll()
+        self.assertFalse(status.dpi and status.dpi["canSet"])
+        self.assertIsNone(status.dpi_target)
+        self.inventory[:] = self.inventory[:1]
+        self.assertEqual(L.LogitechProvider().poll(), [])
+
+    def test_g_pro_wireless_invalid_write_identity_never_touches_hid(self):
+        self.configure_g_pro()
+        self.prime()
+        for change in (dict(name=[]), dict(name="G Pro Wireless Gaming Mousf"),
+                       dict(pid=0xC548), dict(pid=0xC500), dict(pid=0),
+                       dict(slot=0), dict(slot=7), dict(slot=True), dict(unit="00000000")):
+            with self.subTest(change=change):
+                target = dict(self.target, **change)
+                result = L.set_device_dpi(self.inventory, target, 800, 400, L._target_token(target))
+                self.assertEqual(result["error"], "dpi_invalid_target")
+                self.assertEqual(self.bus.writes, [])
+
+    def test_g_pro_wireless_name_change_to_another_allowed_model_is_rejected(self):
+        self.configure_g_pro(0xC547)
+        self.prime()
+        self.mouse.name = "PRO X Wireless"
+        self.assertEqual(self.change()["error"], "dpi_target_changed")
+        self.assertEqual(self.bus.set_calls, [])
+
+    def test_g_pro_wireless_cable_can_use_long_collection_only(self):
+        self.configure_g_pro(0xC088, 0xFF)
+        self.inventory[:] = self.inventory[1:]
+        self.prime()
+        self.assertIsNone(self.target["short_path"])
+        self.assertTrue(self.change()["success"])
+        self.assertEqual(len(self.bus.set_calls), 1)
+
+    def test_g_pro_wireless_acknowledged_mismatch_keeps_actual_readback_without_retry(self):
+        for wired in (False, True):
+            with self.subTest(wired=wired):
+                self.configure_g_pro(0xC088 if wired else 0xC539, 0xFF if wired else 1)
+                self.bus.current = 400
+                self.bus.set_calls.clear()
+                self.prime()
+                self.bus.ignore_set = True
+                result = self.change()
+                self.assertFalse(result["success"])
+                self.assertFalse(result["outcomeUnknown"])
+                self.assertEqual((result["error"], result["confirmedDpi"]), ("dpi_readback_mismatch", 400))
+                self.assertEqual(len(self.bus.set_calls), 1)
+
+    def test_pro_x_partial_cached_identity_can_recover_on_the_next_poll(self):
+        provider = L.LogitechProvider()
+        self.mouse.features[L.F_NAME] = (3, {2: [255]})
+        [first] = provider.poll()
+        self.assertFalse(first.dpi and first.dpi["canSet"])
+        self.mouse.features[L.F_NAME] = (3, {2: [3]})
+        [recovered] = provider.poll()
+        self.assertTrue(recovered.dpi and recovered.dpi["canSet"])
+        self.assertEqual(self.bus.set_calls, [])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ namespace AtkBattery {
         public string Name;
         public string InterfaceName;
         public int Flow;
+        // Devices contains DEVICE_STATE_ACTIVE endpoints only, from EnumAudioEndpoints.
+        public int? FormFactor;
     }
     public sealed class AudioReading {
         public string ActiveOutput = "other";
@@ -47,6 +49,8 @@ namespace AtkBattery {
     }
 
     public static partial class AudioControl {
+        // ENDPOINT_FORM_FACTOR (mmdeviceapi.h): Headphones=3, Headset=5.
+        internal static bool IsHeadphone(int? formFactor){return formFactor==3||formFactor==5;}
         const string SpeakerInterface = "Realtek(R) Audio";
         const string HeadsetInterface = "HyperX Cloud Alpha Wireless";
         static readonly object OperationLock = new object();
@@ -278,7 +282,7 @@ namespace AtkBattery {
             var choices = new List<AudioDeviceChoice>();
             foreach (var endpoint in endpoints) {
                 descriptions.Add((endpoint.Flow == 0 ? "render" : "capture") + " | " + endpoint.Name + " | " + endpoint.InterfaceName + " | " + endpoint.Id);
-                choices.Add(new AudioDeviceChoice { Id=endpoint.Id, Name=endpoint.Name, InterfaceName=endpoint.InterfaceName, Flow=endpoint.Flow });
+                choices.Add(new AudioDeviceChoice { Id=endpoint.Id, Name=endpoint.Name, InterfaceName=endpoint.InterfaceName, Flow=endpoint.Flow, FormFactor=endpoint.FormFactor });
             }
             result.Endpoints = descriptions.ToArray();
             result.Devices = choices.ToArray();
@@ -350,6 +354,12 @@ namespace AtkBattery {
                 if (!matching) continue;
                 if (match != null) { ambiguous = true; return null; }
                 match = endpoint;
+            }
+            // Preserve the existing HyperX identity and explicit binding above.
+            // Other outputs qualify only through Windows' endpoint type, never a name guess.
+            if(match==null&&target=="headset")foreach(var endpoint in endpoints) {
+                if(endpoint.Flow!=0||!IsHeadphone(endpoint.FormFactor))continue;
+                if(match!=null){ambiguous=true;return null;}match=endpoint;
             }
             return match;
         }

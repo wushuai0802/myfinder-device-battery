@@ -96,6 +96,7 @@ namespace AtkBatteryTray {
         PopupControl pressedControl;
         PopupPage pressedPage;
         bool draggingVolume;
+        bool volumeCollapsed;
         string volumeEndpoint;
         string lastHoverTip;
         readonly System.Windows.Forms.Timer feedbackTimer=new System.Windows.Forms.Timer();
@@ -125,7 +126,8 @@ namespace AtkBatteryTray {
             dpiScale=NativeDisplay.ScaleAt(Cursor.Position);
             Text="设备电量与音频控制";AccessibleName=Text;
             displayHeadset=owner.Headset;displayAudio=owner.Audio;
-            headsetProgress=TrayContext.ShowHeadset(displayHeadset,displayAudio)?1f:0f;
+            volumeCollapsed=DeviceSettings.Current.VolumeCollapsed;
+            headsetProgress=VisualDesign.HasAudioCard(displayHeadset,displayAudio)?1f:0f;
             layoutTarget=headsetProgress;
             targetSize=VisualDesign.PanelSizeFor(headsetProgress>0f,owner.Dpi);
             ClientSize=UiState.ScaleSize(targetSize,dpiScale);DoubleBuffered=true;Font=new Font("Segoe UI",9);
@@ -204,7 +206,9 @@ namespace AtkBatteryTray {
             var controls=PopupPages.Build(owner,navigation,headsetProgress>.98f,owner.UseWirelessLayout?MainWireless():null);
             if(navigation.Page==PopupPage.Main&&!owner.UseWirelessLayout){
                 float top=VisualDesign.MouseCardHeight(owner.Dpi)+104*headsetProgress+VisualDesign.CardGap;
-                foreach(var control in controls){var rectangle=control.Rect;if(control.Id==240)rectangle.Y=top;else if(control.Id==0||control.Id==1)rectangle.Y=top+VisualDesign.SystemVolumeHeight+1;control.Rect=rectangle;}
+                bool secondCard=headsetProgress>.98f||VisualDesign.AudioCardFor(owner.Headset,owner.Audio)!=null;
+                float delta=top-VisualDesign.SystemVolumeRectFor(secondCard,owner.Dpi).Top;
+                foreach(var control in controls)if(control.Id==240||control.Id==241||control.Id==0||control.Id==1){var rectangle=control.Rect;rectangle.Offset(0,delta);control.Rect=rectangle;}
             }
             return controls;
         }
@@ -218,6 +222,7 @@ namespace AtkBatteryTray {
         void PerformAction(PopupControl control) {
             HidePointerTip();
             int id=control.Id;
+            if(id==241){CancelPointerInteraction();owner.SetVolumeCollapsed(!DeviceSettings.Current.VolumeCollapsed);return;}
             if(id==902||id==903){var layout=MainWireless();navigation.DeviceScroll=id==902?Math.Max(0,layout.Start-layout.Cards.Count):layout.End;UpdateLayoutSize();Invalidate();return;}
             if(id>=1000&&id<3000) {
                 if(id>=2000){owner.RefreshWireless(control.DeviceKey);return;}
@@ -237,13 +242,13 @@ namespace AtkBatteryTray {
             if(id==206){Go(PopupPage.Devices);return;}if(id==251){owner.RefreshWireless(navigation.SelectedDeviceKey);return;}
             if(id==205){owner.RefreshAudioDevices();return;}
             if(id==257){navigation.SelectedDeviceKey=control.DeviceKey;var cards=WirelessLayout.Build(owner,0,100000,true).All;var card=cards.Find(delegate(WirelessCard item){return item.Id==control.DeviceKey;});navigation.SelectedDeviceName=card==null?control.Text:card.Name;Go(PopupPage.ManageDevice);return;}
-            if(id==256){if(control.DeviceKey=="native:mouse")Go(PopupPage.Mouse);else if(control.DeviceKey=="native:headset")Go(PopupPage.Headset);else Go(PopupPage.Device);return;}
+            if(id==256){if(control.DeviceKey=="native:mouse")Go(PopupPage.Mouse);else if(control.DeviceKey=="native:headset")Go(PopupPage.Headset);else if(control.DeviceKey=="native:audio"){navigation.AudioDeviceKey=null;navigation.AudioDeviceName=null;Go(PopupPage.Audio);}else Go(PopupPage.Device);return;}
             try {
                 var pref=DeviceSettings.Current;
                 if(id==210||id==211||id==213||id==216){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
                 if(id>=400&&id<=432) {
                     if(id<=402)pref.Theme=id==400?"auto":id==401?"light":"dark";
-                    else if(id>=410&&id<=414){pref.TraySource=id==410?"auto":id==411?"mouse":id==412?"headset":id==413?"keyboard":"lowest";pref.TrayDeviceId=null;}
+                    else if(id>=410&&id<=415){pref.TraySource=id==410?"auto":id==411?"mouse":id==412?"headset":id==413?"keyboard":id==414?"lowest":"active";pref.TrayDeviceId=null;}
                     else if(id>=420&&id<=422)pref.WarningThreshold=id==420?10:id==421?15:20;
                     else if(id>=430)pref.BackgroundSeconds=id==430?60:id==431?120:300;else return;
                     DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);Back();return;
@@ -317,9 +322,11 @@ namespace AtkBatteryTray {
             return -1;
         }
         public void SyncDevices() {
-            if(draggingVolume&&!VolumeTargetAvailable(volumeEndpoint))CancelPointerInteraction();
-            if(owner.UseWirelessLayout&&navigation.Page==PopupPage.Main&&!pageAnimation.Enabled&&!PopupPages.Reduced&&MainWireless().Size.Height!=targetSize.Height){pageStartHeight=targetSize.Height;pageProgress=0;pageClock.Restart();pageAnimation.Start();}
-            bool visible=TrayContext.ShowHeadset(owner.Headset,owner.Audio);
+            bool volumeChanged=volumeCollapsed!=DeviceSettings.Current.VolumeCollapsed;volumeCollapsed=DeviceSettings.Current.VolumeCollapsed;
+            if(draggingVolume&&(!VolumeTargetAvailable(volumeEndpoint)||navigation.Page==PopupPage.Main&&volumeCollapsed))CancelPointerInteraction();
+            if(volumeChanged){pageAnimation.Stop();pageProgress=1;}
+            if(!volumeChanged&&owner.UseWirelessLayout&&navigation.Page==PopupPage.Main&&!pageAnimation.Enabled&&!PopupPages.Reduced&&MainWireless().Size.Height!=targetSize.Height){pageStartHeight=targetSize.Height;pageProgress=0;pageClock.Restart();pageAnimation.Start();}
+            bool visible=VisualDesign.HasAudioCard(owner.Headset,owner.Audio);
             displayAudio=owner.Audio;if(visible||headsetProgress==0f)displayHeadset=owner.Headset;
             float next=visible?1f:0f;
             if(next!=layoutTarget) {
@@ -356,8 +363,8 @@ namespace AtkBatteryTray {
                 float height=Math.Max(1,96*headsetProgress);
                 if(headsetProgress>0f)using(var shape=Style.Round(new RectangleF(0,headsetTop,targetSize.Width,height),Math.Min(VisualDesign.PanelRadius,height/2)))mask.Union(shape);
                 float volumeTop=mouse+104*headsetProgress+VisualDesign.CardGap;
-                using(var shape=Style.Round(new RectangleF(0,volumeTop,targetSize.Width,VisualDesign.SystemVolumeHeight),12))mask.Union(shape);
-                mask.Union(new RectangleF(0,volumeTop+VisualDesign.SystemVolumeHeight,targetSize.Width,30));
+                using(var shape=Style.Round(new RectangleF(0,volumeTop,targetSize.Width,VisualDesign.CurrentSystemVolumeHeight),12))mask.Union(shape);
+                mask.Union(new RectangleF(0,volumeTop+VisualDesign.CurrentSystemVolumeHeight,targetSize.Width,30));
             }
             }
             using(var transform=new Matrix()){transform.Scale(dpiScale,dpiScale);mask.Transform(transform);}
@@ -511,8 +518,9 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(navigation.Page).Append('|').Append(navigation.Offset).Append('|').Append(navigation.Notice).Append('|').Append(navigation.VolumePreview).Append('|').Append(pageProgress);
             visible.Append('|').Append(navigation.AudioDeviceKey).Append('|').Append(navigation.AudioDeviceName);
             visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.TrayDeviceId).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
+            visible.Append('|').Append(preferences.VolumeCollapsed);
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
-            if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name);
+            if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name).Append('|').Append(device.FormFactor);
             visible.Append('|').Append(owner.DesiredVolume).Append('|').Append(hoverAction).Append('|').Append(pressedAction);
             visible.Append('|').Append(owner.NativeMousePresent).Append('|').Append(owner.GenericReady).Append('|').Append(owner.GenericScanning).Append('|').Append(navigation.DeviceScroll).Append('|').Append(navigation.SelectedDeviceKey).Append('|').Append(navigation.SelectedDeviceName);
             visible.Append('|').Append(owner.WirelessDpiPresentationKey);
@@ -630,6 +638,10 @@ namespace AtkBatteryTray {
         AudioControl.NotificationListener audioEvents;
         bool sessionLocked,audioNeedsReconcile;
         string trayDeviceKey;
+        string activePhysicalId;
+        bool activeNative;
+        DateTime activeSwitchedAt=DateTime.MinValue;
+        readonly Action<AudioBindings> saveConfiguration;
         DateTime audioOperationStarted;
         bool pendingHeadsetRefresh,manualRefresh;
         int stageInFlight=-1;
@@ -706,13 +718,14 @@ namespace AtkBatteryTray {
             try {string path=Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt");if(File.Exists(path)&&new FileInfo(path).Length<65536){string text=File.ReadAllText(path);lowBattery.Restore("mouse",text.Contains("mouse=1"));lowBattery.Restore("headset",text.Contains("headset=1"));foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text,@"(?m)^(device-[a-f0-9]{24})=1\r?$"))lowBattery.Restore(match.Groups[1].Value,true);}}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select) : this(showPanel,read,select,null,null) {}
-        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null,Func<NativeDpiRequest,DpiConfig> nativeDpiWriter=null) {
+        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null,Func<NativeDpiRequest,DpiConfig> nativeDpiWriter=null,Action<AudioBindings> configurationWriter=null) {
             persistStatus=diagnostics;
             readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;writeVolume=volumeWriter;
             writeAudioCommand=audioCommandRunner;
             writeNativeDpi=nativeDpiWriter;
             genericWorker=wirelessReader;
             activityClock=activityTime??new Func<DateTime>(delegate{return DateTime.UtcNow;});
+            saveConfiguration=configurationWriter??DeviceSettings.SaveConfiguration;
             activityTimer.Tick+=delegate{activityTimer.Stop();DrainActivityRefresh();};
             readLeftButton=leftButtonReader??new Func<bool>(NativeDisplay.IsLeftButtonPressed);
             if(diagnostics){if(genericWorker==null)genericWorker=new GenericBatteryWorker();try{NativeMousePresent=MouseBattery.Enumerate().Count>0;}catch{NativeMousePresent=false;}}
@@ -792,6 +805,11 @@ namespace AtkBatteryTray {
             }
             UpdateIcon();
         }
+        internal void SetVolumeCollapsed(bool collapsed) {
+            var pref=DeviceSettings.Current;if(pref.VolumeCollapsed==collapsed)return;pref.VolumeCollapsed=collapsed;
+            try{saveConfiguration(pref);ConfigurationChanged(false);}
+            catch(Exception error){if(details!=null&&!details.IsDisposed)details.Notice("未保存："+error.Message);}
+        }
         public PanelFeedback GetFeedback() {
             var now=DateTime.UtcNow;
             return new PanelFeedback {PendingStage=pendingStage>=0?pendingStage:stageInFlight,
@@ -813,7 +831,7 @@ namespace AtkBatteryTray {
             AudioBindings preferences;try{preferences=DeviceSettings.Current;}catch{preferences=new AudioBindings();}
             DateTime now=DateTime.UtcNow;var mouse=UiState.Mouse(Current,LastGood,now);var headset=UiState.Headset(Headset,now);
             var presentation=UiState.Tray(preferences.TraySource,mouse,headset);var shown=presentation.Battery;
-            if(UseWirelessLayout){presentation=WirelessTray(preferences.TraySource);shown=presentation.Battery;}
+            if(UseWirelessLayout||preferences.TraySource=="active"||!String.IsNullOrEmpty(preferences.TrayDeviceId)){presentation=WirelessTray(preferences.TraySource);shown=presentation.Battery;}
             bool stale=shown.Percent.HasValue&&!shown.Fresh;
             bool dark=Style.Dark;string key=shown.Key+"|"+dark+"|"+SystemInformation.SmallIconSize.Width;
             if(key!=lastIconKey) {
@@ -838,10 +856,15 @@ namespace AtkBatteryTray {
         }
         TrayView WirelessTray(string source) {
             var layout=WirelessLayout.Build(this,0,100000);var available=new List<WirelessCard>();
-            foreach(var card in layout.All)if(card.Id!="empty")available.Add(card);
+            foreach(var card in layout.All)if(card.Id!="empty"&&!card.AudioOnly&&card.Battery!=null)available.Add(card);
             WirelessCard selected=null;string fixedId=DeviceSettings.Current.TrayDeviceId;
             if(!String.IsNullOrEmpty(fixedId))selected=available.Find(delegate(WirelessCard card){return card.Id==fixedId&&card.Battery.Fresh&&card.Battery.Percent.HasValue;});
             bool fixedSelected=selected!=null;
+            if(source=="active") {
+                if(selected==null&&activePhysicalId!=null)selected=available.Find(delegate(WirelessCard card){return card.Battery.Percent.HasValue&&(activeNative?card.NativeMouse:card.Kind=="mouse"&&card.Device!=null&&card.Device.PhysicalId==activePhysicalId&&card.Device.Online&&card.Device.ConnectionState!="disconnected");});
+                if(selected!=null)fixedSelected=true;
+                source="auto";
+            }
             if(selected==null&&source=="auto")selected=available.Find(delegate(WirelessCard card){return card.Id==trayDeviceKey&&card.Battery.Fresh&&card.Battery.Percent.HasValue;});
             foreach(var card in available) {
                 if(fixedSelected||selected!=null&&source=="auto"&&selected.Id==trayDeviceKey)break;
@@ -940,6 +963,14 @@ namespace AtkBatteryTray {
         internal void HandleMouseActivity(MouseActivitySource source){
             if(disposed||sessionLocked||source==null)return;
             if(source.IsNativeAtk)NativeMousePresent=true;
+            DateTime now=activityClock();
+            // Independent from refresh scheduling: a fresh reading makes Record return false.
+            if((activePhysicalId!=source.PhysicalId||activeNative!=source.IsNativeAtk)&&(activeSwitchedAt==DateTime.MinValue||(now-activeSwitchedAt).TotalSeconds>=3)) {
+                activePhysicalId=source.PhysicalId;activeNative=source.IsNativeAtk;activeSwitchedAt=now;
+                if(DeviceSettings.Current.TraySource=="active") {
+                    string previous=trayDeviceKey;WirelessTray("active");if(previous!=trayDeviceKey)UpdateIcon();
+                }
+            }
             if(activityRefresh.Record(source.PhysicalId,source.IsNativeAtk,FreshActivitySource(source.PhysicalId,source.IsNativeAtk),activityClock()))DrainActivityRefresh();
         }
         internal void ActivityTopologyChanged(){

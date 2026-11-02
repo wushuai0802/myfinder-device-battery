@@ -1,0 +1,167 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Reflection;
+using System.Threading;
+using System.Windows.Forms;
+using AtkBattery;
+using AtkBatteryTray;
+
+// Injected input, snapshots and writers only. Never enumerate HID or real audio.
+static class UiFeedbackTests {
+    const BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
+    const string A="device-111111111111111111111111",B="device-222222222222222222222222";
+    const string PhysA="device-aaaaaaaaaaaaaaaaaaaaaaaa",PhysB="device-bbbbbbbbbbbbbbbbbbbbbbbb";
+    static int checks,failures;
+    static string output;
+    static void Check(bool value,string message){if(!value)throw new Exception(message);checks++;}
+    static object Field(object owner,string name){return owner.GetType().GetField(name,Private).GetValue(owner);}
+    static void Set(object owner,string name,object value){owner.GetType().GetField(name,Private).SetValue(owner,value);}
+    static object Call(object owner,string name,params object[] args){return owner.GetType().GetMethod(name,Private|BindingFlags.Public).Invoke(owner,args);}
+    static void Run(string name,Action action){try{action();Console.WriteLine("PASS "+name);}catch(Exception e){failures++;Console.Error.WriteLine("FAIL "+name+": "+(e.InnerException??e));}}
+    static void Pump(Func<bool> done){DateTime until=DateTime.UtcNow.AddSeconds(5);while(!done()&&DateTime.UtcNow<until){Application.DoEvents();Thread.Sleep(5);}Check(done(),"fake audio operation finished");}
+    static void Collapsed(AudioBindings settings,bool value){var field=typeof(AudioBindings).GetField("VolumeCollapsed");Check(field!=null,"VolumeCollapsed is a persisted preference");field.SetValue(settings,value);}
+    static AudioDeviceChoice Endpoint(string id,int? form,int flow=0){var choice=new AudioDeviceChoice {Id=id,Name="Endpoint "+id,Flow=flow};var field=typeof(AudioDeviceChoice).GetField("FormFactor");Check(field!=null,"audio snapshots retain endpoint form factors");field.SetValue(choice,form);return choice;}
+    static AudioReading Audio(){return new AudioReading {OperationSucceeded=true,TimestampUtc=DateTime.UtcNow,SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="Speakers",HeadsetAvailable=true,HeadsetId="headphones",HeadsetName="Headphones",MicrophoneAvailable=true,MicrophoneId="mic",MicrophoneMuted=false,ConsoleOutputId="speaker",MultimediaOutputId="speaker",VolumeEndpointId="speaker",OutputVolumePercent=55};}
+    static WirelessDevice Mouse(string id,string physical,int percent){return new WirelessDevice {Id=id,PhysicalId=physical,Kind="mouse",Name=id==A?"Mouse A":"Mouse B",Percent=percent,Online=true,Fresh=true,ConnectionState="connected",MeasurementState="current",ConfirmedAtUtc=DateTime.UtcNow.ToString("o")};}
+    sealed class Fixture:IDisposable {
+        internal readonly TrayContext Owner;
+        internal readonly Details Popup;
+        internal readonly PopupNavigation Navigation;
+        internal DateTime Now=DateTime.UtcNow;
+        internal int Reads,VolumeWrites,LastVolume=-1,OutputWrites;
+        internal readonly ManualResetEvent VolumeGate=new ManualResetEvent(true);
+        internal Fixture(AudioBindings settings=null){
+            DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {RememberReadings=false,ReducedMotion=true,TraySource="auto"});
+            Owner=new TrayContext(false,delegate(bool battery){Interlocked.Increment(ref Reads);return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=Now}};},delegate(int stage){throw new Exception("No DPI writes");},null,delegate{return Audio();},false,
+                delegate(string target){Interlocked.Increment(ref OutputWrites);var value=Audio();value.ActiveOutput=target;return value;},delegate(bool mute){throw new Exception("No microphone writes");},
+                delegate(string endpoint,int value){VolumeGate.WaitOne();LastVolume=value;Interlocked.Increment(ref VolumeWrites);var audio=Audio();audio.OutputVolumePercent=value;return audio;},delegate{return false;},null,null,delegate{return Now;},null,
+                delegate(AudioBindings pref){DeviceSettings.SaveBindings(Path.Combine(output,"ui-feedback-fixture-settings.json"),pref);DeviceSettings.UseTransientConfiguration(pref);});
+            Pump(delegate{return !Owner.IsRefreshing&&!Owner.IsAudioBusy&&Owner.Audio!=null;});
+            ((System.Windows.Forms.Timer)Field(Owner,"refresh")).Stop();
+            Popup=new Details(Owner);Set(Owner,"details",Popup);Navigation=(PopupNavigation)Field(Popup,"navigation");
+        }
+        internal List<PopupControl> Controls(){return (List<PopupControl>)Call(Popup,"ControlsForPage");}
+        internal void MouseEvent(string name,PointF point){float scale=(float)Field(Popup,"dpiScale");typeof(Control).GetMethod(name,Private).Invoke(Popup,new object[]{new MouseEventArgs(MouseButtons.Left,1,(int)(point.X*scale),(int)(point.Y*scale),0)});}
+        internal void Click(PopupControl control){var point=new PointF(control.Rect.X+control.Rect.Width/2,control.Rect.Y+control.Rect.Height/2);MouseEvent("OnMouseDown",point);MouseEvent("OnMouseUp",point);}
+        internal void Activity(string physical,bool native=false){Owner.HandleMouseActivity(new MouseActivitySource(physical,native,native?(ushort)0x373B:(ushort)0x046D,native?(ushort)0x1278:(ushort)0xC547));}
+        public void Dispose(){VolumeGate.Set();Owner.ExitThread();if(!Popup.IsDisposed)Popup.Dispose();Owner.Dispose();VolumeGate.Dispose();}
+    }
+    static void Configuration(){
+        string path=Path.Combine(output,"ui-feedback-settings.json");
+        if(File.Exists(path))File.Delete(path);
+        Check(DeviceSettings.LoadBindings(path).TraySource=="active","a missing configuration defaults to active");
+        foreach(string source in new[]{"auto","mouse","headset","keyboard","lowest"}){
+            File.WriteAllText(path,"{\"SchemaVersion\":1,\"TraySource\":\""+source+"\"}");Check(DeviceSettings.LoadBindings(path).TraySource==source,"old explicit "+source+" stays unchanged");
+        }
+        File.WriteAllText(path,"{\"SchemaVersion\":1}");var old=DeviceSettings.LoadBindings(path);Check(old.TraySource=="mouse","old omitted TraySource retains mouse default");
+        var pref=new AudioBindings {TraySource="active"};Collapsed(pref,true);DeviceSettings.SaveBindings(path,pref);var loaded=DeviceSettings.LoadBindings(path);
+        Check(loaded.TraySource=="active"&&(bool)typeof(AudioBindings).GetField("VolumeCollapsed").GetValue(loaded.Clone()),"active and collapsed survive a save/load and clone");
+        Collapsed(old,false);Check(!(bool)typeof(AudioBindings).GetField("VolumeCollapsed").GetValue(old),"old files expand volume by default");
+    }
+    static void ActiveTray(){
+        using(var f=new Fixture(new AudioBindings {TraySource="active",RememberReadings=false,ReducedMotion=true})){
+            f.Owner.NativeMousePresent=false;var a=Mouse(A,PhysA,71);var b=Mouse(B,PhysB,42);f.Owner.WirelessDevices=new[]{a,b};Call(f.Owner,"UpdateIcon");
+            Check((string)Field(f.Owner,"trayDeviceKey")==A,"no activity falls back to auto");int reads=f.Reads;
+            f.Activity(PhysB);Check((string)Field(f.Owner,"trayDeviceKey")==B,"fresh activity selects its physical mouse even when Record returns false");
+            int updates=(int)Field(f.Owner,"iconUpdates");for(int i=0;i<200;i++)f.Activity(PhysB);
+            Check((int)Field(f.Owner,"iconUpdates")==updates&&f.Reads==reads,"repeated fresh activity performs no icon redraw or device read");
+            f.Activity(PhysA);f.Now=f.Now.AddMilliseconds(2999);f.Activity(PhysA);Check((string)Field(f.Owner,"trayDeviceKey")==B,"a change is held for at least three seconds");
+            f.Now=f.Now.AddMilliseconds(1);f.Activity(PhysA);Check((string)Field(f.Owner,"trayDeviceKey")==A,"another mouse can take over at three seconds");
+            var pref=DeviceSettings.Current;pref.TrayDeviceId=B;DeviceSettings.UseTransientConfiguration(pref);Call(f.Owner,"UpdateIcon");f.Now=f.Now.AddSeconds(3);f.Activity(PhysA);Check((string)Field(f.Owner,"trayDeviceKey")==B,"fixed device has highest priority");
+            pref.TrayDeviceId=null;DeviceSettings.UseTransientConfiguration(pref);f.Owner.WirelessDevices=new[]{b};Call(f.Owner,"UpdateIcon");Check((string)Field(f.Owner,"trayDeviceKey")==B,"removed active mouse falls back to auto");
+            f.Owner.WirelessDevices=new[]{a,b};f.Now=f.Now.AddSeconds(3);f.Activity(PhysA);a.Percent=null;Call(f.Owner,"UpdateIcon");Check((string)Field(f.Owner,"trayDeviceKey")==B,"active mouse without battery falls back to auto");a.Percent=71;
+            Set(f.Owner,"sessionLocked",true);f.Now=f.Now.AddSeconds(3);f.Activity(PhysA);Check((string)Field(f.Owner,"trayDeviceKey")==B,"lock prevents activity-driven tray updates");Set(f.Owner,"sessionLocked",false);
+            f.Owner.Current=new BatteryReading {Percent=80,TimestampUtc=DateTime.UtcNow};f.Activity(PhysA,true);Check((string)Field(f.Owner,"trayDeviceKey")=="native:mouse","exact native ATK activity maps to its card");
+            var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=211,VisibleChoices=20},false);Check(rows.Exists(delegate(PopupControl c){return c.Text=="当前使用的设备"&&c.Detail.Contains("USB");}),"popup describes the USB-only active source");
+        }
+    }
+    static void VolumeLayouts(){
+        foreach(bool wireless in new[]{false,true})using(var f=new Fixture()){
+            f.Owner.GenericReady=wireless;Call(f.Popup,"UpdateLayoutSize");var expanded=f.Controls();var slider=expanded.Find(delegate(PopupControl c){return c.Id==240;});var collapse=expanded.Find(delegate(PopupControl c){return c.Text=="收起系统音量";});
+            Check(slider!=null&&slider.Slider&&collapse!=null&&!slider.Rect.IntersectsWith(collapse.Rect),"collapse and slider hit regions do not overlap in "+wireless);
+            int height=f.Popup.ClientSize.Height;f.Click(collapse);var rows=f.Controls();Check(!rows.Exists(delegate(PopupControl c){return c.Slider;}),"collapsed main panel contains no slider in "+wireless);
+            var expand=rows.Find(delegate(PopupControl c){return c.Text=="展开系统音量";});Check(expand!=null&&expand.Value=="55%"&&f.Popup.ClientSize.Height<height,"collapsed strip retains live percent and reduces panel height");
+            Call(f.Popup,"UpdateFallbackRegion");float scale=(float)Field(f.Popup,"dpiScale");Check(f.Popup.Region.IsVisible((expand.Rect.X+20)*scale,(expand.Rect.Y+10)*scale),"fallback mask includes collapsed strip");
+            var footer=rows.Find(delegate(PopupControl c){return c.Id==0;});Check(footer.Rect.Top>=expand.Rect.Bottom&&footer.Rect.Bottom*scale<=f.Popup.ClientSize.Height+1,"footer follows the collapsed strip");
+            f.Owner.Audio.OutputVolumePercent=23;f.Popup.SyncDevices();Check(f.Controls().Find(delegate(PopupControl c){return c.Text=="展开系统音量";}).Value=="23%","external volume updates collapsed percent");
+            int before=f.VolumeWrites;var oldTrack=PopupPages.VolumeTrack(slider.Rect);var oldPoint=new PointF(oldTrack.X+100,oldTrack.Y+oldTrack.Height/2);f.MouseEvent("OnMouseDown",oldPoint);f.MouseEvent("OnMouseUp",oldPoint);
+            Check(f.VolumeWrites==before&&f.Controls().Exists(delegate(PopupControl c){return c.Id==240&&c.Slider;}),"click at old slider x only expands, without a volume write");
+            var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+            var message=Message.Create(IntPtr.Zero,0,IntPtr.Zero,IntPtr.Zero);expand=f.Controls().Find(delegate(PopupControl c){return c.Text=="展开系统音量";});Call(f.Popup,"FocusControl",expand);Call(f.Popup,"ProcessCmdKey",message,Keys.Space);
+            Check(f.Controls().Exists(delegate(PopupControl c){return c.Slider;}),"keyboard space expands volume");
+            pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);var handle=f.Popup.Handle;var tree=(AccessibleObject)Call(f.Popup,"CreateAccessibilityInstance");rows=f.Controls();int index=rows.FindIndex(delegate(PopupControl c){return c.Text=="展开系统音量";});
+            Check(tree.GetChild(index).Role==AccessibleRole.PushButton&&tree.GetChild(index).Name=="展开系统音量","collapse strip has a clear accessible button name");tree.GetChild(index).Value="95%";Check(f.VolumeWrites==before,"accessible collapsed button cannot write volume");tree.GetChild(index).DoDefaultAction();Check(f.Controls().Exists(delegate(PopupControl c){return c.Slider;}),"assistive default action expands volume");
+        }
+    }
+    static void VolumeDuringDrag(){
+        using(var f=new Fixture()){
+            var slider=f.Controls().Find(delegate(PopupControl c){return c.Id==240;});var point=new PointF(slider.Rect.X+130,slider.Rect.Y+35);f.MouseEvent("OnMouseDown",point);Check((bool)Field(f.Popup,"draggingVolume"),"fake drag starts");
+            var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);f.MouseEvent("OnMouseUp",point);
+            Check(f.VolumeWrites==0&&f.Navigation.VolumePreview==-1&&!(bool)Field(f.Popup,"draggingVolume"),"collapsing cancels uncommitted pointer preview");
+            f.VolumeGate.Reset();f.Owner.SelectOutputVolume("speaker",35);f.Owner.SelectOutputVolume("speaker",64);Check(f.Owner.DesiredVolume==64,"queue contains the latest submitted volume");
+            Collapsed(pref,false);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);f.Click(f.Controls().Find(delegate(PopupControl c){return c.Text=="收起系统音量";}));
+            Check(f.Owner.DesiredVolume==64,"collapse keeps already submitted audio queue");f.VolumeGate.Set();Pump(delegate{return !f.Owner.IsAudioBusy&&!f.Owner.DesiredVolume.HasValue;});Check(f.LastVolume==64&&f.Owner.Audio.OutputVolumePercent==64,"submitted last value is committed and shown after collapse");
+        }
+    }
+    static void AudioDetection(){
+        bool ambiguous;var endpoints=new List<AudioEndpointInfo> {new AudioEndpointInfo {Id="headphones",Flow=0,FormFactor=3,Name="Wired headphones"}};
+        Check(AudioControl.FindEndpoint(endpoints,"headset",new AudioBindings(),out ambiguous).Id=="headphones"&&!ambiguous,"unique Windows Headphones form factor resolves");
+        endpoints[0].FormFactor=5;Check(AudioControl.FindEndpoint(endpoints,"headset",out ambiguous).Id=="headphones","Windows Headset form factor also resolves");
+        endpoints.Add(new AudioEndpointInfo {Id="second",Flow=0,FormFactor=3});Check(AudioControl.FindEndpoint(endpoints,"headset",out ambiguous)==null&&ambiguous,"multiple headphones are never guessed");
+        var pref=new AudioBindings {HeadsetEndpointId="second"};Check(AudioControl.FindEndpoint(endpoints,"headset",pref,out ambiguous).Id=="second","explicit binding resolves multiple endpoints");
+        endpoints.RemoveAt(1);Check(AudioControl.FindEndpoint(endpoints,"headset",pref,out ambiguous)==null,"unplugged binding does not silently retarget");
+        endpoints.Add(new AudioEndpointInfo {Id="hyperx",Flow=0,InterfaceName="HyperX Cloud Alpha Wireless"});Check(AudioControl.FindEndpoint(endpoints,"headset",out ambiguous).Id=="hyperx","existing HyperX automatic identity keeps priority");
+        endpoints.Clear();endpoints.Add(new AudioEndpointInfo {Id="speaker",Flow=0,FormFactor=1,Name="Headphones by name only"});endpoints.Add(new AudioEndpointInfo {Id="capture",Flow=1,FormFactor=3});
+        Check(AudioControl.FindEndpoint(endpoints,"headset",out ambiguous)==null&&!ambiguous,"a speaker name or a capture endpoint cannot masquerade as headphone output");
+        var encoded=Audio();encoded.Devices=new[]{Endpoint("headphones",5)};var decoded=AudioBrokerClient.Decode<AudioReading>(AudioBrokerClient.Encode(encoded));Check(decoded.Devices[0].FormFactor==5,"form factor survives the existing audio broker transport");
+    }
+    static void AudioCards(){
+        foreach(bool wireless in new[]{false,true})using(var f=new Fixture()){
+            f.Owner.GenericReady=wireless;var pref=DeviceSettings.Current;
+            f.Owner.Audio.Devices=new[]{Endpoint("headphones",3),Endpoint("speaker",1),Endpoint("mic",4,1)};
+            f.Popup.SyncDevices();
+            var layout=WirelessLayout.Build(f.Owner,0,1000);var card=layout.All.Find(delegate(WirelessCard c){return c.Id=="native:audio";});
+            Check(card!=null&&card.Name=="耳机"&&card.Subtitle=="Endpoint headphones"&&(card.Battery==null||!card.Battery.Percent.HasValue),"audio card uses endpoint title with no battery in "+wireless);
+            var controls=PopupPages.Build(f.Owner,new PopupNavigation(),false);foreach(int id in new[]{100,101,102})Check(controls.Exists(delegate(PopupControl c){return c.Id==id&&c.Enabled;}),"audio card has existing action "+id);
+            var actual=f.Controls();bool disjoint=true;for(int i=0;i<actual.Count;i++)for(int j=i+1;j<actual.Count;j++)disjoint&=!actual[i].Rect.IntersectsWith(actual[j].Rect);
+            Check(disjoint&&f.Popup.ClientSize.Height==(int)Math.Round((wireless?layout.Size.Height:VisualDesign.PanelSizeFor(true,f.Owner.Dpi).Height)*(float)Field(f.Popup,"dpiScale")),"plugged audio card has matching real popup size and nonoverlapping hit targets");
+            Check(!f.Owner.CreateFeedbackReport().FullText.Contains("Endpoint headphones"),"audio-only card keeps endpoint names out of feedback reports");
+            Check(!controls.Exists(delegate(PopupControl c){return c.DeviceKey=="native:audio"&&(c.Id==5||c.Id>=2000);}),"audio card has no battery refresh target");
+            f.Owner.Audio.Devices=new[]{Endpoint("speaker",1)};f.Popup.SyncDevices();Check(!WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";})&&!f.Controls().Exists(delegate(PopupControl c){return c.Id>=100&&c.Id<=102;}),"unplug removes audio card and actual hit targets");
+            pref.HeadsetEndpointId="speaker";DeviceSettings.UseTransientConfiguration(pref);Check(WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"active bound endpoint can identify a driver-reported speaker");
+            f.Owner.Audio.Devices=new AudioDeviceChoice[0];Check(!WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"unplug removes bound audio card too");
+            f.Owner.Audio.Devices=new[]{Endpoint("speaker",1)};Check(WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"replug restores bound card");
+            pref.HeadsetEndpointId=null;DeviceSettings.UseTransientConfiguration(pref);f.Owner.Audio.Devices=new[]{Endpoint("headphones",3),Endpoint("second",5)};f.Owner.Audio.HeadsetAvailable=false;
+            card=WirelessLayout.Build(f.Owner,0,1000).All.Find(delegate(WirelessCard c){return c.Id=="native:audio";});controls=PopupPages.Build(f.Owner,new PopupNavigation(),false);
+            Check(card!=null&&card.Subtitle.Contains("绑定")&&controls.Exists(delegate(PopupControl c){return c.Id==101&&!c.Enabled&&c.Detail.Contains("绑定");}),"ambiguous card guides explicit binding and disables headset action");
+            f.Owner.Headset=new HeadsetReading {Connected=true,ConnectionVerified=true};Check(!WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"native headset suppresses duplicate controls");f.Owner.Headset=null;
+            f.Owner.WirelessDevices=new[]{new WirelessDevice {Id=A,Name="Generic wireless headset",Kind="headset",Online=true}};Check(WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"generic headset still receives shared audio card");
+            DeviceSettings.SetDeviceHidden(pref,"native:audio",true);DeviceSettings.UseTransientConfiguration(pref);Check(!WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"audio card respects persisted hide mechanism");
+            Check(f.OutputWrites==0&&f.VolumeWrites==0,"audio discovery and hotplug never write audio");
+        }
+    }
+    static void PagingAndClassicTray(){
+        using(var f=new Fixture()){
+            f.Owner.NativeMousePresent=false;f.Owner.GenericReady=true;f.Owner.WirelessDevices=new[]{Mouse(A,PhysA,71),Mouse(B,PhysB,42)};
+            var expanded=WirelessLayout.Build(f.Owner,0,205);Check(expanded.Paged&&expanded.Cards.Count==1,"expanded volume reserves room when paging");
+            var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);var collapsed=WirelessLayout.Build(f.Owner,0,205);
+            Check(!collapsed.Paged&&collapsed.Cards.Count==2&&collapsed.Size.Height<=205&&collapsed.Footer==collapsed.VolumeRect.Bottom,"collapsed volume releases room for the next card without moving the footer into it");
+            var next=WirelessLayout.Build(f.Owner,expanded.End,205);Check(next.Start==1&&next.Cards[0].Id==B,"scroll offset remains usable after collapse");
+            f.Owner.NativeMousePresent=true;f.Owner.GenericReady=false;f.Owner.WirelessDevices=new WirelessDevice[0];pref.TraySource="active";DeviceSettings.UseTransientConfiguration(pref);Call(f.Owner,"UpdateIcon");
+            Check(!f.Owner.UseWirelessLayout&&(string)Field(f.Owner,"trayDeviceKey")=="native:mouse","classic layout uses the same nonempty active fallback");
+            f.Activity(PhysA,true);Check((string)Field(f.Owner,"trayDeviceKey")=="native:mouse","classic native activity keeps its own card");
+        }
+    }
+    static void Previews(){
+        using(var f=new Fixture())foreach(bool wireless in new[]{false,true})foreach(bool dark in new[]{false,true})foreach(bool collapsed in new[]{false,true}){
+            f.Owner.GenericReady=wireless;f.Owner.Audio.Devices=new[]{Endpoint("headphones",3)};var pref=DeviceSettings.Current;Collapsed(pref,collapsed);DeviceSettings.UseTransientConfiguration(pref);
+            var layout=WirelessLayout.Build(f.Owner,0,1000);var size=wireless?layout.Size:VisualDesign.PanelSizeFor(true,f.Owner.Dpi);using(var image=new Bitmap(size.Width,size.Height))using(var g=Graphics.FromImage(image)){
+                g.Clear(Color.Transparent);if(wireless)CompactRenderer.PaintWireless(g,f.Owner,layout,dark,f.Owner.GetFeedback());else VisualDesign.PaintDevicesPanel(g,f.Owner.Current,null,null,false,null,null,false,dark,null,f.Owner.Audio);
+                image.Save(Path.Combine(output,"ui-feedback-"+(wireless?"wireless":"classic")+"-"+(dark?"dark":"light")+"-"+(collapsed?"collapsed":"expanded")+".png"));
+            }
+        }
+    }
+    [STAThread] static int Main(string[] args){output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Run("configuration",Configuration);Run("active tray",ActiveTray);Run("volume layouts",VolumeLayouts);Run("collapse during drag/queue",VolumeDuringDrag);Run("audio detection",AudioDetection);Run("audio cards",AudioCards);Run("paging and classic tray",PagingAndClassicTray);if(failures==0)Run("previews",Previews);Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices/audio only");return failures==0?0:1;}
+}

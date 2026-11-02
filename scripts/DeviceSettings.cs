@@ -28,7 +28,7 @@ namespace AtkBattery {
         [DataMember(Order=1, EmitDefaultValue=false)] public string SpeakerEndpointId;
         [DataMember(Order=2, EmitDefaultValue=false)] public string HeadsetEndpointId;
         [DataMember(Order=3, EmitDefaultValue=false)] public string MicrophoneEndpointId;
-        [DataMember(Order=4, EmitDefaultValue=false)] public string TraySource = "auto";
+        [DataMember(Order=4, EmitDefaultValue=false)] public string TraySource = "active";
         [DataMember(Order=5, EmitDefaultValue=false)] public bool LowBatteryNotifications;
         [DataMember(Order=6)] public string Theme = "auto";
         [DataMember(Order=7)] public bool ReducedMotion;
@@ -43,6 +43,7 @@ namespace AtkBattery {
         [DataMember(Order=16, EmitDefaultValue=false)] public List<string> DeviceOrder = new List<string>();
         [DataMember(Order=17, EmitDefaultValue=false)] public Dictionary<string,AudioEndpointBindings> AudioDeviceBindings = new Dictionary<string,AudioEndpointBindings>();
         [DataMember(Order=18, EmitDefaultValue=false)] public bool ExplicitAudioBindingsOnly;
+        [DataMember(Order=19)] public bool VolumeCollapsed;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";TraySource="mouse";RememberReadings=true;WarningThreshold=20;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
@@ -54,7 +55,7 @@ namespace AtkBattery {
             var copy=new AudioBindings { SchemaVersion=SchemaVersion,
                 SpeakerEndpointId=SpeakerEndpointId, HeadsetEndpointId=HeadsetEndpointId,
                 MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,TrayDeviceId=TrayDeviceId,
-                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ReducedMotion=ReducedMotion,
+                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,
                 RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
                 HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases),
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };
@@ -149,7 +150,7 @@ namespace AtkBattery {
             if(settings==null||settings.SchemaVersion!=1)throw new InvalidDataException("Unsupported audio settings format");
             foreach(string role in new[]{"speaker","headset","microphone"})settings.SetEndpoint(role,settings.EndpointFor(role));
             if(String.IsNullOrEmpty(settings.TraySource))settings.TraySource="mouse";
-            if(settings.TraySource!="auto"&&settings.TraySource!="mouse"&&settings.TraySource!="headset"&&settings.TraySource!="keyboard"&&settings.TraySource!="lowest")
+            if(settings.TraySource!="active"&&settings.TraySource!="auto"&&settings.TraySource!="mouse"&&settings.TraySource!="headset"&&settings.TraySource!="keyboard"&&settings.TraySource!="lowest")
                 throw new InvalidDataException("Unknown tray battery source");
             settings.TrayDeviceId=String.IsNullOrWhiteSpace(settings.TrayDeviceId)?null:settings.TrayDeviceId.Trim();
             if(settings.TrayDeviceId!=null) {

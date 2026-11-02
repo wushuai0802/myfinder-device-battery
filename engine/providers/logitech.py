@@ -66,7 +66,10 @@ F_ROOT, F_INFO, F_NAME = 0x0000, 0x0003, 0x0005
 F_UNIFIED, F_STATUS, F_VOLTAGE, F_ADC = 0x1004, 0x1000, 0x1001, 0x1F20
 BATTERY_FEATURES = (F_UNIFIED, F_STATUS, F_VOLTAGE, F_ADC)
 F_DPI = 0x2201
-GPW_DPI_MODELS = {(0xC547, "PRO X Wireless")}
+GPW_DPI_MODELS = {(0xC547, "PRO X Wireless")} | {
+    (pid, "G Pro Wireless Gaming Mouse")
+    for pid in (0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC54D)
+}
 QUICK_DPI = (400, 800, 1600, 3200)
 
 # HID++ 1.0 battery registers, for devices without a feature table (Solaar's
@@ -330,10 +333,17 @@ def _dpi_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _gpw_identity(pid, name, kind, unit):
-    return ((pid, name) in GPW_DPI_MODELS and kind == "mouse"
-            and isinstance(unit, str) and re.fullmatch(r"[0-9A-Fa-f]{8}", unit) is not None
-            and int(unit, 16) != 0)
+def _gpw_identity(pid, name, kind, unit, slot=1, require_identity=True):
+    # One model/transport gate for discovery and writes. Cable targets still
+    # require the live HID++ unit ID and the exact writable collections below.
+    if type(pid) is not int or not 0 < pid <= 65535 or not isinstance(name, str) or type(slot) is not int:
+        return False
+    allowed = (slot in range(1, 7) and (pid, name) in GPW_DPI_MODELS
+               or slot == 0xFF and name == "G Pro Wireless Gaming Mouse"
+               and pid not in RECEIVERS and pid not in HEADSETS)
+    return (allowed and (not require_identity or kind == "mouse" and
+            isinstance(unit, str) and re.fullmatch(r"[0-9A-Fa-f]{8}", unit) is not None
+            and int(unit, 16) != 0))
 
 
 def _target_token(target):
@@ -435,7 +445,7 @@ def _fresh_unit(ch, slot):
 
 
 def _capture_gpw_dpi(ch, pid, slot, instance, paths, name, kind, unit, identity_live):
-    if not identity_live or not _gpw_identity(pid, name, kind, unit) or not instance or not paths or 2 not in paths:
+    if not identity_live or not _gpw_identity(pid, name, kind, unit, slot) or not instance or not paths or 2 not in paths:
         return _dpi_view(error="dpi_identity_unconfirmed"), None
     target = {"provider": "logitech", "pid": pid, "instance": instance, "slot": slot,
               "unit": unit, "name": name, "sensor": 0,
@@ -464,13 +474,12 @@ def set_device_dpi(inventory, target, value, expected_dpi, target_token):
             answer.update(current=None, canSet=False)
         return {"dpi": answer, "success": success, "outcomeUnknown": unknown,
                 "error": error, "confirmedDpi": None if unknown else confirmed}
-    if (not isinstance(target, dict) or target.get("pid") != 0xC547
-            or target.get("name") != "PRO X Wireless" or type(target.get("slot")) is not int
-            or target["slot"] not in range(1, 7) or type(target.get("sensor")) is not int or target["sensor"] != 0
+    if (not isinstance(target, dict) or type(target.get("pid")) is not int or type(target.get("slot")) is not int
+            or type(target.get("sensor")) is not int or target["sensor"] != 0
             or not isinstance(target.get("instance"), str) or not target["instance"]
             or not isinstance(target.get("long_path"), (bytes, str)) or not target["long_path"]
             or target.get("short_path") is not None and not isinstance(target["short_path"], (bytes, str))
-            or not _gpw_identity(target["pid"], target["name"], "mouse", target.get("unit"))):
+            or not _gpw_identity(target["pid"], target.get("name"), "mouse", target.get("unit"), target["slot"])):
         return result("dpi_invalid_target")
     if not isinstance(target_token, str) or target_token != _target_token(target):
         return result("dpi_stale_target")
@@ -490,7 +499,7 @@ def set_device_dpi(inventory, target, value, expected_dpi, target_token):
         if channel.request(slot, F_ROOT, 1, timeout=PING_TIMEOUT) is None:
             return result("dpi_device_unavailable")
         name, kind, unit = channel.identity(slot)
-        if not _gpw_identity(target["pid"], name, kind, unit) or unit != target["unit"]:
+        if not _gpw_identity(target["pid"], name, kind, unit, slot) or name != target["name"] or unit != target["unit"]:
             return result("dpi_target_changed")
         view, feature, supported = _dpi_state(channel, slot, target)
         if value not in supported:
@@ -578,7 +587,7 @@ class LogitechProvider(Provider):
         identity_live = slot not in self._ids
         if slot in self._ids:
             name, kind, unit = self._ids[slot]
-            if (pid, name) in GPW_DPI_MODELS:
+            if _gpw_identity(pid, name, kind, unit, idx, require_identity=False):
                 # DPI controls never rely on the battery reader's cached unit.
                 try:
                     fresh = ch.identity(idx)
@@ -626,7 +635,7 @@ class LogitechProvider(Provider):
                     self._last.pop(old, None)
                 self._slot_key[slot] = key
                 dpi, target = None, None
-                if (pid, name) in GPW_DPI_MODELS:
+                if _gpw_identity(pid, name, kind, unit, idx, require_identity=False):
                     dpi, target = _capture_gpw_dpi(ch, pid, idx, instance, paths, name, kind, unit, identity_live)
                 return DeviceStatus(key, name, level, chg, True, "logitech", approx=approx,
                                     kind=kind, dpi=dpi, dpi_target=target,
