@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$InstallDirectory,[string]$DataDirectory,[string]$StartupDirectory,[string]$ProgramsDirectory)
+param([string]$InstallDirectory,[string]$DataDirectory,[string]$StartupDirectory,[string]$ProgramsDirectory,[switch]$PreserveStartup)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Install.Common.ps1')
 $source=Split-Path -Parent $PSScriptRoot
@@ -13,4 +13,4 @@ if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
     }
 }
 Install-DeviceBattery -SourceRoot $source -InstallDirectory $InstallDirectory -DataDirectory $data `
-    -StartupDirectory $StartupDirectory -ProgramsDirectory $ProgramsDirectory
+    -StartupDirectory $StartupDirectory -ProgramsDirectory $ProgramsDirectory -PreserveStartup:$PreserveStartup

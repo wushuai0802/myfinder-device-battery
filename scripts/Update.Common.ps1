@@ -54,7 +54,7 @@ function Confirm-DeviceBatteryUpdatePackage([string]$Executable,[string]$WorkDir
 
 function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDirectory,[string]$DataDirectory) {
     # Only this verified package's normal entry point may mutate the installation.
-    & (Join-Path $Package 'scripts\Install-Startup.ps1') -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory
+    & (Join-Path $Package 'scripts\Install-Startup.ps1') -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -PreserveStartup
 }
 
 function Start-DeviceBatteryUpdatedApp([string]$Executable) {

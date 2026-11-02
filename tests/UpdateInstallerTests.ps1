@@ -5,10 +5,16 @@ $project=Split-Path -Parent $PSScriptRoot
 $updateCommon=Join-Path $project 'scripts\Update.Common.ps1'
 if(-not (Test-Path -LiteralPath $updateCommon)){throw 'FAIL signed update helper and stable-install rules are missing.'}
 . $updateCommon
+$script:realUpdateInstaller=${function:Invoke-DeviceBatteryUpdateInstaller}
 
 $script:passed=0
 function Assert([bool]$Value,[string]$Name){if(-not $Value){throw ('FAIL '+$Name)};$script:passed++}
-function Get-DeviceBatteryStartupApproval([string]$Name){return $null}
+$script:startupApproval=$null;$script:approvalUnreadable=$false
+function Get-DeviceBatteryStartupApproval([string]$Name){
+    if($script:approvalUnreadable){throw 'fixture unreadable startup decision'}
+    if($null -ne $script:startupApproval){return ,$script:startupApproval}
+    return $null
+}
 function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShortcut,[string]$ManualShortcut){}
 $fixture=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) ('update-installer-'+$PSVersionTable.PSVersion.Major+'-'+[Guid]::NewGuid().ToString('N'))
 $old=Join-Path $fixture 'old package';$candidate=Join-Path $fixture 'new package'
@@ -35,6 +41,8 @@ try {
     $install=@{SourceRoot=$old;InstallDirectory=$target;DataDirectory=$data;StartupDirectory=$startup;ProgramsDirectory=$programs}
     $null=Install-DeviceBattery @install
     $exe=Join-Path $target 'outputs\AtkMouseBattery.exe'
+    $shell=New-DeviceBatteryShortcutShell;$shortcutName=Get-DeviceBatteryShortcutName
+    $startupPath=Join-Path $startup $shortcutName;$manualPath=Join-Path $programs $shortcutName
     Assert (Test-DeviceBatteryUpdateInstallation $exe $data) 'stable qualification reuses receipt and ownership rules'
     $probeInfo=New-Object Diagnostics.ProcessStartInfo
     $probeInfo.FileName=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
@@ -74,7 +82,7 @@ try {
         $script:installCalls++
         # Invoke the same transaction in this scope so the fake registry/icon functions remain
         # effective. Launching a separate PowerShell entry point would lose those overrides.
-        Install-DeviceBattery -SourceRoot $Package -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -StartupDirectory $startup -ProgramsDirectory $programs
+        Install-DeviceBattery -SourceRoot $Package -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -StartupDirectory $startup -ProgramsDirectory $programs -PreserveStartup
     }
     function Work {
         $directory=Join-Path (Join-Path (Join-Path $data 'updates') '1.3.6') ('run-'+[Guid]::NewGuid().ToString('N'))
@@ -83,6 +91,7 @@ try {
     }
     $work=Work
     $parameters=@{Executable=$exe;DataDirectory=$data;Version='1.3.6';WorkDirectory=$work;ParentId=123;ParentStartUtc='2026-01-01T00:00:00Z'}
+    $link=$shell.CreateShortcut($startupPath);$link.TargetPath=Join-Path $old 'outputs\AtkMouseBattery.exe';$link.Save()
     $null=Invoke-DeviceBatteryUpdate @parameters
     Assert ((Read-DeviceBatteryReceipt $data).Version -ceq '1.3.6') 'old version updates transactionally'
     Assert ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -ceq $settingsHash) 'settings preserved on success'
@@ -90,6 +99,38 @@ try {
     Assert (-not (Test-Path -LiteralPath $work)) 'successful handoff staging cleaned'
     $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
     Assert ($result.status -ceq 'success') 'success result persisted'
+    Assert ($shell.CreateShortcut($startupPath).TargetPath -ceq $exe -and $shell.CreateShortcut($startupPath).Arguments -ceq '') 'update refreshes an existing quiet startup target'
+    $null=Install-DeviceBattery @install
+    $null=Uninstall-DeviceBatteryStartup -SourceRoot $old -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs
+    $parameters.WorkDirectory=Work
+    $null=Invoke-DeviceBatteryUpdate @parameters
+    Assert (-not (Test-Path -LiteralPath $startupPath)) 'update preserves the users removal of autostart'
+    Assert ((Read-DeviceBatteryReceipt $data).Version -ceq '1.3.6') 'update without autostart succeeds'
+    Assert ($shell.CreateShortcut($manualPath).TargetPath -ceq $exe -and $shell.CreateShortcut($manualPath).Arguments -ceq '--show') 'update without autostart maintains the Start menu launcher'
+    foreach($decision in @(3,7,255,-1,-2)) {
+        $null=Install-DeviceBattery @install
+        $script:startupApproval=if($decision -lt 0){,([byte[]]@())}else{,([byte[]]@($decision,0,0,0))}
+        $script:approvalUnreadable=$decision -eq -2
+        $approvalBytes=[Convert]::ToBase64String($script:startupApproval)
+        $parameters.WorkDirectory=Work
+        $null=Invoke-DeviceBatteryUpdate @parameters
+        $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
+        Assert ($result.status -ceq 'success' -and (Read-DeviceBatteryReceipt $data).Version -ceq '1.3.6') ('update accepts disabled or unknown startup decision '+$decision)
+        Assert ([Convert]::ToBase64String($script:startupApproval) -ceq $approvalBytes) ('update preserves Windows startup decision bytes '+$decision)
+        Assert ($shell.CreateShortcut($startupPath).TargetPath -ceq $exe) ('startup target maintained for decision '+$decision)
+        if($decision -in @(3,7)){Assert ((Get-DeviceBatteryStartupState $startup $exe).Status -ceq 'disabled') ('startup stays disabled '+$decision)}
+        $script:startupApproval=$null;$script:approvalUnreadable=$false
+    }
+    # StartupApproved is keyed by shortcut filename. Keep legacy startup names in place.
+    $null=Install-DeviceBattery @install
+    $legacyName=@(Get-DeviceBatteryShortcutNames | Where-Object {$_ -cne $shortcutName})[0]
+    $legacyPath=Join-Path $startup $legacyName
+    Move-Item -LiteralPath $startupPath -Destination $legacyPath
+    $script:startupApproval=[byte[]]@(3,0,0,0);$parameters.WorkDirectory=Work
+    $null=Invoke-DeviceBatteryUpdate @parameters
+    Assert ((Test-Path -LiteralPath $legacyPath) -and -not (Test-Path -LiteralPath $startupPath)) 'update preserves a legacy startup filename and its Windows decision'
+    Assert ($shell.CreateShortcut($legacyPath).TargetPath -ceq $exe -and (Get-DeviceBatteryStartupState $startup $exe).Status -ceq 'disabled') 'legacy startup target is refreshed without enabling it'
+    $script:startupApproval=$null
     # Return only the isolated fixture to its old version, then fail during a payload copy.
     $null=Install-DeviceBattery @install
     $script:restarts=@();$script:copyFailure=$false
@@ -108,6 +149,37 @@ try {
     $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
     Assert ($result.status -ceq 'failed' -and $result.reason -like '*fixture mid-install failure*') 'failure reason available next launch'
     Assert (-not (Test-Path -LiteralPath $parameters.WorkDirectory)) 'failed handoff staging cleaned'
+    # Fail after the startup link would have been saved, exercising shortcut undo as well as payload undo.
+    $script:originalUndo=${function:Add-DeviceBatteryUndo}
+    foreach($hasStartup in @($true,$false)) {
+        $null=Install-DeviceBattery @install
+        if(-not $hasStartup){$null=Uninstall-DeviceBatteryStartup -SourceRoot $old -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs}
+        $startupHash=if($hasStartup){(Get-FileHash -LiteralPath $startupPath -Algorithm SHA256).Hash}else{$null}
+        $manualHash=(Get-FileHash -LiteralPath $manualPath -Algorithm SHA256).Hash
+        $script:startupApproval=[byte[]]@(3,0,0,0)
+        function Add-DeviceBatteryUndo($Undo,[string]$Path,[string]$Temporary) {
+            & $script:originalUndo $Undo $Path $Temporary
+            if($Path -ieq $manualPath){throw 'fixture late shortcut failure'}
+        }
+        try{$parameters.WorkDirectory=Work;$null=Invoke-DeviceBatteryUpdate @parameters}
+        finally{Set-Item Function:\Add-DeviceBatteryUndo $script:originalUndo}
+        $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
+        Assert ($result.status -ceq 'failed' -and $result.reason -like '*fixture late shortcut failure*') ('late shortcut failure reaches rollback; startup='+$hasStartup)
+        Assert ((Read-DeviceBatteryPackageManifest $target).version -ceq '1.3.4') ('late shortcut failure restores old payload; startup='+$hasStartup)
+        Assert ((Test-Path -LiteralPath $startupPath) -eq $hasStartup) ('rollback restores startup presence; startup='+$hasStartup)
+        if($hasStartup){Assert ((Get-FileHash -LiteralPath $startupPath -Algorithm SHA256).Hash -ceq $startupHash) 'rollback restores exact original startup bytes'}
+        Assert ((Get-FileHash -LiteralPath $manualPath -Algorithm SHA256).Hash -ceq $manualHash) ('rollback restores exact Start menu bytes; startup='+$hasStartup)
+        Assert ([Convert]::ToBase64String($script:startupApproval) -ceq 'AwAAAA==') ('rollback preserves Windows startup decision; startup='+$hasStartup)
+        $script:startupApproval=$null
+    }
+    $null=Install-DeviceBattery @install
+    Assert (Test-Path -LiteralPath $startupPath) 'ordinary installation still creates a missing startup link'
+    foreach($decision in @(3,255)) {
+        $script:startupApproval=[byte[]]@($decision,0,0,0);$rejected=$false
+        try{$null=Install-DeviceBattery @install}catch{$rejected=$true}
+        Assert $rejected ('ordinary installation still rejects disabled or unknown Windows decision '+$decision)
+        $script:startupApproval=$null
+    }
     $script:waitResult=$false;$script:restarts=@();$before=$script:installCalls;$parameters.WorkDirectory=Work
     $null=Invoke-DeviceBatteryUpdate @parameters
     Assert ($script:installCalls -eq $before -and $script:restarts.Count -eq 0) 'parent timeout never installs or starts another app'
@@ -125,6 +197,20 @@ try {
         Assert $rejected 'signing tool rejects a key other than the built-in release key'
         Assert ([IO.File]::ReadAllText($signaturePath) -ceq 'keep existing signature') 'failed signing preserves existing signature'
     }finally{$key.Dispose();if(Test-Path -LiteralPath $privatePath){Remove-Item -LiteralPath $privatePath -Force}}
+    # Exercise both real forwarding layers with a harmless installer boundary in fake folders.
+    $forwardPackage=Join-Path $fixture 'forward package';$forwardScripts=Join-Path $forwardPackage 'scripts'
+    New-Item -ItemType Directory -Path $forwardScripts -Force|Out-Null
+    Copy-Item -LiteralPath (Join-Path $project 'scripts\Install-Startup.ps1') -Destination (Join-Path $forwardScripts 'Install-Startup.ps1')
+    [IO.File]::WriteAllText((Join-Path $forwardScripts 'Install.Common.ps1'),@'
+function Install-DeviceBattery {
+    param($SourceRoot,$InstallDirectory,$DataDirectory,$StartupDirectory,$ProgramsDirectory,[switch]$PreserveStartup)
+    [pscustomobject]@{InstallDirectory=$InstallDirectory;DataDirectory=$DataDirectory;PreserveStartup=$PreserveStartup.IsPresent}
+}
+'@)
+    $forwarded=& $script:realUpdateInstaller $forwardPackage $target $data
+    Assert ($forwarded.PreserveStartup -and $forwarded.InstallDirectory -ceq $target -and $forwarded.DataDirectory -ceq $data) 'real update helper and entry point forward preserve mode and exact paths'
+    $ordinary=& (Join-Path $forwardScripts 'Install-Startup.ps1') -InstallDirectory $target -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs
+    Assert (-not $ordinary.PreserveStartup) 'ordinary entry point defaults to the original install mode'
     Write-Output ('PASS '+$script:passed+' update installer checks on PowerShell '+$PSVersionTable.PSVersion+'; fake folders only')
 }finally {
     if(Test-Path Function:\Copy-Item){Remove-Item Function:\Copy-Item}

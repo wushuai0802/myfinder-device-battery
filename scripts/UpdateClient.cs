@@ -43,23 +43,37 @@ namespace AtkBattery {
         internal static void ValidateUri(Uri uri,bool redirect){
             if(uri==null||!uri.IsAbsoluteUri||uri.Scheme!=Uri.UriSchemeHttps||uri.Port!=443||uri.UserInfo.Length!=0||uri.Fragment.Length!=0||!(DownloadHosts.Contains(uri.IdnHost)||!redirect&&uri.AbsoluteUri.StartsWith(UpdateTrust.ApiUrl,StringComparison.Ordinal)&&uri.Host=="api.github.com"))throw new InvalidDataException("Update URL or redirect is not allowed.");
         }
-        internal static byte[] Fetch(IUpdateTransport transport,Uri uri,long limit,CancellationToken token,Action<long,long> progress){using(var output=new MemoryStream()){Download(transport,uri,output,limit,token,progress);return output.ToArray();}}
-        internal static void Download(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress){
-            try{DownloadCore(transport,uri,output,limit,token,progress);}catch(Exception){token.ThrowIfCancellationRequested();throw;}
+        internal static byte[] Fetch(IUpdateTransport transport,Uri uri,long limit,CancellationToken token,Action<long,long> progress,Func<TimeSpan> clock=null){using(var output=new MemoryStream()){Transfer(transport,uri,output,limit,token,progress,false,clock);return output.ToArray();}}
+        internal static void Download(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,Func<TimeSpan> clock=null){
+            Transfer(transport,uri,output,limit,token,progress,true,clock);
         }
-        static void DownloadCore(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress){
-            var clock=Stopwatch.StartNew();
+        static void Transfer(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,bool download,Func<TimeSpan> clock){
+            try{DownloadCore(transport,uri,output,limit,token,progress,download,clock);}catch(Exception){token.ThrowIfCancellationRequested();throw;}
+        }
+        static void CheckTimeout(TimeSpan elapsed,TimeSpan idle,bool download){
+            if(download?elapsed.TotalMinutes>=30:elapsed.TotalSeconds>120)throw new TimeoutException("Update download timed out.");
+            if(download&&idle.TotalSeconds>=30)throw new TimeoutException("Update download stalled.");
+        }
+        static void DownloadCore(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,bool download,Func<TimeSpan> clock){
+            var stopwatch=Stopwatch.StartNew();if(clock==null)clock=delegate{return stopwatch.Elapsed;};
+            var started=clock();var lastData=started;
+            Action checkTimeout=delegate{var now=clock();CheckTimeout(now-started,now-lastData,download);};
             for(int redirects=0;;redirects++){
-                token.ThrowIfCancellationRequested();ValidateUri(uri,redirects!=0);if(clock.Elapsed.TotalSeconds>120)throw new TimeoutException("Update request timed out.");
+                token.ThrowIfCancellationRequested();ValidateUri(uri,redirects!=0);checkTimeout();
                 using(var response=transport.Get(uri,token)){
+                    token.ThrowIfCancellationRequested();checkTimeout();
                     if(response.Status==301||response.Status==302||response.Status==303||response.Status==307||response.Status==308){
                         Uri next;if(redirects>=5||String.IsNullOrEmpty(response.Location)||!Uri.TryCreate(uri,response.Location,out next))throw new InvalidDataException("Invalid update redirect.");ValidateUri(next,true);uri=next;continue;
                     }
                     if(response.Status!=200)throw new UpdateHttpFailure(response.Status,response.RetryAfter);
                     if(response.Length>limit)throw new InvalidDataException("Update download exceeds its limit.");
-                    byte[] buffer=new byte[65536];long count=0;int read;
-                    while((read=response.Body.Read(buffer,0,buffer.Length))!=0){
-                        token.ThrowIfCancellationRequested();if(clock.Elapsed.TotalSeconds>120)throw new TimeoutException("Update download timed out.");
+                    // UpdateHttp keeps its 30 second ReadWriteTimeout to interrupt a blocked read.
+                    // This clock also bounds the whole transfer and is injectable for offline tests.
+                    byte[] buffer=new byte[65536];long count=0;
+                    while(true){
+                        token.ThrowIfCancellationRequested();checkTimeout();
+                        int read=response.Body.Read(buffer,0,buffer.Length);
+                        token.ThrowIfCancellationRequested();checkTimeout();if(read==0)break;lastData=clock();
                         count+=read;if(count>limit)throw new InvalidDataException("Update download exceeds its limit.");output.Write(buffer,0,read);if(progress!=null)progress(count,response.Length);
                     }
                     token.ThrowIfCancellationRequested();if(response.Length>=0&&response.Length!=count)throw new InvalidDataException("Truncated update download.");return;

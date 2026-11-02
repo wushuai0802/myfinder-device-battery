@@ -236,7 +236,8 @@ function Install-DeviceBattery {
         [Parameter(Mandatory=$true)][string]$InstallDirectory,
         [Parameter(Mandatory=$true)][string]$DataDirectory,
         [Parameter(Mandatory=$true)][string]$StartupDirectory,
-        [Parameter(Mandatory=$true)][string]$ProgramsDirectory
+        [Parameter(Mandatory=$true)][string]$ProgramsDirectory,
+        [switch]$PreserveStartup
     )
     if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or [Environment]::OSVersion.Version.Major -lt 10 -or -not [Environment]::Is64BitOperatingSystem){throw 'Windows 10/11 x64 is required.'}
     $framework=[Microsoft.Win32.Registry]::GetValue('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full','Release',$null)
@@ -286,19 +287,29 @@ function Install-DeviceBattery {
     $known=@((Join-Path $source 'outputs\AtkMouseBattery.exe'),$exe)
     if($receipt){$known+=Join-Path $receipt.InstallDirectory 'outputs\AtkMouseBattery.exe'}
     $name=Get-DeviceBatteryShortcutName;$shell=New-DeviceBatteryShortcutShell
-    $links=@(
-        @{Path=(Join-Path $StartupDirectory $name);Arguments='';Description='MyFinder Device Battery - start quietly at login.'},
-        @{Path=(Join-Path $ProgramsDirectory $name);Arguments='--show';Description='MyFinder Device Battery - open the device panel.'}
-    )
+    $startupLink=@{Path=(Join-Path $StartupDirectory $name);Arguments='';Description='MyFinder Device Battery - start quietly at login.'}
+    $manualLink=@{Path=(Join-Path $ProgramsDirectory $name);Arguments='--show';Description='MyFinder Device Battery - open the device panel.'}
+    $links=@($startupLink,$manualLink)
+    if($PreserveStartup) {
+        # StartupApproved decisions are keyed by filename. Update existing names in place.
+        $startupLinks=@(foreach($candidate in (Get-DeviceBatteryShortcutNames)) {
+            $path=Join-Path $StartupDirectory $candidate
+            if(Test-Path -LiteralPath $path){@{Path=$path;Arguments='';Description=$startupLink.Description}}
+        })
+        $links=$startupLinks+@($manualLink)
+        if($startupLinks.Count -gt 0){$startupLink=$startupLinks[0]}
+    }
     foreach($link in $links) {
         if((Test-Path -LiteralPath $link.Path) -and -not (Test-DeviceBatteryShortcut ($shell.CreateShortcut($link.Path)) $known)){
             throw ('An unrelated shortcut will not be overwritten: '+$link.Path)
         }
     }
-    foreach($candidate in (Get-DeviceBatteryShortcutNames)) {
-        $approval=Get-DeviceBatteryStartupApproval $candidate
-        if($null -ne $approval -and ($approval.Length -lt 1 -or $approval[0] -notin @(2,6))){
-            throw 'Windows previously disabled or has an unknown decision for this startup item. Review Startup Apps before installing autostart.'
+    if(-not $PreserveStartup) {
+        foreach($candidate in (Get-DeviceBatteryShortcutNames)) {
+            $approval=Get-DeviceBatteryStartupApproval $candidate
+            if($null -ne $approval -and ($approval.Length -lt 1 -or $approval[0] -notin @(2,6))){
+                throw 'Windows previously disabled or has an unknown decision for this startup item. Review Startup Apps before installing autostart.'
+            }
         }
     }
     $temporary=Join-Path ([IO.Path]::GetTempPath()) ('myfinder-install-'+[Guid]::NewGuid().ToString('N'))
@@ -336,8 +347,9 @@ function Install-DeviceBattery {
             $verified=$shell.CreateShortcut($entry.Path)
             if($verified.TargetPath -ine $exe -or $verified.Arguments -cne $entry.Arguments -or $verified.IconLocation -cne ($exe+',0')){throw 'Shortcut verification failed.'}
         }
+        $legacyFolders=if($PreserveStartup){@($ProgramsDirectory)}else{@($StartupDirectory,$ProgramsDirectory)}
         foreach($oldName in (Get-DeviceBatteryShortcutNames | Where-Object {$_ -cne $name})) {
-            foreach($folder in @($StartupDirectory,$ProgramsDirectory)) {
+            foreach($folder in $legacyFolders) {
                 $old=Join-Path $folder $oldName
                 if((Test-Path -LiteralPath $old) -and (Test-DeviceBatteryShortcut ($shell.CreateShortcut($old)) $known)) {
                     Add-DeviceBatteryUndo $undo $old $temporary;Remove-Item -LiteralPath $old -Force -ErrorAction Stop
@@ -346,8 +358,8 @@ function Install-DeviceBattery {
         }
         # Refresh only this installation after every transactional change succeeded.
         # A shell notification failure must never undo a valid installation.
-        try {Update-DeviceBatteryShellIcons $exe $links[0].Path $links[1].Path} catch {}
-        [pscustomobject]@{Version=$package.version;PayloadChanged=$payloadChanged;InstalledExecutable=$exe;StartupShortcut=$links[0].Path;ManualShortcut=$links[1].Path;SettingsDirectory=$DataDirectory}
+        try {Update-DeviceBatteryShellIcons $exe $startupLink.Path $manualLink.Path} catch {}
+        [pscustomobject]@{Version=$package.version;PayloadChanged=$payloadChanged;InstalledExecutable=$exe;StartupShortcut=$startupLink.Path;ManualShortcut=$manualLink.Path;SettingsDirectory=$DataDirectory}
     } catch {
         $failure=$_
         $rollbackErrors=New-Object 'System.Collections.Generic.List[string]'

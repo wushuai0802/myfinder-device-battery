@@ -16,6 +16,7 @@ static class UpdateTests {
     static int passed;
     static void Check(bool value,string name){if(!value)throw new Exception("FAIL "+name);passed++;}
     static void Reject(Action action,string name){bool rejected=false;try{action();}catch(Exception){rejected=true;}Check(rejected,name);}
+    static void Throws<T>(Action action,string name) where T:Exception {bool rejected=false;try{action();}catch(T){rejected=true;}Check(rejected,name);}
     sealed class Http:IUpdateTransport {
         internal readonly Queue<UpdateResponse> Responses=new Queue<UpdateResponse>();
         internal readonly List<Uri> Requests=new List<Uri>();
@@ -29,6 +30,63 @@ static class UpdateTests {
         internal string Root,Package;
         public bool IsStable(CancellationToken token){return Stable;}
         public void Start(PreparedUpdate update){Starts++;Root=update.InstallDirectory;Package=update.PackageDirectory;}
+    }
+    sealed class Clock {
+        internal double Seconds;
+        internal TimeSpan Now(){return TimeSpan.FromSeconds(Seconds);}
+    }
+    sealed class SlowStream:MemoryStream {
+        readonly Clock clock;readonly double[] delays;
+        internal int Reads;internal Action OnRead;
+        internal SlowStream(Clock timer,int bytes,params double[] waits):base(new byte[bytes]){clock=timer;delays=waits;}
+        public override int Read(byte[] buffer,int offset,int count){
+            if(Reads<delays.Length)clock.Seconds+=delays[Reads];Reads++;
+            if(OnRead!=null)OnRead();return base.Read(buffer,offset,Math.Min(count,1));
+        }
+    }
+    static Http SlowHttp(SlowStream body,long length){var http=new Http();http.Responses.Enqueue(new UpdateResponse(200,body,length,null,null));return http;}
+    static void NetworkTimeouts(){
+        var uri=new Uri("https://release-assets.githubusercontent.com/package.zip");
+        var clock=new Clock();var body=new SlowStream(clock,8,Enumerable.Repeat(20.0,8).ToArray());var http=SlowHttp(body,8);
+        using(var output=new MemoryStream()){
+            int reports=0;
+            UpdateNetwork.Download(http,uri,output,100,CancellationToken.None,delegate(long count,long total){reports++;Check(count==reports&&total==8,"slow transfer reports cumulative progress");},clock.Now);
+            Check(clock.Seconds==160&&output.Length==8&&reports==8,"continuous slow download survives more than 120 seconds");
+        }
+        foreach(bool eof in new[]{false,true}){
+            clock=new Clock();body=new SlowStream(clock,eof?1:2,1,30);http=SlowHttp(body,-1);
+            using(var output=new MemoryStream()){
+                Throws<TimeoutException>(()=>UpdateNetwork.Download(http,uri,output,100,CancellationToken.None,null,clock.Now),"30 second stall fails, including EOF="+eof);
+                Check(output.Length==1&&clock.Seconds==31,"stalled transfer stops before writing late data");
+            }
+        }
+        clock=new Clock();body=new SlowStream(clock,90,Enumerable.Repeat(20.0,90).ToArray());http=SlowHttp(body,90);
+        using(var output=new MemoryStream()){
+            Throws<TimeoutException>(()=>UpdateNetwork.Download(http,uri,output,100,CancellationToken.None,null,clock.Now),"active download still stops at the 30 minute total limit");
+            Check(clock.Seconds==1800&&output.Length==89,"total limit is independent of continuing progress");
+        }
+        // Release metadata, checksums and signatures all use Fetch and retain its 120 second cap.
+        foreach(var small in new[]{new Uri(UpdateTrust.ApiUrl),new Uri("https://github.com/SHA256SUMS.txt"),new Uri("https://github.com/SHA256SUMS.txt.sig")}){
+            clock=new Clock();body=new SlowStream(clock,8,Enumerable.Repeat(20.0,8).ToArray());http=SlowHttp(body,8);
+            Throws<TimeoutException>(()=>UpdateNetwork.Fetch(http,small,100,CancellationToken.None,null,clock.Now),"small request retains its total timeout: "+small.AbsolutePath);
+            Check(clock.Seconds==140,"small request is not extended to the package deadline");
+        }
+        clock=new Clock();body=new SlowStream(clock,3);http=SlowHttp(body,3);
+        using(var token=new CancellationTokenSource())using(var output=new MemoryStream()){
+            Throws<OperationCanceledException>(()=>UpdateNetwork.Download(http,uri,output,100,token.Token,delegate(long count,long total){token.Cancel();},clock.Now),"cancel from progress is observed before another read");
+            Check(body.Reads==1&&output.Length==1,"cancel does not attempt another potentially blocking read");
+        }
+        clock=new Clock();body=new SlowStream(clock,3);http=SlowHttp(body,3);
+        using(var token=new CancellationTokenSource())using(var output=new MemoryStream()){
+            body.OnRead=delegate{token.Cancel();throw new IOException("fixture aborted read");};
+            Throws<OperationCanceledException>(()=>UpdateNetwork.Download(http,uri,output,100,token.Token,null,clock.Now),"aborted read is reported as cancellation");
+            Check(body.Reads==1&&output.Length==0,"cancelled read writes no data");
+        }
+        clock=new Clock();body=new SlowStream(clock,3);http=SlowHttp(body,3);
+        using(var token=new CancellationTokenSource())using(var output=new MemoryStream()){
+            token.Cancel();Throws<OperationCanceledException>(()=>UpdateNetwork.Download(http,uri,output,100,token.Token,null,clock.Now),"pre-cancelled transfer is refused");
+            Check(http.Requests.Count==0&&body.Reads==0,"pre-cancelled transfer sends no HTTP");
+        }
     }
     static UpdateAsset Asset(string version,string name){return new UpdateAsset {Name=name,Size=100,Url="https://github.com/wushuai0802/myfinder-device-battery/releases/download/v"+version+"/"+name};}
     static UpdateRelease Release(string version,bool pre=false){return new UpdateRelease {Tag="v"+version,Prerelease=pre,Body="<script>bad()</script>\r\n[click](file:///C:/x)",Assets=new[]{Asset(version,UpdateTrust.ZipName(version)),Asset(version,"SHA256SUMS.txt"),Asset(version,"SHA256SUMS.txt.sig")}};}
@@ -55,6 +113,7 @@ static class UpdateTests {
     [STAThread] static int Main(string[] args){
         string root=Path.Combine(Path.GetFullPath(args[0]),"update-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try {
+            NetworkTimeouts();
             UpdateVersion a,b;Check(UpdateVersion.TryParse("1.3.5-beta.1",out a)&&UpdateVersion.TryParse("1.3.5",out b)&&a.CompareTo(b)<0,"beta before stable");
             Check(UpdateVersion.Parse("1.3.5").CompareTo(UpdateVersion.Parse("1.3.6-beta.1"))<0,"stable before next beta");
             Check(UpdateVersion.Parse("1.3.5-beta.9").CompareTo(UpdateVersion.Parse("1.3.5-beta.10"))<0,"numeric beta ordering");
