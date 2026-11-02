@@ -1,0 +1,42 @@
+name: 设备适配反馈
+description: 提交未取得电量的设备信息，帮助确认型号和协议范围
+title: "[设备适配] 品牌与型号"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请在“状态与诊断”页主动复制诊断摘要。未取得电量可能是尚未适配，也可能是设备休眠。
+        摘要包含型号级 VID:PID 和 HID 集合。发布前请自行检查内容，删除序列号、设备路径或其他个人信息。
+  - type: input
+    id: model
+    attributes:
+      label: 品牌与完整型号
+      placeholder: 例如 ATK A9 Air（如知道，请补充固件版本）
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: 本次连接方式
+      options:
+        - 2.4G 接收器
+        - 有线 USB
+        - 蓝牙
+    validations:
+      required: true
+  - type: input
+    id: official-battery
+    attributes:
+      label: 官方软件显示的电量
+      description: 请填写读数及是否充电；官方软件也没有读数时请说明。
+      placeholder: 例如 75%，未充电；或官方软件未识别
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断摘要
+      description: 移动或唤醒设备后重新同步，再主动复制摘要；发布前自行检查。
+      render: text
+    validations:
+      required: true

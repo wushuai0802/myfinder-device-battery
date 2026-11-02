@@ -91,12 +91,38 @@ namespace AtkBattery {
         [DataMember(Name="deviceCount")] public int DeviceCount;
         [DataMember(Name="nextRetryAtUtc")] public string NextRetryAtUtc;
     }
+    [DataContract] public sealed class UnadaptedCollection {
+        [DataMember(Name="usagePage")] public int UsagePage;
+        [DataMember(Name="usage")] public int Usage;
+    }
+    [DataContract] public sealed class UnadaptedDevice {
+        [DataMember(Name="vendorId")] public int VendorId;
+        [DataMember(Name="productId")] public int ProductId;
+        [DataMember(Name="product")] public string Product;
+        [DataMember(Name="collections")] public UnadaptedCollection[] Collections;
+        internal static bool Word(int value){return value>=0&&value<=65535;}
+        internal static string CleanProduct(string value){
+            // This extra cleanup is restricted to the new inventory section.
+            // Model IDs are formatted from bounded integers, never from names.
+            value=Regex.Replace(value??"",@"(?i)(?:[a-z]:\\|\\\\|(?:hid|usb|bthenum|bthledevice)[\\#])[^\s""']+","[path]");
+            value=Regex.Replace(value,@"(?i)(?:\b(?:serial(?:[_ -]?number)?|s/n|sn)|序列号)\s*[:=#：]?\s*[^\s""']+","[serial]");
+            value=SafeDiagnostic.Clean(value).Replace('"','\'');
+            var result=new StringBuilder();foreach(char c in value)if(!Char.IsControl(c)&&result.Length<48)result.Append(c);
+            return result.ToString().Trim();
+        }
+        internal string DiagnosticLine(){
+            var line=new StringBuilder(VendorId.ToString("X4")+":"+ProductId.ToString("X4")+" \""+CleanProduct(Product)+"\"");
+            int count=0;foreach(var item in Collections??new UnadaptedCollection[0])if(item!=null&&Word(item.UsagePage)&&Word(item.Usage)&&count++<8)line.Append(" "+item.UsagePage.ToString("X4")+":"+item.Usage.ToString("X4"));
+            return line.ToString();
+        }
+    }
     [DataContract] public sealed class WirelessSnapshot {
         [DataMember(Name="schema")] public int Schema;
         [DataMember(Name="requestId")] public long RequestId;
         [DataMember(Name="generation")] public int Generation;
         [DataMember(Name="complete")] public bool Complete;
         [DataMember(Name="devices")] public WirelessDevice[] Devices;
+        [DataMember(Name="unadapted",EmitDefaultValue=false)] public UnadaptedDevice[] Unadapted;
         [DataMember(Name="nativeMousePresent")] public bool? NativeMousePresent;
         [DataMember(Name="providerCount")] public int ProviderCount;
         [DataMember(Name="health")] public ReaderHealth[] Health;
@@ -241,6 +267,18 @@ namespace AtkBattery {
                 devices.Add(value);
             }
             var errors=new List<string>();foreach(var error in snapshot.Errors??new string[0])if(errors.Count<32)errors.Add(Clean(error,96,"read_failed"));snapshot.Errors=errors.ToArray();
+            if(snapshot.Unadapted!=null){
+                var unadapted=new List<UnadaptedDevice>();
+                foreach(var item in snapshot.Unadapted){
+                    if(unadapted.Count>=16)break;
+                    if(item==null||!UnadaptedDevice.Word(item.VendorId)||!UnadaptedDevice.Word(item.ProductId))continue;
+                    item.Product=UnadaptedDevice.CleanProduct(item.Product);
+                    var collections=new List<UnadaptedCollection>();
+                    foreach(var collection in item.Collections??new UnadaptedCollection[0])if(collection!=null&&UnadaptedDevice.Word(collection.UsagePage)&&UnadaptedDevice.Word(collection.Usage)&&collections.Count<8)collections.Add(collection);
+                    item.Collections=collections.ToArray();unadapted.Add(item);
+                }
+                snapshot.Unadapted=unadapted.ToArray();
+            }
             var health=new List<ReaderHealth>();foreach(var item in snapshot.Health??new ReaderHealth[0])if(item!=null&&health.Count<64){if(!Regex.IsMatch(item.PhysicalId??"",@"^device-[a-f0-9]{24}$"))item.PhysicalId=null;item.Provider=Clean(item.Provider,48,"unknown");item.State=Clean(item.State,24,"unknown");item.ErrorCode=Clean(item.ErrorCode,48,"");item.Scope=item.Scope=="device"?"device":"provider";item.DeviceCount=Math.Max(0,Math.Min(64,item.DeviceCount));health.Add(item);}snapshot.Health=health.ToArray();
             if(snapshot.DpiResult!=null){
                 var result=snapshot.DpiResult;result.Error=Clean(result.Error,160,"");

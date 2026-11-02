@@ -142,6 +142,8 @@ namespace AtkBatteryTray {
                 rows.Add(Info("开机启动",StartupState()));rows.Add(Info("通用设备",owner.GenericReady?owner.WirelessDevices.Length+"个":owner.GenericScanning?"正在识别":"尚未就绪"));
                 if(!String.IsNullOrEmpty(owner.GenericHealthSummary))rows.Add(Info("读取器健康",owner.GenericHealthSummary));
                 else if(!String.IsNullOrEmpty(owner.GenericError))rows.Add(Info("读取器状态","暂不可用，详情见诊断摘要"));
+                rows.Add(Info("许可证","AGPL-3.0-only"));rows.Add(Info("无担保","按现状提供"));
+                var source=Info("源码",null);source.Detail="https://github.com/\nwushuai0802/\nmyfinder-device-battery";rows.Add(source);
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));
             }else if(nav.Page==PopupPage.Devices) {
                 var devices=WirelessLayout.Build(owner,0,100000,true).All;
@@ -184,7 +186,7 @@ namespace AtkBatteryTray {
                 }else nav.Offset=0;
             }
             float y=44;
-            foreach(var row in rows){float height=row.Slider?54:!String.IsNullOrEmpty(row.Detail)?44:34;row.Rect=new RectangleF(10,y,240,height);y+=height+2;}
+            foreach(var row in rows){float height=row.Slider?54:!String.IsNullOrEmpty(row.Detail)?26+18*row.Detail.Split('\n').Length:34;row.Rect=new RectangleF(10,y,240,height);y+=height+2;}
             rows.Insert(0,new PopupControl {Id=6,Text="返回",Rect=new RectangleF(8,5,34,34)});
             return WithIdentity(rows,nav,owner);
         }
@@ -309,7 +311,7 @@ namespace AtkBatteryTray {
                 }else {
                     float textWidth=String.IsNullOrEmpty(row.Value)?rect.Right-x-23:Math.Min(105,rect.Right-x-90);
                     VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y+(String.IsNullOrEmpty(row.Detail)?0:1),textWidth,String.IsNullOrEmpty(row.Detail)?rect.Height:22),11.5f,false,row.Id==204?TrayGlyph.LevelColor(10,dark):color,StringAlignment.Near);
-                    if(!String.IsNullOrEmpty(row.Detail))VisualDesign.DrawLabel(g,row.Detail,new RectangleF(x,rect.Y+22,rect.Right-x-24,18),11,false,detailColor,StringAlignment.Near);
+                    if(!String.IsNullOrEmpty(row.Detail)){var lines=row.Detail.Split('\n');for(int i=0;i<lines.Length;i++)VisualDesign.DrawLabel(g,lines[i],new RectangleF(x,rect.Y+22+18*i,rect.Right-x-24,18),11,false,detailColor,StringAlignment.Near);}
                     if(!String.IsNullOrEmpty(row.Value))VisualDesign.DrawLabel(g,row.Value,new RectangleF(x+textWidth,rect.Y,rect.Right-x-textWidth-19,rect.Height),11,false,detailColor,StringAlignment.Far);
                     if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(rect.Height-14)/2,14,14),VisualDesign.HighContrast&&highlighted?SystemColors.HighlightText:blue);
                     else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=222||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000)VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(rect.Height-12)/2,12,12),detailColor);

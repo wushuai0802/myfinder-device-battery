@@ -70,6 +70,46 @@ def public_id(key):
     return "device-" + hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:24]
 
 
+def unadapted_devices(inventory, previous):
+    """Allowlisted model metadata from existing inventory only; never probe HID."""
+    from topology import physical_groups
+    known = {value.get("physicalId") for value in previous.values()}
+    out = []
+    for physical, infos in physical_groups(inventory).items():
+        if public_id(physical) in known or any((d.get("vendor_id"), d.get("product_id")) in NATIVE for d in infos):
+            continue
+        if not any(d.get("usage_page", 0) >= 0xFF00 or
+                   (d.get("usage_page"), d.get("usage")) == (1, 2) for d in infos):
+            continue
+        # Product strings are untrusted, too. Remove any private inventory
+        # values before truncation, so a shortened serial cannot escape cleanup.
+        secrets = {physical}
+        for info in infos:
+            for field in ("serial_number", "path", "physical_id"):
+                value = info.get(field)
+                if value:
+                    secrets.add(value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value))
+        names = []
+        for info in infos:
+            name = str(info.get("product_string") or "")
+            for secret in sorted(secrets, key=lambda value: (-len(value), value)):
+                name = re.sub(re.escape(secret), "[redacted]", name, flags=re.I)
+            name = re.sub(r'(?i)(?:[a-z]:\\|\\\\|(?:hid|usb|bthenum|bthledevice)[\\#])[^\s"\']+', "[path]", name)
+            name = re.sub(r'(?i)(?:\b(?:serial(?:[_ -]?number)?|s/n|sn)|序列号)\s*[:=#：]?\s*[^\s"\']+', "[serial]", name)
+            name = re.sub(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b", "[device]", name)
+            name = "".join(c for c in name if c.isprintable()).replace('"', "'").strip()[:48]
+            if name:
+                names.append(name)
+        models = sorted({(d["vendor_id"], d["product_id"]) for d in infos})
+        vid, pid = models[0]
+        # topology.discover currently supplies usage only, not report lengths.
+        collections = sorted((d.get("usage_page", 0), d.get("usage", 0)) for d in infos)[:8]
+        out.append({"vendorId": vid, "productId": pid, "product": min(names) if names else "",
+                    "collections": [{"usagePage": page, "usage": usage} for page, usage in collections]})
+    return sorted(out, key=lambda item: (item["vendorId"], item["productId"], item["product"],
+                                        [(c["usagePage"], c["usage"]) for c in item["collections"]]))[:16]
+
+
 def valid_public_target(value):
     return value is None or isinstance(value, str) and re.fullmatch(r"device-[a-f0-9]{24}", value) is not None
 
@@ -341,6 +381,7 @@ class BatteryEngine:
         self.providers = providers if providers is not None else [name for name, _ in PROVIDERS] + ["standard_hid"]
         self.package_smoke = package_smoke
         self.previous = {}
+        self.unadapted = []
         self.by_provider = {}
         self.health = {}
         self.last_poll = {}
@@ -367,7 +408,7 @@ class BatteryEngine:
         for child in self.children:
             child.close()
 
-    def _snapshot(self, request_id=0, generation=0, complete=True):
+    def _snapshot(self, request_id=0, generation=0, complete=True, unadapted_inventory=None):
         live = {}
         legacy_counts = Counter(v.get("legacyId") for group in self.by_provider.values() for v in group.values() if v.get("legacyId"))
         dedicated = {v.get("unitId") for group in self.by_provider.values() for v in group.values()
@@ -410,8 +451,11 @@ class BatteryEngine:
                        and valid_public_target(key[len("topology:"):]) else None)
                   for key, value in self.health.items()][:128]
         errors = [h["provider"] + ": " + h["errorCode"] for h in health if h.get("errorCode")]
+        if complete and unadapted_inventory is not None:
+            self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
         return {"schema": 2, "requestId": request_id, "generation": generation, "complete": complete,
                 "devices": devices, "nativeMousePresent": self.native_mouse,
+                "unadapted": self.unadapted,
                 "providerCount": len(self.providers), "errors": (list(self.errors) + errors)[:32],
                 "health": health, "checkedAtUtc": utcnow(), "packageSmoke": self.package_smoke}
 
@@ -651,6 +695,7 @@ class BatteryEngine:
         priority = set(self._deferred)
         partial_count = 0
         full_round = device_id is None and physical_id is None
+        full_inventory = None
 
         def task_key(item):
             action, name, physical, command, _budget = item
@@ -746,6 +791,8 @@ class BatteryEngine:
                         if not isinstance(inventory, list) or len(inventory) > 512:
                             raise IsolationError("invalid_response")
                         inventory = [d for d in inventory if (d.get("vendor_id"), d.get("product_id")) not in NATIVE]
+                        if full_round:
+                            full_inventory = inventory
                         groups = dict(list(physical_groups(inventory).items())[:MAX_DEVICES])
                         if physical_id is not None:
                             groups = {key: infos for key, infos in groups.items() if public_id(key) == physical_id}
@@ -855,7 +902,7 @@ class BatteryEngine:
                 break
             if pending or active or wait_bluetooth and self._bluetooth_slot is not None:
                 time.sleep(0.01)
-        return self._snapshot(request_id, generation)
+        return self._snapshot(request_id, generation, unadapted_inventory=full_inventory)
 
 
 def main():

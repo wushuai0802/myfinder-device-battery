@@ -1,5 +1,11 @@
 """Pulsar, ATK, VXE and Hitscan wireless mice over USB/HID, without vendor software.
 
+MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matching
+(协议族匹配，未实测; level C). Only FF02:0002 with a known output length of exactly
+17 bytes receives the existing power query. FF04/FF05 alone and unknown lengths
+are not sufficient. No model catalog or DPI commands are added; the server keeps
+native 373B:1278 excluded. Listed models retain their original selection rules.
+
 Protocol from andrewrabert/python-pulsar-mouse-tool, which also backs the
 "HID: pulsar" driver in review for the Linux kernel and lists these ids:
 
@@ -296,16 +302,26 @@ class PulsarProvider(Provider):
             except Exception as e:  # pragma: no cover
                 log.warning("hid.enumerate(%04x): %s", vid, e)
                 continue
-            for pid in pids:
+            candidates = list(pids)
+            if vid == 0x373B:
+                candidates += sorted({d["product_id"] for d in infos if d["product_id"] not in pids})
+            for pid in candidates:
                 mine = [d for d in infos if d["product_id"] == pid]
                 if not mine:
                     continue
                 key = f"pulsar:{vid:04x}{pid:04x}"
-                present.add(key)
-                d = self._pick(mine)
+                if pid in pids:
+                    present.add(key)
+                    d = self._pick(mine)
+                    name = pids[pid]
+                else:
+                    d = next((d for d in mine if (d.get("usage_page"), d.get("usage")) == CONTROL_USAGE
+                              and output_length(d["path"]) == PAYLOAD_LEN), None)
+                    if d is not None:
+                        present.add(key)
+                    name = (d.get("product_string") or "ATK Mouse") if d is not None else "ATK Mouse"
                 if d is None:
                     continue
-                name = pids[pid]
                 self._diag.append(f"[Pulsar] pid={vid:04x}:{pid:04x} '{name}' "
                                   f"iface={d.get('interface_number')} "
                                   f"{d.get('usage_page', 0):04x}:{d.get('usage', 0):04x}"

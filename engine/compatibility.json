@@ -56,7 +56,7 @@
     {"provider":"hyperx_cloud3","name":"HyperX Cloud III 与已列明Core变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3.py"},
     {"provider":"hyperx","name":"HyperX Cloud II 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx.py"},
     {"provider":"keychron","name":"Keychron M5 / Ultra-Link 8K","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/keychron.py"},
-    {"provider":"pulsar","name":"Pulsar / ATK / VXE / Hitscan 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/pulsar.py"},
+    {"provider":"pulsar","name":"Pulsar / ATK / VXE / Hitscan 已列明型号及 ATK FF02 协议族","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/pulsar.py","matchScope":"既有匹配表不变；表外373B仅FF02:0002且输出恰好17字节；协议族匹配，未实测；排除原生373B:1278，不开放DPI"},
     {"provider":"jbl","name":"JBL Quantum 910 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/jbl.py"},
     {"provider":"logitech","name":"Logitech HID++ 与已列明G系列耳机","kinds":["mouse","keyboard","headset"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/logitech.py"},
     {"provider":"steelseries","name":"SteelSeries 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/steelseries.py"},

@@ -95,7 +95,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Star
 - 新安装默认自动选择有数据的设备，也可选鼠标优先、耳机优先、键盘优先或最低电量。在设备详情开启“固定为托盘主设备”可指定来源；卡片置顶只改变排列。固定设备暂时无有效读数时回退到其他可用设备，恢复后再选回。自动模式保持当前有效来源，不跟随最后移动的鼠标轮换数字。
 - 低电量提醒默认关闭，可选择10%、15%或20%（默认20%）；每台设备每轮放电只提醒一次，充电或回升至30%后重新计数。缓存不触发提醒；全屏、演示或系统不允许通知时延后。
 - 外观默认跟随系统，支持浅色/深色与减弱动效。偏好选项提供统一的选择页并自动保存；详情中的设备别名只影响本程序，不改系统或USB名称。
-- “状态与诊断”显示自启与读取状态，可主动复制不含端点ID的诊断摘要。
+- “状态与诊断”显示自启与读取状态，可主动复制诊断摘要（不含序列号和路径）。摘要包含未取得电量设备的型号级 VID:PID、产品名与 HID 集合，可能是未适配或休眠；这份列表不写入 `status.json`。提交设备反馈前请自行检查摘要内容。
 - 接收器插拔、系统恢复会合并触发一次检查，仍保留原有定时兜底。耳机开机未必产生 Windows 设备事件。
 
 托盘右键的“音源设置”还提供快速绑定、刷新设备列表和恢复默认音源识别。
@@ -156,7 +156,9 @@ GitHub Actions 在main推送及PR上构建、运行协议与安装回归，然�
 
 验证边界、交互性能与八小时资源采样方法见 [验证范围与复验方法](docs/verification.md)。
 
-通用版打包会按`engine/dependencies.lock.json`固定URL与SHA256准备官方便携运行库，复用已通过校验的下载缓存并校验官方Python签名。维护端可运行`Build-Backend.ps1`，再用`engine/runtime/python.exe -I -B -m unittest discover -s tests -p 'test_*.py'`及`-m unittest discover -s engine/tests`检查协议与桥接。最终用户无需执行这些步骤。自有代码采用[MIT许可证](LICENSE)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+通用版打包会按`engine/dependencies.lock.json`固定URL与SHA256准备官方便携运行库，复用已通过校验的下载缓存并校验官方Python签名。维护端可运行`Build-Backend.ps1`，再用`engine/runtime/python.exe -I -B -m unittest discover -s tests -p 'test_*.py'`及`-m unittest discover -s engine/tests`检查协议与桥接。最终用户无需执行这些步骤。
+
+自有代码采用 [AGPL-3.0-only](LICENSE)，按现状提供，不提供任何担保。1.3.4 及更早版本按 MIT 发布，下一版本起为 AGPL-3.0-only。改编自 HaloBattery 的部分保留其 MIT 声明，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；源码地址为 https://github.com/wushuai0802/myfinder-device-battery 。许可证、无担保说明与源码地址也可在“状态与诊断”页查看。
 
 `AtkBatteryProbe.exe --help`、`--self-test` 不访问 HID。`--enumerate` 读描述符；`--power`、`--diagnostic` 查询设备；`--dpi-read` 读取 PAW3955 档位表；`--select-stage N` 会实际选择一个已有的一基档位。
 

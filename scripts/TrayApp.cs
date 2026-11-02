@@ -266,7 +266,7 @@ namespace AtkBatteryTray {
                 else if(id==233){DeviceSettings.ResetAudioForDevice(navigation.AudioDeviceKey);owner.ConfigurationChanged();navigation.Notice=navigation.AudioDeviceKey==null?"已恢复自动识别":"已清除此设备的音频绑定";Invalidate();return;}
                 else if(id==7||id==8){navigation.Offset=Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
                 else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
-                else if(id==250){Clipboard.SetText(owner.DiagnosticSummary());navigation.Notice="已复制不含设备ID的诊断摘要";Invalidate();return;}
+                else if(id==250){Clipboard.SetText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
                 else return;
                 DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
             }catch(Exception error){navigation.Notice="未保存："+error.Message;Invalidate();}
@@ -608,6 +608,7 @@ namespace AtkBatteryTray {
         DateTime genericChecked=DateTime.MinValue;
         readonly Dictionary<string,WirelessDevice> wirelessCache=new Dictionary<string,WirelessDevice>();
         public WirelessDevice[] WirelessDevices=new WirelessDevice[0];
+        UnadaptedDevice[] unadaptedDevices=new UnadaptedDevice[0];
         public bool NativeMousePresent=true,GenericReady;
         public string GenericError;
         public string GenericHealthSummary;
@@ -1070,6 +1071,7 @@ namespace AtkBatteryTray {
                 if(snapshot.Generation>0&&snapshot.Generation!=wirelessDpiGeneration){wirelessDpiGeneration=snapshot.Generation;Interlocked.Increment(ref wirelessDpiEpoch);pendingWirelessDpi.Clear();wirelessDpiFailures.Clear();}
                 if(complete&&snapshot.DpiResult==null)wirelessDpiNeedsReconcile=false;
                 GenericReady=true;GenericError=null;WirelessDevices=snapshot.Devices??new WirelessDevice[0];GenericHealth=snapshot.Health??new ReaderHealth[0];GenericFailureCount=0;
+                if(snapshot.Unadapted!=null)unadaptedDevices=snapshot.Unadapted;
                 foreach(var device in WirelessDevices)if(device.Kind=="mouse")activityRefresh.ObserveMouse(device.PhysicalId);
                 foreach(var health in GenericHealth)if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
@@ -1104,6 +1106,9 @@ namespace AtkBatteryTray {
             if(!String.IsNullOrEmpty(DpiError))text+="\r\nDPI读取："+SafeDiagnostic.Clean(DpiError);
             foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip;
             text+="\r\n通用读取："+(GenericReady?"已就绪":GenericScanning?"识别中":"尚未就绪")+"\r\n读取健康："+(GenericError??GenericHealthSummary??"正常");foreach(var item in GenericHealth)if(item.State!="ok"&&item.State!="no_devices")text+="\r\n"+item.Provider+"："+item.State+" / "+item.ErrorCode;
+            text+="\r\n未取得电量的设备（可能未适配，也可能正在休眠）";
+            if(unadaptedDevices.Length==0)text+="\r\n无记录";
+            foreach(var device in unadaptedDevices)text+="\r\n"+device.DiagnosticLine();
             return String.Join(Environment.NewLine,Array.ConvertAll(text.Split(new[]{"\r\n"},StringSplitOptions.None),delegate(string line){return SafeDiagnostic.Clean(line);}));
         }
         internal static bool ShowHeadset(HeadsetReading headset,AudioReading audio) {

@@ -177,6 +177,64 @@ class PulsarTest(unittest.TestCase):
         self.assertIn("[Pulsar] pid=3554:f58a 'VXE R1 Pro Max (2.4 GHz)'", diag)
         self.assertIn("3900 mV", diag)
 
+    def test_unlisted_atk_exact_collection_and_length_reads_only_power(self):
+        bus = self.one_receiver(vid=0x373B, pid=0x120A, replies=[reply(73)],
+                                lengths={P.CONTROL_USAGE: 17})
+        for col in bus.cols:
+            col.info["product_string"] = "ATK A9 Air"
+        found = P.PulsarProvider().poll()
+        self.assertEqual([(d.key, d.name, d.level, d.online) for d in found],
+                         [("pulsar:373b120a", "ATK A9 Air", 73, True)])
+        self.assertEqual(bus.written(), [P.CONTROL_USAGE])
+        self.assertEqual([frame for col in bus.cols for frame in col.sent], [P.make_request()])
+        self.assertEqual(sum(col.opened for col in bus.cols), 1)
+
+    def test_unlisted_atk_silence_keeps_grey_reading_and_fallback_name(self):
+        self.one_receiver(vid=0x373B, pid=0x120A, replies=[reply(61)],
+                          lengths={P.CONTROL_USAGE: 17})
+        provider = P.PulsarProvider()
+        first = provider.poll()
+        self.assertEqual([(d.name, d.level) for d in first], [("ATK Mouse", 61)])
+        kept = provider.poll()
+        self.assertEqual([(d.key, d.level, d.online, d.wake_on_input) for d in kept],
+                         [("pulsar:373b120a", 61, False, True)])
+
+    def test_unlisted_atk_never_falls_back_to_other_collections_or_lengths(self):
+        for shape, lengths in [([(1, 0xFF04, 2)], {(0xFF04, 2): 17}),
+                               ([(1, 0xFF05, 2)], {(0xFF05, 2): 54}),
+                               ([(1, 0xFF02, 1)], {(0xFF02, 1): 17}),
+                               (SHAPE, {P.CONTROL_USAGE: 64, (0xFF04, 2): 17}),
+                               (SHAPE, {})]:
+            with self.subTest(shape=shape, lengths=lengths):
+                bus = self.one_receiver(vid=0x373B, pid=0x120A, replies=[reply(61)],
+                                        shape=shape, lengths=lengths)
+                self.assertEqual(P.PulsarProvider().poll(), [])
+                self.assertEqual(sum(col.opened for col in bus.cols), 0)
+                self.assertEqual(bus.written(), [])
+
+    def test_unlisted_other_vendors_are_not_opened(self):
+        for vid in (0x3554, 0x3710, 0x3770, 0x1234):
+            with self.subTest(vid=vid):
+                bus = self.one_receiver(vid=vid, pid=0x120A, replies=[reply(61)],
+                                        lengths={P.CONTROL_USAGE: 17})
+                self.assertEqual(P.PulsarProvider().poll(), [])
+                self.assertEqual(sum(col.opened for col in bus.cols), 0)
+
+    def test_unlisted_atk_rejects_bad_checksum_and_level(self):
+        for frame in (reply(61, break_checksum=True), reply(101)):
+            with self.subTest(frame=frame):
+                bus = self.one_receiver(vid=0x373B, pid=0x120A, replies=[frame],
+                                        lengths={P.CONTROL_USAGE: 17})
+                self.assertEqual(P.PulsarProvider().poll(), [])
+                self.assertEqual([f for col in bus.cols for f in col.sent], [P.make_request()])
+
+    def test_listed_atk_and_vxe_still_accept_unknown_output_length(self):
+        for vid, pid in ((0x373B, 0x1085), (0x3554, 0xF58A)):
+            with self.subTest(vid=vid, pid=pid):
+                self.one_receiver(vid=vid, pid=pid, replies=[reply(61)])
+                found = P.PulsarProvider().poll()
+                self.assertEqual([(d.name, d.level) for d in found], [(P.PIDS[vid][pid], 61)])
+
     def test_the_r1_pro_max_on_its_cable_is_read(self):
         # the reporter's second report: the wired mouse is 3554:f58c, product string
         # 'VXE R1 PRO MAX', with the same eight collections as the receiver
