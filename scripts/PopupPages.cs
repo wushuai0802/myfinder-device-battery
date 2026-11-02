@@ -90,7 +90,7 @@ namespace AtkBatteryTray {
             }else if(nav.Page==PopupPage.Audio) {
                 if(nav.AudioDeviceKey!=null)rows.Add(Info("控制对象",nav.AudioDeviceName??"此耳机"));
                 rows.Add(Info("当前系统输出",OutputName(audio)));
-                var a=Row(100,"扬声器",null,"speaker");a.Detail=audio==null?"未检测到":audio.SpeakerName;a.Enabled=audio!=null&&audio.SpeakerAvailable;a.Selected=audio!=null&&audio.ActiveOutput=="speaker";rows.Add(a);
+                var a=Row(100,"扬声器",null,"speaker");a.Detail=audio==null?"未检测到":audio.SpeakerAvailable?audio.SpeakerName:"请到音频设置中绑定扬声器端点";a.Enabled=audio!=null&&audio.SpeakerAvailable;a.Selected=audio!=null&&audio.ActiveOutput=="speaker";rows.Add(a);
                 a=Row(101,"耳机",null,"headset");a.Detail=audio==null?"未检测到":audio.HeadsetName;a.Enabled=audio!=null&&audio.HeadsetAvailable;a.Selected=audio!=null&&audio.ActiveOutput=="headset";rows.Add(a);
                 a=Row(240,"系统输出音量");a.Slider=true;a.Enabled=audio!=null&&audio.OutputVolumePercent.HasValue&&!String.IsNullOrEmpty(audio.VolumeEndpointId);a.Value=a.Enabled?(nav.VolumePreview>=0?nav.VolumePreview:owner.DesiredVolume??audio.OutputVolumePercent.Value)+"%":"不可用";rows.Add(a);
                 a=Toggle(102,"Windows麦克风静音",audio!=null&&audio.MicrophoneMuted==true);a.Enabled=audio!=null&&audio.MicrophoneAvailable&&audio.MicrophoneMuted.HasValue;rows.Add(a);

@@ -18,11 +18,21 @@ namespace AtkBatteryTray {
                 using(var pen=new Pen(VisualDesign.HighContrast?SystemColors.WindowText:dark?Color.FromArgb(75,83,94):Color.FromArgb(220,226,235),1))g.DrawPath(pen,shape);
             }
         }
-        public static void DrawLabel(Graphics g,string text,RectangleF rect,float fontSize,bool bold,Color color,StringAlignment align) {
+        public static void DrawLabel(Graphics g,string text,RectangleF rect,float fontSize,bool bold,Color color,StringAlignment align,StringTrimming trimming=StringTrimming.EllipsisCharacter) {
             string family="Segoe UI";foreach(char c in text??"")if(c>=0x2e80&&c<=0x9fff){family="Microsoft YaHei UI";break;}
             using(var font=new Font(family,fontSize,bold?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))
             using(var brush=new SolidBrush(color))
-            using(var format=new StringFormat {Alignment=align,LineAlignment=StringAlignment.Center,Trimming=StringTrimming.EllipsisCharacter,FormatFlags=StringFormatFlags.NoWrap})g.DrawString(text??"",font,brush,rect,format);
+            using(var format=new StringFormat {Alignment=align,LineAlignment=StringAlignment.Center,Trimming=trimming,FormatFlags=StringFormatFlags.NoWrap})g.DrawString(text??"",font,brush,rect,format);
+        }
+        internal static float BatteryTextSize(Graphics g,string text,float preferredSize,float width){
+            using(var format=new StringFormat {FormatFlags=StringFormatFlags.NoWrap}){
+                for(float size=preferredSize;size>=1;size-=.25f)using(var font=new Font("Segoe UI",size,FontStyle.Bold,GraphicsUnit.Pixel)){
+                    // Measure with DrawLabel's font and GDI+ padding, in logical
+                    // units so DPI transforms leave the ring and percent fixed.
+                    if(g.MeasureString(text,font,Int32.MaxValue,format).Width<=width)return size;
+                }
+            }
+            return 1;
         }
         public static void DrawSymbol(Graphics g,string name,RectangleF rect,Color color) {
             var state=g.Save();g.TranslateTransform(rect.X,rect.Y);g.ScaleTransform(rect.Width/20,rect.Height/20);
@@ -85,7 +95,9 @@ namespace AtkBatteryTray {
             }
             if(view.Charging)DrawSymbol(g,"bolt",new RectangleF(179,top+22,9,12),Fg(dark));
             Color digit=view.Fresh?Fg(dark):Muted(dark);
-            DrawLabel(g,view.Percent.HasValue?(view.Approximate?"≈":"")+view.Percent.Value.ToString():"--",new RectangleF(198,top+9,43,32),view.Approximate?16:VisualDesign.BatteryDigitSize,true,digit,StringAlignment.Far);
+            string text=view.Percent.HasValue?(view.Approximate?"≈":"")+view.Percent.Value.ToString():"--";
+            var digits=new RectangleF(198,top+9,43,32);
+            DrawLabel(g,text,digits,BatteryTextSize(g,text,view.Approximate?16:VisualDesign.BatteryDigitSize,digits.Width),true,digit,StringAlignment.Far,StringTrimming.None);
             if(view.Percent.HasValue)DrawLabel(g,"%",new RectangleF(241,top+15,10,21),10,false,digit,StringAlignment.Near);
         }
         static void Header(Graphics g,string name,string subtitle,string icon,float top,bool dark,PanelFeedback feedback,int action) {
@@ -118,7 +130,7 @@ namespace AtkBatteryTray {
             var surface=new RectangleF(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1);
             DrawSurface(g,surface,dark);
             var toggle=VisualDesign.VolumeToggleRect(rect,collapsed);Highlight(g,toggle,241,feedback,dark);
-            DrawSymbol(g,collapsed?"expand":"collapse",new RectangleF(rect.Right-25,rect.Y+(collapsed?9:6),14,14),Fg(dark));
+            DrawSymbol(g,collapsed?"expand":"collapse",VisualDesign.VolumeChevronRect(rect,collapsed),Fg(dark));
             if(feedback!=null&&feedback.KeyboardFocus==241)Outline(g,toggle,Blue(dark),1.1f);
             if(collapsed) {
                 DrawSymbol(g,"speaker",new RectangleF(rect.X+11,rect.Y+8,16,16),enabled?Fg(dark):Muted(dark));

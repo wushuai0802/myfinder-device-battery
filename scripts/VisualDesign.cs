@@ -14,7 +14,8 @@ namespace AtkBatteryTray {
         public static int SystemVolumeHeightFor(bool collapsed){return collapsed?32:SystemVolumeHeight;}
         public static int CurrentSystemVolumeHeight {get{return SystemVolumeHeightFor(DeviceSettings.Current.VolumeCollapsed);}}
         internal static RectangleF VolumeSliderRect(RectangleF card){return new RectangleF(card.X,card.Y,card.Width-36,card.Height);}
-        internal static RectangleF VolumeToggleRect(RectangleF card,bool collapsed){return collapsed?card:new RectangleF(card.Right-32,card.Y+2,28,24);}
+        internal static RectangleF VolumeToggleRect(RectangleF card,bool collapsed){return new RectangleF(card.Right-32,collapsed?card.Y+(card.Height-24)/2:card.Y+2,28,24);}
+        internal static RectangleF VolumeChevronRect(RectangleF card,bool collapsed){return new RectangleF(card.Right-25,collapsed?card.Y+(card.Height-14)/2:card.Y+6,14,14);}
         public const float BatteryRingSize=25,BatteryDigitSize=18;
         public static Size PanelSize {get{return PanelSizeFor(false);}}
         public static float PanelRadius {get{return 16;}}

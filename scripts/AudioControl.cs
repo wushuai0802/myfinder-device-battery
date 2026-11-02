@@ -48,12 +48,29 @@ namespace AtkBattery {
         internal int? FormFactor;
     }
 
+    // Session-only state shared by reads and writes, including callers outside
+    // the audio worker. Device-specific scopes neither use nor update it.
+    internal sealed class SpeakerEndpointMemory {
+        readonly object gate=new object();
+        string rememberedOutputId;
+        internal AudioEndpointInfo FindSpeaker(IList<AudioEndpointInfo> endpoints,AudioBindings bindings,string defaultOutputId,out bool ambiguous){
+            lock(gate){
+                if(!bindings.ExplicitAudioBindingsOnly){
+                    var current=AudioControl.KnownNonHeadphoneOutput(endpoints,defaultOutputId);
+                    if(current!=null)rememberedOutputId=current.Id;
+                }
+                return AudioControl.FindEndpoint(endpoints,"speaker",bindings,defaultOutputId,rememberedOutputId,out ambiguous);
+            }
+        }
+    }
+
     public static partial class AudioControl {
         // ENDPOINT_FORM_FACTOR (mmdeviceapi.h): Headphones=3, Headset=5.
         internal static bool IsHeadphone(int? formFactor){return formFactor==3||formFactor==5;}
         const string SpeakerInterface = "Realtek(R) Audio";
         const string HeadsetInterface = "HyperX Cloud Alpha Wireless";
         static readonly object OperationLock = new object();
+        static readonly SpeakerEndpointMemory SpeakerMemory = new SpeakerEndpointMemory();
         static readonly Guid VolumeInterfaceId = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
         static readonly Guid ChangeContext = new Guid("7495D5A5-5C95-47C4-8D95-0A9A1E5A4B11");
         static readonly PropertyKey FriendlyNameKey = new PropertyKey("A45C254E-DF1C-4EFD-8020-67D146A850E0", 14);
@@ -259,9 +276,12 @@ namespace AtkBattery {
             var result = new AudioReading { TimestampUtc = DateTime.UtcNow, ActiveOutput = "other" };
             var endpoints = session.Enumerate();
             var bindings = DeviceSettings.Current;
+            result.ConsoleOutputId = session.DefaultOutput(Role.Console);
+            result.MultimediaOutputId = session.DefaultOutput(Role.Multimedia);
+            result.CommunicationsOutputId = session.DefaultOutput(Role.Communications);
             bool ambiguous;
-            var speaker = FindEndpoint(endpoints, "speaker", bindings, out ambiguous);
-            if (ambiguous) result.Error = AddError(result.Error, "扬声器端点不唯一，未选择。");
+            var speaker = SpeakerMemory.FindSpeaker(endpoints, bindings, result.ConsoleOutputId, out ambiguous);
+            if (ambiguous) result.Error = AddError(result.Error, "扬声器端点不唯一，请到音频设置中绑定。");
             var headset = FindEndpoint(endpoints, "headset", bindings, out ambiguous);
             if (ambiguous) result.Error = AddError(result.Error, "耳机端点不唯一，未选择。");
             var microphone = FindEndpoint(endpoints, "microphone", bindings, out ambiguous);
@@ -272,9 +292,6 @@ namespace AtkBattery {
             if (speaker != null) { result.SpeakerId = speaker.Id; result.SpeakerName = speaker.Name; }
             if (headset != null) { result.HeadsetId = headset.Id; result.HeadsetName = headset.Name; }
             if (microphone != null) { result.MicrophoneId = microphone.Id; result.MicrophoneName = microphone.Name; }
-            result.ConsoleOutputId = session.DefaultOutput(Role.Console);
-            result.MultimediaOutputId = session.DefaultOutput(Role.Multimedia);
-            result.CommunicationsOutputId = session.DefaultOutput(Role.Communications);
             result.OutputRolesDiffer = !SameId(result.ConsoleOutputId, result.MultimediaOutputId);
             if (speaker != null && SameId(result.ConsoleOutputId, speaker.Id)) result.ActiveOutput = "speaker";
             else if (headset != null && SameId(result.ConsoleOutputId, headset.Id)) result.ActiveOutput = "headset";
@@ -318,6 +335,11 @@ namespace AtkBattery {
             return FindEndpoint(endpoints,target,new AudioBindings(),out ambiguous);
         }
         internal static AudioEndpointInfo FindEndpoint(IList<AudioEndpointInfo> endpoints, string target, AudioBindings bindings, out bool ambiguous) {
+            return FindEndpoint(endpoints,target,bindings,null,null,out ambiguous);
+        }
+        // COM-free selection: explicit bindings and legacy vendor identities
+        // keep priority; the caller supplies the default and session memory.
+        internal static AudioEndpointInfo FindEndpoint(IList<AudioEndpointInfo> endpoints, string target, AudioBindings bindings, string defaultOutputId, string rememberedOutputId, out bool ambiguous) {
             AudioEndpointInfo match = null;
             ambiguous = false;
             if(target!="speaker"&&target!="headset"&&target!="microphone")return null;
@@ -361,7 +383,35 @@ namespace AtkBattery {
                 if(endpoint.Flow!=0||!IsHeadphone(endpoint.FormFactor))continue;
                 if(match!=null){ambiguous=true;return null;}match=endpoint;
             }
+            if(match==null&&target=="speaker")return FindAutomaticSpeaker(endpoints,defaultOutputId,rememberedOutputId,out ambiguous);
             return match;
+        }
+
+        static bool IsKnownNonHeadphoneOutput(AudioEndpointInfo endpoint){
+            // ENDPOINT_FORM_FACTOR values 0..9 are known; UnknownFormFactor=10.
+            return endpoint.Flow==0&&!String.IsNullOrEmpty(endpoint.Id)&&endpoint.FormFactor.HasValue&&endpoint.FormFactor.Value>=0&&endpoint.FormFactor.Value<10&&!IsHeadphone(endpoint.FormFactor);
+        }
+        internal static AudioEndpointInfo KnownNonHeadphoneOutput(IList<AudioEndpointInfo> endpoints,string id){
+            if(String.IsNullOrEmpty(id))return null;
+            AudioEndpointInfo match=null;
+            foreach(var endpoint in endpoints){
+                if(!SameId(endpoint.Id,id)||!IsKnownNonHeadphoneOutput(endpoint))continue;
+                if(match!=null)return null;match=endpoint;
+            }
+            return match;
+        }
+        static AudioEndpointInfo FindAutomaticSpeaker(IList<AudioEndpointInfo> endpoints,string defaultOutputId,string rememberedOutputId,out bool ambiguous){
+            ambiguous=false;
+            var current=KnownNonHeadphoneOutput(endpoints,defaultOutputId);if(current!=null)return current;
+            var remembered=KnownNonHeadphoneOutput(endpoints,rememberedOutputId);if(remembered!=null)return remembered;
+            AudioEndpointInfo speaker=null,other=null;int speakerCount=0,otherCount=0;
+            foreach(var endpoint in endpoints){
+                if(!IsKnownNonHeadphoneOutput(endpoint))continue;
+                if(endpoint.FormFactor==1){speaker=endpoint;speakerCount++;}
+                else{other=endpoint;otherCount++;}
+            }
+            if(speakerCount>0){ambiguous=speakerCount>1;return ambiguous?null:speaker;}
+            ambiguous=otherCount>1;return ambiguous?null:other;
         }
 
         static string RestoreOutputs(IPolicyConfig policy, AudioSession session, AudioReading before) {

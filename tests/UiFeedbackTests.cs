@@ -32,10 +32,10 @@ static class UiFeedbackTests {
         internal DateTime Now=DateTime.UtcNow;
         internal int Reads,VolumeWrites,LastVolume=-1,OutputWrites;
         internal readonly ManualResetEvent VolumeGate=new ManualResetEvent(true);
-        internal Fixture(AudioBindings settings=null){
+        internal Fixture(AudioBindings settings=null,Func<AudioReading> readAudio=null,Func<string,AudioReading> switchAudio=null){
             DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {RememberReadings=false,ReducedMotion=true,TraySource="auto"});
-            Owner=new TrayContext(false,delegate(bool battery){Interlocked.Increment(ref Reads);return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=Now}};},delegate(int stage){throw new Exception("No DPI writes");},null,delegate{return Audio();},false,
-                delegate(string target){Interlocked.Increment(ref OutputWrites);var value=Audio();value.ActiveOutput=target;return value;},delegate(bool mute){throw new Exception("No microphone writes");},
+            Owner=new TrayContext(false,delegate(bool battery){Interlocked.Increment(ref Reads);return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=Now}};},delegate(int stage){throw new Exception("No DPI writes");},null,delegate{return readAudio==null?Audio():readAudio();},false,
+                delegate(string target){Interlocked.Increment(ref OutputWrites);if(switchAudio!=null)return switchAudio(target);var value=Audio();value.ActiveOutput=target;return value;},delegate(bool mute){throw new Exception("No microphone writes");},
                 delegate(string endpoint,int value){VolumeGate.WaitOne();LastVolume=value;Interlocked.Increment(ref VolumeWrites);var audio=Audio();audio.OutputVolumePercent=value;return audio;},delegate{return false;},null,null,delegate{return Now;},null,
                 delegate(AudioBindings pref){DeviceSettings.SaveBindings(Path.Combine(output,"ui-feedback-fixture-settings.json"),pref);DeviceSettings.UseTransientConfiguration(pref);});
             Pump(delegate{return !Owner.IsRefreshing&&!Owner.IsAudioBusy&&Owner.Audio!=null;});
@@ -87,7 +87,7 @@ static class UiFeedbackTests {
             var footer=rows.Find(delegate(PopupControl c){return c.Id==0;});Check(footer.Rect.Top>=expand.Rect.Bottom&&footer.Rect.Bottom*scale<=f.Popup.ClientSize.Height+1,"footer follows the collapsed strip");
             f.Owner.Audio.OutputVolumePercent=23;f.Popup.SyncDevices();Check(f.Controls().Find(delegate(PopupControl c){return c.Text=="展开系统音量";}).Value=="23%","external volume updates collapsed percent");
             int before=f.VolumeWrites;var oldTrack=PopupPages.VolumeTrack(slider.Rect);var oldPoint=new PointF(oldTrack.X+100,oldTrack.Y+oldTrack.Height/2);f.MouseEvent("OnMouseDown",oldPoint);f.MouseEvent("OnMouseUp",oldPoint);
-            Check(f.VolumeWrites==before&&f.Controls().Exists(delegate(PopupControl c){return c.Id==240&&c.Slider;}),"click at old slider x only expands, without a volume write");
+            Check(f.VolumeWrites==before&&!f.Controls().Exists(delegate(PopupControl c){return c.Id==240&&c.Slider;}),"click at old slider x leaves volume collapsed without a volume write");
             var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
             var message=Message.Create(IntPtr.Zero,0,IntPtr.Zero,IntPtr.Zero);expand=f.Controls().Find(delegate(PopupControl c){return c.Text=="展开系统音量";});Call(f.Popup,"FocusControl",expand);Call(f.Popup,"ProcessCmdKey",message,Keys.Space);
             Check(f.Controls().Exists(delegate(PopupControl c){return c.Slider;}),"keyboard space expands volume");
@@ -116,6 +116,88 @@ static class UiFeedbackTests {
         endpoints.Clear();endpoints.Add(new AudioEndpointInfo {Id="speaker",Flow=0,FormFactor=1,Name="Headphones by name only"});endpoints.Add(new AudioEndpointInfo {Id="capture",Flow=1,FormFactor=3});
         Check(AudioControl.FindEndpoint(endpoints,"headset",out ambiguous)==null&&!ambiguous,"a speaker name or a capture endpoint cannot masquerade as headphone output");
         var encoded=Audio();encoded.Devices=new[]{Endpoint("headphones",5)};var decoded=AudioBrokerClient.Decode<AudioReading>(AudioBrokerClient.Encode(encoded));Check(decoded.Devices[0].FormFactor==5,"form factor survives the existing audio broker transport");
+    }
+    static void BatteryTextFits(){
+        foreach(float scale in new[]{1f,1.25f,1.5f,2f})using(var image=new Bitmap(520,100))using(var g=Graphics.FromImage(image)){
+            g.ScaleTransform(scale,scale);g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            var texts=new List<string> {"--"};for(int percent=0;percent<=100;percent++){texts.Add(percent.ToString());texts.Add("≈"+percent);}
+            foreach(string text in texts){
+                float preferred=text.StartsWith("≈")?16:VisualDesign.BatteryDigitSize;
+                float size=CompactRenderer.BatteryTextSize(g,text,preferred,43);
+                using(var font=new Font("Segoe UI",size,FontStyle.Bold,GraphicsUnit.Pixel))using(var format=new StringFormat {Alignment=StringAlignment.Far,LineAlignment=StringAlignment.Center,Trimming=StringTrimming.None,FormatFlags=StringFormatFlags.NoWrap}){
+                    Check(size>0&&size<=preferred&&g.MeasureString(text,font,Int32.MaxValue,format).Width<=43,"battery text "+text+" fits the unchanged 43px region at "+scale);
+                    int fitted,lines;g.MeasureString(text,font,new SizeF(43,32),format,out fitted,out lines);Check(fitted==text.Length&&lines==1,"the complete battery label fits without clipping or wrapping");
+                }
+                using(var font=new Font("Segoe UI",preferred,FontStyle.Bold,GraphicsUnit.Pixel))if(g.MeasureString(text,font).Width<=43)Check(size==preferred,"a label that already fits keeps its preferred size");
+                if(text=="--"||text.Length==2||text.StartsWith("≈")&&text.Length==3)Check(size==preferred,"two digit and unavailable battery sizes stay unchanged for "+text);
+            }
+        }
+    }
+    static void CollapsedVolumeTargets(){
+        foreach(bool wireless in new[]{false,true})foreach(bool audioCard in new[]{false,true})foreach(float scale in new[]{1f,1.25f,1.5f,2f})using(var f=new Fixture()){
+            var pref=DeviceSettings.Current;pref.VolumeCollapsed=true;DeviceSettings.UseTransientConfiguration(pref);
+            f.Owner.GenericReady=wireless;f.Owner.NativeMousePresent=true;
+            f.Owner.Audio.Devices=audioCard?new[]{Endpoint("headphones",3)}:new AudioDeviceChoice[0];
+            if(wireless)f.Owner.WirelessDevices=new[]{Mouse(A,PhysA,71),Mouse(B,PhysB,42)};
+            Set(f.Popup,"dpiScale",scale);f.Popup.SyncDevices();
+            var layout=(WirelessLayout)Call(f.Popup,"MainWireless");
+            var card=wireless?layout.VolumeRect:VisualDesign.SystemVolumeRectFor(audioCard,f.Owner.Dpi);
+            var toggle=f.Controls().Find(delegate(PopupControl c){return c.Id==241;});
+            Check(toggle!=null&&toggle.Rect==VisualDesign.VolumeToggleRect(card,true)&&toggle.Rect.Width>=28&&toggle.Rect.Height>=24,"collapsed arrow hit area follows the scaled "+wireless+" layout with audio card "+audioCard);
+            Check(toggle.Text=="展开系统音量"&&toggle.Value=="55%"&&!toggle.Slider,"Id 241 keeps its accessible text and value");
+            Check(Math.Abs(toggle.Rect.Y+toggle.Rect.Height/2-(card.Y+card.Height/2))<.01f,"collapsed arrow target is vertically centered");
+            var chevron=VisualDesign.VolumeChevronRect(card,true);Check(toggle.Rect.Contains(chevron),"drawn triangle lies within its hit area");
+            int volume=f.Owner.Audio.OutputVolumePercent.Value;
+            foreach(float x in new[]{card.X+15,card.X+card.Width/2}){
+                var point=new PointF(x,card.Y+card.Height/2);f.MouseEvent("OnMouseMove",point);Check((int)Field(f.Popup,"hoverAction")!=241,"hovering collapsed strip text does not highlight the arrow");
+                f.MouseEvent("OnMouseDown",point);f.MouseEvent("OnMouseUp",point);
+                Check(DeviceSettings.Current.VolumeCollapsed&&f.VolumeWrites==0&&f.Owner.Audio.OutputVolumePercent==volume,"clicking the collapsed strip left or middle changes neither expansion nor volume");
+            }
+            var center=new PointF(chevron.X+chevron.Width/2,chevron.Y+chevron.Height/2);f.MouseEvent("OnMouseMove",center);
+            Check((int)Field(f.Popup,"hoverAction")==241,"hovering the triangle highlights its button");
+            f.MouseEvent("OnMouseDown",center);f.MouseEvent("OnMouseUp",center);
+            Check(!DeviceSettings.Current.VolumeCollapsed&&f.VolumeWrites==0&&f.Controls().Exists(delegate(PopupControl c){return c.Id==240&&c.Slider;}),"only the triangle expands volume at "+scale);
+            var expanded=VisualDesign.VolumeToggleRect(new RectangleF(0,50,260,48),false);Check(expanded==new RectangleF(228,52,28,24),"expanded hit geometry stays unchanged");
+            Check(VisualDesign.VolumeChevronRect(new RectangleF(0,50,260,48),false)==new RectangleF(235,56,14,14),"expanded triangle drawing stays unchanged");
+        }
+        using(var f=new Fixture(new AudioBindings {RememberReadings=false,VolumeCollapsed=true})){
+            Set(f.Popup,"headsetProgress",.5f);Call(f.Popup,"UpdateLayoutSize");var toggle=f.Controls().Find(delegate(PopupControl c){return c.Id==241;});
+            var card=new RectangleF(0,VisualDesign.MouseCardHeight(f.Owner.Dpi)+52+VisualDesign.CardGap,260,32);
+            Check(toggle.Rect==VisualDesign.VolumeToggleRect(card,true),"classic Id 241 follows the intermediate second-card animation offset");
+            f.Click(toggle);Check(!DeviceSettings.Current.VolumeCollapsed&&f.VolumeWrites==0,"the displaced classic arrow still expands without writing volume");
+        }
+    }
+    static AudioReading AutomaticAudio(List<AudioEndpointInfo> endpoints,SpeakerEndpointMemory memory,string current){
+        bool ambiguous;var speaker=memory.FindSpeaker(endpoints,DeviceSettings.Current,current,out ambiguous);
+        var headset=AudioControl.FindEndpoint(endpoints,"headset",out ambiguous);
+        var result=new AudioReading {OperationSucceeded=true,TimestampUtc=DateTime.UtcNow,ConsoleOutputId=current,MultimediaOutputId=current,CommunicationsOutputId="communications",VolumeEndpointId=current,OutputVolumePercent=55,
+            SpeakerAvailable=speaker!=null,SpeakerId=speaker==null?null:speaker.Id,HeadsetAvailable=headset!=null,HeadsetId=headset==null?null:headset.Id};
+        result.ActiveOutput=speaker!=null&&speaker.Id==current?"speaker":headset!=null&&headset.Id==current?"headset":"other";
+        var choices=new List<AudioDeviceChoice>();foreach(var endpoint in endpoints)choices.Add(new AudioDeviceChoice {Id=endpoint.Id,Flow=endpoint.Flow,FormFactor=endpoint.FormFactor,Name=endpoint.Id});result.Devices=choices.ToArray();return result;
+    }
+    static void AutomaticAudioRoundTrip(){
+        foreach(int form in new[]{1,9}){
+            var memory=new SpeakerEndpointMemory();var endpoints=new List<AudioEndpointInfo> {new AudioEndpointInfo {Id="original",Flow=0,FormFactor=form},new AudioEndpointInfo {Id="headphones",Flow=0,FormFactor=3},new AudioEndpointInfo {Id="other",Flow=0,FormFactor=1}};
+            string current="original";
+            using(var f=new Fixture(null,delegate{return AutomaticAudio(endpoints,memory,current);},delegate(string target){
+                var before=AutomaticAudio(endpoints,memory,current);string id=target=="speaker"?before.SpeakerId:before.HeadsetId;
+                if(id==null)throw new Exception("Fake target must be available");current=id;return AutomaticAudio(endpoints,memory,current);
+            })){
+                Check(f.Owner.Audio.SpeakerAvailable&&f.Owner.Audio.SpeakerId=="original","non-Realtek default is an available speaker target");
+                f.Click(f.Controls().Find(delegate(PopupControl c){return c.Id==101;}));Pump(delegate{return f.OutputWrites==1&&!f.Owner.IsAudioBusy;});
+                var speaker=f.Controls().Find(delegate(PopupControl c){return c.Id==100;});
+                Check(current=="headphones"&&f.Owner.Audio.ActiveOutput=="headset"&&speaker!=null&&speaker.Enabled&&f.Owner.Audio.SpeakerId=="original","switching to wired headphones keeps the original output available");
+                f.Click(speaker);Pump(delegate{return f.OutputWrites==2&&!f.Owner.IsAudioBusy;});
+                Check(current=="original"&&f.Owner.Audio.ActiveOutput=="speaker"&&f.Owner.Audio.CommunicationsOutputId=="communications"&&f.VolumeWrites==0,"switching back restores the remembered USB/HDMI endpoint through the fake audio queue");
+            }
+        }
+    }
+    static void AmbiguousSpeakerHint(){
+        using(var f=new Fixture()){
+            f.Owner.Audio.SpeakerAvailable=false;f.Owner.Audio.SpeakerId=null;f.Owner.Audio.SpeakerName=null;
+            var speaker=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.Audio},false).Find(delegate(PopupControl c){return c.Id==100;});
+            Check(!speaker.Enabled&&speaker.Detail!=null&&speaker.Detail.Contains("音频设置")&&speaker.Detail.Contains("绑定"),"unresolved speaker details explain how to bind an endpoint");
+        }
     }
     static void AudioCards(){
         foreach(bool wireless in new[]{false,true})using(var f=new Fixture()){
@@ -163,5 +245,5 @@ static class UiFeedbackTests {
             }
         }
     }
-    [STAThread] static int Main(string[] args){output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Run("configuration",Configuration);Run("active tray",ActiveTray);Run("volume layouts",VolumeLayouts);Run("collapse during drag/queue",VolumeDuringDrag);Run("audio detection",AudioDetection);Run("audio cards",AudioCards);Run("paging and classic tray",PagingAndClassicTray);if(failures==0)Run("previews",Previews);Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices/audio only");return failures==0?0:1;}
+    [STAThread] static int Main(string[] args){output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Run("battery text fitting",BatteryTextFits);Run("configuration",Configuration);Run("active tray",ActiveTray);Run("volume layouts",VolumeLayouts);Run("collapsed volume targets",CollapsedVolumeTargets);Run("collapse during drag/queue",VolumeDuringDrag);Run("audio detection",AudioDetection);Run("automatic audio round trip",AutomaticAudioRoundTrip);Run("ambiguous speaker hint",AmbiguousSpeakerHint);Run("audio cards",AudioCards);Run("paging and classic tray",PagingAndClassicTray);if(failures==0)Run("previews",Previews);Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices/audio only");return failures==0?0:1;}
 }

@@ -8,8 +8,69 @@ static class AudioSettingsTests {
     static int passed;
     static void Check(bool value,string name){if(!value)throw new Exception("FAIL "+name);passed++;}
     static void Reject(Action operation,string name){bool rejected=false;try{operation();}catch{rejected=true;}Check(rejected,name);}
+    static AudioEndpointInfo Output(string id,int? form,int flow=0){return new AudioEndpointInfo {Id=id,Flow=flow,FormFactor=form,Name="Unrelated name",InterfaceName="Other vendor"};}
+    static void SpeakerFallbacks(){
+        bool ambiguous;var automatic=new AudioBindings();
+        var speaker=Output("usb",1);var headphones=Output("headphones",3);var hdmi=Output("hdmi",9);var spdif=Output("spdif",8);
+        var endpoints=new List<AudioEndpointInfo> {speaker,headphones};
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",out ambiguous)==speaker&&!ambiguous,"a unique non-Realtek speaker resolves without a binding");
+        endpoints.Add(hdmi);endpoints.Add(spdif);endpoints.Add(Output("second-speaker",1));
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"HDMI","usb",out ambiguous)==hdmi&&!ambiguous,"current known non-headphone default wins over memory and multiple speakers");
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"headphones","hdmi",out ambiguous)==hdmi&&!ambiguous,"headphone default returns to the remembered HDMI output");
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"headphones",null,out ambiguous)==null&&ambiguous,"multiple speakers without a usable default or memory are ambiguous");
+        endpoints.RemoveAt(4);
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"headphones","unplugged",out ambiguous)==speaker&&!ambiguous,"unplugged memory falls back to the unique speaker before other output types");
+        endpoints.Remove(speaker);endpoints.Remove(spdif);
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"headphones","unplugged",out ambiguous)==hdmi&&!ambiguous,"unplugged memory falls back to the unique known other output");
+        endpoints.Add(spdif);
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"headphones",null,out ambiguous)==null&&ambiguous,"multiple other outputs without a speaker are ambiguous");
+        foreach(int form in new[]{0,2,4,6,7,8,9}){
+            var known=Output("known",form);endpoints=new List<AudioEndpointInfo> {headphones,known,Output("capture",1,1)};
+            Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"headphones",null,out ambiguous)==known&&!ambiguous,"known render form factor "+form+" is eligible without name guessing");
+        }
+        foreach(int? form in new int?[]{null,-1,10,11,99}){
+            var unknown=Output("unknown",form);unknown.Name="Speakers";
+            endpoints=new List<AudioEndpointInfo> {headphones,Output("headset",5),unknown,Output("capture",1,1)};
+            Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"unknown","unknown",out ambiguous)==null&&!ambiguous,"unknown form factor "+form+", headphones and capture endpoints never qualify");
+            endpoints.Add(speaker);
+            Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"unknown","unknown",out ambiguous)==speaker&&!ambiguous,"unknown endpoints do not make a unique speaker ambiguous");
+        }
+        var realtek=Output("realtek",1);realtek.InterfaceName="Realtek(R) Audio";
+        endpoints=new List<AudioEndpointInfo> {speaker,headphones,hdmi,spdif,realtek};
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",automatic,"hdmi","spdif",out ambiguous)==realtek&&!ambiguous,"existing Realtek rule keeps priority over the generic fallback");
+        var explicitBinding=new AudioBindings {SpeakerEndpointId="headphones"};
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",explicitBinding,"hdmi","usb",out ambiguous)==headphones&&!ambiguous,"explicit bindings retain the user-selected output regardless of endpoint type");
+        explicitBinding.SpeakerEndpointId="unplugged";
+        Check(AudioControl.FindEndpoint(endpoints,"speaker",explicitBinding,"hdmi","usb",out ambiguous)==null&&!ambiguous,"an absent explicit speaker binding cannot fall through to automatic selection");
+        endpoints.Remove(realtek);
+        var memory=new SpeakerEndpointMemory();
+        Check(memory.FindSpeaker(endpoints,automatic,"hdmi",out ambiguous)==hdmi,"a global known default seeds session memory");
+        var scoped=new AudioBindings {ExplicitAudioBindingsOnly=true};
+        Check(memory.FindSpeaker(endpoints,scoped,"spdif",out ambiguous)==null&&!ambiguous,"device-only scopes do not select an automatic speaker");
+        scoped.SpeakerEndpointId="spdif";
+        Check(memory.FindSpeaker(endpoints,scoped,"spdif",out ambiguous)==spdif,"device-only scopes keep explicit bindings");
+        Check(memory.FindSpeaker(endpoints,automatic,"headphones",out ambiguous)==hdmi,"device-only reads and explicit device bindings do not overwrite global session memory");
+        Check(new SpeakerEndpointMemory().FindSpeaker(endpoints,automatic,"headphones",out ambiguous)==speaker,"session memory is isolated from a fresh resolver");
+        Check(memory.FindSpeaker(endpoints,automatic,"spdif",out ambiguous)==spdif&&memory.FindSpeaker(endpoints,automatic,"headphones",out ambiguous)==spdif,"the most recently observed eligible default replaces older memory");
+        endpoints.Remove(spdif);
+        Check(memory.FindSpeaker(endpoints,automatic,"headphones",out ambiguous)==speaker,"removed remembered outputs are revalidated against the current inventory");
+        Check(automatic.SpeakerEndpointId==null&&automatic.HeadsetEndpointId==null,"automatic selection leaves configuration bindings untouched");
+        int errors=0;var threads=new System.Threading.Thread[6];
+        memory.FindSpeaker(endpoints,automatic,"hdmi",out ambiguous);
+        for(int i=0;i<threads.Length;i++){
+            threads[i]=new System.Threading.Thread(delegate(){
+                for(int j=0;j<100;j++){
+                    bool multiple;
+                    if(memory.FindSpeaker(endpoints,scoped,"usb",out multiple)!=null||multiple||memory.FindSpeaker(endpoints,automatic,"headphones",out multiple)!=hdmi||multiple)System.Threading.Interlocked.Increment(ref errors);
+                }
+            });threads[i].Start();
+        }
+        foreach(var thread in threads)Check(thread.Join(5000),"concurrent fake endpoint resolver completes");
+        Check(errors==0,"concurrent scoped reads cannot overwrite remembered global output");
+    }
     static int Main(string[] args) {
         try {
+            SpeakerFallbacks();
             string root=Path.Combine(Path.GetFullPath(args[0]),"audio-settings-"+Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             string path=Path.Combine(root,"audio-settings.json");
