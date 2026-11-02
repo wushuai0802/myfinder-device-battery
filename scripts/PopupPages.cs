@@ -83,6 +83,7 @@ namespace AtkBatteryTray {
                 return WithIdentity(rows,nav,owner);
             }
             if(nav.Page==PopupPage.More) {
+                rows.Add(Row(260,owner.UpdateAvailable?owner.UpdateStatus:"检查更新",null,"info"));
                 rows.Add(Row(0,"立即同步全部",null,"refresh"));rows.Add(Row(200,"音源与麦克风",null,"speaker"));
                 rows.Add(Row(201,"显示与提醒",null,"settings"));if(owner.NativeMousePresent)rows.Add(Row(2,"鼠标详情",null,"mouse"));
                 if(!owner.UseWirelessLayout||owner.Headset!=null&&owner.Headset.ReceiverPresent)rows.Add(Row(3,"耳机详情",null,"headset"));rows.Add(Row(206,"设备管理",null,"keyboard"));rows.Add(Row(202,"状态与诊断",null,"info"));rows.Add(Row(204,"退出",null,"power"));
@@ -101,6 +102,7 @@ namespace AtkBatteryTray {
                 rows.Add(Toggle(214,"跨重启保留读数",pref.RememberReadings));rows.Add(Toggle(215,"减弱动效",pref.ReducedMotion));
                 rows.Add(Row(216,"后台同步间隔",pref.BackgroundSeconds==60?"1分钟":pref.BackgroundSeconds==120?"2分钟":"5分钟"));
                 rows.Add(Row(217,"清除历史读数",null,"refresh"));
+                rows.Add(Toggle(219,"自动检查更新",pref.AutoCheckUpdates));
             }else if(nav.Page==PopupPage.ChoosePreference) {
                 string[] labels;int first,selected;
                 if(nav.PreferenceAction==210){labels=new[]{"跟随系统","浅色","深色"};first=400;selected=pref.Theme=="auto"?0:pref.Theme=="light"?1:2;}
@@ -142,6 +144,9 @@ namespace AtkBatteryTray {
                 if(nav.Offset>0)rows.Add(Row(7,"上一页"));if(nav.Offset+visible<choices.Count)rows.Add(Row(8,"下一页"));
             }else if(nav.Page==PopupPage.Diagnostics) {
                 rows.Add(Info("版本",AppRuntime.Version));rows.Add(Info("鼠标读取",UiState.Mouse(owner.Current,owner.LastGood,DateTime.UtcNow).Fresh?"已确认":"历史 / 未知"));
+                rows.Insert(1,Info("软件更新",owner.UpdateStatus));
+                rows.Insert(2,Row(owner.UpdateAvailable?260:261,owner.UpdateAvailable?owner.UpdateStatus:"检查更新",null,"info"));
+                if(!String.IsNullOrEmpty(owner.UpdateFailure))rows.Insert(3,Info("上次更新失败",owner.UpdateFailure));
                 rows.Add(Info("耳机无线",headset?"已确认连接":"未确认连接"));rows.Add(Info("后台同步",pref.BackgroundSeconds+"秒"));
                 rows.Add(Info("配置状态",DeviceSettings.UsingDefaults?"读取失败，使用默认":"正常"));
                 rows.Add(Info("诊断写入",owner.StorageHealthText));

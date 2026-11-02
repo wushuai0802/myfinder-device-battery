@@ -26,6 +26,10 @@ function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShor
     $script:iconRefreshPaths=@($Executable,$StartupShortcut,$ManualShortcut)
 }
 $manifest=Read-DeviceBatteryPackageManifest $extracted
+# Validate the actual unsigned CI package using the independent offline updater validator.
+# A release signature is created locally after CI; this never needs the private key.
+$validation=Start-Process -FilePath (Join-Path $extracted 'outputs\AtkMouseBattery.exe') -ArgumentList @('--validate-update-directory',('"'+$extracted+'"'),$manifest.version) -WindowStyle Hidden -PassThru
+try{if(-not $validation.WaitForExit(30000) -or $validation.ExitCode -ne 0){throw 'The independent updater package validator rejected the CI package.'}}finally{$validation.Dispose()}
 $checksum=Join-Path (Split-Path -Parent $ZipPath) 'SHA256SUMS.txt'
 $actualHash=(Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $expectedLine=$actualHash+'  '+[IO.Path]::GetFileName($ZipPath)

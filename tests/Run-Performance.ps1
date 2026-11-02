@@ -11,6 +11,7 @@ $release=Read-DeviceBatteryRelease $root
 $metadata=Join-Path $OutputDirectory 'AssemblyInfo.performance.cs'
 [IO.File]::WriteAllText($metadata,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$release.version+'")]'),(New-Object Text.UTF8Encoding($false)))
 $sources=@(Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
+$sources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
 $sources+=$metadata
 $binary=Join-Path $OutputDirectory 'InteractionPerformanceTests.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:InteractionPerformanceTests /reference:System.Runtime.Serialization.dll `

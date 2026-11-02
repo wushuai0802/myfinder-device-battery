@@ -10,6 +10,12 @@ $testMetadata=Join-Path $OutputDirectory 'AssemblyInfo.tests.cs'
 [IO.File]::WriteAllText($testMetadata,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$testRelease.version+'")]'),(New-Object Text.UTF8Encoding($false)))
 $appSources=@(Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
 $appSources+=$testMetadata
+$appSources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
+$updateTest=Join-Path $OutputDirectory 'UpdateTests.exe'
+& $compiler /nologo /target:exe /platform:x64 /optimize+ /define:UPDATE_TESTS /main:UpdateTests /reference:System.Runtime.Serialization.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll "/out:$updateTest" $appSources (Join-Path $PSScriptRoot 'UpdateTests.cs')
+if($LASTEXITCODE -ne 0){throw 'Update test build failed.'}
+& $updateTest $OutputDirectory $root
+if($LASTEXITCODE -ne 0){throw 'Update tests failed.'}
 $test=Join-Path $OutputDirectory 'AudioSettingsTests.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:AudioSettingsTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll "/out:$test" $appSources (Join-Path $PSScriptRoot 'AudioSettingsTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Audio/settings test build failed.'}
@@ -55,6 +61,12 @@ if($LASTEXITCODE -ne 0){throw 'Runtime integration test build failed.'}
 & $runtimeTest $OutputDirectory
 if($LASTEXITCODE -ne 0){throw 'Runtime integration tests failed.'}
 $installer=Join-Path $PSScriptRoot 'InstallerTests.ps1'
+foreach($hostName in @('powershell.exe','pwsh.exe')){
+    if(Get-Command $hostName -ErrorAction SilentlyContinue){
+        & $hostName -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'UpdateInstallerTests.ps1') -OutputDirectory $OutputDirectory
+        if($LASTEXITCODE -ne 0){throw ('Update installer tests failed on '+$hostName)}
+    }
+}
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -OutputDirectory $OutputDirectory
 if($LASTEXITCODE -ne 0){throw 'Windows PowerShell installer tests failed.'}
 if(Get-Command pwsh.exe -ErrorAction SilentlyContinue){

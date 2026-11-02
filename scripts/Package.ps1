@@ -31,7 +31,7 @@ $runtime=Join-Path $root 'engine\runtime'
 $null=& (Join-Path $PSScriptRoot 'Build-Backend.ps1') -OutputDirectory $runtime
 New-Item -ItemType Directory -Path (Join-Path $stage 'outputs'),(Join-Path $stage 'scripts') -Force|Out-Null
 foreach($file in @('AtkMouseBattery.exe','AtkBatteryProbe.exe')){Copy-Item -LiteralPath (Join-Path $BuildDirectory $file) -Destination (Join-Path $stage 'outputs')}
-foreach($file in @('Install.Common.ps1','Manifest.Common.ps1','Install-Startup.ps1','Uninstall-Startup.ps1','Start.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stage 'scripts')}
+foreach($file in @('Install.Common.ps1','Manifest.Common.ps1','Install-Startup.ps1','Uninstall-Startup.ps1','Start.ps1','Apply-Update.ps1','Update.Common.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stage 'scripts')}
 foreach($file in @('README.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','LICENSE','release.json')){Copy-Item -LiteralPath (Join-Path $root $file) -Destination $stage}
 Copy-Item -LiteralPath $buildInfoPath -Destination (Join-Path $stage 'build-info.json')
 foreach($file in (Get-DeviceBatteryEngineFiles (Join-Path $root 'engine'))) {

@@ -30,6 +30,7 @@ using System.Reflection;
 '@
 [IO.File]::WriteAllText($assembly,$metadata.Replace('{ASSEMBLY}',$release.assemblyVersion).Replace('{VERSION}',$release.version),(New-Object Text.UTF8Encoding($false)))
 $uiSources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
+$uiSources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/win32icon:$iconPath" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $uiSources $assembly
 if ($LASTEXITCODE -ne 0) { throw 'Tray build failed.' }
 & (Join-Path $buildOutput 'AtkBatteryProbe.exe') --self-test

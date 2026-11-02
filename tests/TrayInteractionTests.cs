@@ -229,6 +229,26 @@ static class TrayInteractionTests {
             }
         }
     }
+    static void OpeningGuardSurvivesNestedShowPump() {
+        using(var f=new Fixture()) {
+            var details=f.OpenHidden(false);bool observed=false,guarded=false;
+            details.VisibleChanged+=delegate {
+                if(!details.Visible||observed)return;
+                observed=true;
+                // Showing a native window can pump messages before Show/Activate returns.
+                // A HandleCreated callback must not end the presentation guard inside that pump.
+                Application.DoEvents();
+                guarded=(bool)IgnoreDeactivateField.GetValue(details);
+                Deactivate(details);
+            };
+            details.OpenAnimated();
+            Check(observed,"opening regression pumps messages during native Show");
+            Check(guarded,"opening guard survives a nested Show message pump");
+            Until(delegate{return !(bool)IgnoreDeactivateField.GetValue(details);},"opening guard releases after Show/Activate finishes");
+            PumpFor(230);
+            Check(!details.IsDisposed&&!details.IsClosing&&details.Visible,"setup deactivation cannot dismiss a newly opened popup");
+        }
+    }
     static void PopupHandleLifecycle() {
         using(var f=new Fixture()) {
             var details=f.OpenHidden(false);
@@ -372,6 +392,7 @@ static class TrayInteractionTests {
             Run("hold beyond the close animation",LongPress);
             Run("disposed captured close target",DisposedTarget);
             Run("captured target replaced before release",ReplacedTarget);
+            Run("opening guard survives nested Show message pumping",OpeningGuardSurvivesNestedShowPump);
             Run("visible replacement native activation probe",VisibleReplacementActivation);
             Run("press during closing reveals with activation probe",ReopenDuringClose);
             Run("right-button isolation and menu reveal",RightButtonAndMenu);
