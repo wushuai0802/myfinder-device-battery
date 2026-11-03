@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory)
+param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $previewOutput=[IO.Path]::GetFullPath($OutputDirectory)
@@ -21,6 +21,14 @@ $previewRelease=Read-DeviceBatteryRelease $root
 $previewMetadata=Join-Path $compileDirectory 'AssemblyInfo.preview.cs'
 [IO.File]::WriteAllText($previewMetadata,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$previewRelease.version+'")]'),(New-Object Text.UTF8Encoding($false)))
 $sources+=$previewMetadata
+$interactionExecutable=Join-Path $compileDirectory 'RenderInteractions.exe'
+& $compiler /nologo /target:exe /platform:x64 /optimize+ /main:HoverTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$interactionExecutable" $sources (Join-Path $PSScriptRoot 'HoverTests.cs')
+if($LASTEXITCODE -ne 0){throw 'Interaction preview compilation failed.'}
+# Every interactive region, separately in default / hover / pressed / keyboard
+# focus states, in all four palettes and both light/dark modes.
+& $interactionExecutable --render $previewOutput
+if($LASTEXITCODE -ne 0){throw 'Interaction preview rendering failed.'}
+if($InteractionsOnly){return}
 $executable=Join-Path $compileDirectory 'RenderThemes.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:ThemeTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$executable" $sources (Join-Path $PSScriptRoot 'ThemeTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Theme preview compilation failed.'}

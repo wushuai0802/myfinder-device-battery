@@ -322,8 +322,9 @@ static class PopupStateRegressionTests {
             using(var focused=VolumeSurface(audio,new PanelFeedback {HoverAction=240,KeyboardFocus=240},dark,scale))
             using(var disabled=VolumeSurface(null,new PanelFeedback(),dark,scale))
             using(var disabledHover=VolumeSurface(null,new PanelFeedback {HoverAction=240,PressedAction=240},dark,scale)) {
-                Check(PixelsChanged(normal,hover,leftEdge,scale)&&PixelsChanged(normal,hover,topEdge,scale),"volume hover reaches the outer card edge bands without an inset background plate at "+scale+" dark="+dark+" contrast="+highContrast);
-                Check(PixelsChanged(normal,pressed,leftEdge,scale)&&PixelsChanged(normal,pressed,topEdge,scale),"volume press reaches the same outer card edge bands at "+scale);
+                Check(!PixelsChanged(normal,hover,leftEdge,scale)&&!PixelsChanged(normal,hover,topEdge,scale),"volume hover preserves the required card clearance at "+scale+" dark="+dark+" contrast="+highContrast);
+                Check(!PixelsChanged(normal,pressed,leftEdge,scale)&&!PixelsChanged(normal,pressed,topEdge,scale),"volume press preserves the same card clearance at "+scale);
+                Check(PixelsChanged(normal,hover,new RectangleF(14,14,204,26),scale)&&PixelsChanged(normal,pressed,new RectangleF(14,14,204,26),scale),"enabled volume still provides visible inset hover and press feedback at "+scale);
                 Check(PixelsChanged(hover,focused,full,scale),"keyboard focus remains visually distinct from card hover at "+scale);
                 Check(!PixelsChanged(disabled,disabledHover,full,scale),"disabled volume does not gain interactive background feedback at "+scale);
                 bool clear=true;foreach(var image in new[]{normal,hover,pressed,focused})clear&=image.GetPixel((int)(4*scale),(int)(4*scale)).A==0&&image.GetPixel((int)(2*scale),(int)(28*scale)).A==0&&image.GetPixel((int)(134*scale),(int)(2*scale)).A==0;

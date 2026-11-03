@@ -393,8 +393,7 @@ static class ThemedDialogTests {
                         button.Name=style+dark+kind+interaction;
                         ComparePaint(button,theme.Background,scale,delegate(Graphics g,RectangleF rect){
                             if(kind!=ThemedButtonKind.Text){CompactRenderer.Fill(g,rect,theme.Track,VisualDesign.SelectionRadius);CompactRenderer.Selection(g,rect,button.Text,null,kind==ThemedButtonKind.Primary,true,hover,pressed,false,dark);}
-                            else{CompactRenderer.Highlight(g,rect,0,new PanelFeedback {HoverAction=hover?0:-1,PressedAction=pressed?0:-1},dark);CompactRenderer.DrawLabel(g,button.Text,rect,VisualDesign.DeviceNameFontSize,false,theme.Accent,StringAlignment.Center);}
-                            if(hover)CompactRenderer.Outline(g,rect,theme.Accent,1);
+                            else{InteractionLayout.Paint(g,DialogInteraction.Card(button,scale,rect),rect,0,new PanelFeedback {HoverAction=hover?0:-1,PressedAction=pressed?0:-1},dark,false,delegate{CompactRenderer.DrawLabel(g,button.Text,rect,VisualDesign.DeviceNameFontSize,false,theme.Accent,StringAlignment.Center);});}
                         });
                     }
                 }

@@ -409,11 +409,12 @@ namespace AtkBatteryTray {
             if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==224?"图标样式":nav.PreferenceAction==211?"显示规则":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
             switch(nav.Page){case PopupPage.More:return "更多选项";case PopupPage.Audio:return "音源与麦克风";case PopupPage.Preferences:return "显示与提醒";case PopupPage.Mouse:return "鼠标详情";case PopupPage.Headset:return "耳机详情";case PopupPage.Bindings:return "按钮绑定";case PopupPage.PickBinding:return nav.BindingRole=="speaker"?"选择扬声器":nav.BindingRole=="headset"?"选择耳机":"选择麦克风";default:return "状态与诊断";}
         }
-        internal static RectangleF VolumeTrack(RectangleF row){return new RectangleF(row.X+9,row.Y+(row.Height<=VisualDesign.SystemVolumeHeight?27:33),row.Width-18,VisualDesign.VolumeTrackHeight);}
+        internal static RectangleF VolumeTrack(RectangleF row){return new RectangleF(row.X+17,row.Y+(row.Height<=VisualDesign.SystemVolumeHeight?27:33),row.Width-34,VisualDesign.VolumeTrackHeight);}
         internal static int VolumeAt(RectangleF row,float x){var track=VolumeTrack(row);return Math.Max(0,Math.Min(100,(int)Math.Round((x-track.Left)/track.Width*100)));}
         internal static RectangleF ToggleBounds(RectangleF row){return new RectangleF(row.Right-37,row.Y+(row.Height-VisualDesign.ToggleHeight)/2,VisualDesign.ToggleWidth,VisualDesign.ToggleHeight);}
         internal static void DrawToggle(Graphics g,RectangleF row,bool isChecked,bool enabled,bool dark,bool warning=false) {
             var palette=ThemePalette.Current(dark);var toggle=ToggleBounds(row);
+            if(InteractionLayout.Measuring){InteractionLayout.Include(toggle);return;}
             CompactRenderer.Fill(g,toggle,!enabled?palette.Track:isChecked?warning&&!VisualDesign.HighContrast?ThemePalette.LevelColor(10,dark):palette.Selected:palette.Track,VisualDesign.ToggleHeight/2);
             var knob=new RectangleF(toggle.X+(isChecked?VisualDesign.ToggleWidth-VisualDesign.ToggleKnobSize-VisualDesign.ToggleInset:VisualDesign.ToggleInset),toggle.Y+VisualDesign.ToggleInset,VisualDesign.ToggleKnobSize,VisualDesign.ToggleKnobSize);
             using(var brush=new SolidBrush(!enabled?palette.Muted:isChecked?palette.SelectedForeground:VisualDesign.HighContrast?palette.Knob:dark?palette.Muted:Color.White))g.FillEllipse(brush,knob);
@@ -423,16 +424,17 @@ namespace AtkBatteryTray {
             Size size=SizeFor(controls);var palette=ThemePalette.Current(dark);var fg=palette.Foreground;var muted=palette.Muted;var blue=palette.Accent;var track=palette.Track;
             g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             VisualDesign.DrawSurface(g,new RectangleF(.5f,.5f,size.Width-1,size.Height-1),dark);
+            var card=new RectangleF(.5f,.5f,size.Width-1,size.Height-1);
+            var feedbackState=new PanelFeedback {HoverAction=hover,PressedAction=pressed,KeyboardFocus=focus};
             bool backActive=hover==6||pressed==6||focus==6;
-            if(backActive)using(var shape=VisualDesign.RoundRect(8,5,34,34,7))using(var brush=new SolidBrush(palette.Interaction(pressed==6)))g.FillPath(brush,shape);
-            if(backActive)using(var shape=VisualDesign.RoundRect(8.5f,5.5f,33,33,7))using(var pen=new Pen(blue,1))g.DrawPath(pen,shape);
-            VisualDesign.DrawSymbol(g,"back",new RectangleF(17,14,16,16),VisualDesign.HighContrast&&backActive?palette.SelectedForeground:muted);
+            InteractionLayout.Paint(g,card,new RectangleF(8,5,34,34),6,feedbackState,dark,false,delegate{VisualDesign.DrawSymbol(g,"back",new RectangleF(17,14,16,16),VisualDesign.HighContrast&&backActive?palette.SelectedForeground:muted);});
             VisualDesign.DrawLabel(g,Title(nav),new RectangleF(45,9,200,27),13,true,fg,StringAlignment.Near);
             foreach(var row in controls) {
                 if(row.Id==6)continue;
                 if(row.Section){VisualDesign.DrawLabel(g,row.Text,new RectangleF(row.Rect.X+6,row.Rect.Y,row.Rect.Width-12,row.Rect.Height),11,false,muted,StringAlignment.Near);continue;}
                 var rect=row.Rect;bool highlighted=row.Id>=0&&(row.Id==hover||row.Id==focus||row.Id==pressed),themeChoice=!String.IsNullOrEmpty(row.PaletteKey);
-                if(!themeChoice&&(highlighted||row.Selected))using(var shape=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,7))using(var brush=new SolidBrush(row.Selected?palette.Selected:palette.Interaction(row.Id==pressed)))g.FillPath(brush,shape);
+                if(!themeChoice&&row.Selected)CompactRenderer.Fill(g,rect,palette.Selected,VisualDesign.SelectionRadius);
+                InteractionLayout.Paint(g,card,rect,row.Id,row.Enabled&&!row.Information&&row.Id>=0?feedbackState:null,dark,row.Selected,delegate{
                 Color color=row.Enabled?fg:muted;float x=rect.X+6;
                 Color detailColor=muted;
                 if(row.Enabled&&themeChoice&&row.Selected)color=blue;
@@ -450,6 +452,7 @@ namespace AtkBatteryTray {
                             using(var pen=new Pen(swatch.Border,1))g.DrawPath(pen,shape);
                         }
                         using(var brush=new SolidBrush(swatch.Accent))g.FillEllipse(brush,x+18,y+5,8,8);
+                        InteractionLayout.Include(new RectangleF(x-.5f,y-.5f,31,19));
                     }
                     x+=38;
                 }
@@ -463,6 +466,7 @@ namespace AtkBatteryTray {
                     if(value.HasValue) {
                         float diameter=row.Id==hover||row.Id==pressed?14:12;
                         var knob=new RectangleF(meter.X+fill-diameter/2,meter.Y+meter.Height/2-diameter/2,diameter,diameter);
+                        var ink=knob;ink.Inflate(.5f,.5f);InteractionLayout.Include(ink);
                         using(var brush=new SolidBrush(palette.Knob))g.FillEllipse(brush,knob);
                         using(var pen=new Pen(blue,1))g.DrawEllipse(pen,knob);
                     }
@@ -470,6 +474,7 @@ namespace AtkBatteryTray {
                     VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y,rect.Width-51,rect.Height),11.5f,false,color,StringAlignment.Near);
                     DrawToggle(g,rect,row.Checked,row.Enabled,dark,row.Id==102);
                 }else if(row.WrapText) {
+                    InteractionLayout.Include(InteractionLayout.LabelBounds(g,WrappedText(row),new RectangleF(x,rect.Y+6,rect.Right-x-23,rect.Height-12),11.5f,false,StringAlignment.Near,StringTrimming.None,true));
                     using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(color))using(var format=new StringFormat {LineAlignment=StringAlignment.Center})g.DrawString(WrappedText(row),font,brush,new RectangleF(x,rect.Y+6,rect.Right-x-23,rect.Height-12),format);
                 }else {
                     float textWidth=String.IsNullOrEmpty(row.Value)?rect.Right-x-23:Math.Min(105,rect.Right-x-90);
@@ -479,7 +484,7 @@ namespace AtkBatteryTray {
                     if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(rect.Height-14)/2,14,14),themeChoice?blue:palette.SelectedForeground);
                     else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=224||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000&&row.ActionKey!="tray:member"&&row.ActionKey!="tray:group-pin"||row.ActionKey=="tray:group"||row.ActionKey=="tray:rename"||row.ActionKey=="tray:rules"||row.ActionKey=="tray:members")VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(rect.Height-12)/2,12,12),detailColor);
                 }
-                if(highlighted)using(var shape=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1,7))using(var pen=new Pen(blue,1))g.DrawPath(pen,shape);
+                });
             }
             string notice=nav.Notice;
             var feedback=owner.GetFeedback();bool failure=false;

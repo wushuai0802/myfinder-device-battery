@@ -45,6 +45,19 @@ namespace AtkBatteryTray {
         }
     }
 
+    internal static class DialogInteraction {
+        internal static RectangleF Card(Control control,float scale,RectangleF rect){
+            Control surface=control.Parent;float x=control.Left/scale,y=control.Top/scale;
+            while(surface!=null){
+                if(surface is ThemedSection||surface is Form)return new RectangleF(-x+.5f,-y+.5f,surface.ClientSize.Width/scale-1,surface.ClientSize.Height/scale-1);
+                x+=surface.Left/scale;y+=surface.Top/scale;surface=surface.Parent;
+            }
+            // An unparented preview control has no enclosing card. Its own bounds
+            // still constrain feedback, exactly as a segment constrains its fill.
+            rect.Inflate(8,8);return rect;
+        }
+    }
+
     // Dialogs consume the panel's palette without deriving alternative control colors.
     internal sealed class DialogTheme {
         internal readonly bool Dark,HighContrast;
@@ -289,12 +302,10 @@ namespace AtkBatteryTray {
             var rect=new RectangleF(0,0,Width/scale,Height/scale);
             if(kind!=ThemedButtonKind.Text){
                 CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
-                CompactRenderer.Selection(e.Graphics,rect,Text,null,kind==ThemedButtonKind.Primary,Enabled,hovered,pressed,false,theme.Dark);
+                CompactRenderer.Selection(e.Graphics,rect,Text,null,kind==ThemedButtonKind.Primary,Enabled,hovered,pressed,false,theme.Dark,Focused&&ShowFocusCues,DialogInteraction.Card(this,scale,rect));
             }else{
-                if(Enabled)CompactRenderer.Highlight(e.Graphics,rect,0,new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1},theme.Dark);
-                CompactRenderer.DrawLabel(e.Graphics,Text,rect,VisualDesign.DeviceNameFontSize,false,TextFor(hovered,pressed),StringAlignment.Center);
+                InteractionLayout.Paint(e.Graphics,DialogInteraction.Card(this,scale,rect),rect,0,Enabled?new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1,KeyboardFocus=Focused&&ShowFocusCues?0:-1}:null,theme.Dark,false,delegate{CompactRenderer.DrawLabel(e.Graphics,Text,rect,VisualDesign.DeviceNameFontSize,false,TextFor(hovered,pressed),StringAlignment.Center);});
             }
-            if(Enabled&&(hovered||pressed||Focused&&ShowFocusCues))CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);
             e.Graphics.Restore(state);
         }
         protected override void OnParentChanged(EventArgs e){base.OnParentChanged(e);if(!theme.HighContrast)DialogPaint.InheritBackground(this);}
@@ -415,8 +426,8 @@ namespace AtkBatteryTray {
             float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.SetClip(ClientRectangle,CombineMode.Intersect);e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
             var rect=new RectangleF(0,0,Width/scale,Height/scale);
             CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
-            CompactRenderer.Selection(e.Graphics,rect,Text,null,Checked,Enabled,hovered,pressed,false,theme.Dark);
-            if(Focused&&ShowFocusCues)CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);e.Graphics.Restore(state);
+            CompactRenderer.Selection(e.Graphics,rect,Text,null,Checked,Enabled,hovered,pressed,false,theme.Dark,Focused&&ShowFocusCues,DialogInteraction.Card(this,scale,rect));
+            e.Graphics.Restore(state);
         }
         protected override void OnCheckedChanged(EventArgs e){base.OnCheckedChanged(e);Invalidate();}
         protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
@@ -445,10 +456,10 @@ namespace AtkBatteryTray {
             if(theme.HighContrast){base.OnPaint(e);return;}
             float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
             var rect=new RectangleF(0,0,Width/scale,Height/scale);
-            if(Enabled)CompactRenderer.Highlight(e.Graphics,rect,0,new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1},theme.Dark);
+            InteractionLayout.Paint(e.Graphics,DialogInteraction.Card(this,scale,rect),rect,0,Enabled?new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1,KeyboardFocus=Focused&&ShowFocusCues?0:-1}:null,theme.Dark,false,delegate{
             CompactRenderer.DrawLabel(e.Graphics,Text,new RectangleF(6,0,rect.Width-51,rect.Height),VisualDesign.DeviceNameFontSize,false,Enabled?theme.Foreground:theme.Muted,StringAlignment.Near);
             PopupPages.DrawToggle(e.Graphics,rect,Checked,Enabled,theme.Dark);
-            if(Focused&&ShowFocusCues)CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);e.Graphics.Restore(state);
+            });e.Graphics.Restore(state);
         }
         protected override void OnCheckedChanged(EventArgs e){base.OnCheckedChanged(e);Invalidate();}
         protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
