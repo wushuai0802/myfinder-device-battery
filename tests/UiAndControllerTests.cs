@@ -160,12 +160,12 @@ static class UiAndControllerTests {
                     foreach(var control in controls)Check(control.Rect.Left>=0&&control.Rect.Right<=logical.Width&&control.Rect.Bottom<=logical.Height,"secondary page bounds "+page);
                     using(var image=new Bitmap(logical.Width*2,logical.Height*2))using(var graphics=Graphics.FromImage(image)){graphics.Clear(Color.Transparent);graphics.ScaleTransform(2,2);PopupPages.Paint(graphics,context,navigation,controls,false,-1,-1,-1);image.Save(Path.Combine(output,"page-"+page+".png"));}
                 }
-                navigation.Page=PopupPage.Preferences;navigation.VisibleChoices=3;navigation.Offset=0;
+                navigation.Page=PopupPage.Preferences;navigation.VisibleChoices=3;navigation.MaximumHeight=259;navigation.Offset=0;
                 var compactPreferences=PopupPages.Build(context,navigation,true);
                 Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==8;})&&PopupPages.SizeFor(compactPreferences).Height<260,"secondary preferences paginate in a small high-DPI work area");
                 navigation.Offset=11;compactPreferences=PopupPages.Build(context,navigation,true);
                 Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==217;})&&compactPreferences.Exists(delegate(PopupControl row){return row.Id==7;}),"clear-history remains reachable on the last preferences page");
-                navigation.VisibleChoices=7;navigation.Offset=0;
+                navigation.VisibleChoices=7;navigation.MaximumHeight=0;navigation.Offset=0;
                 navigation.Page=PopupPage.Main;
                 var mainControls=PopupPages.Build(context,navigation,true);
                 bool disjoint=true;for(int a=0;a<mainControls.Count;a++)for(int b=a+1;b<mainControls.Count;b++)disjoint&=!mainControls[a].Rect.IntersectsWith(mainControls[b].Rect);

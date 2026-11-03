@@ -38,7 +38,7 @@ namespace AtkBatteryTray {
         internal Color Interaction(bool pressed){return VisualDesign.HighContrast?Selected:Color.FromArgb(pressed?(dark?30:19):(dark?18:10),Foreground);}
         internal Color IconFill {get{return VisualDesign.HighContrast?Track:Color.FromArgb(dark?9:5,Foreground);}}
         internal Color SyncFill {get{return VisualDesign.HighContrast?Card:Color.FromArgb(225,Card);}}
-        internal Color Knob {get{return VisualDesign.HighContrast?SystemColors.Window:Foreground;}}
+        internal Color Knob {get{return VisualDesign.HighContrast?SystemColors.Window:dark?Foreground:Color.White;}}
         internal static Color LevelColor(int? percent,bool dark) {
             if(VisualDesign.HighContrast)return percent.HasValue?SystemColors.WindowText:SystemColors.GrayText;
             if(!percent.HasValue)return Current(dark).Muted;

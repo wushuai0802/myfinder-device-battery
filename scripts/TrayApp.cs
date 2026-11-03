@@ -205,7 +205,9 @@ namespace AtkBatteryTray {
         }
         WirelessLayout MainWireless(){return WirelessLayout.Build(owner,navigation.DeviceScroll,(int)(Screen.FromPoint(anchor).WorkingArea.Height/dpiScale)-24);}
         List<PopupControl> ControlsForPage(){
-            navigation.VisibleChoices=Math.Max(2,Math.Min(7,(int)((Screen.FromPoint(anchor).WorkingArea.Height/dpiScale-88)/36)-2));
+            float workHeight=Screen.FromPoint(anchor).WorkingArea.Height/dpiScale;
+            navigation.MaximumHeight=(int)workHeight-24;
+            navigation.VisibleChoices=Math.Max(2,Math.Min(7,(int)((workHeight-88)/36)-2));
             var controls=PopupPages.Build(owner,navigation,headsetProgress>.98f,owner.UseWirelessLayout?MainWireless():null);
             if(navigation.Page==PopupPage.Main&&!owner.UseWirelessLayout){
                 float top=VisualDesign.MouseCardHeight(owner.Dpi)+104*headsetProgress+VisualDesign.CardGap;
@@ -282,7 +284,7 @@ namespace AtkBatteryTray {
                 else if(id==220||id==221||id==222){EditAlias(id==220,id==222?navigation.SelectedDeviceKey:null);return;}
                 else if(id>=230&&id<=232){navigation.BindingRole=id==230?"speaker":id==231?"headset":"microphone";Go(PopupPage.PickBinding);return;}
                 else if(id==233){DeviceSettings.ResetAudioForDevice(navigation.AudioDeviceKey);owner.ConfigurationChanged();navigation.Notice=navigation.AudioDeviceKey==null?"已恢复自动识别":"已清除此设备的音频绑定";Invalidate();return;}
-                else if(id==7||id==8){navigation.Offset=Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
+                else if(id==7||id==8){navigation.Offset=control.PageOffset>=0?control.PageOffset:Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
                 else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
                 else if(id==250){copyText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
                 else if(id==258){navigation.Notice=owner.OpenFeedback(copyText,openLink);Invalidate();return;}

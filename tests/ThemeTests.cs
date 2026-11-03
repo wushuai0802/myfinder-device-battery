@@ -17,6 +17,7 @@ static class ThemeTests {
     const BindingFlags Static=BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic;
     static readonly string[] Styles={"ocean","native","amber","mist"};
     static readonly string[] Names={"海蓝","原生","琥珀","青雾"};
+    const string HistoryNotice="关闭保留不删除历史，清除需单独操作";
     static readonly string[] Roles={"Card","Border","Foreground","Muted","Track","Accent","Selected","SelectedForeground"};
     static readonly string[][] Colors={
         new[]{"2C3038","4B535E","F4F6F8","A7B1C1","424852","4D9BFF","1F6FEB","FFFFFF"},
@@ -121,6 +122,82 @@ static class ThemeTests {
             }
         }
     }
+    static string PageTexts(List<PopupControl> rows){return String.Join("|",rows.FindAll(delegate(PopupControl row){return row.Id!=6&&row.Id!=7&&row.Id!=8;}).ConvertAll(delegate(PopupControl row){return row.Text;}).ToArray());}
+    static int PageOffset(List<PopupControl> rows,int id,int fallback){
+        var row=rows.Find(delegate(PopupControl c){return c.Id==id;});Check(row!=null,"page navigation exists: "+id);
+        var field=typeof(PopupControl).GetField("PageOffset");return field==null?fallback:(int)field.GetValue(row);
+    }
+    static Color Pixel(Bitmap image,float x,float y,int scale){return image.GetPixel((int)(x*scale),(int)(y*scale));}
+    static int Pixels(Bitmap image,RectangleF area,int scale,Func<Color,bool> match){
+        int count=0;for(int y=(int)(area.Top*scale);y<(int)(area.Bottom*scale);y++)for(int x=(int)(area.Left*scale);x<(int)(area.Right*scale);x++)if(match(image.GetPixel(x,y)))count++;return count;
+    }
+    static void PreferencePages(){
+        const string first="显示|外观|配色|托盘显示|减弱动效|提醒|低电量提醒|提醒阈值",second="数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新";
+        using(var f=new Fixture()){
+            var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=7};var rows=PopupPages.Build(f.Owner,nav,false);
+            Check(PageTexts(rows)==first,"first preferences page keeps all six display/reminder settings together");
+            Check(rows.FindAll(delegate(PopupControl row){return row.Id>=200;}).Count==6&&!rows.Exists(delegate(PopupControl row){return row.Detail==HistoryNotice;}),"first page has six settings and no history notice");
+            using(var image=RenderPanel(PopupPages.SizeFor(rows),2,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,false,-1,-1,-1);})){
+                var footer=new RectangleF(13,image.Height/2-25,234,20);Check(Pixels(image,footer,2,delegate(Color c){return c.ToArgb()!=ThemePalette.Current(false).Card.ToArgb();})==0,"first page footer does not repeat the data notice");
+            }
+            int firstHeight=PopupPages.SizeFor(rows).Height;nav.Offset=PageOffset(rows,8,7);rows=PopupPages.Build(f.Owner,nav,false);
+            Check(PageTexts(rows)==second&&rows.FindAll(delegate(PopupControl row){return row.Id>=200;}).Count==4,"second page has all four data/update settings");
+            var clear=rows.Find(delegate(PopupControl row){return row.Id==217;});var update=rows.Find(delegate(PopupControl row){return row.Section&&row.Text=="更新";});
+            Check(clear.Detail==HistoryNotice&&clear.Rect.Bottom+2==update.Rect.Top,"the only history notice is directly below the data action");
+            nav.Offset=PageOffset(rows,7,0);Check(PageTexts(PopupPages.Build(f.Owner,nav,false))==first,"previous page returns to the entire first group pair");
+            foreach(int limit in new[]{firstHeight,firstHeight-1,340,260,230,210}){
+                nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=Math.Max(2,Math.Min(7,(limit+24-88)/36-2))};Set(nav,"MaximumHeight",limit);
+                var seen=new HashSet<int>();var starts=new HashSet<int>();int pages=0;
+                while(true){
+                    rows=PopupPages.Build(f.Owner,nav,false);Check(starts.Add(nav.Offset),"bounded pagination advances without looping");pages++;
+                    var size=PopupPages.SizeFor(rows);Check(size.Width==260&&size.Height<=limit,"preferences fit the available logical work area: "+limit);
+                    float bottom=0;foreach(var row in rows){Check(row.Rect.Top>=bottom&&row.Rect.Bottom<=size.Height-28,"preference rows and footer never overlap");bottom=row.Rect.Bottom;if(row.Id>=200)seen.Add(row.Id);}
+                    foreach(float scale in new[]{1f,1.25f,1.5f,2f})Check(UiState.ScaleSize(size,scale).Height<=Math.Ceiling(limit*scale),"preferences also fit after DPI scaling");
+                    var next=rows.Find(delegate(PopupControl row){return row.Id==8;});if(next==null)break;nav.Offset=PageOffset(rows,8,nav.Offset+nav.VisibleChoices);Check(pages<20,"bounded preferences finish");
+                }
+                Check(seen.Count==10,"all ten settings remain reachable with height "+limit);Check(limit>=firstHeight?pages==2:pages>2,"group paging is used only when both full pages fit");
+                while(nav.Offset>0){rows=PopupPages.Build(f.Owner,nav,false);int before=nav.Offset;nav.Offset=PageOffset(rows,7,Math.Max(0,before-nav.VisibleChoices));Check(nav.Offset<before,"bounded previous page always moves backwards");}
+            }
+            f.Nav.Page=PopupPage.Preferences;rows=f.Rows();if(PageTexts(rows)==first){f.Activate(rows.Find(delegate(PopupControl row){return row.Id==8;}));Check(PageTexts(f.Rows())==second,"real popup action follows the group page boundary");f.Activate(f.Rows().Find(delegate(PopupControl row){return row.Id==7;}));Check(PageTexts(f.Rows())==first,"real popup previous action restores first groups");}
+        }
+    }
+    static void ToggleKnobs(){
+        const int scale=4;VisualDesign.HighContrastOverride=false;
+        foreach(string style in Styles)foreach(bool dark in new[]{true,false})foreach(bool on in new[]{false,true})using(var f=new Fixture(style)){
+            var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=100};var rows=PopupPages.Build(f.Owner,nav,false);var row=rows.Find(delegate(PopupControl c){return c.Id==212;});row.Checked=on;
+            var p=ThemePalette.Current(dark);float left=row.Rect.Right-37,top=row.Rect.Y+(row.Rect.Height-18)/2,cx=left+(on?21:9),cy=top+9;
+            Color expected=on?(dark&&(style=="amber"||style=="mist")?p.SelectedForeground:Color.White):dark?p.Muted:Color.White;
+            using(var image=RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);})){
+                Color center=Pixel(image,cx,cy,scale),track=Pixel(image,on?left+5:left+25,cy,scale);
+                Check(center.ToArgb()==expected.ToArgb(),"toggle knob color: "+style+" "+dark+" "+on);
+                Color boundary=!on&&!dark?p.Muted:center;Check(Contrast(boundary,track)>=3,"toggle boundary contrast: "+style+" "+dark+" "+on);
+                if(!on&&!dark){var strip=new RectangleF(cx-7.5f,cy-2,1.5f,4);Check(Pixels(image,strip,scale,delegate(Color c){return c.ToArgb()==p.Muted.ToArgb();})>0,"light off toggle has a 1px secondary-text outline");}
+            }
+        }
+    }
+    static void ThemeSwatches(){
+        const int scale=4;
+        foreach(string style in Styles)foreach(bool dark in new[]{true,false})using(var f=new Fixture(style)){
+            var nav=new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=223};var rows=PopupPages.Build(f.Owner,nav,false);var current=ThemePalette.Current(dark);
+            using(var image=RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);}))foreach(var row in rows)if(row.Id!=6){
+                var p=ThemePalette.For(row.PaletteKey,dark);float x=row.Rect.X+6,y=row.Rect.Y+(row.Rect.Height-18)/2;
+                Check(Pixel(image,x+8,y+9,scale).ToArgb()==p.Card.ToArgb(),"mini swatch shows its own card color: "+row.PaletteKey);
+                Check(Pixels(image,new RectangleF(x+6,y,18,1),scale,delegate(Color c){return c.ToArgb()==p.Border.ToArgb();})>0,"mini swatch has the palette border");
+                Check(Pixel(image,x+22,y+9,scale).ToArgb()==p.Accent.ToArgb(),"8px accent dot stays inside the right of the swatch");
+                Check(Pixels(image,new RectangleF(x+31,row.Rect.Top+2,6,row.Rect.Height-4),scale,delegate(Color c){return c.ToArgb()!=current.Card.ToArgb();})==0,"all names leave a clear gap after the 30px swatch");
+                Color text=row.Selected?current.Accent:current.Foreground;Check(Pixels(image,new RectangleF(x+38,row.Rect.Top,60,row.Rect.Height),scale,delegate(Color c){return c.ToArgb()==text.ToArgb();})>0,"all four names start after their swatches and selected text uses accent");
+                Check(Pixel(image,180,row.Rect.Y+row.Rect.Height/2,scale).ToArgb()==current.Card.ToArgb(),"theme rows keep the card background, including the selected row");
+                if(row.Selected)Check(Pixels(image,new RectangleF(row.Rect.Right-22,row.Rect.Top+(row.Rect.Height-14)/2,14,14),scale,delegate(Color c){return c.ToArgb()==current.Accent.ToArgb();})>0,"selected theme retains an accent check mark");
+            }
+            var selected=rows.Find(delegate(PopupControl row){return row.Selected;});
+            using(var hover=RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,selected.Id,selected.Id,selected.Id);}))Check(Pixel(hover,180,selected.Rect.Y+selected.Rect.Height/2,scale).ToArgb()==current.Card.ToArgb(),"hover, press and keyboard focus do not flood a theme row");
+            nav.PreferenceAction=210;rows=PopupPages.Build(f.Owner,nav,false);selected=rows.Find(delegate(PopupControl row){return row.Selected;});
+            using(var ordinary=RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);}))Check(Pixel(ordinary,180,selected.Rect.Y+selected.Rect.Height/2,scale).ToArgb()==current.Selected.ToArgb(),"other chooser pages keep their selected fill");
+            VisualDesign.HighContrastOverride=true;nav.PreferenceAction=223;rows=PopupPages.Build(f.Owner,nav,false);
+            using(var hc=RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);}))foreach(var row in rows)if(row.Id!=6)Check(Pixels(hc,new RectangleF(row.Rect.X+6,row.Rect.Top+2,30,row.Rect.Height-4),scale,delegate(Color c){return c.ToArgb()!=SystemColors.Window.ToArgb();})==0,"high contrast omits every colored swatch");
+            VisualDesign.HighContrastOverride=false;
+        }
+    }
     static void Geometry(){
         Check(VisualDesign.PanelWidth==260&&VisualDesign.BatteryRingSize==28&&VisualDesign.BatteryDigitSize==20&&VisualDesign.PanelRadius==12,"requested geometry constants");
         using(var f=new Fixture()){
@@ -214,7 +291,15 @@ static class ThemeTests {
     }
     static Rectangle KnobBounds(Bitmap image,Color color,PointF center,int scale){
         int left=image.Width,top=image.Height,right=-1,bottom=-1;
-        for(int y=(int)((center.Y-10)*scale);y<(center.Y+10)*scale;y++)for(int x=(int)((center.X-10)*scale);x<(center.X+10)*scale;x++)if(image.GetPixel(x,y).ToArgb()==color.ToArgb()){left=Math.Min(left,x);top=Math.Min(top,y);right=Math.Max(right,x);bottom=Math.Max(bottom,y);}
+        // White knob and white card can share a color. Follow only the solid
+        // interior connected to the center, enclosed by the accent outline.
+        var pending=new Queue<Point>();var visited=new HashSet<int>();pending.Enqueue(new Point((int)(center.X*scale),(int)(center.Y*scale)));
+        while(pending.Count>0){
+            var point=pending.Dequeue();int x=point.X,y=point.Y;
+            if(x<0||y<0||x>=image.Width||y>=image.Height||Math.Abs(x-center.X*scale)>=10*scale||Math.Abs(y-center.Y*scale)>=10*scale||!visited.Add(y*image.Width+x)||image.GetPixel(x,y).ToArgb()!=color.ToArgb())continue;
+            left=Math.Min(left,x);top=Math.Min(top,y);right=Math.Max(right,x);bottom=Math.Max(bottom,y);
+            pending.Enqueue(new Point(x-1,y));pending.Enqueue(new Point(x+1,y));pending.Enqueue(new Point(x,y-1));pending.Enqueue(new Point(x,y+1));
+        }
         Check(right>=left&&bottom>=top,"knob has visible solid pixels");return Rectangle.FromLTRB(left,top,right+1,bottom+1);
     }
     static void VolumeKnobs(){
@@ -222,13 +307,20 @@ static class ThemeTests {
         foreach(string style in Styles)foreach(bool dark in new[]{true,false})foreach(bool secondary in new[]{false,true})using(var f=new Fixture(style)){
             var nav=new PopupNavigation {Page=PopupPage.Audio,VisibleChoices=100};var rows=PopupPages.Build(f.Owner,nav,false);var row=rows.Find(delegate(PopupControl c){return c.Id==240;});
             var rect=secondary?row.Rect:VisualDesign.VolumeSliderRect(new RectangleF(0,0,260,48));var track=PopupPages.VolumeTrack(rect);var center=new PointF(track.X+track.Width*.55f,track.Y+track.Height/2);
+            var palette=ThemePalette.Current(dark);Color expected=dark?palette.Foreground:Color.White;
+            Check(palette.Knob.ToArgb()==expected.ToArgb(),"slider is white in light mode and retains the existing light knob in dark mode: "+style+" "+dark);
+            Check(Contrast(dark?expected:palette.Accent,palette.Track)>=3,"slider fill or light-mode accent outline contrasts with the unfilled track");
             var bounds=new List<Rectangle>();
             for(int state=0;state<3;state++){
                 var feedback=new PanelFeedback {HoverAction=state==1?240:-1,PressedAction=state==2?240:-1};
                 using(var image=RenderPanel(secondary?PopupPages.SizeFor(rows):new Size(260,48),scale,delegate(Graphics g){
                     g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
                     if(secondary)PopupPages.Paint(g,f.Owner,nav,rows,dark,feedback.HoverAction,feedback.PressedAction,-1);else CompactRenderer.SystemVolume(g,new RectangleF(0,0,260,48),f.Owner.Audio,dark,feedback);
-                }))bounds.Add(KnobBounds(image,ThemePalette.Current(dark).Knob,center,scale));
+                })){
+                    Check(Pixel(image,center.X,center.Y,scale).ToArgb()==expected.ToArgb(),"both slider renderers use the correct knob fill");
+                    Check(Pixels(image,new RectangleF(center.X-1,center.Y-(state==0?6:7)-.5f,2,1),scale,delegate(Color c){return c.ToArgb()==palette.Accent.ToArgb();})>0,"slider retains its accent outline above the track");
+                    bounds.Add(KnobBounds(image,palette.Knob,center,scale));
+                }
             }
             foreach(var bound in bounds)Check(Math.Abs(bound.Width-bound.Height)<=1,"volume knob stays circular");
             Check(Math.Abs(bounds[0].Width/(float)scale-11)<=.5f&&Math.Abs(bounds[1].Width/(float)scale-13)<=.5f&&bounds[1].Size==bounds[2].Size,"12px idle knob grows to 14px on hover and drag, inside its 1px outline");
@@ -253,9 +345,11 @@ static class ThemeTests {
                 f.Owner.WirelessDevices[1].Kind="keyboard";f.Owner.WirelessDevices[2].Kind="headset";
                 var layout=WirelessLayout.Build(f.Owner,0,1000);
                 pages.Add(RenderPanel(layout.Size,scale,delegate(Graphics g){CompactRenderer.PaintWireless(g,f.Owner,layout,dark,new PanelFeedback());}));
-                foreach(int offset in new[]{0,7}){
-                    var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=7,Offset=offset};var rows=PopupPages.Build(f.Owner,nav,false);
+                var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=7};
+                for(int page=0;page<2;page++){
+                    var rows=PopupPages.Build(f.Owner,nav,false);
                     pages.Add(RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);}));
+                    if(page==0)nav.Offset=PageOffset(rows,8,7);
                 }
                 var chooser=new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=223,VisibleChoices=7};var choices=PopupPages.Build(f.Owner,chooser,false);
                 pages.Add(RenderPanel(PopupPages.SizeFor(choices),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,chooser,choices,dark,-1,-1,-1);}));
@@ -279,7 +373,7 @@ static class ThemeTests {
     }
     [STAThread] static int Main(string[] args){
         bool render=args.Length>0&&args[0]=="--render";output=Path.GetFullPath(args[render?1:0]);Directory.CreateDirectory(output);var previous=DeviceSettings.Current;
-        try{VisualDesign.HighContrastOverride=false;if(render){RenderThemes();return 0;}Run("ThemeStyle compatibility",Configuration);Run("exact palette and WCAG contrast",Palettes);Run("choice save and stay",Choices);Run("noninteractive preference groups and paging",Groups);Run("geometry and hit targets",Geometry);Run("fresh low battery rendering",LowBattery);Run("high contrast system roles and rendered frames",HighContrast);Run("flat surfaces, swatches, sync sizing and title feedback",Surfaces);Run("round volume knob states",VolumeKnobs);Run("ThemeStyle repaint cache",RepaintCache);Console.WriteLine(checks+" checks, "+failures+" failed groups; injected readers and TEMP settings only");return failures==0?0:1;}
+        try{VisualDesign.HighContrastOverride=false;if(render){RenderThemes();return 0;}Run("ThemeStyle compatibility",Configuration);Run("exact palette and WCAG contrast",Palettes);Run("choice save and stay",Choices);Run("noninteractive preference groups and paging",Groups);Run("group-aligned preferences and bounded fallback",PreferencePages);Run("toggle knob rendering and contrast",ToggleKnobs);Run("mini swatches, selection and label spacing",ThemeSwatches);Run("geometry and hit targets",Geometry);Run("fresh low battery rendering",LowBattery);Run("high contrast system roles and rendered frames",HighContrast);Run("flat surfaces, swatches, sync sizing and title feedback",Surfaces);Run("round volume knob states",VolumeKnobs);Run("ThemeStyle repaint cache",RepaintCache);Console.WriteLine(checks+" checks, "+failures+" failed groups; injected readers and TEMP settings only");return failures==0?0:1;}
         finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
     }
 }
