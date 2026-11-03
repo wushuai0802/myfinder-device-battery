@@ -33,7 +33,7 @@ static class UiFeedbackTests {
         internal int Reads,VolumeWrites,LastVolume=-1,OutputWrites;
         internal readonly ManualResetEvent VolumeGate=new ManualResetEvent(true);
         internal Fixture(AudioBindings settings=null,Func<AudioReading> readAudio=null,Func<string,AudioReading> switchAudio=null){
-            DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {RememberReadings=false,ReducedMotion=true,TraySource="auto"});
+            DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {RememberReadings=false,ReducedMotion=true,TraySource="auto",VolumeCollapsed=false});
             Owner=new TrayContext(false,delegate(bool battery){Interlocked.Increment(ref Reads);return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=Now}};},delegate(int stage){throw new Exception("No DPI writes");},null,delegate{return readAudio==null?Audio():readAudio();},false,
                 delegate(string target){Interlocked.Increment(ref OutputWrites);if(switchAudio!=null)return switchAudio(target);var value=Audio();value.ActiveOutput=target;return value;},delegate(bool mute){throw new Exception("No microphone writes");},
                 delegate(string endpoint,int value){VolumeGate.WaitOne();LastVolume=value;Interlocked.Increment(ref VolumeWrites);var audio=Audio();audio.OutputVolumePercent=value;return audio;},delegate{return false;},null,null,delegate{return Now;},null,

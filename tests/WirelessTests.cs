@@ -29,7 +29,7 @@ static class WirelessTests {
         }
         var current=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=current.GetValue(null);TrayContext owner=null;
         try {
-            NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();current.SetValue(null,new AudioBindings());
+            NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();current.SetValue(null,new AudioBindings {VolumeCollapsed=false});
             string output=Path.Combine(Path.GetFullPath(args[0]),"wireless-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(output);
             Check(GenericBatteryWorker.Parse("{broken").Error!=null,"invalid worker output cannot replace verified data");
             string json="{\"schema\":1,\"devices\":[{\"id\":\"device-000000000000000000000001\",\"name\":\"Keyboard\\nInjected\",\"kind\":\"keyboard\",\"percent\":42,\"online\":true,\"fresh\":true,\"confirmedAtUtc\":\""+DateTime.UtcNow.ToString("o")+"\"}]}";
@@ -88,7 +88,7 @@ static class WirelessTests {
             AccessibilityChecks();
             owner.WirelessDevices=new WirelessDevice[0];layout=WirelessLayout.Build(owner,0,260);Check(layout.All.Count==1&&layout.All[0].Id=="empty"&&layout.All[0].Name=="无线设备","empty discovery is honest and brand-neutral");
             owner.GenericHealthSummary="部分读取暂不可用（1项）";owner.GenericFailureCount=1;layout=WirelessLayout.Build(owner,0,260);
-            Check(layout.All[0].Subtitle=="部分读取器暂不可用","empty partial failure is distinct from having no compatible device");
+            Check(layout.All[0].Subtitle=="点这里查看原因"&&owner.GenericFailureCount==1&&owner.GenericHealthSummary=="部分读取暂不可用（1项）","empty partial failure offers help without changing reader health evidence");
             owner.GenericHealthSummary=null;owner.GenericFailureCount=0;owner.WirelessDevices=new[]{system};
             var detailRows=PopupPages.Build(owner,new PopupNavigation {Page=PopupPage.Device,SelectedDeviceKey=system.Id,SelectedDeviceName=system.Name},false);
             Check(detailRows.Exists(delegate(PopupControl row){return row.Information&&row.Text=="适配验证"&&row.Value=="待型号实测";}),"a protocol-backed device is not presented as a locally verified model");

@@ -122,7 +122,9 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll",SetLastError=true)] static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr destination,ref NativePoint position,ref NativeSize size,IntPtr source,ref NativePoint origin,int colorKey,ref NativeBlend blend,int flags);
         [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr hwnd,int index);
         [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr hwnd,int index,IntPtr value);
-        public Details(TrayContext context) {
+        readonly Action<string> copyText,openLink;
+        public Details(TrayContext context,Action<string> copy=null,Action<string> open=null) {
+            copyText=copy??Clipboard.SetText;openLink=open??new Action<string>(delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});});
             owner=context;FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;AutoScaleMode=AutoScaleMode.None;
             dpiScale=NativeDisplay.ScaleAt(Cursor.Position);
             Text="设备电量与音频控制";AccessibleName=Text;
@@ -223,6 +225,7 @@ namespace AtkBatteryTray {
         void PerformAction(PopupControl control) {
             HidePointerTip();
             int id=control.Id;
+            if(control.DeviceKey=="empty"){if(!owner.GenericScanning)Go(PopupPage.DeviceMissing);return;}
             if(id==241){CancelPointerInteraction();owner.SetVolumeCollapsed(!DeviceSettings.Current.VolumeCollapsed);return;}
             if(id==902||id==903){var layout=MainWireless();navigation.DeviceScroll=id==902?Math.Max(0,layout.Start-layout.Cards.Count):layout.End;UpdateLayoutSize();Invalidate();return;}
             if(id>=1000&&id<3000) {
@@ -242,18 +245,22 @@ namespace AtkBatteryTray {
             if(id==202){Go(PopupPage.Diagnostics);return;}if(id==203){Go(PopupPage.Bindings);return;}if(id==204){owner.ExitThread();return;}
             if(id==260){owner.OpenUpdate();return;}if(id==261){owner.CheckUpdates();return;}
             if(id==206){Go(PopupPage.Devices);return;}if(id==251){owner.RefreshWireless(navigation.SelectedDeviceKey);return;}
+            if(id==207){Go(PopupPage.DeviceMissing);return;}
             if(id==205){owner.RefreshAudioDevices();return;}
             if(id==257){navigation.SelectedDeviceKey=control.DeviceKey;var cards=WirelessLayout.Build(owner,0,100000,true).All;var card=cards.Find(delegate(WirelessCard item){return item.Id==control.DeviceKey;});navigation.SelectedDeviceName=card==null?control.Text:card.Name;Go(PopupPage.ManageDevice);return;}
             if(id==256){if(control.DeviceKey=="native:mouse")Go(PopupPage.Mouse);else if(control.DeviceKey=="native:headset")Go(PopupPage.Headset);else if(control.DeviceKey=="native:audio"){navigation.AudioDeviceKey=null;navigation.AudioDeviceName=null;Go(PopupPage.Audio);}else Go(PopupPage.Device);return;}
             try {
                 var pref=DeviceSettings.Current;
+                if(control.ActionKey=="tray:pin"&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==211) {
+                    pref.TrayDeviceId=control.DeviceKey;owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;
+                }
                 if(id==210||id==211||id==213||id==216){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
                 if(id>=400&&id<=432) {
                     if(id<=402)pref.Theme=id==400?"auto":id==401?"light":"dark";
                     else if(id>=410&&id<=415){pref.TraySource=id==410?"auto":id==411?"mouse":id==412?"headset":id==413?"keyboard":id==414?"lowest":"active";pref.TrayDeviceId=null;}
                     else if(id>=420&&id<=422)pref.WarningThreshold=id==420?10:id==421?15:20;
                     else if(id>=430)pref.BackgroundSeconds=id==430?60:id==431?120:300;else return;
-                    DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);Back();return;
+                    owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;
                 }
                 else if(id==212)pref.LowBatteryNotifications=!pref.LowBatteryNotifications;
                 else if(id==214)pref.RememberReadings=!pref.RememberReadings;
@@ -274,10 +281,11 @@ namespace AtkBatteryTray {
                 else if(id==233){DeviceSettings.ResetAudioForDevice(navigation.AudioDeviceKey);owner.ConfigurationChanged();navigation.Notice=navigation.AudioDeviceKey==null?"已恢复自动识别":"已清除此设备的音频绑定";Invalidate();return;}
                 else if(id==7||id==8){navigation.Offset=Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
                 else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
-                else if(id==250){Clipboard.SetText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
-                else if(id==258){navigation.Notice=owner.OpenFeedback();Invalidate();return;}
+                else if(id==250){copyText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
+                else if(id==258){navigation.Notice=owner.OpenFeedback(copyText,openLink);Invalidate();return;}
+                else if(id==259){openLink("https://github.com/wushuai0802/myfinder-device-battery/blob/main/docs/compatibility.md");return;}
                 else return;
-                DeviceSettings.SaveConfiguration(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
+                owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
             }catch(Exception error){navigation.Notice="未保存："+error.Message;Invalidate();}
         }
         void SchedulePendingHint(){feedbackTimer.Stop();feedbackTimer.Start();}
@@ -827,6 +835,7 @@ namespace AtkBatteryTray {
             }
             UpdateIcon();
         }
+        internal void SavePreferences(AudioBindings preferences){saveConfiguration(preferences);}
         internal void SetVolumeCollapsed(bool collapsed) {
             var pref=DeviceSettings.Current;if(pref.VolumeCollapsed==collapsed)return;pref.VolumeCollapsed=collapsed;
             try{saveConfiguration(pref);ConfigurationChanged(false);}

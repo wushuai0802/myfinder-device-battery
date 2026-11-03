@@ -46,7 +46,7 @@ namespace AtkBatteryTray {
             Action<WirelessCard> add=delegate(WirelessCard card){if(card==null||!added.Add(card.Id))return;card.Hidden=hidden.Contains(card.Id);if(includeHidden||!card.Hidden)layout.All.Add(card);};
             foreach(string id in pref.DeviceOrder)add(discovered.Find(delegate(WirelessCard card){return card.Id==id;}));
             foreach(var card in discovered)add(card);
-            if(layout.All.Count==0)layout.All.Add(new WirelessCard {Id="empty",Name="无线设备",Kind="device",Battery=new BatteryView {Name="无线设备"},Subtitle=discovered.Count>0?"设备已隐藏，可在设备管理中恢复":owner.GenericScanning?"正在识别设备…":!String.IsNullOrEmpty(owner.GenericError)?"设备读取组件暂不可用":owner.GenericFailureCount>0||!String.IsNullOrEmpty(owner.GenericHealthSummary)?"部分读取器暂不可用":!owner.GenericReady?"设备读取组件尚未就绪":"尚未连接兼容设备"});
+            if(layout.All.Count==0)layout.All.Add(new WirelessCard {Id="empty",Name="无线设备",Kind="device",Battery=new BatteryView {Name="无线设备"},Subtitle=owner.GenericScanning?"正在识别设备…":"点这里查看原因"});
             layout.Start=Math.Max(0,Math.Min(offset,layout.All.Count-1));
             float y=0;int end=layout.Start;
             foreach(var card in layout.All.GetRange(layout.Start,layout.All.Count-layout.Start)) {

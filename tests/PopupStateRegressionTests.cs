@@ -41,7 +41,7 @@ static class PopupStateRegressionTests {
         internal int VolumeWrites,LastVolume=-1;
         internal string LastEndpoint;
         internal Fixture() {
-            DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false,Theme="light"});
+            DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false,Theme="light",VolumeCollapsed=false});
             Owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=battery?new BatteryReading {Percent=85,TimestampUtc=DateTime.UtcNow}:null,Dpi=Dpi()};},
                 delegate(int stage){throw new Exception("Unexpected DPI write");},delegate{return new HeadsetReading {ConnectionVerified=true,Connected=false};},delegate{return Audio();},false,
                 delegate(string endpoint){throw new Exception("Unexpected output write");},delegate(bool muted){throw new Exception("Unexpected microphone write");},

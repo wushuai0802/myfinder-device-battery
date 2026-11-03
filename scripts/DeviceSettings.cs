@@ -43,10 +43,10 @@ namespace AtkBattery {
         [DataMember(Order=16, EmitDefaultValue=false)] public List<string> DeviceOrder = new List<string>();
         [DataMember(Order=17, EmitDefaultValue=false)] public Dictionary<string,AudioEndpointBindings> AudioDeviceBindings = new Dictionary<string,AudioEndpointBindings>();
         [DataMember(Order=18, EmitDefaultValue=false)] public bool ExplicitAudioBindingsOnly;
-        [DataMember(Order=19)] public bool VolumeCollapsed;
+        [DataMember(Order=19)] public bool VolumeCollapsed = true;
         [DataMember(Order=20)] public bool AutoCheckUpdates = true;
         [OnDeserializing] void Defaults(StreamingContext context) {
-            Theme="auto";TraySource="mouse";RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;
+            Theme="auto";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
@@ -93,7 +93,7 @@ namespace AtkBattery {
                 catch(InvalidDataException){UseDefaults();}catch(IOException){UseDefaults();}catch(UnauthorizedAccessException){UseDefaults();}catch(SerializationException){UseDefaults();}catch(ArgumentException){UseDefaults();}}
                 return current.Clone();}}
         }
-        static void UseDefaults(){current=new AudioBindings();usingDefaults=true;}
+        static void UseDefaults(){current=new AudioBindings {VolumeCollapsed=false};usingDefaults=true;}
         static void PreserveUnreadSettings(){if(usingDefaults&&File.Exists(SettingsPath)&&!File.Exists(SettingsPath+".unread.bak"))File.Copy(SettingsPath,SettingsPath+".unread.bak");}
         public static void SetEndpoint(string role,string id) {
             lock(Gate) {
