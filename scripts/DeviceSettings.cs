@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Collections.Generic;
+using System.Xml;
 
 namespace AtkBattery {
     [DataContract]
@@ -46,11 +47,15 @@ namespace AtkBattery {
         [DataMember(Order=19)] public bool VolumeCollapsed = true;
         [DataMember(Order=20)] public bool AutoCheckUpdates = true;
         [DataMember(Order=21)] public string ThemeStyle = "ocean";
+        [DataMember(Order=22, EmitDefaultValue=false)] public List<TrayGroup> TrayGroups = new List<TrayGroup>();
+        [DataMember(Order=23)] public string TrayIconStyle = "number";
+        [DataMember(Order=24, EmitDefaultValue=false)] public bool TrayGroupHintShown;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
+            TrayGroups=new List<TrayGroup>();TrayIconStyle="number";
         }
 
         public AudioBindings Clone() {
@@ -62,6 +67,8 @@ namespace AtkBattery {
                 HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases),
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };
             if(AudioDeviceBindings!=null)foreach(var pair in AudioDeviceBindings)copy.AudioDeviceBindings[pair.Key]=pair.Value==null?null:pair.Value.Clone();
+            copy.TrayIconStyle=TrayIconStyle;copy.TrayGroupHintShown=TrayGroupHintShown;
+            if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
         }
         public string EndpointFor(string role) {
@@ -161,6 +168,7 @@ namespace AtkBattery {
             }
             if(settings.Theme!="auto"&&settings.Theme!="light"&&settings.Theme!="dark")throw new InvalidDataException("Unknown theme");
             settings.ThemeStyle=AtkBatteryTray.ThemePalette.Normalize(settings.ThemeStyle);
+            TrayConfiguration.Normalize(settings);
             if(settings.WarningThreshold!=10&&settings.WarningThreshold!=15&&settings.WarningThreshold!=20)throw new InvalidDataException("Invalid notification threshold");
             if(settings.BackgroundSeconds!=60&&settings.BackgroundSeconds!=120&&settings.BackgroundSeconds!=300)throw new InvalidDataException("Invalid background interval");
             settings.MouseAlias=CleanAlias(settings.MouseAlias,"ATK A9 Air+");
@@ -195,7 +203,14 @@ namespace AtkBattery {
             if(info.Length>65536)throw new InvalidDataException("Audio settings file is too large");
             using(var input=File.OpenRead(path)) {
                 var serializer=new DataContractJsonSerializer(typeof(AudioBindings));
-                var settings=serializer.ReadObject(input) as AudioBindings;
+                var document=new XmlDocument {XmlResolver=null};
+                try{using(var reader=JsonReaderWriterFactory.CreateJsonReader(input,XmlDictionaryReaderQuotas.Max))document.Load(reader);}
+                catch(XmlException error){throw new SerializationException("Invalid audio settings JSON",error);}
+                var fields=new AudioBindings();TrayConfiguration.ReadFields(document.DocumentElement,fields);
+                AudioBindings settings;
+                using(var reader=new XmlNodeReader(document))settings=serializer.ReadObject(reader) as AudioBindings;
+                if(settings==null)throw new InvalidDataException("Invalid audio settings");
+                settings.TrayGroups=fields.TrayGroups;settings.TrayIconStyle=fields.TrayIconStyle;settings.TrayGroupHintShown=fields.TrayGroupHintShown;
                 Validate(settings);
                 return settings;
             }

@@ -108,7 +108,7 @@ static class ThemeTests {
         using(var f=new Fixture()){
             var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=100},false);
             string actual=String.Join("|",rows.FindAll(delegate(PopupControl row){return row.Id!=6;}).ConvertAll(delegate(PopupControl row){return row.Text;}).ToArray());
-            Check(actual=="显示|外观|配色|托盘显示|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新","preference sections and order");
+            Check(actual=="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新","preference sections and order");
             foreach(string name in new[]{"显示","提醒","数据","更新"}){
                 var row=rows.Find(delegate(PopupControl c){return c.Text==name;});Check(row.Information&&row.Id<0&&row.Rect.Height>=23&&row.Rect.Height<=25,"section is 24px information");Check(PopupPages.Hit(rows,new PointF(row.Rect.X+10,row.Rect.Y+10))==null&&PopupPages.FindStable(rows,row.StableKey)==null,"section cannot be hit or focused");
             }
@@ -132,7 +132,7 @@ static class ThemeTests {
         int count=0;for(int y=(int)(area.Top*scale);y<(int)(area.Bottom*scale);y++)for(int x=(int)(area.Left*scale);x<(int)(area.Right*scale);x++)if(match(image.GetPixel(x,y)))count++;return count;
     }
     static void PreferencePages(){
-        const string first="显示|外观|配色|托盘显示|减弱动效|提醒|低电量提醒|提醒阈值",second="数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新";
+        const string first="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值",second="数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新";
         using(var f=new Fixture()){
             var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=7};var rows=PopupPages.Build(f.Owner,nav,false);
             Check(PageTexts(rows)==first,"first preferences page keeps all six display/reminder settings together");
@@ -392,6 +392,7 @@ static class ThemeTests {
         }
     }
     static void RenderThemes(){
+        RenderTrayIcons();
         const float scale=2;
         foreach(string style in Styles)foreach(bool dark in new[]{true,false})using(var f=new Fixture(style)){
             var pages=new List<Bitmap>();
@@ -422,6 +423,24 @@ static class ThemeTests {
                     string path=Path.Combine(output,style+"-"+(dark?"dark":"light")+".png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);
                 }
             }finally{foreach(var page in pages)page.Dispose();}
+        }
+    }
+    static void RenderTrayIcons(){
+        int?[] levels={0,15,46,80,100,null,46,46};string[] labels={"0%","15%","46%","80%","100%","无读数","充电","历史"};
+        string[] kinds={"mouse","keyboard","headset","device"};
+        using(var sheet=new Bitmap(1408,1088,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(sheet)){
+            g.Clear(Color.FromArgb(115,120,128));
+            CompactRenderer.DrawLabel(g,"托盘图标 / 原生像素尺寸；设备图标依次为鼠标、键盘、耳机、通用设备",new RectangleF(12,4,1384,28),15,true,Color.White,StringAlignment.Near);
+            for(int state=0;state<8;state++)CompactRenderer.DrawLabel(g,labels[state],new RectangleF(180+state*152,32,152,24),13,true,Color.White,StringAlignment.Center);
+            int row=0;foreach(bool dark in new[]{false,true})foreach(string style in new[]{"number","device"})foreach(int size in new[]{16,20,24,32}){
+                int y=60+row++*64;Color background=dark?Color.FromArgb(32,32,32):Color.FromArgb(243,243,243);using(var brush=new SolidBrush(background))g.FillRectangle(brush,0,y,sheet.Width,64);
+                CompactRenderer.DrawLabel(g,(dark?"深色":"浅色")+" / "+(style=="number"?"数字":"设备")+" / "+size+"px",new RectangleF(10,y,164,64),13,false,dark?Color.White:Color.Black,StringAlignment.Near);
+                for(int state=0;state<8;state++){
+                    int count=style=="device"?4:1;float start=180+state*152+(152-(count*size+(count-1)*4))/2f;
+                    for(int kind=0;kind<count;kind++)using(var bitmap=style=="device"?TrayGlyph.RenderDevice(levels[state],state==6,dark,state==7,size,kinds[kind]):TrayGlyph.Render(levels[state],state==6,dark,state==7,size))g.DrawImageUnscaled(bitmap,(int)start+kind*(size+4),y+(64-size)/2);
+                }
+            }
+            string path=Path.Combine(output,"tray-icons.png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);
         }
     }
     static Bitmap RenderPanel(Size size,float scale,Action<Graphics> paint){

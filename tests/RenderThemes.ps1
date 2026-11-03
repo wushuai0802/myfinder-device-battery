@@ -15,6 +15,7 @@ $sources=@(Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.cs'
 $executable=Join-Path $compileDirectory 'RenderThemes.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:ThemeTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$executable" $sources (Join-Path $PSScriptRoot 'ThemeTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Theme preview compilation failed.'}
-# --render only paints injected fixtures; it never runs settings tests or actions.
+# --render paints injected fixtures and tray-icons.png (both styles, eight states,
+# four native sizes, light/dark taskbars); it never runs settings tests or actions.
 & $executable --render $previewOutput
 if($LASTEXITCODE -ne 0){throw 'Theme preview rendering failed.'}

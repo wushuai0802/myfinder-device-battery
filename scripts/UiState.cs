@@ -22,6 +22,7 @@ namespace AtkBatteryTray {
     public sealed class TrayView {
         public BatteryView Battery;
         public string Tooltip;
+        public string DeviceKind;
     }
     internal sealed class AudioCardView {
         internal string Subtitle,EndpointId;
@@ -77,7 +78,7 @@ namespace AtkBatteryTray {
             }
             string tooltip=(source=="lowest"?"最低电量 · ":"")+chosen.Name+"\n"+mouse.Tooltip+" | "+headset.Tooltip;
             if(tooltip.Length>63)tooltip=tooltip.Substring(0,62)+"…";
-            return new TrayView {Battery=chosen,Tooltip=tooltip};
+            return new TrayView {Battery=chosen,Tooltip=tooltip,DeviceKind=chosen==headset?"headset":"mouse"};
         }
         public static bool SkipConfirmedStage(DpiConfig dpi,string error,int requested,bool switching,DateTime now) {
             return !switching&&dpi!=null&&dpi.ActiveStage==requested&&String.IsNullOrEmpty(error)&&Recent(dpi.TimestampUtc,now,5);

@@ -53,6 +53,7 @@ static class UiMenusTests {
             throw new Exception("unreachable row: "+text);
         }
         internal PopupControl ById(int id){var row=Controls().Find(delegate(PopupControl item){return item.Id==id;});Check(row!=null,"visible action "+id);return row;}
+        internal void TrayChooser(){Page(PopupPage.Preferences);Activate(ById(211));Activate(Find(TrayConfiguration.FirstName));Activate(Find("显示规则"));}
         internal void Activate(PopupControl row){Call(Popup,"PerformAction",row);}
         internal void Feedback(PopupControl row,string category){
             Exception failure=null;bool shown=false;string beforeCopy=Copied,beforeOpen=Opened;
@@ -100,7 +101,7 @@ static class UiMenusTests {
         }
     }
     static void PreferenceOrder(){
-        using(var f=new Fixture())Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|托盘显示|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新","preferences include theme style and the requested noninteractive groups");
+        using(var f=new Fixture())Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新","preferences include theme style and the requested noninteractive groups");
     }
     static void HelpActions(){
         using(var f=new Fixture()){
@@ -215,16 +216,16 @@ static class UiMenusTests {
             var ids=new HashSet<int>();foreach(var row in rows)Check(row.Id<0||ids.Add(row.Id),"tray choice IDs do not collide");
             int[] ruleIds={415,414,410,411,412,413};string[] sources={"active","lowest","auto","mouse","headset","keyboard"};
             for(int i=0;i<ruleIds.Length;i++){
-                pref=DeviceSettings.Current;pref.TrayDeviceId="mouse-a";DeviceSettings.UseTransientConfiguration(pref);f.Page(PopupPage.Preferences);f.Activate(f.ById(211));
+                pref=DeviceSettings.Current;pref.TrayDeviceId="mouse-a";DeviceSettings.UseTransientConfiguration(pref);f.TrayChooser();
                 var rule=f.Find(new[]{"当前使用的设备","最低电量","自动选择有数据的设备","鼠标优先","耳机优先","键盘优先"}[i]);Check(rule.Id==ruleIds[i],"rule retains action ID "+sources[i]);f.Activate(rule);
                 Check(DeviceSettings.Current.TraySource==sources[i]&&DeviceSettings.Current.TrayDeviceId==null,"choosing a rule clears the fixed device: "+sources[i]);
                 rows=Rows(f.Owner,PopupPage.ChoosePreference,211);Check(Selected(rows)==1&&rows.Find(delegate(PopupControl row){return row.Selected;}).Id==ruleIds[i],"one selected rule: "+sources[i]);
             }
-            f.Page(PopupPage.Preferences);f.Activate(f.ById(211));var pin=f.Find("固定：鼠标 A");f.Activate(pin);
-            Check(DeviceSettings.Current.TrayDeviceId=="mouse-a"&&f.Navigation.Page==PopupPage.Preferences,"fixed choice writes the existing TrayDeviceId and returns");
+            f.TrayChooser();var pin=f.Find("固定：鼠标 A");f.Activate(pin);
+            Check(DeviceSettings.Current.TrayDeviceId=="mouse-a"&&f.Navigation.Page==PopupPage.TrayGroup,"fixed choice writes the existing TrayDeviceId and returns to its group");
             rows=Rows(f.Owner,PopupPage.ChoosePreference,211);Check(Selected(rows)==1&&rows.Find(delegate(PopupControl row){return row.Selected;}).DeviceKey=="mouse-a","a fixed device excludes every rule selection");
-            Check(Rows(f.Owner,PopupPage.Preferences).Find(delegate(PopupControl row){return row.Id==211;}).Value=="固定：鼠标 A","preferences show the fixed device's name");
-            pref=DeviceSettings.Current;pref.DeviceAliases["mouse-a"]="新别名";DeviceSettings.UseTransientConfiguration(pref);Check(Rows(f.Owner,PopupPage.Preferences).Find(delegate(PopupControl row){return row.Id==211;}).Value=="固定：新别名","fixed value follows the existing alias");
+            Check(Rows(f.Owner,PopupPage.TrayIcons).Find(delegate(PopupControl row){return row.GroupKey==TrayConfiguration.FirstId;}).Value=="固定：鼠标 A","group list shows the fixed device's name");
+            pref=DeviceSettings.Current;pref.DeviceAliases["mouse-a"]="新别名";DeviceSettings.UseTransientConfiguration(pref);Check(Rows(f.Owner,PopupPage.TrayIcons).Find(delegate(PopupControl row){return row.GroupKey==TrayConfiguration.FirstId;}).Value=="固定：新别名","group summary follows the existing alias");
             f.Navigation.SelectedDeviceKey="mouse-a";f.Navigation.SelectedDeviceName="新别名";f.Page(PopupPage.Device);var toggle=f.Find("固定为托盘主设备");Check(toggle.Checked,"device detail reflects the tray chooser pin");f.Activate(toggle);
             Check(DeviceSettings.Current.TrayDeviceId==null&&Selected(Rows(f.Owner,PopupPage.ChoosePreference,211))==1,"detail unpin restores the rule selection");f.Activate(f.Find("固定为托盘主设备"));
             Check(DeviceSettings.Current.TrayDeviceId=="mouse-a"&&Rows(f.Owner,PopupPage.ChoosePreference,211).Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey=="mouse-a";}),"detail pin updates the same tray chooser setting");
@@ -240,14 +241,14 @@ static class UiMenusTests {
         using(var f=new Fixture()){
             var device=Device("hidden-pin","隐藏设备");f.Owner.WirelessDevices=new[]{device};
             var pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add(device.Id);pref.DeviceAliases[device.Id]="隐藏设备别名";DeviceSettings.UseTransientConfiguration(pref);
-            f.Page(PopupPage.Preferences);f.Activate(f.ById(211));f.Activate(f.Find("固定：隐藏设备别名"));
-            Check(DeviceSettings.Current.TrayDeviceId==device.Id&&f.Navigation.Page==PopupPage.Preferences,"hidden device can be fixed through the existing chooser action");
-            Check(Rows(f.Owner,PopupPage.Preferences).Find(delegate(PopupControl row){return row.Id==211;}).Value=="固定：隐藏设备别名","hidden fixed device displays its real alias in preferences");
+            f.TrayChooser();f.Activate(f.Find("固定：隐藏设备别名"));
+            Check(DeviceSettings.Current.TrayDeviceId==device.Id&&f.Navigation.Page==PopupPage.TrayGroup,"hidden device can be fixed through its group rule chooser");
+            Check(Rows(f.Owner,PopupPage.TrayIcons).Find(delegate(PopupControl row){return row.GroupKey==TrayConfiguration.FirstId;}).Value=="固定：隐藏设备别名","hidden fixed device displays its real alias in the group summary");
             var rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
             Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey==device.Id&&row.Text=="固定：隐藏设备别名";}),"hidden fixed device has one selected choice with its real name");
             f.Owner.WirelessDevices=new WirelessDevice[0];rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
             Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey==device.Id&&row.Text=="固定：已断开的设备";}),"disconnected hidden-device placeholder is reported as disconnected");
-            Check(Rows(f.Owner,PopupPage.Preferences).Find(delegate(PopupControl row){return row.Id==211;}).Value=="固定：已断开的设备","disconnected hidden pin is also explicit in preferences");
+            Check(Rows(f.Owner,PopupPage.TrayIcons).Find(delegate(PopupControl row){return row.GroupKey==TrayConfiguration.FirstId;}).Value=="固定：已断开的设备","disconnected hidden pin is also explicit in the group summary");
             pref=DeviceSettings.Current;pref.TrayDeviceId=null;DeviceSettings.UseTransientConfiguration(pref);rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
             Check(!rows.Exists(delegate(PopupControl row){return row.ActionKey=="tray:pin";}),"offline hidden management placeholders are not offered as current devices");
             f.Owner.NativeMousePresent=true;f.Owner.Headset=new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=80,BatteryTimestampUtc=DateTime.UtcNow};
@@ -285,7 +286,7 @@ static class UiMenusTests {
             f.Owner.NativeMousePresent=true;f.Owner.Headset=new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=80,BatteryTimestampUtc=DateTime.UtcNow};
             foreach(string id in new[]{"native:mouse","native:headset"}){
                 string name=id=="native:mouse"?DeviceSettings.Current.MouseAlias:DeviceSettings.Current.HeadsetAlias;
-                f.Page(PopupPage.Preferences);f.Activate(f.ById(211));f.Activate(f.Find("固定："+name));f.Page(id=="native:mouse"?PopupPage.Mouse:PopupPage.Headset);
+                f.TrayChooser();f.Activate(f.Find("固定："+name));f.Page(id=="native:mouse"?PopupPage.Mouse:PopupPage.Headset);
                 var toggle=f.Find("固定为托盘主设备");Check(toggle.Checked&&toggle.DeviceKey==id,"native detail reflects the chooser pin: "+id);f.Activate(toggle);
                 Check(DeviceSettings.Current.TrayDeviceId==null&&Selected(Rows(f.Owner,PopupPage.ChoosePreference,211))==1,"native detail unpin restores exactly one rule: "+id);f.Activate(f.Find("固定为托盘主设备"));
                 Check(Rows(f.Owner,PopupPage.ChoosePreference,211).Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey==id;}),"native detail pin returns to the chooser: "+id);
@@ -305,8 +306,8 @@ static class UiMenusTests {
             Check(same!=null&&same.Id!=target.Id&&PopupPages.SameAction(target,same),"a fixed choice retains stable device identity across discovery reorder");
             Check(!PopupPages.SameAction(target,moved.Find(delegate(PopupControl row){return row.Id==target.Id;})),"reused numeric slots cannot transfer a fixed-device action");
             Check(PopupPages.ReconcileFocus(moved,target.StableKey,1)==same,"fixed-choice keyboard focus follows stable identity");
-            pref=DeviceSettings.Current;pref.TrayDeviceId="offline-pin";DeviceSettings.UseTransientConfiguration(pref);f.Page(PopupPage.Preferences);f.Activate(f.ById(211));f.Activate(f.Find("固定：已断开的设备"));
-            Check(DeviceSettings.Current.TrayDeviceId=="offline-pin"&&f.Navigation.Page==PopupPage.Preferences,"the disconnected selected row preserves the existing fixed setting when activated");
+            pref=DeviceSettings.Current;pref.TrayDeviceId="offline-pin";DeviceSettings.UseTransientConfiguration(pref);f.TrayChooser();f.Activate(f.Find("固定：已断开的设备"));
+            Check(DeviceSettings.Current.TrayDeviceId=="offline-pin"&&f.Navigation.Page==PopupPage.TrayGroup,"the disconnected selected row preserves the existing fixed setting and returns to its group");
             f.Owner.NativeMousePresent=false;f.Owner.WirelessDevices=new WirelessDevice[0];pref=DeviceSettings.Current;pref.TrayDeviceId=null;DeviceSettings.UseTransientConfiguration(pref);
             Check(Rows(f.Owner,PopupPage.ChoosePreference,211).Count==7,"the empty placeholder is never offered as a fixed tray device");
         }

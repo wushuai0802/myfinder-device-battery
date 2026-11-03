@@ -47,6 +47,37 @@ namespace AtkBatteryTray {
                 return result;
             }
         }
+        public static Bitmap RenderDevice(int? percent,bool charge,bool dark,bool stale,int size,string kind){
+            size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
+            using(var large=new Bitmap(canvas,canvas,PixelFormat.Format32bppPArgb)){
+                using(var g=Graphics.FromImage(large)){
+                    g.Clear(Color.Transparent);g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.ScaleTransform(canvas/32f,canvas/32f);
+                    Color gray=LevelColor(null,dark),foreground=VisualDesign.HighContrast?SystemColors.WindowText:dark?Color.FromArgb(244,246,248):Color.FromArgb(27,36,48);
+                    Color symbol=percent.HasValue&&!stale?foreground:gray;
+                    if(kind=="mouse"||kind=="keyboard"||kind=="headset")CompactRenderer.DrawSymbol(g,kind,new RectangleF(4,2,24,21),symbol);
+                    else {
+                        using(var pen=new Pen(symbol,1.9f))using(var shape=VisualDesign.RoundRect(7,3,18,19,3)){
+                            g.DrawPath(pen,shape);g.DrawLine(pen,12,8,20,8);g.DrawLine(pen,12,12,20,12);g.DrawEllipse(pen,14.5f,16,3,3);
+                        }
+                    }
+                    // A fixed, native-aligned track keeps 0% and unknown visibly empty.
+                    using(var brush=new SolidBrush(Color.FromArgb(75,gray)))g.FillRectangle(brush,3,27,26,3);
+                    if(percent.HasValue&&percent.Value>0)using(var brush=new SolidBrush(stale?gray:LevelColor(percent,dark)))g.FillRectangle(brush,3,27,26*Math.Max(0,Math.Min(100,percent.Value))/100f,3);
+                    if(charge){
+                        using(var marker=new SolidBrush(Color.FromArgb(12,17,21)))g.FillEllipse(marker,25f,1.2f,6.4f,9.6f);
+                        PointF[] bolt={new PointF(29.1f,2.2f),new PointF(26.2f,6.2f),new PointF(28.1f,6.2f),new PointF(27.2f,9.6f),new PointF(30.2f,5.2f),new PointF(28.4f,5.2f)};
+                        using(var brush=new SolidBrush(percent.HasValue&&!stale?Color.White:gray))g.FillPolygon(brush,bolt);
+                    }
+                }
+                var result=new Bitmap(size,size,PixelFormat.Format32bppPArgb);
+                using(var g=Graphics.FromImage(result))using(var attributes=new ImageAttributes()){
+                    g.CompositingMode=CompositingMode.SourceCopy;g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;
+                    attributes.SetWrapMode(WrapMode.TileFlipXY);g.DrawImage(large,new Rectangle(0,0,size,size),0,0,canvas,canvas,GraphicsUnit.Pixel,attributes);
+                }
+                result.SetPixel(0,0,Color.Transparent);result.SetPixel(size-1,0,Color.Transparent);result.SetPixel(0,size-1,Color.Transparent);result.SetPixel(size-1,size-1,Color.Transparent);
+                return result;
+            }
+        }
         static void DrawDigits(Graphics g,string text,bool charge,Color fg,Color halo) {
             if(text=="--") {
                 using(var pen=new Pen(fg,2.3f)) {

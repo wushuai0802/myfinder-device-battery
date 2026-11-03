@@ -43,10 +43,13 @@ namespace AtkBatteryTray {
     internal sealed class DeviceEventsWindow:NativeWindow,IDisposable {
         readonly Action changed;
         readonly Action appearance;readonly Action<bool> session;
+        readonly Action taskbarCreated;
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int RegisterWindowMessage(string message);
+        internal static readonly int TaskbarCreated=RegisterWindowMessage("TaskbarCreated");
         [DllImport("wtsapi32.dll")] static extern bool WTSRegisterSessionNotification(IntPtr hwnd,int flags);
         [DllImport("wtsapi32.dll")] static extern bool WTSUnRegisterSessionNotification(IntPtr hwnd);
-        public DeviceEventsWindow(Action callback,Action appearanceChanged=null,Action<bool> sessionChanged=null) {
-            changed=callback;appearance=appearanceChanged;session=sessionChanged;CreateHandle(new CreateParams {Caption="MyFinder Device Battery Events"});
+        public DeviceEventsWindow(Action callback,Action appearanceChanged=null,Action<bool> sessionChanged=null,Action trayRecreated=null) {
+            changed=callback;appearance=appearanceChanged;session=sessionChanged;taskbarCreated=trayRecreated;CreateHandle(new CreateParams {Caption="MyFinder Device Battery Events"});
             if(session!=null)try{WTSRegisterSessionNotification(Handle,0);}catch(DllNotFoundException){}
         }
         protected override void WndProc(ref Message message) {
@@ -55,6 +58,7 @@ namespace AtkBatteryTray {
                 message.Msg==0x218&&(value==7||value==18))changed();
             if(message.Msg==0x001A&&appearance!=null)appearance();
             if(message.Msg==0x02B1&&session!=null&&(value==7||value==8))session(value==7);
+            if(message.Msg==TaskbarCreated&&taskbarCreated!=null)taskbarCreated();
             base.WndProc(ref message);
         }
         public void Dispose(){if(session!=null)try{WTSUnRegisterSessionNotification(Handle);}catch(DllNotFoundException){}DestroyHandle();}

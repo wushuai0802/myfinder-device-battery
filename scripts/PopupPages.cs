@@ -5,19 +5,21 @@ using System.Drawing.Drawing2D;
 using AtkBattery;
 
 namespace AtkBatteryTray {
-    internal enum PopupPage { Main, More, Audio, Preferences, Mouse, Headset, Diagnostics, Bindings, PickBinding, ChoosePreference, Devices, Device, ManageDevice, DeviceMissing }
+    internal enum PopupPage { Main, More, Audio, Preferences, Mouse, Headset, Diagnostics, Bindings, PickBinding, ChoosePreference, Devices, Device, ManageDevice, DeviceMissing, TrayIcons, TrayGroup, TrayRules, TrayMembers, ConfirmTrayDelete }
     internal sealed class PopupControl {
         public int Id;
         public int DpiValue;
         public int PageOffset=-1;
         public RectangleF Rect;
         public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey;
+        public string GroupKey;
         public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy,WrapText,Section;
         public string StableKey {get {
             string action=ActionKey;
+            if(action=="tray:rule")action+=":"+TargetToken;
             if(DpiValue>0)action="wireless-dpi:"+DpiValue+":"+(TargetToken??"");
             if(String.IsNullOrEmpty(action))action=Id>=2000&&Id<3000?"refresh":Id>=1000&&Id<2000?"details":Id>=300&&Id<400?"binding:"+(EndpointId??"auto"):"action:"+Id;
-            return (DeviceKey??"global")+"|"+action;
+            return (GroupKey==null?"":GroupKey+"|")+(DeviceKey??"global")+"|"+action;
         }}
     }
     internal sealed class PopupNavigation {
@@ -29,9 +31,11 @@ namespace AtkBatteryTray {
         internal int DeviceScroll;
         internal string SelectedDeviceKey,SelectedDeviceName,ReturnedFocusKey;
         internal string AudioDeviceKey,AudioDeviceName;
+        internal string TrayGroupKey=TrayConfiguration.FirstId;
+        internal bool TrayHint;
         readonly Stack<ReturnPoint> history=new Stack<ReturnPoint>();
         sealed class ReturnPoint {internal PopupPage Page;internal int Focus,Offset;internal string FocusKey,AudioDeviceKey,AudioDeviceName;}
-        internal void Reset(){history.Clear();Page=PopupPage.Main;Offset=0;VolumePreview=-1;Notice="";DeviceScroll=0;ReturnedFocusKey=null;AudioDeviceKey=null;AudioDeviceName=null;}
+        internal void Reset(){history.Clear();Page=PopupPage.Main;Offset=0;VolumePreview=-1;Notice="";DeviceScroll=0;ReturnedFocusKey=null;AudioDeviceKey=null;AudioDeviceName=null;TrayGroupKey=TrayConfiguration.FirstId;TrayHint=false;}
         internal void Go(PopupPage page,int focus,string stableFocus=null) {
             if(page==Page)return;
             history.Push(new ReturnPoint {Page=Page,Focus=focus,Offset=Offset,FocusKey=stableFocus,AudioDeviceKey=AudioDeviceKey,AudioDeviceName=AudioDeviceName});Page=page;Offset=0;Notice="";
@@ -57,6 +61,16 @@ namespace AtkBatteryTray {
         static string OutputName(AudioReading audio){return UiState.CurrentOutputName(audio);}
         static List<WirelessCard> TrayDevices(TrayContext owner){return WirelessLayout.Build(owner,0,100000,true).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&(card.Device!=null||card.NativeMouse||card.NativeHeadset);});}
         static string FixedTrayName(TrayContext owner,string id){var device=TrayDevices(owner).Find(delegate(WirelessCard card){return card.Id==id;});return "固定："+(device==null?"已断开的设备":device.Name);}
+        static string TrayRule(TrayContext owner,string source,string deviceId){return !String.IsNullOrEmpty(deviceId)?FixedTrayName(owner,deviceId):source=="active"?"当前使用的设备":source=="auto"?"自动":source=="mouse"?"鼠标优先":source=="headset"?"耳机优先":source=="keyboard"?"键盘优先":"最低电量";}
+        static PopupControl GroupRow(string action,string text,string groupId,string value=null){var row=Row(610+Array.IndexOf(new[]{"add","rename","rules","members","delete","confirm-delete","rule","member","group-pin","group"},action),text,value);row.ActionKey="tray:"+action;row.GroupKey=groupId;return row;}
+        static List<WirelessCard> MemberDevices(TrayContext owner,AudioBindings pref){
+            var cards=WirelessLayout.Build(owner,0,100000,true).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&card.Id!="native:audio";});
+            foreach(var group in pref.TrayGroups)foreach(string id in group.Members)if(!cards.Exists(delegate(WirelessCard card){return card.Id==id;})){
+                string alias;string name=id=="native:mouse"?pref.MouseAlias:id=="native:headset"?pref.HeadsetAlias:pref.DeviceAliases.TryGetValue(id,out alias)?alias:"已断开的设备";
+                cards.Add(new WirelessCard {Id=id,Name=name,Kind="device"});
+            }
+            return cards;
+        }
         internal static List<PopupControl> Build(TrayContext owner,PopupNavigation nav,bool headset,WirelessLayout wireless=null) {
             var rows=new List<PopupControl>();int preferenceSplit=0;var pref=DeviceSettings.Current;var audio=nav.AudioDeviceKey!=null&&!owner.AudioControlsAvailable?null:owner.Audio;
             var audioPref=DeviceSettings.ForAudioDevice(nav.AudioDeviceKey);
@@ -105,7 +119,7 @@ namespace AtkBatteryTray {
                 rows.Add(Section("显示"));
                 rows.Add(Row(210,"外观",pref.Theme=="auto"?"跟随系统":pref.Theme=="dark"?"深色":"浅色"));
                 rows.Add(Row(223,"配色",ThemePalette.Name(pref.ThemeStyle)));
-                rows.Add(Row(211,"托盘显示",!String.IsNullOrEmpty(pref.TrayDeviceId)?FixedTrayName(owner,pref.TrayDeviceId):pref.TraySource=="active"?"当前使用的设备":pref.TraySource=="auto"?"自动":pref.TraySource=="mouse"?"鼠标优先":pref.TraySource=="headset"?"耳机优先":pref.TraySource=="keyboard"?"键盘优先":"最低电量"));
+                rows.Add(Row(211,"托盘图标",(pref.TrayGroups.Count+1)+" 个"));
                 rows.Add(Toggle(215,"减弱动效",pref.ReducedMotion));
                 rows.Add(Section("提醒"));rows.Add(Toggle(212,"低电量提醒",pref.LowBatteryNotifications));rows.Add(Row(213,"提醒阈值",pref.WarningThreshold+"%"));
                 preferenceSplit=rows.Count;
@@ -114,10 +128,37 @@ namespace AtkBatteryTray {
                 rows.Add(Toggle(214,"跨重启保留读数",pref.RememberReadings));
                 var clear=Row(217,"清除历史读数",null,"refresh");clear.Detail="关闭保留不删除历史，清除需单独操作";rows.Add(clear);
                 rows.Add(Section("更新"));rows.Add(Toggle(219,"自动检查更新",pref.AutoCheckUpdates));
+            }else if(nav.Page==PopupPage.TrayIcons){
+                var firstGroup=GroupRow("group",TrayConfiguration.FirstName,TrayConfiguration.FirstId,TrayRule(owner,pref.TraySource,pref.TrayDeviceId));firstGroup.Id=600;rows.Add(firstGroup);
+                foreach(var group in pref.TrayGroups){var row=GroupRow("group",group.Name,group.Id,TrayRule(owner,group.Source,group.DeviceId));row.Id=600+rows.Count;rows.Add(row);}
+                var add=GroupRow("add","添加托盘图标",null);add.Enabled=pref.TrayGroups.Count<3;rows.Add(add);
+                rows.Add(Row(224,"图标样式",pref.TrayIconStyle=="device"?"设备图标":"数字"));
+                if(nav.TrayHint){var hint=Info(TrayConfiguration.HiddenIconHint,null);hint.WrapText=true;rows.Add(hint);}
+            }else if(nav.Page==PopupPage.TrayGroup){
+                var group=TrayConfiguration.Find(pref,nav.TrayGroupKey);
+                if(group==null)rows.Add(Info("包含其余所有设备",null));else rows.Add(GroupRow("rename","名称",group.Id,group.Name));
+                rows.Add(GroupRow("rules","显示规则",nav.TrayGroupKey,TrayRule(owner,group==null?pref.TraySource:group.Source,group==null?pref.TrayDeviceId:group.DeviceId)));
+                if(group!=null){rows.Add(GroupRow("members","包含的设备",group.Id,group.Members.Count+" 台"));rows.Add(GroupRow("delete","删除此图标",group.Id));}
+            }else if(nav.Page==PopupPage.TrayRules){
+                var group=TrayConfiguration.Find(pref,nav.TrayGroupKey);
+                if(group!=null){
+                    foreach(string source in new[]{"active","lowest"}){var rule=GroupRow("rule",source=="active"?"当前使用的设备":"最低电量",group.Id);rule.Id=620+rows.Count;rule.TargetToken=source;rule.Selected=String.IsNullOrEmpty(group.DeviceId)&&group.Source==source;if(source=="active")rule.Detail="只识别鼠标，其他设备按最低电量";rows.Add(rule);}
+                    foreach(var device in MemberDevices(owner,pref))if(group.Members.Contains(device.Id)){var pin=GroupRow("group-pin","固定："+device.Name,group.Id);pin.Id=4000+rows.Count;pin.DeviceKey=device.Id;pin.Selected=group.DeviceId==device.Id;rows.Add(pin);}
+                }
+            }else if(nav.Page==PopupPage.TrayMembers){
+                var group=TrayConfiguration.Find(pref,nav.TrayGroupKey);
+                if(group!=null)foreach(var device in MemberDevices(owner,pref)){
+                    var member=GroupRow("member",device.Name,group.Id);member.Id=5000+rows.Count;member.DeviceKey=device.Id;member.Selected=group.Members.Contains(device.Id);
+                    string current=TrayConfiguration.Owner(pref,device.Id);if(current!=group.Id)member.Detail="当前在："+TrayConfiguration.Name(pref,current);rows.Add(member);
+                }
+            }else if(nav.Page==PopupPage.ConfirmTrayDelete){
+                var note=Info("删除此图标后，包含的设备将回到托盘图标 1",null);note.WrapText=true;rows.Add(note);
+                rows.Add(GroupRow("confirm-delete","确认删除",nav.TrayGroupKey));
             }else if(nav.Page==PopupPage.ChoosePreference) {
                 string[] labels;int first,selected;
                 if(nav.PreferenceAction==210){labels=new[]{"跟随系统","浅色","深色"};first=400;selected=pref.Theme=="auto"?0:pref.Theme=="light"?1:2;}
                 else if(nav.PreferenceAction==223){labels=new[]{"海蓝","原生","琥珀","青雾"};first=440;selected=Array.IndexOf(ThemePalette.Keys,ThemePalette.Normalize(pref.ThemeStyle));}
+                else if(nav.PreferenceAction==224){labels=new[]{"数字","设备图标"};first=450;selected=pref.TrayIconStyle=="device"?1:0;}
                 else if(nav.PreferenceAction==211){labels=new[]{"当前使用的设备","最低电量","自动选择有数据的设备","鼠标优先","耳机优先","键盘优先"};first=410;selected=pref.TraySource=="active"?0:pref.TraySource=="lowest"?1:pref.TraySource=="auto"?2:pref.TraySource=="mouse"?3:pref.TraySource=="headset"?4:5;}
                 else if(nav.PreferenceAction==213){labels=new[]{"10%","15%","20%"};first=420;selected=pref.WarningThreshold==10?0:pref.WarningThreshold==15?1:2;}
                 else {labels=new[]{"1分钟","2分钟","5分钟"};first=430;selected=pref.BackgroundSeconds==60?0:pref.BackgroundSeconds==120?1:2;}
@@ -356,11 +397,16 @@ namespace AtkBatteryTray {
             return StartupDiagnostics.Describe();
         }
         internal static string Title(PopupNavigation nav) {
+            if(nav.Page==PopupPage.TrayIcons)return "托盘图标";
+            if(nav.Page==PopupPage.TrayGroup)return TrayConfiguration.Name(DeviceSettings.Current,nav.TrayGroupKey);
+            if(nav.Page==PopupPage.TrayRules)return "显示规则";
+            if(nav.Page==PopupPage.TrayMembers)return "包含的设备";
+            if(nav.Page==PopupPage.ConfirmTrayDelete)return "删除此图标？";
             if(nav.Page==PopupPage.Devices)return "设备管理";
             if(nav.Page==PopupPage.DeviceMissing)return "设备没显示？";
             if(nav.Page==PopupPage.ManageDevice)return "显示与排序";
             if(nav.Page==PopupPage.Device)return "设备详情";
-            if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==211?"托盘显示":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
+            if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==224?"图标样式":nav.PreferenceAction==211?"显示规则":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
             switch(nav.Page){case PopupPage.More:return "更多选项";case PopupPage.Audio:return "音源与麦克风";case PopupPage.Preferences:return "显示与提醒";case PopupPage.Mouse:return "鼠标详情";case PopupPage.Headset:return "耳机详情";case PopupPage.Bindings:return "按钮绑定";case PopupPage.PickBinding:return nav.BindingRole=="speaker"?"选择扬声器":nav.BindingRole=="headset"?"选择耳机":"选择麦克风";default:return "状态与诊断";}
         }
         internal static RectangleF VolumeTrack(RectangleF row){return new RectangleF(row.X+9,row.Y+(row.Height<=VisualDesign.SystemVolumeHeight?27:33),row.Width-18,6);}
@@ -428,7 +474,7 @@ namespace AtkBatteryTray {
                     if(!String.IsNullOrEmpty(row.Detail)){var lines=row.Detail.Split('\n');for(int i=0;i<lines.Length;i++)VisualDesign.DrawLabel(g,lines[i],new RectangleF(x,rect.Y+22+18*i,rect.Right-x-(row.Id==217?12:24),18),11,false,detailColor,StringAlignment.Near);}
                     if(!String.IsNullOrEmpty(row.Value))VisualDesign.DrawLabel(g,row.Value,new RectangleF(x+textWidth,rect.Y,rect.Right-x-textWidth-19,rect.Height),11,false,detailColor,StringAlignment.Far);
                     if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(rect.Height-14)/2,14,14),themeChoice?blue:palette.SelectedForeground);
-                    else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=223||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000)VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(rect.Height-12)/2,12,12),detailColor);
+                    else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=224||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000&&row.ActionKey!="tray:member"&&row.ActionKey!="tray:group-pin"||row.ActionKey=="tray:group"||row.ActionKey=="tray:rename"||row.ActionKey=="tray:rules"||row.ActionKey=="tray:members")VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(rect.Height-12)/2,12,12),detailColor);
                 }
                 if(highlighted)using(var shape=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1,7))using(var pen=new Pen(blue,1))g.DrawPath(pen,shape);
             }
