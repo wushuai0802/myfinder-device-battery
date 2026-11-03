@@ -198,6 +198,63 @@ static class ThemeTests {
             VisualDesign.HighContrastOverride=false;
         }
     }
+    static Bitmap PopupRow(Fixture f,PopupNavigation nav,PopupControl row,bool dark,float scale,Action<Graphics> extra=null){
+        var rows=new List<PopupControl>{row};
+        return RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);if(extra!=null)extra(g);});
+    }
+    static Bitmap RowReference(Fixture f,PopupNavigation nav,PopupControl row,bool dark,float scale,Action<Graphics> draw){
+        return PopupRow(f,nav,new PopupControl {Id=-1,Rect=row.Rect},dark,scale,draw);
+    }
+    static bool SameArea(Bitmap a,Bitmap b,RectangleF area,float scale){
+        var crop=Rectangle.FromLTRB((int)Math.Floor(area.Left*scale),(int)Math.Floor(area.Top*scale),(int)Math.Ceiling(area.Right*scale),(int)Math.Ceiling(area.Bottom*scale));
+        using(var left=a.Clone(crop,PixelFormat.Format32bppPArgb))using(var right=b.Clone(crop,PixelFormat.Format32bppPArgb))return SamePixels(left,right);
+    }
+    static void IconDetailRows(){
+        foreach(bool dark in new[]{false,true})foreach(float scale in new[]{1f,1.25f,1.5f,2f})using(var f=new Fixture()){
+            int count=0;
+            foreach(var page in new[]{PopupPage.Preferences,PopupPage.Audio,PopupPage.Diagnostics,PopupPage.DeviceMissing}){
+                var nav=new PopupNavigation {Page=page,VisibleChoices=100};
+                foreach(var row in PopupPages.Build(f.Owner,nav,false))if(!String.IsNullOrEmpty(row.Icon)&&!String.IsNullOrEmpty(row.Detail)){
+                    count++;row.Selected=false;
+                    var rect=row.Rect;var icon=new RectangleF(16,rect.Top+4,16,16);var title=new RectangleF(40,rect.Top+1,187,22);
+                    var detail=new RectangleF(title.Left,rect.Top+22,rect.Right-title.Left-(row.Id==217?12:24),18);
+                    Check(icon.Top+icon.Height/2==title.Top+title.Height/2&&!icon.IntersectsWith(detail)&&detail.Left==title.Left,"reference icon aligns with the title and clears its detail column");
+                    using(var actual=PopupRow(f,nav,row,dark,scale))using(var expected=RowReference(f,nav,row,dark,scale,delegate(Graphics g){
+                        var p=ThemePalette.Current(dark);VisualDesign.DrawSymbol(g,row.Icon,icon,p.Muted);
+                        VisualDesign.DrawLabel(g,row.Text,title,11.5f,false,row.Enabled?p.Foreground:p.Muted,StringAlignment.Near);
+                        var lines=row.Detail.Split('\n');for(int i=0;i<lines.Length;i++)VisualDesign.DrawLabel(g,lines[i],new RectangleF(detail.X,detail.Y+18*i,detail.Width,detail.Height),11,false,p.Muted,StringAlignment.Near);
+                    }))Check(SamePixels(actual,expected),"icon/title/detail rendering matches disjoint aligned rectangles: "+page+" / "+row.Id+" / "+scale+" / "+dark);
+                }
+            }
+            Check(count>=5,"covers clear-history, both audio rows and both multiline feedback rows");
+        }
+    }
+    static void UnchangedRowContent(){
+        foreach(bool dark in new[]{false,true})foreach(float scale in new[]{1f,1.25f,1.5f,2f})using(var f=new Fixture()){
+            var nav=new PopupNavigation {Page=PopupPage.More};
+            foreach(string detail in new[]{null,""}){
+                var row=new PopupControl {Id=299,Rect=new RectangleF(10,44,240,34),Text="Single line",Icon="refresh",Detail=detail};
+                using(var actual=PopupRow(f,nav,row,dark,scale))using(var expected=RowReference(f,nav,row,dark,scale,delegate(Graphics g){
+                    var p=ThemePalette.Current(dark);VisualDesign.DrawSymbol(g,"refresh",new RectangleF(16,53,16,16),p.Muted);
+                    VisualDesign.DrawLabel(g,row.Text,new RectangleF(40,44,187,34),11.5f,false,p.Foreground,StringAlignment.Near);
+                }))Check(SamePixels(actual,expected),"single-line icon and text retain their original rectangles");
+            }
+            foreach(int id in new[]{217,299}){
+                var row=new PopupControl {Id=id,Rect=new RectangleF(10,44,240,44),Text="Title",Detail="Description"};
+                using(var actual=PopupRow(f,nav,row,dark,scale))using(var expected=RowReference(f,nav,row,dark,scale,delegate(Graphics g){
+                    var p=ThemePalette.Current(dark);VisualDesign.DrawLabel(g,row.Text,new RectangleF(16,45,211,22),11.5f,false,p.Foreground,StringAlignment.Near);
+                    VisualDesign.DrawLabel(g,row.Detail,new RectangleF(16,66,id==217?222:210,18),11,false,p.Muted,StringAlignment.Near);
+                }))Check(SamePixels(actual,expected),"rows without icons retain their original title/detail rectangles: "+id);
+            }
+            foreach(string kind in new[]{"toggle","slider","swatch","wrapped"}){
+                var row=new PopupControl {Id=299,Rect=new RectangleF(10,44,240,54),Text="Special row",Icon="refresh",Detail="Description",Toggle=kind=="toggle",Slider=kind=="slider",PaletteKey=kind=="swatch"?"ocean":null,WrapText=kind=="wrapped"};
+                using(var actual=PopupRow(f,nav,row,dark,scale)){
+                    row.Detail=null;
+                    using(var expected=PopupRow(f,nav,row,dark,scale))Check(SameArea(actual,expected,new RectangleF(15,44,19,54),scale),"special-row icon retains its single-line position: "+kind);
+                }
+            }
+        }
+    }
     static void Geometry(){
         Check(VisualDesign.PanelWidth==260&&VisualDesign.BatteryRingSize==28&&VisualDesign.BatteryDigitSize==20&&VisualDesign.PanelRadius==12,"requested geometry constants");
         using(var f=new Fixture()){
@@ -373,7 +430,7 @@ static class ThemeTests {
     }
     [STAThread] static int Main(string[] args){
         bool render=args.Length>0&&args[0]=="--render";output=Path.GetFullPath(args[render?1:0]);Directory.CreateDirectory(output);var previous=DeviceSettings.Current;
-        try{VisualDesign.HighContrastOverride=false;if(render){RenderThemes();return 0;}Run("ThemeStyle compatibility",Configuration);Run("exact palette and WCAG contrast",Palettes);Run("choice save and stay",Choices);Run("noninteractive preference groups and paging",Groups);Run("group-aligned preferences and bounded fallback",PreferencePages);Run("toggle knob rendering and contrast",ToggleKnobs);Run("mini swatches, selection and label spacing",ThemeSwatches);Run("geometry and hit targets",Geometry);Run("fresh low battery rendering",LowBattery);Run("high contrast system roles and rendered frames",HighContrast);Run("flat surfaces, swatches, sync sizing and title feedback",Surfaces);Run("round volume knob states",VolumeKnobs);Run("ThemeStyle repaint cache",RepaintCache);Console.WriteLine(checks+" checks, "+failures+" failed groups; injected readers and TEMP settings only");return failures==0?0:1;}
+        try{VisualDesign.HighContrastOverride=false;if(render){RenderThemes();return 0;}Run("ThemeStyle compatibility",Configuration);Run("exact palette and WCAG contrast",Palettes);Run("choice save and stay",Choices);Run("noninteractive preference groups and paging",Groups);Run("group-aligned preferences and bounded fallback",PreferencePages);Run("toggle knob rendering and contrast",ToggleKnobs);Run("mini swatches, selection and label spacing",ThemeSwatches);Run("icon/detail aligned rendering",IconDetailRows);Run("unchanged single-line, icon-free and special rows",UnchangedRowContent);Run("geometry and hit targets",Geometry);Run("fresh low battery rendering",LowBattery);Run("high contrast system roles and rendered frames",HighContrast);Run("flat surfaces, swatches, sync sizing and title feedback",Surfaces);Run("round volume knob states",VolumeKnobs);Run("ThemeStyle repaint cache",RepaintCache);Console.WriteLine(checks+" checks, "+failures+" failed groups; injected readers and TEMP settings only");return failures==0?0:1;}
         finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
     }
 }

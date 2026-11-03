@@ -383,7 +383,11 @@ namespace AtkBatteryTray {
                 Color detailColor=muted;
                 if(row.Enabled&&themeChoice&&row.Selected)color=blue;
                 else if(row.Enabled&&(row.Selected||VisualDesign.HighContrast&&highlighted)&&!themeChoice){color=palette.SelectedForeground;detailColor=color;}
-                if(!String.IsNullOrEmpty(row.Icon)){VisualDesign.DrawSymbol(g,row.Icon,new RectangleF(x,rect.Y+(rect.Height-16)/2,16,16),detailColor);x+=24;}
+                if(!String.IsNullOrEmpty(row.Icon)){
+                    bool titleAligned=!String.IsNullOrEmpty(row.Detail)&&!row.Slider&&!row.Toggle&&!row.WrapText&&!themeChoice;
+                    float iconY=titleAligned?rect.Y+4:rect.Y+(rect.Height-16)/2;
+                    VisualDesign.DrawSymbol(g,row.Icon,new RectangleF(x,iconY,16,16),detailColor);x+=24;
+                }
                 if(themeChoice) {
                     if(!VisualDesign.HighContrast) {
                         var swatch=ThemePalette.For(row.PaletteKey,dark);float y=rect.Y+(rect.Height-18)/2;
@@ -421,7 +425,7 @@ namespace AtkBatteryTray {
                 }else {
                     float textWidth=String.IsNullOrEmpty(row.Value)?rect.Right-x-23:Math.Min(105,rect.Right-x-90);
                     VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y+(String.IsNullOrEmpty(row.Detail)?0:1),textWidth,String.IsNullOrEmpty(row.Detail)?rect.Height:22),11.5f,false,row.Id==204&&!(VisualDesign.HighContrast&&highlighted)?ThemePalette.LevelColor(10,dark):color,StringAlignment.Near);
-                    if(!String.IsNullOrEmpty(row.Detail)){var lines=row.Detail.Split('\n');float detailX=row.Id==217?rect.X+6:x;for(int i=0;i<lines.Length;i++)VisualDesign.DrawLabel(g,lines[i],new RectangleF(detailX,rect.Y+22+18*i,rect.Right-detailX-(row.Id==217?12:24),18),11,false,detailColor,StringAlignment.Near);}
+                    if(!String.IsNullOrEmpty(row.Detail)){var lines=row.Detail.Split('\n');for(int i=0;i<lines.Length;i++)VisualDesign.DrawLabel(g,lines[i],new RectangleF(x,rect.Y+22+18*i,rect.Right-x-(row.Id==217?12:24),18),11,false,detailColor,StringAlignment.Near);}
                     if(!String.IsNullOrEmpty(row.Value))VisualDesign.DrawLabel(g,row.Value,new RectangleF(x+textWidth,rect.Y,rect.Right-x-textWidth-19,rect.Height),11,false,detailColor,StringAlignment.Far);
                     if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(rect.Height-14)/2,14,14),themeChoice?blue:palette.SelectedForeground);
                     else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=223||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000)VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(rect.Height-12)/2,12,12),detailColor);
