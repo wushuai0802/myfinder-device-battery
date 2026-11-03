@@ -122,7 +122,7 @@ static class UiFeedbackTests {
             g.ScaleTransform(scale,scale);g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             var texts=new List<string> {"--"};for(int percent=0;percent<=100;percent++){texts.Add(percent.ToString());texts.Add("≈"+percent);}
             foreach(string text in texts){
-                float preferred=text.StartsWith("≈")?16:VisualDesign.BatteryDigitSize;
+                float preferred=text.StartsWith("≈")?18:VisualDesign.BatteryDigitSize;
                 float size=CompactRenderer.BatteryTextSize(g,text,preferred,43);
                 using(var font=new Font("Segoe UI",size,FontStyle.Bold,GraphicsUnit.Pixel))using(var format=new StringFormat {Alignment=StringAlignment.Far,LineAlignment=StringAlignment.Center,Trimming=StringTrimming.None,FormatFlags=StringFormatFlags.NoWrap}){
                     Check(size>0&&size<=preferred&&g.MeasureString(text,font,Int32.MaxValue,format).Width<=43,"battery text "+text+" fits the unchanged 43px region at "+scale);

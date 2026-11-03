@@ -10,8 +10,8 @@ namespace AtkBatteryTray {
         public int Id;
         public int DpiValue;
         public RectangleF Rect;
-        public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken;
-        public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy,WrapText;
+        public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey;
+        public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy,WrapText,Section;
         public string StableKey {get {
             string action=ActionKey;
             if(DpiValue>0)action="wireless-dpi:"+DpiValue+":"+(TargetToken??"");
@@ -41,14 +41,15 @@ namespace AtkBatteryTray {
         }
     }
     internal static class PopupPages {
-        internal static Color Foreground(bool dark){return VisualDesign.HighContrast?System.Drawing.SystemColors.WindowText:dark?Color.FromArgb(243,245,248):Color.FromArgb(36,41,50);}
-        internal static Color Muted(bool dark){return VisualDesign.HighContrast?System.Drawing.SystemColors.GrayText:dark?Color.FromArgb(167,177,193):Color.FromArgb(100,110,125);}
-        internal static Color Track(bool dark){return VisualDesign.HighContrast?System.Drawing.SystemColors.Control:dark?Color.FromArgb(66,72,82):Color.FromArgb(231,235,241);}
-        internal static Color Blue(bool dark){return VisualDesign.HighContrast?System.Drawing.SystemColors.Highlight:dark?Color.FromArgb(50,139,250):Color.FromArgb(8,101,214);}
-        internal static Color SelectedForeground {get{return VisualDesign.HighContrast?System.Drawing.SystemColors.HighlightText:Color.White;}}
+        internal static Color Foreground(bool dark){return ThemePalette.Current(dark).Foreground;}
+        internal static Color Muted(bool dark){return ThemePalette.Current(dark).Muted;}
+        internal static Color Track(bool dark){return ThemePalette.Current(dark).Track;}
+        internal static Color Blue(bool dark){return ThemePalette.Current(dark).Accent;}
+        internal static Color SelectedForeground(bool dark){return ThemePalette.Current(dark).SelectedForeground;}
         internal static bool Reduced {get{return DeviceSettings.Current.ReducedMotion||!System.Windows.Forms.SystemInformation.IsMenuAnimationEnabled;}}
         static PopupControl Row(int id,string text,string value=null,string icon=null){return new PopupControl {Id=id,Text=text,Value=value,Icon=icon};}
         static PopupControl Info(string text,string value){var row=Row(-1,text,value);row.Information=true;row.ActionKey="info:"+text;return row;}
+        static PopupControl Section(string text){var row=Info(text,null);row.Section=true;return row;}
         static string WrappedText(PopupControl row){return String.IsNullOrEmpty(row.Value)?row.Text:row.Text+"\n"+row.Value;}
         static PopupControl Toggle(int id,string text,bool value){var row=Row(id,text);row.Toggle=true;row.Checked=value;return row;}
         static string OutputName(AudioReading audio){return UiState.CurrentOutputName(audio);}
@@ -99,22 +100,26 @@ namespace AtkBatteryTray {
                 a=Toggle(102,"Windows麦克风静音",audio!=null&&audio.MicrophoneMuted==true);a.Enabled=audio!=null&&audio.MicrophoneAvailable&&audio.MicrophoneMuted.HasValue;rows.Add(a);
                 rows.Add(Row(203,"更换按钮绑定",null,"settings"));
             }else if(nav.Page==PopupPage.Preferences) {
+                rows.Add(Section("显示"));
                 rows.Add(Row(210,"外观",pref.Theme=="auto"?"跟随系统":pref.Theme=="dark"?"深色":"浅色"));
+                rows.Add(Row(223,"配色",ThemePalette.Name(pref.ThemeStyle)));
                 rows.Add(Row(211,"托盘显示",!String.IsNullOrEmpty(pref.TrayDeviceId)?FixedTrayName(owner,pref.TrayDeviceId):pref.TraySource=="active"?"当前使用的设备":pref.TraySource=="auto"?"自动":pref.TraySource=="mouse"?"鼠标优先":pref.TraySource=="headset"?"耳机优先":pref.TraySource=="keyboard"?"键盘优先":"最低电量"));
                 rows.Add(Toggle(215,"减弱动效",pref.ReducedMotion));
-                rows.Add(Toggle(212,"低电量提醒",pref.LowBatteryNotifications));rows.Add(Row(213,"提醒阈值",pref.WarningThreshold+"%"));
+                rows.Add(Section("提醒"));rows.Add(Toggle(212,"低电量提醒",pref.LowBatteryNotifications));rows.Add(Row(213,"提醒阈值",pref.WarningThreshold+"%"));
+                rows.Add(Section("数据"));
                 rows.Add(Row(216,"后台同步间隔",pref.BackgroundSeconds==60?"1分钟":pref.BackgroundSeconds==120?"2分钟":"5分钟"));
                 rows.Add(Toggle(214,"跨重启保留读数",pref.RememberReadings));
                 rows.Add(Row(217,"清除历史读数",null,"refresh"));
-                rows.Add(Toggle(219,"自动检查更新",pref.AutoCheckUpdates));
+                rows.Add(Section("更新"));rows.Add(Toggle(219,"自动检查更新",pref.AutoCheckUpdates));
             }else if(nav.Page==PopupPage.ChoosePreference) {
                 string[] labels;int first,selected;
                 if(nav.PreferenceAction==210){labels=new[]{"跟随系统","浅色","深色"};first=400;selected=pref.Theme=="auto"?0:pref.Theme=="light"?1:2;}
+                else if(nav.PreferenceAction==223){labels=new[]{"海蓝","原生","琥珀","青雾"};first=440;selected=Array.IndexOf(ThemePalette.Keys,ThemePalette.Normalize(pref.ThemeStyle));}
                 else if(nav.PreferenceAction==211){labels=new[]{"当前使用的设备","最低电量","自动选择有数据的设备","鼠标优先","耳机优先","键盘优先"};first=410;selected=pref.TraySource=="active"?0:pref.TraySource=="lowest"?1:pref.TraySource=="auto"?2:pref.TraySource=="mouse"?3:pref.TraySource=="headset"?4:5;}
                 else if(nav.PreferenceAction==213){labels=new[]{"10%","15%","20%"};first=420;selected=pref.WarningThreshold==10?0:pref.WarningThreshold==15?1:2;}
                 else {labels=new[]{"1分钟","2分钟","5分钟"};first=430;selected=pref.BackgroundSeconds==60?0:pref.BackgroundSeconds==120?1:2;}
                 int[] trayRuleIds={415,414,410,411,412,413};
-                for(int i=0;i<labels.Length;i++){var choice=Row(nav.PreferenceAction==211?trayRuleIds[i]:first+i,labels[i]);choice.Selected=i==selected&&(nav.PreferenceAction!=211||String.IsNullOrEmpty(pref.TrayDeviceId));rows.Add(choice);}
+                for(int i=0;i<labels.Length;i++){var choice=Row(nav.PreferenceAction==211?trayRuleIds[i]:first+i,labels[i]);choice.Selected=i==selected&&(nav.PreferenceAction!=211||String.IsNullOrEmpty(pref.TrayDeviceId));if(nav.PreferenceAction==223)choice.PaletteKey=ThemePalette.Keys[i];rows.Add(choice);}
                 if(nav.PreferenceAction==211) {
                     rows[0].Detail="仅跟随 USB 鼠标活动";
                     foreach(var device in TrayDevices(owner)) {
@@ -218,7 +223,7 @@ namespace AtkBatteryTray {
                 }else nav.Offset=0;
             }
             float y=44;
-            foreach(var row in rows){float height=row.Slider?54:!String.IsNullOrEmpty(row.Detail)?26+18*row.Detail.Split('\n').Length:34;
+            foreach(var row in rows){float height=row.Section?24:row.Slider?54:!String.IsNullOrEmpty(row.Detail)?26+18*row.Detail.Split('\n').Length:34;
                 if(row.WrapText)using(var bitmap=new Bitmap(1,1))using(var g=Graphics.FromImage(bitmap))using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))height=Math.Max(height,(float)Math.Ceiling(g.MeasureString(WrappedText(row),font,new SizeF(211,1000)).Height)+12);
                 row.Rect=new RectangleF(10,y,240,height);y+=height+2;}
             rows.Insert(0,new PopupControl {Id=6,Text="返回",Rect=new RectangleF(8,5,34,34)});
@@ -321,27 +326,36 @@ namespace AtkBatteryTray {
             if(nav.Page==PopupPage.DeviceMissing)return "设备没显示？";
             if(nav.Page==PopupPage.ManageDevice)return "显示与排序";
             if(nav.Page==PopupPage.Device)return "设备详情";
-            if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==211?"托盘显示":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
+            if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==211?"托盘显示":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
             switch(nav.Page){case PopupPage.More:return "更多选项";case PopupPage.Audio:return "音源与麦克风";case PopupPage.Preferences:return "显示与提醒";case PopupPage.Mouse:return "鼠标详情";case PopupPage.Headset:return "耳机详情";case PopupPage.Bindings:return "按钮绑定";case PopupPage.PickBinding:return nav.BindingRole=="speaker"?"选择扬声器":nav.BindingRole=="headset"?"选择耳机":"选择麦克风";default:return "状态与诊断";}
         }
         internal static RectangleF VolumeTrack(RectangleF row){return new RectangleF(row.X+9,row.Y+(row.Height<=VisualDesign.SystemVolumeHeight?27:33),row.Width-18,6);}
         internal static int VolumeAt(RectangleF row,float x){var track=VolumeTrack(row);return Math.Max(0,Math.Min(100,(int)Math.Round((x-track.Left)/track.Width*100)));}
         internal static void Paint(Graphics g,TrayContext owner,PopupNavigation nav,List<PopupControl> controls,bool dark,int hover,int pressed,int focus) {
-            Size size=SizeFor(controls);var fg=Foreground(dark);var muted=Muted(dark);var blue=Blue(dark);var track=Track(dark);
+            Size size=SizeFor(controls);var palette=ThemePalette.Current(dark);var fg=palette.Foreground;var muted=palette.Muted;var blue=palette.Accent;var track=palette.Track;
             g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             VisualDesign.DrawSurface(g,new RectangleF(.5f,.5f,size.Width-1,size.Height-1),dark);
-            if(hover==6||pressed==6||focus==6)using(var shape=VisualDesign.RoundRect(8,5,34,34,7))using(var brush=new SolidBrush(Color.FromArgb(dark?18:10,fg)))g.FillPath(brush,shape);
-            if(focus==6)using(var shape=VisualDesign.RoundRect(8.5f,5.5f,33,33,7))using(var pen=new Pen(blue,1))g.DrawPath(pen,shape);
-            VisualDesign.DrawSymbol(g,"back",new RectangleF(17,14,16,16),muted);
+            bool backActive=hover==6||pressed==6||focus==6;
+            if(backActive)using(var shape=VisualDesign.RoundRect(8,5,34,34,7))using(var brush=new SolidBrush(palette.Interaction(pressed==6)))g.FillPath(brush,shape);
+            if(backActive)using(var shape=VisualDesign.RoundRect(8.5f,5.5f,33,33,7))using(var pen=new Pen(blue,1))g.DrawPath(pen,shape);
+            VisualDesign.DrawSymbol(g,"back",new RectangleF(17,14,16,16),VisualDesign.HighContrast&&backActive?palette.SelectedForeground:muted);
             VisualDesign.DrawLabel(g,Title(nav),new RectangleF(45,9,200,27),13,true,fg,StringAlignment.Near);
             foreach(var row in controls) {
                 if(row.Id==6)continue;
+                if(row.Section){VisualDesign.DrawLabel(g,row.Text,new RectangleF(row.Rect.X+6,row.Rect.Y,row.Rect.Width-12,row.Rect.Height),11,false,muted,StringAlignment.Near);continue;}
                 var rect=row.Rect;bool highlighted=row.Id>=0&&(row.Id==hover||row.Id==focus||row.Id==pressed);
-                if(highlighted||row.Selected)using(var shape=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,8))using(var brush=new SolidBrush(VisualDesign.HighContrast?SystemColors.Highlight:row.Selected?Color.FromArgb(dark?35:21,blue):Color.FromArgb(dark?18:10,fg)))g.FillPath(brush,shape);
+                if(highlighted||row.Selected)using(var shape=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,7))using(var brush=new SolidBrush(row.Selected?palette.Selected:palette.Interaction(row.Id==pressed)))g.FillPath(brush,shape);
                 Color color=row.Enabled?fg:muted;float x=rect.X+6;
                 Color detailColor=muted;
-                if(VisualDesign.HighContrast&&row.Enabled&&(highlighted||row.Selected)){color=SystemColors.HighlightText;detailColor=color;}
+                if(row.Enabled&&(row.Selected||VisualDesign.HighContrast&&highlighted)){color=palette.SelectedForeground;detailColor=color;}
                 if(!String.IsNullOrEmpty(row.Icon)){VisualDesign.DrawSymbol(g,row.Icon,new RectangleF(x,rect.Y+(rect.Height-16)/2,16,16),detailColor);x+=24;}
+                if(!String.IsNullOrEmpty(row.PaletteKey)) {
+                    var swatch=ThemePalette.For(row.PaletteKey,dark);float y=rect.Y+(rect.Height-8)/2;
+                    using(var brush=new SolidBrush(swatch.Card))g.FillEllipse(brush,x,y,8,8);
+                    using(var pen=new Pen(swatch.Border,1))g.DrawEllipse(pen,x,y,8,8);
+                    using(var brush=new SolidBrush(swatch.Accent))g.FillEllipse(brush,x+13,y,8,8);
+                    x+=30;
+                }
                 if(row.Slider) {
                     int? actual=owner.Audio==null?null:owner.Audio.OutputVolumePercent;
                     int? value=nav.VolumePreview>=0?(int?)nav.VolumePreview:owner.DesiredVolume??actual;
@@ -350,30 +364,35 @@ namespace AtkBatteryTray {
                     var meter=VolumeTrack(rect);using(var shape=VisualDesign.RoundRect(meter.X,meter.Y,meter.Width,meter.Height,3))using(var brush=new SolidBrush(track))g.FillPath(brush,shape);
                     float fill=value.HasValue?meter.Width*value.Value/100f:0;
                     if(fill>0)using(var shape=VisualDesign.RoundRect(meter.X,meter.Y,fill,meter.Height,Math.Min(3,fill/2)))using(var brush=new SolidBrush(row.Enabled?blue:muted))g.FillPath(brush,shape);
-                    if(value.HasValue)using(var brush=new SolidBrush(dark?Color.FromArgb(235,240,247):Color.White))g.FillEllipse(brush,meter.X+fill-6,meter.Y-3,12,12);
+                    if(value.HasValue) {
+                        float diameter=row.Id==hover||row.Id==pressed?14:12;
+                        var knob=new RectangleF(meter.X+fill-diameter/2,meter.Y+meter.Height/2-diameter/2,diameter,diameter);
+                        using(var brush=new SolidBrush(palette.Knob))g.FillEllipse(brush,knob);
+                        using(var pen=new Pen(blue,1))g.DrawEllipse(pen,knob);
+                    }
                 }else if(row.Toggle) {
                     VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y,rect.Width-51,rect.Height),11.5f,false,color,StringAlignment.Near);
                     var toggle=new RectangleF(rect.Right-37,rect.Y+(rect.Height-18)/2,30,18);
-                    using(var shape=VisualDesign.RoundRect(toggle.X,toggle.Y,toggle.Width,toggle.Height,9))using(var brush=new SolidBrush(!row.Enabled?track:row.Checked?row.Id==102?TrayGlyph.LevelColor(10,dark):blue:track))g.FillPath(brush,shape);
-                    using(var brush=new SolidBrush(row.Enabled?Color.White:muted))g.FillEllipse(brush,toggle.X+(row.Checked?14:2),toggle.Y+2,14,14);
+                    using(var shape=VisualDesign.RoundRect(toggle.X,toggle.Y,toggle.Width,toggle.Height,9))using(var brush=new SolidBrush(!row.Enabled?track:row.Checked?row.Id==102&&!VisualDesign.HighContrast?ThemePalette.LevelColor(10,dark):palette.Selected:track))g.FillPath(brush,shape);
+                    using(var brush=new SolidBrush(!row.Enabled?muted:row.Checked?palette.SelectedForeground:palette.Knob))g.FillEllipse(brush,toggle.X+(row.Checked?14:2),toggle.Y+2,14,14);
                 }else if(row.WrapText) {
                     using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(color))using(var format=new StringFormat {LineAlignment=StringAlignment.Center})g.DrawString(WrappedText(row),font,brush,new RectangleF(x,rect.Y+6,rect.Right-x-23,rect.Height-12),format);
                 }else {
                     float textWidth=String.IsNullOrEmpty(row.Value)?rect.Right-x-23:Math.Min(105,rect.Right-x-90);
-                    VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y+(String.IsNullOrEmpty(row.Detail)?0:1),textWidth,String.IsNullOrEmpty(row.Detail)?rect.Height:22),11.5f,false,row.Id==204?TrayGlyph.LevelColor(10,dark):color,StringAlignment.Near);
+                    VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y+(String.IsNullOrEmpty(row.Detail)?0:1),textWidth,String.IsNullOrEmpty(row.Detail)?rect.Height:22),11.5f,false,row.Id==204&&!(VisualDesign.HighContrast&&highlighted)?ThemePalette.LevelColor(10,dark):color,StringAlignment.Near);
                     if(!String.IsNullOrEmpty(row.Detail)){var lines=row.Detail.Split('\n');for(int i=0;i<lines.Length;i++)VisualDesign.DrawLabel(g,lines[i],new RectangleF(x,rect.Y+22+18*i,rect.Right-x-24,18),11,false,detailColor,StringAlignment.Near);}
                     if(!String.IsNullOrEmpty(row.Value))VisualDesign.DrawLabel(g,row.Value,new RectangleF(x+textWidth,rect.Y,rect.Right-x-textWidth-19,rect.Height),11,false,detailColor,StringAlignment.Far);
-                    if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(rect.Height-14)/2,14,14),VisualDesign.HighContrast&&highlighted?SystemColors.HighlightText:blue);
-                    else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=222||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000)VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(rect.Height-12)/2,12,12),detailColor);
+                    if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(rect.Height-14)/2,14,14),palette.SelectedForeground);
+                    else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=223||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000)VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(rect.Height-12)/2,12,12),detailColor);
                 }
-                if(row.Id>=0&&row.Id==focus)using(var shape=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1,8))using(var pen=new Pen(blue,1))g.DrawPath(pen,shape);
+                if(highlighted)using(var shape=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1,7))using(var pen=new Pen(blue,1))g.DrawPath(pen,shape);
             }
             string notice=nav.Notice;
             var feedback=owner.GetFeedback();bool failure=false;
             if(String.IsNullOrEmpty(notice)&&nav.Page==PopupPage.Audio&&!String.IsNullOrEmpty(feedback.AudioFailure)){notice=feedback.AudioFailure;failure=true;}
             if(String.IsNullOrEmpty(notice)&&nav.Page==PopupPage.Audio&&feedback.ShowPendingHints&&(!String.IsNullOrEmpty(feedback.PendingOutput)||feedback.MicrophonePending))notice="等待Windows确认…";
             if(String.IsNullOrEmpty(notice))notice=nav.Page==PopupPage.Bindings||nav.Page==PopupPage.PickBinding?"绑定只改变按钮目标，不切换当前音源":nav.Page==PopupPage.Preferences?"关闭保留不删除历史，清除需单独操作":nav.Page==PopupPage.Audio?"静音状态来自Windows麦克风端点":"";
-            VisualDesign.DrawLabel(g,notice,new RectangleF(13,size.Height-25,234,20),11,false,failure?TrayGlyph.LevelColor(10,dark):muted,StringAlignment.Near);
+            VisualDesign.DrawLabel(g,notice,new RectangleF(13,size.Height-25,234,20),11,false,failure?ThemePalette.LevelColor(10,dark):muted,StringAlignment.Near);
         }
     }
 }

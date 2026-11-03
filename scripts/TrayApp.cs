@@ -254,7 +254,10 @@ namespace AtkBatteryTray {
                 if(control.ActionKey=="tray:pin"&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==211) {
                     pref.TrayDeviceId=control.DeviceKey;owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;
                 }
-                if(id==210||id==211||id==213||id==216){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
+                if(id==210||id==211||id==213||id==216||id==223){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
+                if(id>=440&&id<=443&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==223) {
+                    pref.ThemeStyle=ThemePalette.Keys[id-440];owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
+                }
                 if(id>=400&&id<=432) {
                     if(id<=402)pref.Theme=id==400?"auto":id==401?"light":"dark";
                     else if(id>=410&&id<=415){pref.TraySource=id==410?"auto":id==411?"mouse":id==412?"headset":id==413?"keyboard":id==414?"lowest":"active";pref.TrayDeviceId=null;}
@@ -364,7 +367,7 @@ namespace AtkBatteryTray {
         void UpdateFallbackRegion() {
             Region mask;
             if(navigation.Page==PopupPage.Main&&owner.UseWirelessLayout) {
-                mask=new Region();mask.MakeEmpty();var layout=MainWireless();foreach(var card in layout.Cards)using(var shape=Style.Round(new RectangleF(0,card.Top,260,card.Height),16))mask.Union(shape);
+                mask=new Region();mask.MakeEmpty();var layout=MainWireless();foreach(var card in layout.Cards)using(var shape=Style.Round(new RectangleF(0,card.Top,260,card.Height),VisualDesign.PanelRadius))mask.Union(shape);
                 if(layout.HasVolume)using(var shape=Style.Round(layout.VolumeRect,12))mask.Union(shape);
                 mask.Union(new RectangleF(0,layout.Footer,260,30));
             }else{
@@ -537,7 +540,7 @@ namespace AtkBatteryTray {
             var preferences=DeviceSettings.Current;
             visible.Append('|').Append(navigation.Page).Append('|').Append(navigation.Offset).Append('|').Append(navigation.Notice).Append('|').Append(navigation.VolumePreview).Append('|').Append(pageProgress);
             visible.Append('|').Append(navigation.AudioDeviceKey).Append('|').Append(navigation.AudioDeviceName);
-            visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.TrayDeviceId).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
+            visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.ThemeStyle).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.TrayDeviceId).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
             visible.Append('|').Append(preferences.VolumeCollapsed);
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
             if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name).Append('|').Append(device.FormFactor);

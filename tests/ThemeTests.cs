@@ -1,0 +1,285 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Reflection;
+using System.Runtime.Serialization;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Windows.Forms;
+using AtkBattery;
+using AtkBatteryTray;
+
+// All readers and writers are injected. Build/run under TEMP, never real settings.
+static class ThemeTests {
+    const BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
+    const BindingFlags Static=BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic;
+    static readonly string[] Styles={"ocean","native","amber","mist"};
+    static readonly string[] Names={"海蓝","原生","琥珀","青雾"};
+    static readonly string[] Roles={"Card","Border","Foreground","Muted","Track","Accent","Selected","SelectedForeground"};
+    static readonly string[][] Colors={
+        new[]{"2C3038","4B535E","F4F6F8","A7B1C1","424852","4D9BFF","1F6FEB","FFFFFF"},
+        new[]{"FFFFFF","DCE2EB","1B2430","5F6B7C","E7EBF1","0865D6","0865D6","FFFFFF"},
+        new[]{"2B2B2B","3E3E3E","FFFFFF","ABABAB","454545","60CDFF","0067C0","FFFFFF"},
+        new[]{"FFFFFF","E5E5E5","1A1A1A","666666","E6E6E6","005FB8","005FB8","FFFFFF"},
+        new[]{"231F1C","38322D","F3EFEA","A89E95","3D3631","E89150","E89150","1A1208"},
+        new[]{"FFFDFA","E6DFD5","2A241F","6F665C","EEE8DF","A3521E","A3521E","FFFFFF"},
+        new[]{"242B33","323C47","DDE3EA","98A4B3","36414C","5CC2C4","5CC2C4","0E171B"},
+        new[]{"FAFCFD","D9E2EC","1E293B","5A6A80","E4EBF1","1F7A7C","1F7A7C","FFFFFF"}
+    };
+    static int checks,failures;
+    static string output;
+    static void Check(bool value,string message){if(!value)throw new Exception(message);checks++;}
+    static void Run(string name,Action action){try{action();Console.WriteLine("PASS "+name);}catch(Exception e){failures++;Console.Error.WriteLine("FAIL "+name+": "+(e.InnerException??e).Message);}}
+    static object Field(object target,string name){return target.GetType().GetField(name,Private).GetValue(target);}
+    static void Set(object target,string name,object value){target.GetType().GetField(name,Private).SetValue(target,value);}
+    static object Call(object target,string name,params object[] args){return target.GetType().GetMethod(name,Private|BindingFlags.Public).Invoke(target,args);}
+    static Type PaletteType(){var type=typeof(CompactRenderer).Assembly.GetType("AtkBatteryTray.ThemePalette");Check(type!=null,"central ThemePalette exists");return type;}
+    static object Palette(string style,bool dark){return PaletteType().GetMethod("For",Static).Invoke(null,new object[]{style,dark});}
+    static Color Role(object palette,string role){return (Color)palette.GetType().GetField(role,BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic).GetValue(palette);}
+    static Color Hex(string value){return Color.FromArgb(Convert.ToInt32(value,16)|unchecked((int)0xff000000));}
+    static void Style(AudioBindings pref,string style){var field=typeof(AudioBindings).GetField("ThemeStyle");Check(field!=null,"ThemeStyle is persisted");field.SetValue(pref,style);}
+    static string Style(AudioBindings pref){var field=typeof(AudioBindings).GetField("ThemeStyle");Check(field!=null,"ThemeStyle is persisted");return (string)field.GetValue(pref);}
+    static double Luminance(Color color){double[] v={color.R/255.0,color.G/255.0,color.B/255.0};for(int i=0;i<3;i++)v[i]=v[i]<=.04045?v[i]/12.92:Math.Pow((v[i]+.055)/1.055,2.4);return .2126*v[0]+.7152*v[1]+.0722*v[2];}
+    static double Contrast(Color a,Color b){double x=Luminance(a),y=Luminance(b);return (Math.Max(x,y)+.05)/(Math.Min(x,y)+.05);}
+    static Color Level(int? percent,bool dark){return (Color)PaletteType().GetMethod("LevelColor",Static).Invoke(null,new object[]{percent,dark});}
+    static void Configuration(){
+        string path=Path.Combine(output,"theme-settings.json");
+        Check(Style(new AudioBindings())=="ocean","new configuration defaults to ocean");
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"Theme\":\"dark\",\"MouseAlias\":\"保留名称\",\"WarningThreshold\":15}");
+        var old=DeviceSettings.LoadBindings(path);Check(Style(old)=="ocean"&&old.Theme=="dark"&&old.MouseAlias=="保留名称"&&old.WarningThreshold==15,"old settings retain every other preference");
+        foreach(string style in new[]{"ocean","native","amber","mist","unknown",null}){
+            var pref=old.Clone();Style(pref,style);DeviceSettings.SaveBindings(path,pref);var loaded=DeviceSettings.LoadBindings(path);
+            Check(Style(loaded)==(Array.IndexOf(Styles,style)>=0?style:"ocean")&&loaded.Theme=="dark"&&loaded.MouseAlias==old.MouseAlias&&loaded.WarningThreshold==15,"round trip and unknown fallback preserve settings: "+style);
+            Check(Style(loaded.Clone())==Style(loaded),"clone retains style");
+        }
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"ThemeStyle\":\"future\",\"Theme\":\"light\",\"MouseAlias\":\"未知配色不重置\"}");
+        var unknown=DeviceSettings.LoadBindings(path);Check(Style(unknown)=="ocean"&&unknown.Theme=="light"&&unknown.MouseAlias=="未知配色不重置","unknown style in input JSON does not reset configuration");
+        var attribute=(DataMemberAttribute)Attribute.GetCustomAttribute(typeof(AudioBindings).GetField("ThemeStyle"),typeof(DataMemberAttribute));Check(attribute!=null&&attribute.Order==21,"ThemeStyle uses next DataMember order");
+    }
+    static void Palettes(){
+        VisualDesign.HighContrastOverride=false;
+        for(int i=0;i<Styles.Length;i++)foreach(bool dark in new[]{true,false}){
+            var palette=Palette(Styles[i],dark);var colors=Colors[i*2+(dark?0:1)];
+            for(int j=0;j<Roles.Length;j++)Check(Role(palette,Roles[j]).ToArgb()==Hex(colors[j]).ToArgb(),Styles[i]+" "+dark+" exact "+Roles[j]);
+            var card=Role(palette,"Card");Check(Contrast(Role(palette,"Foreground"),card)>=4.5,"primary contrast");Check(Contrast(Role(palette,"Muted"),card)>=4.5,"secondary contrast");
+            Check(Contrast(Role(palette,"Accent"),card)>=3,"accent contrast");Check(Contrast(Role(palette,"SelectedForeground"),Role(palette,"Selected"))>=4.5,"selected contrast");
+            foreach(int value in new[]{10,30,80})Check(Contrast(Level(value,dark),card)>=3,"semantic contrast "+Styles[i]+" "+dark+" "+value);
+            var pref=new AudioBindings();Style(pref,Styles[i]);DeviceSettings.UseTransientConfiguration(pref);
+            Check(PopupPages.Foreground(dark)==Role(palette,"Foreground")&&PopupPages.Muted(dark)==Role(palette,"Muted")&&PopupPages.Blue(dark)==Role(palette,"Accent")&&PopupPages.Track(dark)==Role(palette,"Track"),"popup colors use active palette");
+        }
+        foreach(bool dark in new[]{true,false})Check(Role(Palette("future",dark),"Card")==Role(Palette("ocean",dark),"Card"),"unknown palette falls back to ocean");
+        foreach(int value in new[]{10,30,80})Check(Level(value,true)==TrayGlyph.LevelColor(value,true),"deep semantic color unchanged");
+        Check(Level(80,false).ToArgb()==Hex("1A8A50").ToArgb()&&Level(30,false).ToArgb()==Hex("9E6400").ToArgb()&&Level(10,false).ToArgb()==Hex("C92A22").ToArgb(),"light semantic colors are exact");
+    }
+    static AudioReading Audio(){return new AudioReading {TimestampUtc=DateTime.UtcNow,SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="桌面扬声器",HeadsetAvailable=true,HeadsetId="headset",HeadsetName="有线耳机",MicrophoneAvailable=true,MicrophoneId="mic",MicrophoneMuted=false,ActiveOutput="speaker",ConsoleOutputId="speaker",MultimediaOutputId="speaker",VolumeEndpointId="speaker",OutputVolumePercent=55,Devices=new[]{new AudioDeviceChoice {Id="headset",Name="有线耳机",Flow=0,FormFactor=3}}};}
+    static DpiConfig Dpi(){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("theme-fixture"),TimestampUtc=DateTime.UtcNow,ActiveStage=1};foreach(int v in new[]{400,800,1600,3200})dpi.Stages.Add(new DpiStage {XDpi=v,YDpi=v});return dpi;}
+    static WirelessDevice Device(string id,string name,int? percent,bool fresh=true,bool approximate=false){return new WirelessDevice {Id=id,Name=name,Kind="mouse",Transport="2.4 GHz",Percent=percent,Fresh=fresh,Approximate=approximate,Online=true,ConnectionState="connected",MeasurementState=fresh?"current":"cached",ConfirmedAtUtc=(fresh?DateTime.UtcNow:DateTime.UtcNow.AddHours(-2)).ToString("o")};}
+    sealed class Fixture:IDisposable {
+        internal readonly TrayContext Owner;internal readonly Details Popup;internal readonly PopupNavigation Nav;internal int Saves;
+        internal Fixture(string style="ocean"){
+            var pref=new AudioBindings {ReducedMotion=true,RememberReadings=false,VolumeCollapsed=false};if(typeof(AudioBindings).GetField("ThemeStyle")!=null)Style(pref,style);DeviceSettings.UseTransientConfiguration(pref);
+            Owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=new BatteryReading {Percent=76,TimestampUtc=DateTime.UtcNow},Dpi=Dpi()};},delegate(int stage){throw new Exception("No device writes");},null,Audio,false,null,null,null,delegate{return false;},null,null,null,null,
+                delegate(AudioBindings settings){Saves++;DeviceSettings.SaveBindings(Path.Combine(output,"theme-choice.json"),settings);DeviceSettings.UseTransientConfiguration(settings);});
+            DateTime until=DateTime.UtcNow.AddSeconds(5);while((Owner.IsRefreshing||Owner.IsAudioBusy||Owner.Audio==null)&&DateTime.UtcNow<until){Application.DoEvents();Thread.Sleep(2);}Check(!Owner.IsRefreshing&&!Owner.IsAudioBusy&&Owner.Audio!=null,"fake readers settle");
+            ((System.Windows.Forms.Timer)Field(Owner,"refresh")).Stop();Owner.Current=new BatteryReading {Percent=76,TimestampUtc=DateTime.UtcNow};Owner.Dpi=Dpi();Owner.Audio=Audio();Owner.NativeMousePresent=true;
+            Popup=new Details(Owner);Set(Owner,"details",Popup);Nav=(PopupNavigation)Field(Popup,"navigation");
+        }
+        internal List<PopupControl> Rows(){return (List<PopupControl>)Call(Popup,"ControlsForPage");}
+        internal void Activate(PopupControl row){Call(Popup,"PerformAction",row);}
+        public void Dispose(){Owner.ExitThread();if(!Popup.IsDisposed)Popup.Dispose();Owner.Dispose();}
+    }
+    static void Choices(){
+        using(var f=new Fixture()){
+            f.Nav.Page=PopupPage.Preferences;var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=100},false);
+            var choice=rows.Find(delegate(PopupControl row){return row.Text=="配色";});Check(choice!=null&&choice.Value=="海蓝","preferences include current theme style after appearance");
+            Check(rows.IndexOf(choice)==rows.FindIndex(delegate(PopupControl row){return row.Id==210;})+1,"style immediately follows appearance");f.Activate(choice);Check(f.Nav.Page==PopupPage.ChoosePreference&&PopupPages.Title(f.Nav)=="配色","style chooser title");
+            for(int i=0;i<Styles.Length;i++){
+                rows=f.Rows();var row=rows.Find(delegate(PopupControl c){return c.Text==Names[i];});Check(row!=null,"all four choices reachable");int oldSaves=f.Saves;f.Activate(row);
+                Check(f.Saves==oldSaves+1&&Style(DeviceSettings.LoadBindings(Path.Combine(output,"theme-choice.json")))==Styles[i],"choice is saved through the normal configuration writer");
+                Check(f.Nav.Page==PopupPage.ChoosePreference&&f.Nav.Offset==0,"choice stays on current page");rows=f.Rows();Check(rows.FindAll(delegate(PopupControl c){return c.Selected;}).Count==1&&rows.Find(delegate(PopupControl c){return c.Text==Names[i];}).Selected,"choice is immediately selected");
+            }
+            f.Activate(f.Rows().Find(delegate(PopupControl c){return c.Id==6;}));Check(f.Nav.Page==PopupPage.Preferences,"back still returns to preferences");
+        }
+    }
+    static void Groups(){
+        using(var f=new Fixture()){
+            var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=100},false);
+            string actual=String.Join("|",rows.FindAll(delegate(PopupControl row){return row.Id!=6;}).ConvertAll(delegate(PopupControl row){return row.Text;}).ToArray());
+            Check(actual=="显示|外观|配色|托盘显示|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新","preference sections and order");
+            foreach(string name in new[]{"显示","提醒","数据","更新"}){
+                var row=rows.Find(delegate(PopupControl c){return c.Text==name;});Check(row.Information&&row.Id<0&&row.Rect.Height>=23&&row.Rect.Height<=25,"section is 24px information");Check(PopupPages.Hit(rows,new PointF(row.Rect.X+10,row.Rect.Y+10))==null&&PopupPages.FindStable(rows,row.StableKey)==null,"section cannot be hit or focused");
+            }
+            foreach(int count in new[]{2,3,7}){
+                var seen=new HashSet<string>();var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=count};
+                for(int page=0;page<20;page++){
+                    rows=PopupPages.Build(f.Owner,nav,false);var size=PopupPages.SizeFor(rows);float bottom=0;foreach(var row in rows){Check(row.Rect.Bottom<=size.Height&&row.Rect.Top>=bottom,"paged rows fit without overlap");bottom=row.Rect.Bottom;if(row.Id!=6&&row.Id!=7&&row.Id!=8)seen.Add(row.Text);}
+                    var next=rows.Find(delegate(PopupControl c){return c.Id==8;});if(next==null)break;nav.Offset+=count;
+                }
+                Check(seen.Count==14,"every grouped preference remains reachable at "+count);
+            }
+        }
+    }
+    static void Geometry(){
+        Check(VisualDesign.PanelWidth==260&&VisualDesign.BatteryRingSize==28&&VisualDesign.BatteryDigitSize==20&&VisualDesign.PanelRadius==12,"requested geometry constants");
+        using(var f=new Fixture()){
+            var rows=PopupPages.Build(f.Owner,new PopupNavigation(),true);var expected=new Dictionary<int,RectangleF>{{0,new RectangleF(8,257,208,28)},{1,new RectangleF(226,257,28,28)},{2,new RectangleF(10,6,150,44)},{4,new RectangleF(168,6,84,44)},{200,new RectangleF(10,110,240,44)},{100,new RectangleF(11,157,86,34)},{101,new RectangleF(99,157,86,34)},{102,new RectangleF(191,157,58,34)},{240,new RectangleF(0,208,224,48)},{241,new RectangleF(228,210,28,24)}};
+            for(int i=0;i<4;i++)expected[10+i]=new RectangleF(12+i*59.5f,53,57.5f,34);
+            foreach(var pair in expected){var row=rows.Find(delegate(PopupControl c){return c.Id==pair.Key;});Check(row!=null&&row.Rect.Contains(pair.Value),"classic hit region preserved: "+pair.Key);}
+            f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];f.Owner.WirelessDevices=new[]{Device("theme-one","很长很长的设备名称",75)};
+            var layout=WirelessLayout.Build(f.Owner,0,1000);rows=PopupPages.Build(f.Owner,new PopupNavigation(),false,layout);
+            Check(rows.Find(delegate(PopupControl c){return c.Id==1000;}).Rect==new RectangleF(10,6,150,44)&&rows.Find(delegate(PopupControl c){return c.Id==2000;}).Rect==new RectangleF(168,6,84,44),"wireless name and meter hits unchanged");
+        }
+        using(var image=new Bitmap(520,100))using(var g=Graphics.FromImage(image))foreach(string style in Styles)foreach(float scale in new[]{1f,1.25f,1.5f,2f}){
+            g.ResetTransform();g.ScaleTransform(scale,scale);
+            foreach(string text in new[]{"0","100","≈100","--"}){
+                float preferred=text.StartsWith("≈")?18:20;float size=CompactRenderer.BatteryTextSize(g,text,preferred,43);
+                using(var font=new Font("Segoe UI",size,FontStyle.Bold,GraphicsUnit.Pixel))using(var format=new StringFormat {FormatFlags=StringFormatFlags.NoWrap}){
+                    Check(g.MeasureString(text,font,Int32.MaxValue,format).Width<=43,"full battery label fits "+style+" "+text+" "+scale);
+                    int fitted,lines;g.MeasureString(text,font,VisualDesign.BatteryDigitsRect(0).Size,format,out fitted,out lines);Check(fitted==text.Length&&lines==1,"all battery glyphs fit in one line");
+                }
+            }
+            var ring=VisualDesign.BatteryRingRect(0);var digits=VisualDesign.BatteryDigitsRect(0);var percent=VisualDesign.BatteryPercentRect(0);
+            Check(ring.Right+VisualDesign.BatteryRingWidth/2<digits.Left&&digits.Right<=percent.Left&&percent.Right<260,"ring, digits and percent never overlap");
+            Check(ring.Y+ring.Height/2==digits.Y+digits.Height/2&&ring.Y+ring.Height/2==percent.Y+percent.Height/2,"ring, digits and percent are vertically centered");
+            using(var font=new Font("Segoe UI",11,FontStyle.Regular,GraphicsUnit.Pixel))using(var format=new StringFormat {FormatFlags=StringFormatFlags.NoWrap}){int fitted,lines;g.MeasureString("%",font,percent.Size,format,out fitted,out lines);Check(fitted==1&&lines==1,"percent glyph fits at 11px");}
+        }
+    }
+    static Bitmap Card(int percent,bool fresh,bool dark,bool wireless,string style="ocean",int threshold=20,bool headset=false){
+        var pref=new AudioBindings {VolumeCollapsed=false,RememberReadings=false,WarningThreshold=threshold};Style(pref,style);DeviceSettings.UseTransientConfiguration(pref);
+        var image=new Bitmap(260,400);using(var g=Graphics.FromImage(image)){
+            g.Clear(Color.Transparent);
+            if(wireless)using(var f=new Fixture(style)){DeviceSettings.UseTransientConfiguration(pref);f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];f.Owner.WirelessDevices=new[]{Device("theme-low","电量测试",percent,fresh)};CompactRenderer.PaintWireless(g,f.Owner,WirelessLayout.Build(f.Owner,0,1000),dark,new PanelFeedback());}
+            else {
+                var ear=headset?new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=percent,ConnectionTimestampUtc=DateTime.UtcNow,BatteryTimestampUtc=fresh?DateTime.UtcNow:DateTime.UtcNow.AddHours(-2)}:null;
+                CompactRenderer.Paint(g,new BatteryReading {Percent=headset?76:percent,TimestampUtc=fresh||headset?DateTime.UtcNow:DateTime.UtcNow.AddHours(-2)},null,null,false,Dpi(),null,false,dark,ear,Audio());
+            }
+        }return image;
+    }
+    static void LowBattery(){
+        VisualDesign.HighContrastOverride=false;
+        foreach(string style in Styles)foreach(bool dark in new[]{true,false})foreach(int threshold in new[]{10,15,20})foreach(int kind in new[]{0,1,2}){
+            bool wireless=kind==1,headset=kind==2;int y=headset?104:0;
+            using(var low=Card(threshold-1,true,dark,wireless,style,threshold,headset))using(var equal=Card(threshold,true,dark,wireless,style,threshold,headset))using(var history=Card(threshold-1,false,dark,wireless,style,threshold,headset)){
+                Check(low.GetPixel(20,y+48)!=equal.GetPixel(20,y+48),"fresh low battery tints "+style+" "+kind+" "+dark+" "+threshold);Check(history.GetPixel(20,y+48)==equal.GetPixel(20,y+48),"threshold equality and history do not tint");
+                // Thin 11px percent strokes are antialiased; test their red hue,
+                // independently of exact-color checks on the semantic palette.
+                bool digit=false,percent=false;for(int x=199;x<253;x++)for(int row=y+13;row<y+43;row++){var pixel=low.GetPixel(x,row);if(pixel.R>100&&pixel.R-pixel.G>40&&pixel.R-pixel.B>40){if(x<242)digit=true;else percent=true;}}
+                Check(digit&&percent,"both low digits and percent use red: "+style+" dark="+dark+" kind="+kind+" threshold="+threshold+" digits="+digit+" percent="+percent);
+            }
+            VisualDesign.HighContrastOverride=true;using(var low=Card(threshold-1,true,dark,wireless,style,threshold,headset))using(var equal=Card(threshold,true,dark,wireless,style,threshold,headset))Check(low.GetPixel(20,y+48)==equal.GetPixel(20,y+48),"high contrast does not tint");VisualDesign.HighContrastOverride=false;
+        }
+    }
+    static bool SamePixels(Bitmap a,Bitmap b){
+        if(a.Size!=b.Size)return false;
+        var rect=new Rectangle(Point.Empty,a.Size);var x=a.LockBits(rect,ImageLockMode.ReadOnly,PixelFormat.Format32bppPArgb);var y=b.LockBits(rect,ImageLockMode.ReadOnly,PixelFormat.Format32bppPArgb);
+        try{var left=new byte[x.Stride*x.Height];var right=new byte[y.Stride*y.Height];Marshal.Copy(x.Scan0,left,0,left.Length);Marshal.Copy(y.Scan0,right,0,right.Length);for(int i=0;i<left.Length;i++)if(left[i]!=right[i])return false;return true;}
+        finally{a.UnlockBits(x);b.UnlockBits(y);}
+    }
+    static Bitmap ContrastFrame(string style,bool dark,int variant){
+        using(var f=new Fixture(style)){
+            if(variant==0)return RenderPanel(VisualDesign.PanelSizeFor(true,f.Owner.Dpi),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,f.Owner.Audio,1,0,false,1,0,new PanelFeedback {HoverAction=240,PressedAction=1,KeyboardFocus=2});});
+            if(variant==1){f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];f.Owner.WirelessDevices=new[]{Device("hc-low","低电量",12),Device("hc-full","满电量",100)};var layout=WirelessLayout.Build(f.Owner,0,1000);return RenderPanel(layout.Size,1,delegate(Graphics g){CompactRenderer.PaintWireless(g,f.Owner,layout,dark,new PanelFeedback {HoverAction=1000,PressedAction=0,KeyboardFocus=1});});}
+            var nav=new PopupNavigation {Page=variant==2?PopupPage.Preferences:variant==3?PopupPage.ChoosePreference:PopupPage.Audio,PreferenceAction=223,VisibleChoices=100};var rows=PopupPages.Build(f.Owner,nav,false);
+            foreach(var row in rows){if(row.Id==223)row.Value="固定测试文本";if(variant==3)row.Selected=row.PaletteKey=="ocean";}
+            return RenderPanel(PopupPages.SizeFor(rows),1,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,240,6,223);});
+        }
+    }
+    static void HighContrast(){
+        VisualDesign.HighContrastOverride=true;
+        foreach(string style in Styles)foreach(bool dark in new[]{true,false}){
+            var p=Palette(style,dark);Color[] system={SystemColors.Window,SystemColors.WindowText,SystemColors.WindowText,SystemColors.GrayText,SystemColors.Control,SystemColors.Highlight,SystemColors.Highlight,SystemColors.HighlightText};
+            for(int i=0;i<Roles.Length;i++)Check(Role(p,Roles[i]).ToArgb()==system[i].ToArgb(),"high contrast system role "+Roles[i]);Check(Level(10,dark)==SystemColors.WindowText,"high contrast semantic colors are system colors");
+        }
+        for(int variant=0;variant<5;variant++)using(var expected=ContrastFrame("ocean",false,variant))foreach(string style in Styles)foreach(bool dark in new[]{true,false})using(var actual=ContrastFrame(style,dark,variant))Check(SamePixels(expected,actual),"high contrast rendered colors ignore style and mode in "+variant);
+        VisualDesign.HighContrastOverride=false;
+    }
+    static void Surfaces(){
+        foreach(string style in Styles)foreach(bool dark in new[]{true,false})using(var f=new Fixture(style)){
+            var p=ThemePalette.Current(dark);
+            using(var card=RenderPanel(new Size(260,96),1,delegate(Graphics g){CompactRenderer.DrawSurface(g,new RectangleF(.5f,.5f,259,95),dark);}))Check(card.GetPixel(80,20).ToArgb()==p.Card.ToArgb()&&card.GetPixel(80,70).ToArgb()==p.Card.ToArgb(),"flat exact card fill");
+            using(var main=RenderPanel(VisualDesign.PanelSizeFor(true,f.Owner.Dpi),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,f.Owner.Audio);}))Check(main.GetPixel(100,58).ToArgb()==p.Selected.ToArgb()&&main.GetPixel(100,82).ToArgb()==p.Selected.ToArgb(),"flat selected segment fill");
+            using(var image=new Bitmap(1,1))using(var g=Graphics.FromImage(image)){
+                var shortPill=CompactRenderer.SyncPillRect(g,"刚刚确认",0,208);var longPill=CompactRenderer.SyncPillRect(g,"这是很长很长很长很长很长的同步状态说明",0,208);
+                Check(shortPill.Width<208&&longPill.Width==208&&shortPill.Height==24&&p.SyncFill.A==225,"sync background fits text and preserves opacity and maximum width");
+            }
+            var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=223},false);
+            foreach(var row in rows)if(row.Id!=6)Check(!String.IsNullOrEmpty(row.PaletteKey),"each style choice carries its two-color swatch");
+            using(var normal=RenderPanel(new Size(260,96),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,null);}))
+            using(var hover=RenderPanel(new Size(260,96),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,null,1,-1,false,1,-1,new PanelFeedback {HoverAction=2});})){
+                bool arrowChanged=false;for(int x=151;x<158;x++)for(int y=14;y<24;y++){Check(normal.GetPixel(x,y).ToArgb()==p.Card.ToArgb(),"idle title arrow is hidden");arrowChanged|=normal.GetPixel(x,y)!=hover.GetPixel(x,y);}Check(arrowChanged,"hover reveals title arrow");
+            }
+        }
+    }
+    static Rectangle KnobBounds(Bitmap image,Color color,PointF center,int scale){
+        int left=image.Width,top=image.Height,right=-1,bottom=-1;
+        for(int y=(int)((center.Y-10)*scale);y<(center.Y+10)*scale;y++)for(int x=(int)((center.X-10)*scale);x<(center.X+10)*scale;x++)if(image.GetPixel(x,y).ToArgb()==color.ToArgb()){left=Math.Min(left,x);top=Math.Min(top,y);right=Math.Max(right,x);bottom=Math.Max(bottom,y);}
+        Check(right>=left&&bottom>=top,"knob has visible solid pixels");return Rectangle.FromLTRB(left,top,right+1,bottom+1);
+    }
+    static void VolumeKnobs(){
+        const int scale=4;
+        foreach(string style in Styles)foreach(bool dark in new[]{true,false})foreach(bool secondary in new[]{false,true})using(var f=new Fixture(style)){
+            var nav=new PopupNavigation {Page=PopupPage.Audio,VisibleChoices=100};var rows=PopupPages.Build(f.Owner,nav,false);var row=rows.Find(delegate(PopupControl c){return c.Id==240;});
+            var rect=secondary?row.Rect:VisualDesign.VolumeSliderRect(new RectangleF(0,0,260,48));var track=PopupPages.VolumeTrack(rect);var center=new PointF(track.X+track.Width*.55f,track.Y+track.Height/2);
+            var bounds=new List<Rectangle>();
+            for(int state=0;state<3;state++){
+                var feedback=new PanelFeedback {HoverAction=state==1?240:-1,PressedAction=state==2?240:-1};
+                using(var image=RenderPanel(secondary?PopupPages.SizeFor(rows):new Size(260,48),scale,delegate(Graphics g){
+                    g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                    if(secondary)PopupPages.Paint(g,f.Owner,nav,rows,dark,feedback.HoverAction,feedback.PressedAction,-1);else CompactRenderer.SystemVolume(g,new RectangleF(0,0,260,48),f.Owner.Audio,dark,feedback);
+                }))bounds.Add(KnobBounds(image,ThemePalette.Current(dark).Knob,center,scale));
+            }
+            foreach(var bound in bounds)Check(Math.Abs(bound.Width-bound.Height)<=1,"volume knob stays circular");
+            Check(Math.Abs(bounds[0].Width/(float)scale-11)<=.5f&&Math.Abs(bounds[1].Width/(float)scale-13)<=.5f&&bounds[1].Size==bounds[2].Size,"12px idle knob grows to 14px on hover and drag, inside its 1px outline");
+        }
+    }
+    static void RepaintCache(){
+        using(var f=new Fixture()){
+            Call(f.Popup,"UpdateLayoutSize");var handle=f.Popup.Handle;
+            Check((bool)Call(f.Popup,"RenderLayeredFrame"),"hidden layered frame presents");var before=(string)Field(f.Popup,"lastPresentedKey");
+            var pref=DeviceSettings.Current;Style(pref,"amber");DeviceSettings.UseTransientConfiguration(pref);
+            Check((bool)Call(f.Popup,"RenderLayeredFrame"),"style change presents again");var after=(string)Field(f.Popup,"lastPresentedKey");Check(before!=after,"ThemeStyle invalidates the visible-content cache without another setting changing");
+        }
+    }
+    static void RenderThemes(){
+        const float scale=2;
+        foreach(string style in Styles)foreach(bool dark in new[]{true,false})using(var f=new Fixture(style)){
+            var pages=new List<Bitmap>();
+            try {
+                pages.Add(RenderPanel(VisualDesign.PanelSizeFor(true,f.Owner.Dpi),scale,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,f.Owner.Audio,1,-1,false,1,-1,new PanelFeedback());}));
+                f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];
+                f.Owner.WirelessDevices=new[]{Device("preview-low","低电量 · 无线鼠标",14),Device("preview-full","满电 · 无线键盘",100),Device("preview-approx","估算电量 · 耳机",100,true,true),Device("preview-history","历史读数 · 仅供参考",12,false),Device("preview-long","这是一个很长很长的设备名称用于检查标题的省略显示和箭头预留区域",76)};
+                f.Owner.WirelessDevices[1].Kind="keyboard";f.Owner.WirelessDevices[2].Kind="headset";
+                var layout=WirelessLayout.Build(f.Owner,0,1000);
+                pages.Add(RenderPanel(layout.Size,scale,delegate(Graphics g){CompactRenderer.PaintWireless(g,f.Owner,layout,dark,new PanelFeedback());}));
+                foreach(int offset in new[]{0,7}){
+                    var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=7,Offset=offset};var rows=PopupPages.Build(f.Owner,nav,false);
+                    pages.Add(RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);}));
+                }
+                var chooser=new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=223,VisibleChoices=7};var choices=PopupPages.Build(f.Owner,chooser,false);
+                pages.Add(RenderPanel(PopupPages.SizeFor(choices),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,chooser,choices,dark,-1,-1,-1);}));
+                int height=0;foreach(var page in pages)height=Math.Max(height,page.Height);
+                using(var sheet=new Bitmap((260*5+24*6)*(int)scale,height+104*(int)scale,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(sheet)){
+                    g.Clear(Color.FromArgb(128,128,128));g.ScaleTransform(scale,scale);
+                    CompactRenderer.DrawLabel(g,ThemePalette.Name(style)+" / "+(dark?"深色":"浅色"),new RectangleF(24,12,1000,28),18,true,Color.White,StringAlignment.Near);
+                    string[] titles={"主界面 / 音源与展开音量","多设备 / 低电量与历史读数","显示与提醒 / 第 1 页","显示与提醒 / 第 2 页","配色选择 / 点击后停留"};
+                    for(int i=0;i<pages.Count;i++){
+                        float x=24+i*284;CompactRenderer.DrawLabel(g,titles[i],new RectangleF(x,48,260,24),12,false,Color.White,StringAlignment.Near);
+                        g.DrawImage(pages[i],new RectangleF(x,80,260,pages[i].Height/scale));
+                    }
+                    string path=Path.Combine(output,style+"-"+(dark?"dark":"light")+".png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);
+                }
+            }finally{foreach(var page in pages)page.Dispose();}
+        }
+    }
+    static Bitmap RenderPanel(Size size,float scale,Action<Graphics> paint){
+        var image=new Bitmap((int)Math.Ceiling(size.Width*scale),(int)Math.Ceiling(size.Height*scale),PixelFormat.Format32bppPArgb);
+        using(var g=Graphics.FromImage(image)){g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);paint(g);}return image;
+    }
+    [STAThread] static int Main(string[] args){
+        bool render=args.Length>0&&args[0]=="--render";output=Path.GetFullPath(args[render?1:0]);Directory.CreateDirectory(output);var previous=DeviceSettings.Current;
+        try{VisualDesign.HighContrastOverride=false;if(render){RenderThemes();return 0;}Run("ThemeStyle compatibility",Configuration);Run("exact palette and WCAG contrast",Palettes);Run("choice save and stay",Choices);Run("noninteractive preference groups and paging",Groups);Run("geometry and hit targets",Geometry);Run("fresh low battery rendering",LowBattery);Run("high contrast system roles and rendered frames",HighContrast);Run("flat surfaces, swatches, sync sizing and title feedback",Surfaces);Run("round volume knob states",VolumeKnobs);Run("ThemeStyle repaint cache",RepaintCache);Console.WriteLine(checks+" checks, "+failures+" failed groups; injected readers and TEMP settings only");return failures==0?0:1;}
+        finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
+    }
+}

@@ -78,7 +78,7 @@ static class UiMenusTests {
         }
     }
     static void PreferenceOrder(){
-        using(var f=new Fixture())Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="外观|托盘显示|减弱动效|低电量提醒|提醒阈值|后台同步间隔|跨重启保留读数|清除历史读数|自动检查更新","preferences retain their actions in the requested order");
+        using(var f=new Fixture())Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|托盘显示|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新","preferences include theme style and the requested noninteractive groups");
     }
     static void HelpActions(){
         using(var f=new Fixture()){

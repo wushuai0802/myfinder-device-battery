@@ -16,9 +16,12 @@ namespace AtkBatteryTray {
         internal static RectangleF VolumeSliderRect(RectangleF card){return new RectangleF(card.X,card.Y,card.Width-36,card.Height);}
         internal static RectangleF VolumeToggleRect(RectangleF card,bool collapsed){return new RectangleF(card.Right-32,collapsed?card.Y+(card.Height-24)/2:card.Y+2,28,24);}
         internal static RectangleF VolumeChevronRect(RectangleF card,bool collapsed){return new RectangleF(card.Right-25,collapsed?card.Y+(card.Height-14)/2:card.Y+6,14,14);}
-        public const float BatteryRingSize=25,BatteryDigitSize=18;
+        public const float BatteryRingSize=28,BatteryDigitSize=20,BatteryRingWidth=3.2f;
+        internal static RectangleF BatteryRingRect(float top){return new RectangleF(168,top+14,BatteryRingSize,BatteryRingSize);}
+        internal static RectangleF BatteryDigitsRect(float top){return new RectangleF(199,top+12,43,32);}
+        internal static RectangleF BatteryPercentRect(float top){return new RectangleF(242,top+17.5f,11,21);}
         public static Size PanelSize {get{return PanelSizeFor(false);}}
-        public static float PanelRadius {get{return 16;}}
+        public static float PanelRadius {get{return 12;}}
         public static int MouseCardHeight(DpiConfig dpi){return dpi!=null&&dpi.Stages!=null&&dpi.Stages.Count>4?126:96;}
         public static bool ShouldShowHeadset(HeadsetReading headset) {
             return headset!=null&&headset.Connected&&(headset.ConnectionVerified||(headset.ReceiverPresent&&headset.ConnectionTimestampUtc!=DateTime.MinValue));

@@ -45,8 +45,9 @@ namespace AtkBattery {
         [DataMember(Order=18, EmitDefaultValue=false)] public bool ExplicitAudioBindingsOnly;
         [DataMember(Order=19)] public bool VolumeCollapsed = true;
         [DataMember(Order=20)] public bool AutoCheckUpdates = true;
+        [DataMember(Order=21)] public string ThemeStyle = "ocean";
         [OnDeserializing] void Defaults(StreamingContext context) {
-            Theme="auto";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;
+            Theme="auto";ThemeStyle="ocean";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
@@ -56,7 +57,7 @@ namespace AtkBattery {
             var copy=new AudioBindings { SchemaVersion=SchemaVersion,
                 SpeakerEndpointId=SpeakerEndpointId, HeadsetEndpointId=HeadsetEndpointId,
                 MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,TrayDeviceId=TrayDeviceId,
-                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,
+                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ThemeStyle=ThemeStyle,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,
                 RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
                 HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases),
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };
@@ -159,6 +160,7 @@ namespace AtkBattery {
                 foreach(char c in settings.TrayDeviceId)if(Char.IsControl(c))throw new InvalidDataException("Invalid tray device identifier");
             }
             if(settings.Theme!="auto"&&settings.Theme!="light"&&settings.Theme!="dark")throw new InvalidDataException("Unknown theme");
+            settings.ThemeStyle=AtkBatteryTray.ThemePalette.Normalize(settings.ThemeStyle);
             if(settings.WarningThreshold!=10&&settings.WarningThreshold!=15&&settings.WarningThreshold!=20)throw new InvalidDataException("Invalid notification threshold");
             if(settings.BackgroundSeconds!=60&&settings.BackgroundSeconds!=120&&settings.BackgroundSeconds!=300)throw new InvalidDataException("Invalid background interval");
             settings.MouseAlias=CleanAlias(settings.MouseAlias,"ATK A9 Air+");
