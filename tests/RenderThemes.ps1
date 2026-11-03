@@ -34,8 +34,9 @@ $dialogExecutable=Join-Path $compileDirectory 'RenderDialogs.exe'
 if($LASTEXITCODE -ne 0){throw 'Dialog preview compilation failed.'}
 # Real forms via DrawToBitmap, cropped to the client area. No update, feedback,
 # browser or configuration actions run; the retained native title bar is annotated.
-# Each light/dark palette also gets separate dialog-confirmation-*,
-# dialog-release-short-* and dialog-release-long-* images for scrollbar review.
+# Every dialog image pairs the real form with a same-palette, same-scale main
+# panel rendered by CompactRenderer. Includes all update states, feedback,
+# diagnostics, alias, confirmation, and short/long release notes in all palettes.
 # DrawToBitmap may omit native themed scrollbars; injected-call tests verify theme selection.
 & $dialogExecutable --render $previewOutput
 if($LASTEXITCODE -ne 0){throw 'Dialog preview rendering failed.'}

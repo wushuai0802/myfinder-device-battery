@@ -409,8 +409,16 @@ namespace AtkBatteryTray {
             if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==224?"图标样式":nav.PreferenceAction==211?"显示规则":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
             switch(nav.Page){case PopupPage.More:return "更多选项";case PopupPage.Audio:return "音源与麦克风";case PopupPage.Preferences:return "显示与提醒";case PopupPage.Mouse:return "鼠标详情";case PopupPage.Headset:return "耳机详情";case PopupPage.Bindings:return "按钮绑定";case PopupPage.PickBinding:return nav.BindingRole=="speaker"?"选择扬声器":nav.BindingRole=="headset"?"选择耳机":"选择麦克风";default:return "状态与诊断";}
         }
-        internal static RectangleF VolumeTrack(RectangleF row){return new RectangleF(row.X+9,row.Y+(row.Height<=VisualDesign.SystemVolumeHeight?27:33),row.Width-18,6);}
+        internal static RectangleF VolumeTrack(RectangleF row){return new RectangleF(row.X+9,row.Y+(row.Height<=VisualDesign.SystemVolumeHeight?27:33),row.Width-18,VisualDesign.VolumeTrackHeight);}
         internal static int VolumeAt(RectangleF row,float x){var track=VolumeTrack(row);return Math.Max(0,Math.Min(100,(int)Math.Round((x-track.Left)/track.Width*100)));}
+        internal static RectangleF ToggleBounds(RectangleF row){return new RectangleF(row.Right-37,row.Y+(row.Height-VisualDesign.ToggleHeight)/2,VisualDesign.ToggleWidth,VisualDesign.ToggleHeight);}
+        internal static void DrawToggle(Graphics g,RectangleF row,bool isChecked,bool enabled,bool dark,bool warning=false) {
+            var palette=ThemePalette.Current(dark);var toggle=ToggleBounds(row);
+            CompactRenderer.Fill(g,toggle,!enabled?palette.Track:isChecked?warning&&!VisualDesign.HighContrast?ThemePalette.LevelColor(10,dark):palette.Selected:palette.Track,VisualDesign.ToggleHeight/2);
+            var knob=new RectangleF(toggle.X+(isChecked?VisualDesign.ToggleWidth-VisualDesign.ToggleKnobSize-VisualDesign.ToggleInset:VisualDesign.ToggleInset),toggle.Y+VisualDesign.ToggleInset,VisualDesign.ToggleKnobSize,VisualDesign.ToggleKnobSize);
+            using(var brush=new SolidBrush(!enabled?palette.Muted:isChecked?palette.SelectedForeground:VisualDesign.HighContrast?palette.Knob:dark?palette.Muted:Color.White))g.FillEllipse(brush,knob);
+            if(enabled&&!isChecked&&!dark&&!VisualDesign.HighContrast)using(var pen=new Pen(palette.Muted,1))g.DrawEllipse(pen,knob);
+        }
         internal static void Paint(Graphics g,TrayContext owner,PopupNavigation nav,List<PopupControl> controls,bool dark,int hover,int pressed,int focus) {
             Size size=SizeFor(controls);var palette=ThemePalette.Current(dark);var fg=palette.Foreground;var muted=palette.Muted;var blue=palette.Accent;var track=palette.Track;
             g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
@@ -450,9 +458,8 @@ namespace AtkBatteryTray {
                     int? value=nav.VolumePreview>=0?(int?)nav.VolumePreview:owner.DesiredVolume??actual;
                     VisualDesign.DrawLabel(g,nav.VolumePreview>=0||owner.DesiredVolume.HasValue?"系统音量 · 待应用":"系统输出音量",new RectangleF(x,rect.Y+1,175,23),11,false,color,StringAlignment.Near);
                     VisualDesign.DrawLabel(g,value.HasValue?value+"%":"--",new RectangleF(rect.Right-48,rect.Y+1,40,23),11,false,detailColor,StringAlignment.Far);
-                    var meter=VolumeTrack(rect);using(var shape=VisualDesign.RoundRect(meter.X,meter.Y,meter.Width,meter.Height,3))using(var brush=new SolidBrush(track))g.FillPath(brush,shape);
+                    var meter=VolumeTrack(rect);CompactRenderer.DrawVolumeTrack(g,meter,dark,value.GetValueOrDefault()/100f,0,row.Enabled?blue:muted);
                     float fill=value.HasValue?meter.Width*value.Value/100f:0;
-                    if(fill>0)using(var shape=VisualDesign.RoundRect(meter.X,meter.Y,fill,meter.Height,Math.Min(3,fill/2)))using(var brush=new SolidBrush(row.Enabled?blue:muted))g.FillPath(brush,shape);
                     if(value.HasValue) {
                         float diameter=row.Id==hover||row.Id==pressed?14:12;
                         var knob=new RectangleF(meter.X+fill-diameter/2,meter.Y+meter.Height/2-diameter/2,diameter,diameter);
@@ -461,11 +468,7 @@ namespace AtkBatteryTray {
                     }
                 }else if(row.Toggle) {
                     VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y,rect.Width-51,rect.Height),11.5f,false,color,StringAlignment.Near);
-                    var toggle=new RectangleF(rect.Right-37,rect.Y+(rect.Height-18)/2,30,18);
-                    using(var shape=VisualDesign.RoundRect(toggle.X,toggle.Y,toggle.Width,toggle.Height,9))using(var brush=new SolidBrush(!row.Enabled?track:row.Checked?row.Id==102&&!VisualDesign.HighContrast?ThemePalette.LevelColor(10,dark):palette.Selected:track))g.FillPath(brush,shape);
-                    var knob=new RectangleF(toggle.X+(row.Checked?14:2),toggle.Y+2,14,14);
-                    using(var brush=new SolidBrush(!row.Enabled?muted:row.Checked?palette.SelectedForeground:VisualDesign.HighContrast?palette.Knob:dark?muted:Color.White))g.FillEllipse(brush,knob);
-                    if(row.Enabled&&!row.Checked&&!dark&&!VisualDesign.HighContrast)using(var pen=new Pen(muted,1))g.DrawEllipse(pen,knob);
+                    DrawToggle(g,rect,row.Checked,row.Enabled,dark,row.Id==102);
                 }else if(row.WrapText) {
                     using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(color))using(var format=new StringFormat {LineAlignment=StringAlignment.Center})g.DrawString(WrappedText(row),font,brush,new RectangleF(x,rect.Y+6,rect.Right-x-23,rect.Height-12),format);
                 }else {

@@ -6,30 +6,17 @@ using System.Windows.Forms;
 using AtkBattery;
 
 namespace AtkBatteryTray {
-    // Dialog-only roles. The panel palette and its exact color values stay intact.
+    // Dialogs consume the panel's palette without deriving alternative control colors.
     internal sealed class DialogTheme {
         internal readonly bool Dark,HighContrast;
         internal readonly ThemePalette Palette;
-        internal readonly Color Card,Section,Foreground,Muted,Accent,Border,Track,Selected,SelectedForeground,Error;
+        internal readonly Color Background,Card,Section,Foreground,Muted,Accent,Border,Track,Selected,SelectedForeground,Error;
         internal DialogTheme(bool dark){
             Dark=dark;HighContrast=VisualDesign.HighContrast;Palette=ThemePalette.Current(dark);
-            Card=Palette.Card;Foreground=Palette.Foreground;Border=Palette.Border;Track=Palette.Track;
+            Background=Palette.Background;Card=Section=Palette.Card;Foreground=Palette.Foreground;Border=Palette.Border;Track=Palette.Track;
             Selected=Palette.Selected;SelectedForeground=Palette.SelectedForeground;
-            Section=HighContrast?SystemColors.Window:ThemePalette.Blend(Card,Foreground,10);
-            Muted=HighContrast?SystemColors.GrayText:Readable(Palette.Muted,Section,4.5);
-            Accent=HighContrast?SystemColors.Highlight:Readable(Palette.Accent,Section,4.5);
+            Muted=Palette.Muted;Accent=Palette.Accent;
             Error=HighContrast?SystemColors.WindowText:ThemePalette.LevelColor(0,dark);
-        }
-        static double Luminance(Color c){
-            double[] v={c.R/255.0,c.G/255.0,c.B/255.0};
-            for(int i=0;i<v.Length;i++)v[i]=v[i]<=.04045?v[i]/12.92:Math.Pow((v[i]+.055)/1.055,2.4);
-            return .2126*v[0]+.7152*v[1]+.0722*v[2];
-        }
-        internal static double Contrast(Color a,Color b){double x=Luminance(a),y=Luminance(b);return (Math.Max(x,y)+.05)/(Math.Min(x,y)+.05);}
-        internal Color Readable(Color ink,Color background,double minimum){
-            if(HighContrast||Contrast(ink,background)>=minimum)return ink;
-            for(int alpha=1;alpha<=255;alpha++){var next=ThemePalette.Blend(ink,Foreground,alpha);if(Contrast(next,background)>=minimum)return next;}
-            return Foreground;
         }
         internal Color Interaction(Color fill,bool pressed){
             if(HighContrast)return Selected;
@@ -55,7 +42,7 @@ namespace AtkBatteryTray {
         internal static void Apply(DialogTheme theme,bool windows11,Func<int,int,int> set){
             if(VisualDesign.HighContrast||theme.HighContrast)return;
             int dark=theme.Dark?1:0;if(set(20,dark)!=0)set(19,dark);
-            if(windows11){set(35,ColorTranslator.ToWin32(theme.Card));set(36,ColorTranslator.ToWin32(theme.Foreground));}
+            if(windows11){set(33,2);set(35,ColorTranslator.ToWin32(theme.Background));set(36,ColorTranslator.ToWin32(theme.Foreground));}
         }
     }
 
@@ -108,23 +95,24 @@ namespace AtkBatteryTray {
 
     internal class ThemedDialog:Form {
         internal readonly DialogTheme Theme;
-        readonly Font bodyFont,titleFont,descriptionFont;
+        readonly Font bodyFont,titleFont,descriptionFont,cardTitleFont;
         internal ThemedDialog():this(Style.Dark){}
         internal ThemedDialog(bool dark){
             Theme=new DialogTheme(dark);
-            bodyFont=new Font("Microsoft YaHei UI",14,FontStyle.Regular,GraphicsUnit.Pixel);
-            titleFont=new Font("Microsoft YaHei UI",18,FontStyle.Bold,GraphicsUnit.Pixel);
-            descriptionFont=new Font("Microsoft YaHei UI",12,FontStyle.Regular,GraphicsUnit.Pixel);
+            bodyFont=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize,FontStyle.Regular,GraphicsUnit.Pixel);
+            titleFont=new Font("Microsoft YaHei UI",15,FontStyle.Bold,GraphicsUnit.Pixel);
+            cardTitleFont=new Font("Microsoft YaHei UI",VisualDesign.DeviceNameFontSize,FontStyle.Bold,GraphicsUnit.Pixel);
+            descriptionFont=new Font("Microsoft YaHei UI",VisualDesign.SubtitleFontSize,FontStyle.Regular,GraphicsUnit.Pixel);
             AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;Font=bodyFont;
-            BackColor=Theme.Card;ForeColor=Theme.Foreground;Padding=new Padding(24);
+            BackColor=Theme.Background;ForeColor=Theme.Foreground;Padding=new Padding(16);
             FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
             StartPosition=FormStartPosition.CenterParent;ShowInTaskbar=false;
         }
-        internal Label Caption(string text,bool title=false,bool description=false){
-            return new Label {Text=text,AutoSize=true,UseMnemonic=false,BackColor=Color.Transparent,ForeColor=description?Theme.Muted:Theme.Foreground,Font=title?titleFont:description?descriptionFont:bodyFont,Margin=new Padding(0,0,0,4)};
+        internal Label Caption(string text,bool title=false,bool description=false,bool cardTitle=false){
+            return new Label {Text=text,AutoSize=true,UseMnemonic=false,BackColor=Theme.HighContrast?SystemColors.Window:Color.Transparent,ForeColor=description?Theme.Muted:Theme.Foreground,Font=title?titleFont:cardTitle?cardTitleFont:description?descriptionFont:bodyFont,Margin=new Padding(0,0,0,4)};
         }
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);ThemedTitleBar.Apply(Handle,Theme);}
-        protected override void Dispose(bool disposing){base.Dispose(disposing);if(disposing){bodyFont.Dispose();titleFont.Dispose();descriptionFont.Dispose();}}
+        protected override void Dispose(bool disposing){base.Dispose(disposing);if(disposing){bodyFont.Dispose();titleFont.Dispose();descriptionFont.Dispose();cardTitleFont.Dispose();}}
     }
 
     internal enum ThemedButtonKind {Primary,Secondary,Text}
@@ -133,42 +121,40 @@ namespace AtkBatteryTray {
         bool hovered,pressed;
         internal ThemedButton(DialogTheme theme,ThemedButtonKind kind=ThemedButtonKind.Secondary){
             this.theme=theme;this.kind=kind;
-            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw|ControlStyles.SupportsTransparentBackColor,true);
-            FlatStyle=FlatStyle.Flat;FlatAppearance.BorderSize=0;UseVisualStyleBackColor=false;
-            BackColor=Color.Transparent;ForeColor=theme.Foreground;Height=32;Padding=new Padding(14,0,14,0);Margin=new Padding(8,0,0,0);
+            FlatStyle=theme.HighContrast?FlatStyle.Standard:FlatStyle.Flat;FlatAppearance.BorderSize=0;UseVisualStyleBackColor=theme.HighContrast;
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
+            BackColor=theme.HighContrast?SystemColors.Control:Color.Transparent;ForeColor=theme.Foreground;Height=VisualDesign.SelectionHeight;Padding=new Padding(14,0,14,0);Margin=new Padding(VisualDesign.CardGap,0,0,0);
             AccessibleRole=AccessibleRole.PushButton;
         }
-        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/14f;}}
+        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
         public override Size GetPreferredSize(Size proposedSize){
-            var text=TextRenderer.MeasureText(Text,Font,Size.Empty,TextFormatFlags.SingleLine);
-            int width=Math.Max(MinimumSize.Width,text.Width+Padding.Horizontal),height=Math.Max(MinimumSize.Height,Math.Max((int)Math.Round(32*ScaleFactor),text.Height+4));
+            Size text;using(var font=new Font(Font.FontFamily,VisualDesign.DeviceNameFontSize*ScaleFactor,kind==ThemedButtonKind.Primary?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))text=TextRenderer.MeasureText(Text,font,Size.Empty,TextFormatFlags.SingleLine);
+            int width=Math.Max(MinimumSize.Width,text.Width+Padding.Horizontal),height=Math.Max(MinimumSize.Height,(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));
             return new Size(MaximumSize.Width>0?Math.Min(width,MaximumSize.Width):width,MaximumSize.Height>0?Math.Min(height,MaximumSize.Height):height);
         }
         internal Color FillFor(bool hover,bool down){
-            if(!Enabled)return theme.Card;
-            Color fill=kind==ThemedButtonKind.Primary?theme.Selected:theme.Card;
-            if(!hover&&!down)return fill;
-            Color next=theme.Interaction(fill,down);
-            if(kind!=ThemedButtonKind.Primary||theme.HighContrast)return next;
-            // Keep the selected text color legible even on a hovered primary.
-            for(int alpha=255;alpha>=0;alpha--){var candidate=ThemePalette.Blend(fill,next,alpha);if(DialogTheme.Contrast(theme.SelectedForeground,candidate)>=4.5)return candidate;}
-            return fill;
+            Color fill=kind==ThemedButtonKind.Text?theme.Background:Enabled&&kind==ThemedButtonKind.Primary?theme.Selected:theme.Track;
+            return Enabled&&kind!=ThemedButtonKind.Primary&&(hover||down)?theme.Interaction(fill,down):fill;
         }
         internal Color TextFor(bool hover,bool down){
             if(!Enabled)return theme.Muted;
             if(theme.HighContrast&&(hover||down))return theme.SelectedForeground;
-            return kind==ThemedButtonKind.Primary?theme.SelectedForeground:theme.Readable(kind==ThemedButtonKind.Text?theme.Accent:theme.Foreground,FillFor(hover,down),4.5);
+            return kind==ThemedButtonKind.Primary?theme.SelectedForeground:kind==ThemedButtonKind.Text?theme.Accent:theme.Foreground;
         }
         protected override void OnPaint(PaintEventArgs e){
-            float scale=ScaleFactor;var rect=new RectangleF(2*scale,2*scale,Width-4*scale,Height-4*scale);if(rect.Width<=0||rect.Height<=0)return;
-            e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-            using(var path=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,6*scale)){
-                using(var brush=new SolidBrush(FillFor(hovered,pressed)))e.Graphics.FillPath(brush,path);
-                if(kind==ThemedButtonKind.Secondary||!Enabled&&kind==ThemedButtonKind.Primary||theme.HighContrast)using(var pen=new Pen(theme.Border,scale))e.Graphics.DrawPath(pen,path);
+            if(theme.HighContrast){base.OnPaint(e);return;}
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            var rect=new RectangleF(0,0,Width/scale,Height/scale);
+            if(kind!=ThemedButtonKind.Text){
+                CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
+                CompactRenderer.Selection(e.Graphics,rect,Text,null,kind==ThemedButtonKind.Primary,Enabled,hovered,pressed,false,theme.Dark);
+            }else{
+                if(Enabled)CompactRenderer.Highlight(e.Graphics,rect,0,new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1},theme.Dark);
+                CompactRenderer.DrawLabel(e.Graphics,Text,rect,VisualDesign.DeviceNameFontSize,false,TextFor(hovered,pressed),StringAlignment.Center);
             }
-            var text=ClientRectangle;text.Inflate(-Padding.Horizontal/2,0);
-            TextRenderer.DrawText(e.Graphics,Text,Font,text,TextFor(hovered,pressed),TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
-            if(Focused&&ShowFocusCues){using(var path=VisualDesign.RoundRect(.5f*scale,.5f*scale,Width-scale,Height-scale,7*scale))using(var pen=new Pen(theme.Accent,scale))e.Graphics.DrawPath(pen,path);}
+            if(Enabled&&(hovered||pressed||Focused&&ShowFocusCues))CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);
+            e.Graphics.Restore(state);
         }
         public override void NotifyDefault(bool value){base.NotifyDefault(value);Invalidate();}
         protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
@@ -184,41 +170,184 @@ namespace AtkBatteryTray {
     }
 
     internal class ThemedSection:Panel {
-        protected readonly DialogTheme theme;readonly int radius;
-        internal ThemedSection(DialogTheme theme,int radius=12){
-            this.theme=theme;this.radius=radius;
-            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw|ControlStyles.SupportsTransparentBackColor,true);
-            BackColor=Color.Transparent;ForeColor=theme.Foreground;Padding=new Padding(12);
+        protected readonly DialogTheme theme;
+        internal ThemedSection(DialogTheme theme){
+            this.theme=theme;
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
+            BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;Padding=new Padding(12);
+            Margin=new Padding(0,0,0,VisualDesign.CardGap);
         }
-        protected virtual Color Outline {get{return theme.Border;}}
+        protected float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
         protected override void OnPaint(PaintEventArgs e){
-            base.OnPaint(e);if(Width<2||Height<2)return;
-            float scale=Font.SizeInPoints*96f/72f/14f;
-            e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-            using(var path=VisualDesign.RoundRect(.5f,.5f,Width-1,Height-1,radius*scale)){
-                using(var brush=new SolidBrush(theme.Section))e.Graphics.FillPath(brush,path);
-                using(var pen=new Pen(Outline,scale))e.Graphics.DrawPath(pen,path);
-            }
+            base.OnPaint(e);if(theme.HighContrast||Width<2||Height<2)return;
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            CompactRenderer.DrawSurface(e.Graphics,new RectangleF(.5f,.5f,Width/scale-1,Height/scale-1),theme.Dark);e.Graphics.Restore(state);
         }
     }
     internal sealed class ThemedTextBox:ThemedSection {
         internal readonly TextBox Input;
-        internal ThemedTextBox(DialogTheme theme,TextBox input):base(theme,6){
-            Input=input;Padding=new Padding(8);TabStop=false;
-            input.BorderStyle=BorderStyle.None;input.BackColor=theme.Section;input.ForeColor=theme.Foreground;
+        internal ThemedTextBox(DialogTheme theme,TextBox input):base(theme){
+            Input=input;Padding=new Padding(input.Multiline?10:8);TabStop=false;
+            input.BorderStyle=theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;input.BackColor=theme.HighContrast?SystemColors.Window:theme.Track;input.ForeColor=theme.Foreground;
             input.Dock=DockStyle.Fill;input.Margin=Padding.Empty;Controls.Add(input);
             input.GotFocus+=delegate{Invalidate();};input.LostFocus+=delegate{Invalidate();};
             if(input.Multiline)DialogScrollbars.Attach(input,theme);
             Height=input.PreferredHeight+Padding.Vertical;
         }
         protected override void OnFontChanged(EventArgs e){base.OnFontChanged(e);if(Input!=null&&!Input.Multiline)Height=Input.PreferredHeight+Padding.Vertical;}
-        protected override Color Outline {get{return Input.ContainsFocus?theme.Accent:theme.Border;}}
+        protected override void OnPaint(PaintEventArgs e){
+            if(theme.HighContrast)return;
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            var rect=new RectangleF(0,0,Width/scale,Height/scale);CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
+            if(Input.ContainsFocus)CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);e.Graphics.Restore(state);
+        }
+    }
+
+    // Retain the native radio/checkbox models, keyboard behavior and accessibility.
+    internal sealed class ThemedSegments:Panel {
+        readonly DialogTheme theme;int columns=4;bool arranging;
+        internal ThemedSegments(DialogTheme theme){
+            this.theme=theme;TabStop=false;AccessibleRole=AccessibleRole.Grouping;
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            BackColor=theme.HighContrast?SystemColors.Window:theme.Card;
+        }
+        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
+        int ColumnsFor(int width){
+            int minimum=0;foreach(Control child in Controls)minimum=Math.Max(minimum,child.GetPreferredSize(Size.Empty).Width);
+            return width>=minimum*4+6*ScaleFactor?4:2;
+        }
+        public override Size GetPreferredSize(Size proposedSize){int width=proposedSize.Width>0?proposedSize.Width:Width;int count=ColumnsFor(width);return new Size(width,(int)Math.Round(((4/count)*VisualDesign.SelectionHeight+(4/count-1)*2)*ScaleFactor));}
+        protected override void OnLayout(LayoutEventArgs e){
+            base.OnLayout(e);if(arranging||Controls.Count==0)return;arranging=true;
+            try{
+                columns=ColumnsFor(ClientSize.Width);int gap=(int)Math.Round(2*ScaleFactor),rowHeight=(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor);
+                int width=Math.Max(1,(ClientSize.Width-(columns-1)*gap)/columns);
+                for(int i=0;i<Controls.Count;i++)Controls[i].SetBounds(i%columns*(width+gap),i/columns*(rowHeight+gap),i%columns==columns-1?ClientSize.Width-i%columns*(width+gap):width,rowHeight);
+                Height=(4/columns)*rowHeight+(4/columns-1)*gap;Invalidate();
+            }finally{arranging=false;}
+        }
+        protected override void OnPaint(PaintEventArgs e){
+            base.OnPaint(e);if(theme.HighContrast)return;
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            for(int row=0;row<4/columns;row++)CompactRenderer.Fill(e.Graphics,new RectangleF(0,row*(VisualDesign.SelectionHeight+2),Width/scale,VisualDesign.SelectionHeight),theme.Track,VisualDesign.SelectionRadius);
+            e.Graphics.Restore(state);
+        }
+        internal bool MoveSelection(ThemedSegment current,Keys key){
+            int step=key==Keys.Left?-1:key==Keys.Right?1:key==Keys.Up?-columns:key==Keys.Down?columns:0;
+            if(step==0||!Enabled)return false;
+            int index=(Controls.IndexOf(current)+step+Controls.Count)%Controls.Count;var next=(RadioButton)Controls[index];
+            if(next.Enabled){next.Focus();next.Checked=true;}return true;
+        }
+    }
+    internal sealed class ThemedSegment:RadioButton {
+        readonly DialogTheme theme;bool hovered,pressed;
+        internal ThemedSegment(DialogTheme theme){
+            this.theme=theme;AutoSize=false;Margin=Padding.Empty;
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
+            BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;
+        }
+        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
+        public override Size GetPreferredSize(Size proposedSize){
+            if(theme.HighContrast)return base.GetPreferredSize(proposedSize);
+            using(var font=new Font(Font.FontFamily,VisualDesign.DeviceNameFontSize*ScaleFactor,FontStyle.Regular,GraphicsUnit.Pixel))return new Size(TextRenderer.MeasureText(Text,font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.SingleLine).Width+(int)Math.Round(20*ScaleFactor),(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));
+        }
+        protected override bool ProcessDialogKey(Keys keyData){
+            var group=Parent as ThemedSegments;if(group!=null&&(keyData&Keys.Modifiers)==Keys.None&&group.MoveSelection(this,keyData&Keys.KeyCode))return true;
+            return base.ProcessDialogKey(keyData);
+        }
+        protected override void OnPaint(PaintEventArgs e){
+            if(theme.HighContrast){base.OnPaint(e);return;}
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            var rect=new RectangleF(0,0,Width/scale,Height/scale);
+            CompactRenderer.Selection(e.Graphics,rect,Text,null,Checked,Enabled,hovered,pressed,false,theme.Dark);
+            if(Focused&&ShowFocusCues)CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);e.Graphics.Restore(state);
+        }
+        protected override void OnCheckedChanged(EventArgs e){base.OnCheckedChanged(e);Invalidate();}
+        protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
+        protected override void OnMouseLeave(EventArgs e){hovered=pressed=false;Invalidate();base.OnMouseLeave(e);}
+        protected override void OnMouseDown(MouseEventArgs e){pressed=e.Button==MouseButtons.Left;Invalidate();base.OnMouseDown(e);}
+        protected override void OnMouseUp(MouseEventArgs e){pressed=false;Invalidate();base.OnMouseUp(e);}
+        protected override void OnGotFocus(EventArgs e){Invalidate();base.OnGotFocus(e);}
+        protected override void OnLostFocus(EventArgs e){pressed=false;Invalidate();base.OnLostFocus(e);}
+        protected override void OnEnabledChanged(EventArgs e){hovered=pressed=false;Invalidate();base.OnEnabledChanged(e);}
+    }
+    internal sealed class ThemedSwitch:CheckBox {
+        readonly DialogTheme theme;bool hovered,pressed;
+        internal ThemedSwitch(DialogTheme theme){
+            this.theme=theme;AutoSize=true;
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
+            BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;
+        }
+        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
+        public override Size GetPreferredSize(Size proposedSize){return theme.HighContrast?base.GetPreferredSize(proposedSize):new Size(TextRenderer.MeasureText(Text,Font).Width+(int)Math.Round(57*ScaleFactor),(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));}
+        protected override void OnPaint(PaintEventArgs e){
+            if(theme.HighContrast){base.OnPaint(e);return;}
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            var rect=new RectangleF(0,0,Width/scale,Height/scale);
+            if(Enabled)CompactRenderer.Highlight(e.Graphics,rect,0,new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1},theme.Dark);
+            CompactRenderer.DrawLabel(e.Graphics,Text,new RectangleF(6,0,rect.Width-51,rect.Height),VisualDesign.DeviceNameFontSize,false,Enabled?theme.Foreground:theme.Muted,StringAlignment.Near);
+            PopupPages.DrawToggle(e.Graphics,rect,Checked,Enabled,theme.Dark);
+            if(Focused&&ShowFocusCues)CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);e.Graphics.Restore(state);
+        }
+        protected override void OnCheckedChanged(EventArgs e){base.OnCheckedChanged(e);Invalidate();}
+        protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
+        protected override void OnMouseLeave(EventArgs e){hovered=pressed=false;Invalidate();base.OnMouseLeave(e);}
+        protected override void OnMouseDown(MouseEventArgs e){pressed=e.Button==MouseButtons.Left;Invalidate();base.OnMouseDown(e);}
+        protected override void OnMouseUp(MouseEventArgs e){pressed=false;Invalidate();base.OnMouseUp(e);}
+        protected override void OnGotFocus(EventArgs e){Invalidate();base.OnGotFocus(e);}
+        protected override void OnLostFocus(EventArgs e){pressed=false;Invalidate();base.OnLostFocus(e);}
+        protected override void OnEnabledChanged(EventArgs e){hovered=pressed=false;Invalidate();base.OnEnabledChanged(e);}
+    }
+
+    internal sealed class ThemedReleaseNotes:RichTextBox {
+        readonly DialogTheme theme;bool updating;
+        [StructLayout(LayoutKind.Sequential)] struct Paragraph {
+            internal uint Size,Mask;internal ushort Numbering,Effects;internal int StartIndent,RightIndent,Offset;internal ushort Alignment,TabCount;
+            [MarshalAs(UnmanagedType.ByValArray,SizeConst=32)] internal int[] Tabs;
+            internal int SpaceBefore,SpaceAfter,LineSpacing;internal short Style;internal byte LineRule,Outline;internal ushort ShadingWeight,ShadingStyle,NumberingStart,NumberingStyle,NumberingTab,BorderSpace,BorderWidth,Borders;
+        }
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,ref Paragraph paragraph);
+        internal ThemedReleaseNotes(DialogTheme theme){
+            this.theme=theme;ReadOnly=true;Multiline=true;WordWrap=true;DetectUrls=false;BorderStyle=theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;
+            BackColor=theme.Card;ForeColor=theme.Foreground;ScrollBars=RichTextBoxScrollBars.None;
+            DialogScrollbars.Track(this,theme);TextChanged+=delegate{FormatLines();UpdateViewport();};
+        }
+        internal int LineHeight {get{return (int)Math.Ceiling(Font.Height*1.4);}}
+        internal int LineCountFor(int width){
+            var flags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.TextBoxControl|TextFormatFlags.WordBreak|TextFormatFlags.ExpandTabs;
+            var size=TextRenderer.MeasureText(Text+"\u200b",Font,new Size(Math.Max(1,width-4),Int32.MaxValue),flags);
+            // GDI's line metric can differ from Font.Height (GDI+), notably for YaHei.
+            int line=TextRenderer.MeasureText("A",Font,new Size(Int32.MaxValue,Int32.MaxValue),flags).Height;
+            return Math.Max(1,(int)Math.Ceiling(size.Height/(double)Math.Max(1,line)));
+        }
+        internal int PreferredNotesHeight(int width){return Math.Max(3,Math.Min(12,LineCountFor(width)))*LineHeight+4;}
+        void FormatLines(){
+            if(!IsHandleCreated||theme.HighContrast)return;
+            int start=SelectionStart,length=SelectionLength;SelectAll();
+            float dpi;using(var g=CreateGraphics())dpi=g.DpiY;
+            var paragraph=new Paragraph {Size=(uint)Marshal.SizeOf(typeof(Paragraph)),Mask=0x100,LineRule=4,LineSpacing=(int)Math.Round(LineHeight*1440f/dpi),Tabs=new int[32]};
+            SendMessage(Handle,0x0447,IntPtr.Zero,ref paragraph);Select(start,length);
+        }
+        void UpdateViewport(){
+            if(updating||!IsHandleCreated)return;updating=true;
+            try{
+                int width=ClientSize.Width+(ScrollBars==RichTextBoxScrollBars.Vertical?SystemInformation.VerticalScrollBarWidth:0);
+                bool overflow=LineCountFor(width)*LineHeight+4>ClientSize.Height;
+                var wanted=overflow?RichTextBoxScrollBars.Vertical:RichTextBoxScrollBars.None;if(ScrollBars!=wanted)ScrollBars=wanted;
+            }finally{updating=false;}
+        }
+        protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);FormatLines();BeginInvoke((MethodInvoker)delegate{if(!IsDisposed&&IsHandleCreated)UpdateViewport();});}
+        protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);UpdateViewport();}
+        protected override void OnFontChanged(EventArgs e){base.OnFontChanged(e);FormatLines();UpdateViewport();}
     }
 
     internal sealed class ThemedMessageBody:Panel {
         readonly Label message;bool arranging;
         internal ThemedMessageBody(DialogTheme theme,string title,string text){
-            message=new Label {Name="MessageText",AccessibleName=title,Text=text,UseMnemonic=false,ForeColor=theme.Foreground,BackColor=Color.Transparent};
+            message=new Label {Name="MessageText",AccessibleName=title,Text=text,UseMnemonic=false,ForeColor=theme.Foreground,BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent};
             Controls.Add(message);DialogScrollbars.Track(this,theme);
         }
         public override Size GetPreferredSize(Size proposedSize){return message.GetPreferredSize(new Size(Math.Max(1,proposedSize.Width),0));}
@@ -235,31 +364,29 @@ namespace AtkBatteryTray {
         }
     }
 
-    internal sealed class ThemedProgress:Control {
+    internal sealed class ThemedProgress:ProgressBar {
         readonly DialogTheme theme;readonly Timer animation=new Timer {Interval=30};
         readonly System.Diagnostics.Stopwatch clock=new System.Diagnostics.Stopwatch();
         bool indeterminate;int value;
         internal ThemedProgress(DialogTheme theme){
-            this.theme=theme;Height=6;TabStop=false;AccessibleRole=AccessibleRole.ProgressBar;
-            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw|ControlStyles.SupportsTransparentBackColor,true);BackColor=Color.Transparent;
+            this.theme=theme;Height=VisualDesign.VolumeTrackHeight;TabStop=false;AccessibleRole=AccessibleRole.ProgressBar;
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);BackColor=theme.HighContrast?SystemColors.Control:Color.Transparent;
             animation.Tick+=delegate{UpdateAnimation();Invalidate();};
         }
         bool Reduced {get{return DeviceSettings.Current.ReducedMotion||!SystemInformation.IsMenuAnimationEnabled||theme.HighContrast;}}
         internal bool AnimationRunning {get{return animation.Enabled;}}
-        internal bool Indeterminate {get{return indeterminate;}set{if(indeterminate==value)return;indeterminate=value;AccessibleDescription=value?"进度未知":this.value+"%";clock.Restart();UpdateAnimation();Invalidate();}}
-        internal int Value {get{return value;}set{this.value=Math.Max(0,Math.Min(100,value));AccessibleDescription=indeterminate?"进度未知":this.value+"%";Invalidate();}}
+        internal bool Indeterminate {get{return indeterminate;}set{if(indeterminate==value)return;indeterminate=value;AccessibleDescription=value?"进度未知":this.value+"%";clock.Restart();if(theme.HighContrast)base.Value=value?100:this.value;UpdateAnimation();Invalidate();}}
+        internal new int Value {get{return value;}set{this.value=Math.Max(0,Math.Min(100,value));base.Value=indeterminate&&theme.HighContrast?100:this.value;AccessibleDescription=indeterminate?"进度未知":this.value+"%";Invalidate();}}
         void UpdateAnimation(){if(indeterminate&&Visible&&IsHandleCreated&&!Reduced)animation.Start();else animation.Stop();}
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);UpdateAnimation();}
         protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);UpdateAnimation();}
         protected override void OnPaint(PaintEventArgs e){
-            if(Width<=0||Height<=0)return;UpdateAnimation();
-            e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-            using(var path=VisualDesign.RoundRect(0,0,Width,Height,Height/2f)){
-                using(var brush=new SolidBrush(theme.Track))e.Graphics.FillPath(brush,path);
-                float width=indeterminate?(Reduced?Width:Width*.28f):Width*value/100f;
-                float x=indeterminate&&!Reduced?(Width-width)*(float)((Math.Sin(clock.Elapsed.TotalSeconds*Math.PI)+1)/2):0;
-                if(width>0)using(var fill=VisualDesign.RoundRect(x,0,width,Height,Height/2f))using(var brush=new SolidBrush(indeterminate&&Reduced&&!theme.HighContrast?Color.FromArgb(128,theme.Accent):theme.Accent))e.Graphics.FillPath(brush,fill);
-            }
+            if(theme.HighContrast){base.OnPaint(e);return;}if(Width<=0||Height<=0)return;UpdateAnimation();
+            float scale=Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            float fraction=indeterminate?(Reduced?1:.28f):value/100f;
+            float start=indeterminate&&!Reduced?(1-fraction)*(float)((Math.Sin(clock.Elapsed.TotalSeconds*Math.PI)+1)/2):0;
+            CompactRenderer.DrawVolumeTrack(e.Graphics,new RectangleF(0,0,Width/scale,Height/scale),theme.Dark,fraction,start);e.Graphics.Restore(state);
         }
         protected override void Dispose(bool disposing){if(disposing)animation.Dispose();base.Dispose(disposing);}
     }
@@ -267,15 +394,16 @@ namespace AtkBatteryTray {
     internal sealed class ThemedAliasDialog:ThemedDialog {
         internal readonly TextBox Input;
         internal ThemedAliasDialog(string title,string value,int maxLength){
-            Text=title;ClientSize=new Size(360,162);
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Text=title;ClientSize=new Size(360,136);
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Input=new TextBox {Name="AliasInput",AccessibleName=title,Text=value,MaxLength=maxLength};
-            var input=new ThemedTextBox(Theme,Input) {Dock=DockStyle.Top,Margin=new Padding(0,0,0,16)};
+            var input=new ThemedTextBox(Theme,Input) {Dock=DockStyle.Top,Margin=Padding.Empty};
+            var card=new ThemedSection(Theme) {Name="AliasCard",Dock=DockStyle.Fill};card.Controls.Add(input);
             var buttons=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Margin=Padding.Empty};
             var save=new ThemedButton(Theme,ThemedButtonKind.Primary) {Text="保存",DialogResult=DialogResult.OK,AutoSize=true,TabIndex=2};
             var cancel=new ThemedButton(Theme) {Text="取消",DialogResult=DialogResult.Cancel,AutoSize=true,TabIndex=1};
-            buttons.Controls.AddRange(new Control[]{save,cancel});layout.Controls.Add(input,0,0);layout.Controls.Add(buttons,0,2);Controls.Add(layout);AcceptButton=save;CancelButton=cancel;ActiveControl=Input;
+            buttons.Controls.AddRange(new Control[]{save,cancel});layout.Controls.Add(card,0,0);layout.Controls.Add(buttons,0,1);Controls.Add(layout);AcceptButton=save;CancelButton=cancel;ActiveControl=Input;
         }
     }
 
@@ -286,11 +414,14 @@ namespace AtkBatteryTray {
         }
         internal static ThemedDialog Create(string title,string text,MessageBoxButtons buttons,MessageBoxDefaultButton defaultButton=MessageBoxDefaultButton.Button1){
             var dialog=new ThemedDialog {Text=title,ClientSize=new Size(440,210)};
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var heading=dialog.Caption(title,true);layout.Controls.Add(heading,0,0);
-            var message=new ThemedMessageBody(dialog.Theme,title,text) {Dock=DockStyle.Fill,Margin=new Padding(0,12,0,16)};
-            layout.Controls.Add(message,0,1);
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var card=new ThemedSection(dialog.Theme) {Name="MessageCard",Dock=DockStyle.Fill};
+            var content=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            content.RowStyles.Add(new RowStyle(SizeType.AutoSize));content.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            var heading=dialog.Caption(title,false,false,true);content.Controls.Add(heading,0,0);
+            var message=new ThemedMessageBody(dialog.Theme,title,text) {Dock=DockStyle.Fill,Margin=new Padding(0,VisualDesign.CardGap,0,0)};
+            content.Controls.Add(message,0,1);card.Controls.Add(content);layout.Controls.Add(card,0,0);
             var bar=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,FlowDirection=FlowDirection.RightToLeft,Margin=Padding.Empty};
             DialogResult[] results;
             switch(buttons){
@@ -313,13 +444,13 @@ namespace AtkBatteryTray {
             // Yes/No and Abort/Retry/Ignore have no cancel result, like MessageBox.
             if(cancelControl==null){dialog.ControlBox=false;dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(dialog.DialogResult==DialogResult.Cancel)e.Cancel=true;};}
             else if(buttons==MessageBoxButtons.OK)dialog.FormClosing+=delegate{if(dialog.DialogResult==DialogResult.Cancel||dialog.DialogResult==DialogResult.None)dialog.DialogResult=DialogResult.OK;};
-            layout.Controls.Add(bar,0,2);dialog.Controls.Add(layout);
+            layout.Controls.Add(bar,0,1);dialog.Controls.Add(layout);
             bool resizing=false;
             LayoutEventHandler fit=delegate{
                 if(resizing)return;resizing=true;
                 try{
-                    int width=Math.Max(1,dialog.ClientSize.Width-dialog.Padding.Horizontal);float scale=dialog.Font.SizeInPoints*96f/72f/14f;
-                    int surrounding=dialog.Padding.Vertical+heading.GetPreferredSize(new Size(width,0)).Height+heading.Margin.Vertical+message.Margin.Vertical+bar.GetPreferredSize(new Size(width,0)).Height+bar.Margin.Vertical;
+                    int width=Math.Max(1,dialog.ClientSize.Width-dialog.Padding.Horizontal-card.Padding.Horizontal);float scale=dialog.Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;
+                    int surrounding=dialog.Padding.Vertical+card.Padding.Vertical+card.Margin.Vertical+heading.GetPreferredSize(new Size(width,0)).Height+heading.Margin.Vertical+message.Margin.Vertical+bar.GetPreferredSize(new Size(width,0)).Height+bar.Margin.Vertical;
                     int maximum=Math.Min((int)Math.Round(560*scale),Screen.FromControl(dialog).WorkingArea.Height-(dialog.Height-dialog.ClientSize.Height)-(int)Math.Round(48*scale));
                     int height=Math.Min(surrounding+message.GetPreferredSize(new Size(width,0)).Height,Math.Max(surrounding,maximum));
                     if(dialog.ClientSize.Height!=height)dialog.ClientSize=new Size(dialog.ClientSize.Width,height);

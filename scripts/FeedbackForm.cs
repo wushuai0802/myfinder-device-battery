@@ -132,8 +132,8 @@ namespace AtkBatteryTray {
     internal sealed class FeedbackForm:ThemedDialog {
         readonly FeedbackReport report;readonly FeedbackClient client;readonly FeedbackSession session;readonly string relay;
         readonly Action<string> copy,open;readonly Func<string,bool> confirm;
-        readonly FlowLayoutPanel categories=new FlowLayoutPanel();
-        readonly TextBox description=new TextBox();readonly CheckBox diagnostics=new CheckBox();readonly LinkLabel preview=new LinkLabel();
+        readonly ThemedSegments categories;
+        readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,view;
         CancellationTokenSource pending;FeedbackResult receipt;bool busy;
@@ -144,35 +144,47 @@ namespace AtkBatteryTray {
             confirm=confirmation??delegate(string question){return ThemedMessage.Show(this,"反馈问题",question,MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)==DialogResult.Yes;};
             client=new FeedbackClient(relay,transport??new FeedbackHttp(),session);
             Text="反馈问题";ShowInTaskbar=false;StartPosition=FormStartPosition.CenterParent;FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
-            ClientSize=new Size(540,540);
+            ClientSize=new Size(540,568);categories=new ThemedSegments(Theme);diagnostics=new ThemedSwitch(Theme);
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=10};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            for(int i=0;i<10;i++)layout.RowStyles.Add(new RowStyle(i==4?SizeType.Percent:SizeType.AutoSize,i==4?100:0));
-            layout.Controls.Add(Caption("类型"),0,0);
-            categories.AutoSize=true;categories.Dock=DockStyle.Fill;categories.WrapContents=true;categories.Margin=new Padding(0,2,0,10);
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
+            var typeCard=new ThemedSection(Theme) {Name="FeedbackTypeCard",Dock=DockStyle.Fill,Height=78};
+            var typeTitle=Caption("类型",false,false,true);typeTitle.Dock=DockStyle.Top;
+            categories.Dock=DockStyle.Bottom;categories.Margin=Padding.Empty;
             for(int i=0;i<4;i++){
-                string category=FeedbackInput.CategoryAt(i);var radio=new RadioButton {Name="Category-"+category,Text=FeedbackInput.CategoryLabel(category),Tag=category,AutoSize=true,Margin=new Padding(0,2,14,2),BackColor=Theme.Card,ForeColor=Theme.Foreground};
+                string category=FeedbackInput.CategoryAt(i);var radio=new ThemedSegment(Theme) {Name="Category-"+category,Text=FeedbackInput.CategoryLabel(category),AccessibleName=FeedbackInput.CategoryLabel(category),Tag=category,TabIndex=i};
                 categories.Controls.Add(radio);radio.Checked=category==FeedbackInput.DefaultCategory(deviceMissing);
             }
-            layout.Controls.Add(categories,0,1);layout.Controls.Add(Caption("描述（必填，5–2000 字）"),0,2);
-            var hint=Caption("发生了什么？用的是什么设备、怎么连接的？",false,true);layout.Controls.Add(hint,0,3);
+            categories.SizeChanged+=delegate{typeCard.Height=typeCard.Padding.Vertical+typeTitle.PreferredHeight+4+categories.Height;};
+            typeCard.Controls.Add(categories);typeCard.Controls.Add(typeTitle);layout.Controls.Add(typeCard,0,0);
+            var descriptionCard=new ThemedSection(Theme) {Name="FeedbackDescriptionCard",Dock=DockStyle.Fill};
+            var descriptionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};descriptionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            for(int i=0;i<4;i++)descriptionLayout.RowStyles.Add(new RowStyle(i==2?SizeType.Percent:SizeType.AutoSize,i==2?100:0));
+            descriptionLayout.Controls.Add(Caption("描述（必填，5–2000 字）",false,false,true),0,0);
+            var hint=Caption("发生了什么？用的是什么设备、怎么连接的？",false,true);descriptionLayout.Controls.Add(hint,0,1);
             description.Name="Description";description.AccessibleName="描述";description.Multiline=true;description.AcceptsReturn=true;description.Dock=DockStyle.Fill;
-            description.TextChanged+=delegate{UpdateValidation();};layout.Controls.Add(new ThemedTextBox(Theme,description) {Dock=DockStyle.Fill,Margin=new Padding(0,5,0,4)},0,4);
-            remaining.Name="FeedbackRemaining";remaining.AutoSize=true;remaining.Font=hint.Font;remaining.ForeColor=Theme.Muted;remaining.Margin=new Padding(0,0,0,16);layout.Controls.Add(remaining,0,5);
-            var diagnosticRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,Margin=new Padding(0,0,0,10),WrapContents=true};
-            diagnostics.Name="IncludeDiagnostics";diagnostics.Text="附带诊断信息（推荐）";diagnostics.AutoSize=true;diagnostics.Checked=true;diagnostics.Margin=new Padding(0,3,12,3);diagnostics.BackColor=Theme.Card;diagnostics.ForeColor=Theme.Foreground;
+            description.TextChanged+=delegate{UpdateValidation();};descriptionLayout.Controls.Add(new ThemedTextBox(Theme,description) {Dock=DockStyle.Fill,Margin=new Padding(0,5,0,4)},0,2);
+            remaining.Name="FeedbackRemaining";remaining.AutoSize=true;remaining.Font=hint.Font;remaining.ForeColor=Theme.Muted;remaining.Margin=Padding.Empty;descriptionLayout.Controls.Add(remaining,0,3);
+            descriptionCard.Controls.Add(descriptionLayout);layout.Controls.Add(descriptionCard,0,1);
+            var diagnosticCard=new ThemedSection(Theme) {Name="FeedbackDiagnosticsCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
+            var diagnosticRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Top,Margin=Padding.Empty,WrapContents=true};
+            diagnostics.Name="IncludeDiagnostics";diagnostics.Text="附带诊断信息（推荐）";diagnostics.AccessibleName=diagnostics.Text;diagnostics.Checked=true;diagnostics.Margin=new Padding(0,0,12,0);
             preview.Name="ViewDiagnostics";preview.Text="查看内容";preview.AutoSize=true;preview.LinkColor=Theme.Accent;preview.ActiveLinkColor=preview.LinkColor;preview.VisitedLinkColor=preview.LinkColor;preview.DisabledLinkColor=Theme.Muted;preview.Margin=new Padding(0,4,0,3);preview.LinkClicked+=delegate{ShowDiagnostics();};
-            diagnosticRow.Controls.Add(diagnostics);diagnosticRow.Controls.Add(preview);layout.Controls.Add(diagnosticRow,0,6);
+            diagnosticRow.Controls.Add(diagnostics);diagnosticRow.Controls.Add(preview);diagnosticCard.Controls.Add(diagnosticRow);layout.Controls.Add(diagnosticCard,0,2);
+            var noticeCard=new ThemedSection(Theme) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
+            var noticeLayout=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Top,ColumnCount=1,RowCount=2,Margin=Padding.Empty};noticeLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var notice=Caption(String.IsNullOrEmpty(relay)?"将打开 GitHub 提交，需要 GitHub 账号":"提交后会公开显示在 GitHub 项目的问题列表里。诊断不含序列号和文件路径，请不要在描述里填写个人信息。",false,true);
-            notice.Name="FeedbackNotice";notice.Margin=new Padding(0,0,0,10);notice.Dock=DockStyle.Fill;layout.Controls.Add(notice,0,7);
-            status.Name="FeedbackStatus";status.AutoSize=true;status.Dock=DockStyle.Fill;status.Font=hint.Font;status.ForeColor=Theme.Muted;status.Margin=new Padding(0,0,0,16);layout.Controls.Add(status,0,8);
+            notice.Name="FeedbackNotice";notice.Margin=new Padding(0,0,0,4);notice.Dock=DockStyle.Fill;noticeLayout.Controls.Add(notice,0,0);
+            status.Name="FeedbackStatus";status.AutoSize=true;status.Dock=DockStyle.Fill;status.Font=hint.Font;status.ForeColor=Theme.Muted;status.Margin=Padding.Empty;noticeLayout.Controls.Add(status,0,1);
+            noticeCard.Controls.Add(noticeLayout);layout.Controls.Add(noticeCard,0,3);
             var buttons=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=true,Margin=Padding.Empty};
             submit.Name="SubmitFeedback";submit.Text=String.IsNullOrEmpty(relay)?"在浏览器中提交":"提交";submit.AutoSize=true;submit.MinimumSize=new Size(82,30);submit.Click+=delegate{Submit();};
             cancel.Name="CancelFeedback";cancel.Text="取消";cancel.AutoSize=true;cancel.MinimumSize=new Size(82,30);cancel.Click+=delegate{Close();};
             fallback.Name="BrowserFallback";fallback.Text="改用浏览器提交";fallback.AutoSize=true;fallback.MinimumSize=new Size(132,30);fallback.Visible=false;fallback.Click+=delegate{if(ConfirmRepeat())OpenBrowser();};
             view.Name="ViewIssue";view.Text="在浏览器中查看";view.AutoSize=true;view.MinimumSize=new Size(132,30);view.Visible=false;
             view.Click+=delegate{if(receipt!=null&&FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url))try{open(receipt.Url);}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}};
-            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback});layout.Controls.Add(buttons,0,9);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
+            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback});layout.Controls.Add(buttons,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
             FormClosing+=delegate{AbortSubmission();};UpdateValidation();
         }
         void UpdateValidation(){
@@ -208,7 +220,8 @@ namespace AtkBatteryTray {
             var dialog=new ThemedDialog(Theme.Dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var text=new TextBox {Name="DiagnosticText",AccessibleName="诊断信息",Text=report.FullText,ReadOnly=true,Multiline=true,WordWrap=false};
-            layout.Controls.Add(new ThemedTextBox(dialog.Theme,text) {Dock=DockStyle.Fill,Margin=new Padding(0,0,0,16)},0,0);
+            var card=new ThemedSection(dialog.Theme) {Name="DiagnosticsCard",Dock=DockStyle.Fill};
+            text.BorderStyle=dialog.Theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;text.BackColor=dialog.Theme.Card;text.ForeColor=dialog.Theme.Foreground;text.Dock=DockStyle.Fill;card.Controls.Add(text);DialogScrollbars.Attach(text,dialog.Theme);layout.Controls.Add(card,0,0);
             var close=new ThemedButton(dialog.Theme,ThemedButtonKind.Primary) {Text="关闭",DialogResult=DialogResult.Cancel,AutoSize=true,Anchor=AnchorStyles.Right,Margin=Padding.Empty};layout.Controls.Add(close,0,1);
             dialog.Controls.Add(layout);dialog.AcceptButton=close;dialog.CancelButton=close;dialog.ActiveControl=close;return dialog;
         }

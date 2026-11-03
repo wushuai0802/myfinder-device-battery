@@ -3,9 +3,9 @@ using System.Drawing;
 using AtkBattery;
 
 namespace AtkBatteryTray {
-    // Panel colors only. TrayGlyph keeps its existing, theme-independent badge.
+    // Shared panel/dialog colors. TrayGlyph keeps its theme-independent badge.
     internal sealed class ThemePalette {
-        internal readonly Color Card,Border,Foreground,Muted,Track,Accent,Selected,SelectedForeground;
+        internal readonly Color Background,Card,Border,Foreground,Muted,Track,Accent,Selected,SelectedForeground;
         readonly bool dark;
         internal static readonly string[] Keys={"ocean","native","amber","mist"};
         static readonly string[] Names={"海蓝","原生","琥珀","青雾"};
@@ -21,9 +21,10 @@ namespace AtkBatteryTray {
         };
         ThemePalette(bool dark,int card,int border,int foreground,int muted,int track,int accent,int selected,int selectedForeground) {
             this.dark=dark;Card=Rgb(card);Border=Rgb(border);Foreground=Rgb(foreground);Muted=Rgb(muted);Track=Rgb(track);Accent=Rgb(accent);Selected=Rgb(selected);SelectedForeground=Rgb(selectedForeground);
+            Background=Blend(Card,dark?Color.Black:Foreground,dark?64:13);
         }
         ThemePalette() {
-            Card=SystemColors.Window;Border=SystemColors.WindowText;Foreground=SystemColors.WindowText;Muted=SystemColors.GrayText;
+            Background=Card=SystemColors.Window;Border=SystemColors.WindowText;Foreground=SystemColors.WindowText;Muted=SystemColors.GrayText;
             Track=SystemColors.Control;Accent=SystemColors.Highlight;Selected=SystemColors.Highlight;SelectedForeground=SystemColors.HighlightText;
         }
         static Color Rgb(int rgb){return Color.FromArgb(unchecked((int)0xff000000)|rgb);}

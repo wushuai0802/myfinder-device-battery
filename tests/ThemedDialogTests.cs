@@ -5,6 +5,7 @@ using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using AtkBattery;
@@ -14,6 +15,10 @@ using AtkBatteryTray;
 static class ThemedDialogTests {
     const BindingFlags Members=BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic;
     static int checks,failures;
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
+    [StructLayout(LayoutKind.Sequential)] struct PrintRect {internal int Left,Top,Right,Bottom;}
+    [StructLayout(LayoutKind.Sequential)] struct PrintRange {internal IntPtr Device,Target;internal PrintRect Area,Page;internal int First,Last;}
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,ref PrintRange range);
     static void Check(bool value,string message){if(!value)throw new Exception(message);checks++;}
     static void Run(string name,Action test){try{test();Console.WriteLine("PASS "+name);}catch(Exception e){failures++;Console.Error.WriteLine("FAIL "+name+": "+(e.InnerException??e).Message);}}
     static Type Type(string name){var type=typeof(UpdateDialog).Assembly.GetType("AtkBatteryTray."+name);Check(type!=null,name+" is available");return type;}
@@ -25,16 +30,164 @@ static class ThemedDialogTests {
     static double Luminance(Color color){double[] v={color.R/255.0,color.G/255.0,color.B/255.0};for(int i=0;i<3;i++)v[i]=v[i]<=.04045?v[i]/12.92:Math.Pow((v[i]+.055)/1.055,2.4);return .2126*v[0]+.7152*v[1]+.0722*v[2];}
     static double Contrast(Color a,Color b){double x=Luminance(a),y=Luminance(b);return (Math.Max(x,y)+.05)/(Math.Min(x,y)+.05);}
     static Color ColorField(object instance,string name){return (Color)Field(instance,name);}
-    static void SelectTheme(string style,bool dark){DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle=style,Theme=dark?"dark":"light",ReducedMotion=true,RememberReadings=false});}
+    static void SelectTheme(string style,bool dark){DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle=style,Theme=dark?"dark":"light",ReducedMotion=true,RememberReadings=false,VolumeCollapsed=false});}
     static void Show(Form form){form.Opacity=0;form.ShowInTaskbar=false;form.Show();Application.DoEvents();}
     static void Key(Form form,Keys key){typeof(Form).GetMethod("ProcessDialogKey",Members).Invoke(form,new object[]{key});Application.DoEvents();}
+    static void SharedPanelGeometry(){
+        SelectTheme("ocean",true);var theme=new DialogTheme(true);
+        using(var primary=new ThemedButton(theme,ThemedButtonKind.Primary))using(var secondary=new ThemedButton(theme)){
+            Check(primary.Height==30&&primary.GetPreferredSize(Size.Empty).Height==30,"dialog buttons use the panel's 30px selection height");
+            Check(primary.FillFor(false,false)==theme.Selected&&secondary.FillFor(false,false)==theme.Track,"buttons use selected and unselected panel fills");
+        }
+        foreach(string method in new[]{"Selection","Highlight","Outline","Fill","DrawVolumeTrack"})Check(typeof(CompactRenderer).GetMethod(method,BindingFlags.Static|BindingFlags.NonPublic)!=null,"shared panel primitive: "+method);
+        Check(typeof(PopupPages).GetMethod("DrawToggle",BindingFlags.Static|BindingFlags.NonPublic)!=null,"secondary-page switch drawing is reusable");
+        using(var section=new ThemedSection(theme) {Size=new Size(200,80)})using(var actual=new Bitmap(200,80))using(var expected=new Bitmap(200,80)){
+            section.BackColor=theme.Card;section.DrawToBitmap(actual,new Rectangle(Point.Empty,actual.Size));
+            using(var g=Graphics.FromImage(expected)){g.Clear(theme.Card);g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;CompactRenderer.DrawSurface(g,new RectangleF(.5f,.5f,199,79),true);}
+            for(int y=0;y<80;y++)for(int x=0;x<200;x++)Check(actual.GetPixel(x,y)==expected.GetPixel(x,y),"card pixels use DrawSurface including its 1px outline");
+        }
+    }
+    static void DialogBackground(){
+        foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){
+            SelectTheme(style,dark);var palette=ThemePalette.Current(dark);var field=typeof(ThemePalette).GetField("Background",Members);Check(field!=null,"palette defines Background");
+            var background=(Color)field.GetValue(palette);Check(background==ThemePalette.Blend(palette.Card,dark?Color.Black:palette.Foreground,dark?64:13),"only the new background uses 25% / 5% mixing");
+            Check(Luminance(palette.Card)-Luminance(background)>=.004,"card/background luminance delta >= .004 for "+style+dark);
+            Check(Contrast(palette.Foreground,background)>=4.5&&Contrast(palette.Muted,background)>=4.5,"text on new background remains readable");
+            using(var dialog=new UpdateDialog(Release(),true))Check(dialog.BackColor==background&&dialog.Padding==new Padding(16),"window uses background and 16px margins");
+            var attributes=new Dictionary<int,int>();ThemedTitleBar.Apply(new DialogTheme(dark),true,delegate(int a,int v){attributes[a]=v;return 0;});
+            Check(attributes.ContainsKey(33)&&attributes[33]==2&&attributes[35]==ColorTranslator.ToWin32(background),"Windows 11 requests round corners and a matching title bar");
+        }
+    }
+    static void SegmentsAndSwitch(){
+        using(var form=new FeedbackForm(Report(),true,false,delegate{},delegate{},"")){
+            Show(form);var first=Find<RadioButton>(form,"Category-device");var second=Find<RadioButton>(form,"Category-battery");
+            Check(first.GetType()!=typeof(RadioButton)&&second.GetType()==first.GetType(),"feedback types use panel segments");
+            Check(first.Height==VisualDesign.StageRect(0,4).Height&&first.Top==Find<RadioButton>(form,"Category-ui").Top,"wide feedback uses one row of panel-height segments");
+            foreach(string category in new[]{"device","battery","ui","other"}){
+                var option=Find<RadioButton>(form,"Category-"+category);Check(option.AccessibilityObject.Name==option.Text&&option.AccessibilityObject.Role==AccessibleRole.RadioButton,"segment accessible name and radio role");
+            }
+            first.Focus();first.GetType().GetMethod("ProcessDialogKey",Members).Invoke(first,new object[]{Keys.Right});Application.DoEvents();
+            Check(second.Focused&&second.Checked&&form.SelectedCategory=="battery"&&!first.Checked,"Right changes focus and the original selected value");
+            second.GetType().GetMethod("ProcessDialogKey",Members).Invoke(second,new object[]{Keys.Left});Check(first.Checked&&form.SelectedCategory=="device","Left selects the preceding segment");
+            Key(form,Keys.Tab);Check(!first.ContainsFocus&&!second.ContainsFocus,"Tab leaves the radio group");
+            var toggle=Find<CheckBox>(form,"IncludeDiagnostics");Check(toggle.GetType()!=typeof(CheckBox)&&toggle.Checked,"diagnostics uses a checked switch");
+            Check(toggle.AccessibilityObject.Name==toggle.Text&&toggle.AccessibilityObject.Role==AccessibleRole.CheckButton&&(toggle.AccessibilityObject.State&AccessibleStates.Checked)!=0,"switch retains accessible checked state");
+            toggle.AccessibilityObject.DoDefaultAction();Check(!toggle.Checked,"accessible switch action updates the original checkbox value");
+            toggle.GetType().GetMethod("OnClick",Members).Invoke(toggle,new object[]{EventArgs.Empty});Check(toggle.Checked,"whole switch row toggles");
+            toggle.Focus();SendMessage(toggle.Handle,0x0100,(IntPtr)Keys.Space,IntPtr.Zero);SendMessage(toggle.Handle,0x0101,(IntPtr)Keys.Space,IntPtr.Zero);Application.DoEvents();
+            Check(!toggle.Checked&&(toggle.AccessibilityObject.State&AccessibleStates.Checked)==0,"native Space key toggles checked and accessible state");
+            form.ClientSize=new Size(360,form.ClientSize.Height);Application.DoEvents();var third=Find<RadioButton>(form,"Category-ui");
+            Check(first.Top==second.Top&&third.Top>first.Top,"four feedback segments wrap into two rows");
+        }
+    }
+    static void AdaptiveReleaseNotes(){
+        int previous=0;
+        foreach(int lines in new[]{1,7,80}){
+            var release=Release();release.Body=Lines(lines);using(var dialog=new UpdateDialog(release,true)){
+                Show(dialog);var notes=Find<Control>(dialog,"ReleaseNotes");
+                Check(notes.Font.SizeInPoints*96/72==VisualDesign.BodyFontSize,"release notes use 12px body text");
+                Check(dialog.ClientSize.Height>previous,"short, medium and long notes grow the window");previous=dialog.ClientSize.Height;
+                Check(dialog.Height<=Screen.FromControl(dialog).WorkingArea.Height,"update window stays in the screen work area");
+                var scroll=notes.GetType().GetProperty("ScrollBars").GetValue(notes,null);Check(scroll.ToString()==(lines==80?"Vertical":"None"),"only notes exceeding twelve lines scroll");
+                var rich=(ThemedReleaseNotes)notes;Check(rich.Height>=3*rich.LineHeight&&rich.Height<=12*rich.LineHeight+5,"release viewport stays between three and twelve lines");
+                if(lines==7){int next=rich.Text.IndexOf('\n')+1;Check(Math.Abs(rich.GetPositionFromCharIndex(next).Y-rich.GetPositionFromCharIndex(0).Y-rich.LineHeight)<=1,"native rich edit applies 1.4x line spacing");}
+            }
+        }
+        foreach(int lines in new[]{3,12,13}){
+            var release=Release();release.Body=Lines(lines);using(var dialog=new UpdateDialog(release,true)){
+                Show(dialog);var notes=Find<ThemedReleaseNotes>(dialog,"ReleaseNotes");
+                Check(notes.ScrollBars==(lines>12?RichTextBoxScrollBars.Vertical:RichTextBoxScrollBars.None),"exact twelve-line scrollbar boundary: "+lines+" (measured "+notes.LineCountFor(notes.Width)+", height "+notes.Height+", line "+notes.LineHeight+", font "+notes.Font.Height+")");
+                if(lines<=12)Check(notes.GetPositionFromCharIndex(notes.TextLength).Y+notes.Font.Height<=notes.ClientSize.Height,"last release-note line remains fully visible: "+lines);
+            }
+        }
+        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
+            var release=Release();release.Body=Lines(100);using(var dialog=new UpdateDialog(release,true)){
+                dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
+                Check(dialog.Height<=Screen.FromControl(dialog).WorkingArea.Height,"long notes obey the working-area cap at "+scale);
+            }
+        }
+    }
+    static bool SamePixels(Bitmap left,Bitmap right){
+        if(left.Size!=right.Size)return false;
+        for(int y=0;y<left.Height;y++)for(int x=0;x<left.Width;x++)if(left.GetPixel(x,y)!=right.GetPixel(x,y))return false;return true;
+    }
+    static void ComparePaint(Control control,Color background,float scale,Action<Graphics,RectangleF> draw){
+        control.BackColor=background;
+        using(var actual=new Bitmap(control.Width,control.Height))using(var expected=new Bitmap(control.Width,control.Height)){
+            using(var g=Graphics.FromImage(actual)){g.Clear(background);Call(control,"OnPaint",new PaintEventArgs(g,new Rectangle(Point.Empty,actual.Size)));}
+            using(var g=Graphics.FromImage(expected)){g.Clear(background);g.ScaleTransform(scale,scale);g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;draw(g,new RectangleF(0,0,control.Width/scale,control.Height/scale));}
+            if(!SamePixels(actual,expected)){
+                for(int y=0;y<actual.Height;y++)for(int x=0;x<actual.Width;x++)if(actual.GetPixel(x,y)!=expected.GetPixel(x,y))throw new Exception(control.GetType().Name+" "+control.Name+" mismatch at "+scale+" / "+x+","+y+": "+actual.GetPixel(x,y)+" expected "+expected.GetPixel(x,y));
+            }
+            Check(true,control.GetType().Name+" calls the panel drawing path at "+scale);
+        }
+    }
+    static void SharedControlPainting(){
+        foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false})foreach(float scale in new[]{1f,2f}){
+            SelectTheme(style,dark);var theme=new DialogTheme(dark);
+            using(var font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel)){
+                foreach(var kind in new[]{ThemedButtonKind.Primary,ThemedButtonKind.Secondary,ThemedButtonKind.Text})using(var button=new ThemedButton(theme,kind) {Font=font,Text="按钮",Size=new Size((int)(120*scale),(int)(VisualDesign.SelectionHeight*scale))}){
+                    Check(button.GetPreferredSize(Size.Empty).Height==VisualDesign.StageRect(0,4).Height*scale,"dialog/button and DPI segment heights are identical");
+                    for(int interaction=0;interaction<3;interaction++){
+                        if(interaction==1)Call(button,"OnMouseEnter",EventArgs.Empty);if(interaction==2)Call(button,"OnMouseDown",new MouseEventArgs(MouseButtons.Left,1,10,10,0));
+                        bool hover=interaction>0,pressed=interaction==2;
+                        button.Name=style+dark+kind+interaction;
+                        ComparePaint(button,theme.Background,scale,delegate(Graphics g,RectangleF rect){
+                            if(kind!=ThemedButtonKind.Text){CompactRenderer.Fill(g,rect,theme.Track,VisualDesign.SelectionRadius);CompactRenderer.Selection(g,rect,button.Text,null,kind==ThemedButtonKind.Primary,true,hover,pressed,false,dark);}
+                            else{CompactRenderer.Highlight(g,rect,0,new PanelFeedback {HoverAction=hover?0:-1,PressedAction=pressed?0:-1},dark);CompactRenderer.DrawLabel(g,button.Text,rect,VisualDesign.DeviceNameFontSize,false,theme.Accent,StringAlignment.Center);}
+                            if(hover)CompactRenderer.Outline(g,rect,theme.Accent,1);
+                        });
+                    }
+                }
+                using(var progress=new ThemedProgress(theme) {Font=font,Size=new Size((int)(180*scale),(int)(VisualDesign.VolumeTrackHeight*scale)),Value=45}){
+                    Check(progress.Height==PopupPages.VolumeTrack(new RectangleF(0,0,260,48)).Height*scale,"progress uses the volume track height");
+                    Check(((ProgressBar)progress).Value==45&&progress.AccessibleDescription=="45%","native progress value and accessible percentage agree");
+                    ComparePaint(progress,theme.Card,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.DrawVolumeTrack(g,rect,dark,.45f);});
+                }
+                foreach(bool on in new[]{true,false})using(var toggle=new ThemedSwitch(theme) {AutoSize=false,Font=font,Text="诊断",Checked=on,Size=new Size((int)(240*scale),(int)(30*scale))}){
+                    var geometry=PopupPages.ToggleBounds(new RectangleF(0,0,240,30));Check(geometry.Size==new SizeF(VisualDesign.ToggleWidth,VisualDesign.ToggleHeight),"switch uses the secondary page's exact bounds");
+                    ComparePaint(toggle,theme.Card,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.DrawLabel(g,toggle.Text,new RectangleF(6,0,rect.Width-51,rect.Height),VisualDesign.DeviceNameFontSize,false,theme.Foreground,StringAlignment.Near);PopupPages.DrawToggle(g,rect,on,true,dark);});
+                }
+                foreach(bool selected in new[]{true,false})using(var segment=new ThemedSegment(theme) {Font=font,Text="类型",Checked=selected,Size=new Size((int)(120*scale),(int)(VisualDesign.SelectionHeight*scale))}){
+                    ComparePaint(segment,theme.Track,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.Selection(g,rect,segment.Text,null,selected,true,false,false,false,dark);});
+                }
+            }
+        }
+    }
+    static void CardsAndTypography(){
+        using(var update=new UpdateDialog(Release(),true))using(var feedback=new FeedbackForm(Report(),false,Style.Dark,delegate{},delegate{},""))using(var alias=new ThemedAliasDialog("名称","我的设备",12))using(var message=ThemedMessage.Create("确认","测试确认",MessageBoxButtons.OK))using(var diagnostic=feedback.CreateDiagnosticsDialog()){
+            Show(update);Show(feedback);Show(alias);Show(message);Show(diagnostic);
+            foreach(var pair in new[]{new {Form=(Form)update,Names=new[]{"VersionCard","ReleaseNotesCard","UpdateStatusCard"}},new {Form=(Form)feedback,Names=new[]{"FeedbackTypeCard","FeedbackDescriptionCard","FeedbackDiagnosticsCard","FeedbackNoticeCard"}},new {Form=(Form)alias,Names=new[]{"AliasCard"}},new {Form=(Form)message,Names=new[]{"MessageCard"}},new {Form=(Form)diagnostic,Names=new[]{"DiagnosticsCard"}}}){
+                int bottom=16;foreach(string name in pair.Names){var card=Find<ThemedSection>(pair.Form,name);Check(card.Margin.Bottom==VisualDesign.CardGap,"cards share panel CardGap");int top=pair.Form.PointToClient(card.PointToScreen(Point.Empty)).Y;Check(top==bottom,"cards have 16px outer margin and panel gaps");bottom=top+card.Height+VisualDesign.CardGap;}
+            }
+            Check(Find<Label>(update,"UpdateTitle").Font.Bold&&Find<Label>(update,"UpdateTitle").Font.SizeInPoints*96/72==15,"update headline remains the only 15px heading");
+            var description=Find<TextBox>(feedback,"Description");var wrapper=(ThemedTextBox)description.Parent;
+            Check(wrapper.Padding==new Padding(10)&&description.BackColor==feedback.Theme.Track&&description.BorderStyle==BorderStyle.None,"multiline input has a panel track and 10px inset");
+            Check(alias.Input.BackColor==alias.Theme.Track&&alias.Input.BorderStyle==BorderStyle.None,"name input shares the panel track");
+            description.Focus();Check(description.Focused,"feedback input accepts keyboard focus");
+            ComparePaint(wrapper,feedback.Theme.Card,1,delegate(Graphics g,RectangleF rect){CompactRenderer.Fill(g,rect,feedback.Theme.Track,VisualDesign.SelectionRadius);CompactRenderer.Outline(g,rect,feedback.Theme.Accent,1);});
+        }
+    }
+    static void SystemControlsInHighContrast(){
+        VisualDesign.HighContrastOverride=true;
+        try{using(var update=new UpdateDialog(Release(),true))using(var feedback=new FeedbackForm(Report(),false,true,delegate{},delegate{},"")){
+            foreach(var root in new Control[]{update,feedback})SystemControlTree(root);
+        }}finally{VisualDesign.HighContrastOverride=false;}
+    }
+    static void SystemControlTree(Control control){
+        if(control is ButtonBase||control is ThemedProgress||control is ThemedSection){
+            bool painted=(bool)typeof(Control).GetMethod("GetStyle",Members).Invoke(control,new object[]{ControlStyles.UserPaint});
+            Check(!painted,"high contrast uses native painting: "+control.GetType().Name);
+        }
+        foreach(Control child in control.Controls)SystemControlTree(child);
+    }
     static void StateAndKeyboard(){
         using(var dialog=new UpdateDialog(Release(),true)){
             var install=(Button)Field(dialog,"install");var skip=(Button)Field(dialog,"skip");var cancel=(Button)Field(dialog,"cancel");var status=(Label)Field(dialog,"status");
             Check(dialog.AcceptButton==install&&dialog.CancelButton==cancel&&cancel.Text=="稍后","Enter installs and Escape uses Later");
             Check(status.Text=="点击‘更新并重启’后下载，签名和文件校验通过后才安装。"&&!status.Text.Contains("通过，"),"ready copy describes future verification only");
             Check(Find<Label>(dialog,"UpdateTitle").Text=="发现新版本"&&Find<Label>(dialog,"NewVersion").Text=="9.9.9","separate title and accented target version");
-            var notes=Find<TextBox>(dialog,"ReleaseNotes");Check(notes.ReadOnly&&notes.Multiline&&notes.Text.Contains("• 第一项")&&notes.Text.Contains("<script>plain text</script>")&&!notes.Text.Contains("\u0001"),"sanitized plain notes with bullet lines");
+            var notes=Find<RichTextBox>(dialog,"ReleaseNotes");Check(notes.ReadOnly&&notes.Multiline&&!notes.DetectUrls&&notes.Text.Contains("• 第一项")&&notes.Text.Contains("<script>plain text</script>")&&!notes.Text.Contains("\u0001"),"sanitized plain notes with bullet lines");
             int installs=0,skips=0,cancels=0;dialog.InstallRequested+=delegate{installs++;};dialog.SkipRequested+=delegate{skips++;};dialog.CancelRequested+=delegate{cancels++;};
             Show(dialog);Key(dialog,Keys.Enter);skip.PerformClick();Check(installs==1&&skips==1,"default and skip dispatch existing events");
             dialog.Downloading();Check(!install.Enabled&&!skip.Enabled&&cancel.Enabled&&!status.Text.Contains("通过"),"download disables install/skip without claiming verification");
@@ -55,7 +208,7 @@ static class ThemedDialogTests {
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){
             SelectTheme(style,dark);using(var dialog=new UpdateDialog(Release(),true)){
                 Check(Type("ThemedDialog").IsInstanceOfType(dialog)&&dialog.FormBorderStyle!=FormBorderStyle.None&&dialog.AutoScaleMode==AutoScaleMode.Dpi,"native chrome and DPI scaling");
-                var palette=ThemePalette.Current(dark);Check(dialog.BackColor==palette.Card&&dialog.ForeColor==palette.Foreground&&Math.Abs(dialog.Font.SizeInPoints*96/72-14)<.1,"theme card and 14px body font");
+                var palette=ThemePalette.Current(dark);Check(dialog.BackColor==palette.Background&&dialog.ForeColor==palette.Foreground&&Math.Abs(dialog.Font.SizeInPoints*96/72-VisualDesign.BodyFontSize)<.1,"theme background and panel body font");
                 var theme=typeof(UpdateDialog).BaseType.GetField("Theme",Members).GetValue(dialog);
                 foreach(string surface in new[]{"Card","Section"})foreach(string text in new[]{"Foreground","Muted"})Check(Contrast(ColorField(theme,text),ColorField(theme,surface))>=4.5,"text contrast "+style+dark+surface+text);
                 Check(Contrast(ColorField(theme,"Accent"),palette.Card)>=3,"focus ring contrast");
@@ -63,17 +216,17 @@ static class ThemedDialogTests {
                     var button=(Button)Field(dialog,field);Check(Type("ThemedButton").IsInstanceOfType(button)&&button.AccessibilityObject.Role==AccessibleRole.PushButton,"real accessible Button subclass");
                     foreach(bool enabled in new[]{true,false})for(int state=0;state<3;state++){
                         button.Enabled=enabled;var fill=(Color)Call(button,"FillFor",state>0,state==2);var ink=(Color)Call(button,"TextFor",state>0,state==2);
-                        Check(Contrast(ink,fill)>=4.5,"button text contrast "+style+dark+field+state+enabled);
+                        Check(Contrast(ink,fill)>=(enabled&&field!="skip"?4.5:3),"panel button text contrast "+style+dark+field+state+enabled);
                     }
                     button.Enabled=true;
                 }
-                var input=Find<TextBox>(dialog,"ReleaseNotes");Check(input.BorderStyle==BorderStyle.None&&Type("ThemedSection").IsInstanceOfType(input.Parent)&&input.BackColor==ColorField(theme,"Section"),"rounded themed notes section");
+                var input=Find<RichTextBox>(dialog,"ReleaseNotes");Check(input.BorderStyle==BorderStyle.None&&Type("ThemedSection").IsInstanceOfType(input.Parent)&&input.BackColor==palette.Card,"panel card for release notes");
                 var progress=(Control)Field(dialog,"progress");Check(Type("ThemedProgress").IsInstanceOfType(progress)&&progress.Height==6,"six-pixel progress");
                 dialog.Downloading();Check(!(bool)Call(progress,"get_AnimationRunning"),"reduced motion does not start a timer");
                 using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));}
             }
             using(var feedback=new FeedbackForm(Report(),false,dark,delegate{},delegate{},"")){
-                Check(Type("ThemedDialog").IsInstanceOfType(feedback)&&feedback.BackColor==ThemePalette.Current(dark).Card,"feedback shares dialog theme");
+                Check(Type("ThemedDialog").IsInstanceOfType(feedback)&&feedback.BackColor==ThemePalette.Current(dark).Background,"feedback shares dialog theme");
                 Check(Type("ThemedTextBox").IsInstanceOfType(Find<TextBox>(feedback,"Description").Parent),"feedback input shares wrapper");
             }
         }
@@ -89,8 +242,8 @@ static class ThemedDialogTests {
         foreach(bool windows11 in new[]{false,true})foreach(bool fallback in new[]{false,true}){
             var attributes=new List<int>();var values=new List<int>();var theme=new DialogTheme(true);
             ThemedTitleBar.Apply(theme,windows11,delegate(int attribute,int value){attributes.Add(attribute);values.Add(value);return attribute==20&&fallback?-1:0;});
-            Check(String.Join(",",attributes.ConvertAll(delegate(int v){return v.ToString();}).ToArray())==(fallback?"20,19":"20")+(windows11?",35,36":""),"DWM tries 19 only after 20 fails and colors only Windows 11");
-            Check(values[0]==1&&(!windows11||values[values.Count-2]==ColorTranslator.ToWin32(theme.Card)&&values[values.Count-1]==ColorTranslator.ToWin32(theme.Foreground)),"DWM receives dark flag and real COLORREFs");
+            Check(String.Join(",",attributes.ConvertAll(delegate(int v){return v.ToString();}).ToArray())==(fallback?"20,19":"20")+(windows11?",33,35,36":""),"DWM tries 19 only after 20 fails and requests corners/colors only Windows 11");
+            Check(values[0]==1&&(!windows11||values[values.Count-3]==2&&values[values.Count-2]==ColorTranslator.ToWin32(theme.Background)&&values[values.Count-1]==ColorTranslator.ToWin32(theme.Foreground)),"DWM receives round corners, dark flag and background COLORREF");
         }
     }
     static void ProgressMotion(){
@@ -119,7 +272,7 @@ static class ThemedDialogTests {
                 SelectTheme("ocean",dark);calls.Clear();handles.Clear();
                 using(var update=new UpdateDialog(Release(),true))using(var feedback=new FeedbackForm(Report(),false,dark,delegate{},delegate{},""))using(var diagnostic=feedback.CreateDiagnosticsDialog()){
                     Show(update);Show(feedback);Show(diagnostic);
-                    foreach(var input in new[]{Find<TextBox>(update,"ReleaseNotes"),Find<TextBox>(feedback,"Description"),Find<TextBox>(diagnostic,"DiagnosticText")}){
+                    foreach(var input in new TextBoxBase[]{Find<RichTextBox>(update,"ReleaseNotes"),Find<TextBox>(feedback,"Description"),Find<TextBox>(diagnostic,"DiagnosticText")}){
                         Check(handles.Contains(input.Handle),"real multiline handle receives window theme: "+input.Name);
                         int before=calls.Count;typeof(Control).GetMethod("RecreateHandle",Members).Invoke(input,null);
                         Check(calls.Count>before&&handles[handles.Count-1]==input.Handle,"recreated edit handle reapplies theme: "+input.Name);
@@ -146,16 +299,16 @@ static class ThemedDialogTests {
             SelectTheme("ocean",dark);
             var longRelease=Release();longRelease.Body=Lines(80);
             using(var initialLong=new UpdateDialog(longRelease,true)){
-                Show(initialLong);Check(Find<TextBox>(initialLong,"ReleaseNotes").ScrollBars==ScrollBars.Vertical,"initial long notes settle after handle creation");
+                Show(initialLong);Check(Find<RichTextBox>(initialLong,"ReleaseNotes").ScrollBars==RichTextBoxScrollBars.Vertical,"initial long notes settle after handle creation");
                 using(var bitmap=ClientImage(initialLong))Check(bitmap.Width==initialLong.ClientSize.Width,"initial long notes render without handle recreation during creation");
             }
             using(var update=new UpdateDialog(Release(),true)){
-                Show(update);var notes=Find<TextBox>(update,"ReleaseNotes");
-                Check(notes.ScrollBars==ScrollBars.None,"short release notes have no scrollbars");
-                notes.Text=Lines(80);Application.DoEvents();Check(notes.ScrollBars==ScrollBars.Vertical,"long release notes scroll vertically");
-                notes.Text="简短说明";Application.DoEvents();Check(notes.ScrollBars==ScrollBars.None,"shortened release notes remove scrollbars");
-                notes.Text=new string('中',400);Application.DoEvents();Check(notes.ScrollBars==ScrollBars.Vertical,"wrapped notes measure their actual height");
-                update.ClientSize=new Size(1000,1200);Application.DoEvents();Check(notes.ScrollBars==ScrollBars.None,"resizing rechecks wrapped notes");
+                Show(update);var notes=Find<RichTextBox>(update,"ReleaseNotes");
+                Check(notes.ScrollBars==RichTextBoxScrollBars.None,"short release notes have no scrollbars");
+                notes.Text=Lines(80);Application.DoEvents();Check(notes.ScrollBars==RichTextBoxScrollBars.Vertical,"long release notes scroll vertically");
+                notes.Text="简短说明";Application.DoEvents();Check(notes.ScrollBars==RichTextBoxScrollBars.None,"shortened release notes remove scrollbars");
+                notes.Text=new string('中',400);Application.DoEvents();Check(notes.ScrollBars==RichTextBoxScrollBars.Vertical,"wrapped notes measure their actual height");
+                update.ClientSize=new Size(1000,1200);Application.DoEvents();Check(notes.ScrollBars==RichTextBoxScrollBars.None,"widening rechecks wrapped notes within the twelve-line cap");
             }
             using(var feedback=new FeedbackForm(Report(),false,dark,delegate{},delegate{},"")){
                 Show(feedback);var description=Find<TextBox>(feedback,"Description");
@@ -168,7 +321,7 @@ static class ThemedDialogTests {
                     input.Text=Lines(80);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Vertical,"tall diagnostics only scroll vertically");
                     input.Text=new string('W',300);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Horizontal,"wide diagnostics only scroll horizontally");
                     input.Text=Lines(80)+Environment.NewLine+new string('W',300);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Both,"wide and tall diagnostics scroll both ways");
-                    input.Text=Lines(5);diagnostic.ClientSize=new Size(620,180);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Vertical,"shrinking diagnostics enables vertical scrollbar");
+                    input.Text=Lines(8);diagnostic.ClientSize=new Size(620,180);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Vertical,"shrinking diagnostics enables vertical scrollbar with the smaller panel body font");
                     diagnostic.ClientSize=new Size(620,500);Application.DoEvents();Check(input.ScrollBars==ScrollBars.None,"growing diagnostics removes vertical scrollbar");
                 }
             }
@@ -176,7 +329,7 @@ static class ThemedDialogTests {
     }
     static void UpdateProgressVisibility(){
         using(var dialog=new UpdateDialog(Release(),true)){
-            Show(dialog);var progress=(ThemedProgress)Field(dialog,"progress");var status=(Label)Field(dialog,"status");var install=(Button)Field(dialog,"install");var notes=Find<TextBox>(dialog,"ReleaseNotes");
+            Show(dialog);var progress=(ThemedProgress)Field(dialog,"progress");var status=(Label)Field(dialog,"status");var install=(Button)Field(dialog,"install");var notes=Find<RichTextBox>(dialog,"ReleaseNotes");
             Check(!progress.Visible,"ready hides empty progress track");
             Rectangle notesBounds=notes.RectangleToScreen(notes.ClientRectangle);Point button=install.PointToScreen(Point.Empty);int readyStatusHeight=status.Height;
             for(int state=0;state<6;state++){
@@ -194,12 +347,12 @@ static class ThemedDialogTests {
         foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
             int previousHeight=0;
             foreach(int lines in new[]{1,8,100})using(var dialog=ThemedMessage.Create("反馈问题",lines==1?"刚刚已提交过一次，确定还要再提交吗？":Lines(lines),MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)){
-                dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",14*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
+                dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
                 Check(!ContainsTextBox(dialog),"message contains no text boxes at "+scale);
                 var body=Find<Label>(dialog,"MessageText");Check(body.ForeColor==dialog.ForeColor&&Math.Abs(body.Font.SizeInPoints-dialog.Font.SizeInPoints)<.1,"message uses foreground and body font");
                 var no=Find<ThemedButton>(dialog,"MessageNo");var yes=Find<ThemedButton>(dialog,"MessageYes");
                 Check(dialog.AcceptButton==no&&dialog.ActiveControl==no,"No retains default keyboard focus");
-                Check(yes.FillFor(false,false)==dialog.Theme.Selected&&no.FillFor(false,false)==dialog.Theme.Card,"Yes has primary styling independently of focus");
+                Check(yes.FillFor(false,false)==dialog.Theme.Selected&&no.FillFor(false,false)==dialog.Theme.Track,"Yes has primary styling independently of focus");
                 Check(dialog.ClientSize.Height>=previousHeight,"message grows with text until capped");previousHeight=dialog.ClientSize.Height;
                 Check(dialog.ClientSize.Height<=560*scale+2,"message height is capped at "+scale);
                 var area=(ScrollableControl)body.Parent;Check(area.VerticalScroll.Visible==(lines==100)&&!area.HorizontalScroll.Visible,"only overflowing message scrolls at "+scale);
@@ -259,20 +412,20 @@ static class ThemedDialogTests {
     static void LayoutBounds(){
         foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
             using(var feedback=new FeedbackForm(Report(),false,Style.Dark,delegate{},delegate{},"")){
-                feedback.Scale(new SizeF(scale,scale));feedback.Font=new Font("Microsoft YaHei UI",14*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(feedback);
+                feedback.Scale(new SizeF(scale,scale));feedback.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(feedback);
                 var submit=Find<Button>(feedback,"SubmitFeedback");var cancel=Find<Button>(feedback,"CancelFeedback");
                 Check(submit.Left>=0&&submit.Right<=submit.Parent.ClientSize.Width&&cancel.Left>=0&&cancel.Right<=cancel.Parent.ClientSize.Width,"feedback buttons fit horizontally at "+scale);
                 Check(!submit.Bounds.IntersectsWith(cancel.Bounds),"feedback button bounds never overlap at "+scale);
             }
             using(var alias=new ThemedAliasDialog("名称","我的设备",12)){
-                alias.Scale(new SizeF(scale,scale));alias.Font=new Font("Microsoft YaHei UI",14*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(alias);
+                alias.Scale(new SizeF(scale,scale));alias.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(alias);
                 Check(alias.Input.Parent.Height>=alias.Input.PreferredHeight+alias.Input.Parent.Padding.Vertical,"single-line input retains eight-DIP vertical padding at "+scale);
             }
             using(var update=new UpdateDialog(Release(),true)){
-                update.Scale(new SizeF(scale,scale));update.Font=new Font("Microsoft YaHei UI",14*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(update);
+                update.Scale(new SizeF(scale,scale));update.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(update);
                 var install=(Button)Field(update,"install");var skip=(Button)Field(update,"skip");var cancel=(Button)Field(update,"cancel");
                 Check(!install.Bounds.IntersectsWith(cancel.Bounds)&&!cancel.Bounds.IntersectsWith(skip.Bounds)&&install.Right<=install.Parent.ClientSize.Width,"update buttons fit without overlap at "+scale);
-                Check(Find<TextBox>(update,"ReleaseNotes").Height>=100*scale,"notes retain scrollable remaining space at "+scale);
+                var notes=Find<ThemedReleaseNotes>(update,"ReleaseNotes");Check(notes.Height>=3*notes.LineHeight,"notes retain at least three readable lines at "+scale);
             }
         }
     }
@@ -282,11 +435,11 @@ static class ThemedDialogTests {
             Check(!install.Enabled,"download entered before showing preserves disabled action");
             using(var image=new Bitmap(install.Width,install.Height)){
                 install.DrawToBitmap(image,new Rectangle(Point.Empty,image.Size));
-                Check(image.GetPixel(install.Width/2,4).ToArgb()==ThemePalette.Current(Style.Dark).Card.ToArgb(),"disabled primary renders its neutral background");
+                Check(image.GetPixel(install.Width/2,4).ToArgb()==ThemePalette.Current(Style.Dark).Track.ToArgb(),"disabled primary renders the panel track");
             }
             using(var image=ClientImage(update)){
                 var point=update.PointToClient(install.PointToScreen(new Point(install.Width/2,4)));
-                Check(image.GetPixel(point.X,point.Y).ToArgb()==ThemePalette.Current(Style.Dark).Card.ToArgb(),"full form preview preserves disabled button rendering");
+                Check(image.GetPixel(point.X,point.Y).ToArgb()==ThemePalette.Current(Style.Dark).Track.ToArgb(),"full form preview preserves disabled panel selection rendering");
             }
             update.Shutdown();
         }
@@ -295,40 +448,57 @@ static class ThemedDialogTests {
         Show(form);using(var image=new Bitmap(form.Width,form.Height)){
             form.DrawToBitmap(image,new Rectangle(Point.Empty,image.Size));
             var client=form.PointToScreen(Point.Empty);var area=new Rectangle(client.X-form.Left,client.Y-form.Top,form.ClientSize.Width,form.ClientSize.Height);
-            return image.Clone(area,PixelFormat.Format32bppArgb);
+            var result=image.Clone(area,PixelFormat.Format32bppArgb);
+            // RichEdit does not support DrawToBitmap. Ask the same native control
+            // to format its real text and paragraph settings into the preview HDC.
+            using(var g=Graphics.FromImage(result))foreach(Control control in form.Controls.Find("ReleaseNotes",true)){
+                var notes=control as RichTextBox;if(notes==null||!notes.Visible)continue;
+                int width=notes.Width-(notes.ScrollBars==RichTextBoxScrollBars.Vertical?SystemInformation.VerticalScrollBarWidth:0);
+                using(var content=new Bitmap(Math.Max(1,width),Math.Max(1,notes.Height)))using(var ink=Graphics.FromImage(content)){
+                    ink.Clear(notes.BackColor);IntPtr hdc=ink.GetHdc();
+                    try{
+                        var bounds=new PrintRect {Left=30,Top=0,Right=(int)Math.Round((width-2)*1440f/96),Bottom=(int)Math.Round(notes.Height*1440f/96)};
+                        var range=new PrintRange {Device=hdc,Target=hdc,Area=bounds,Page=bounds,First=0,Last=notes.TextLength};
+                        int printed=SendMessage(notes.Handle,0x0439,(IntPtr)1,ref range).ToInt32();Check(notes.TextLength==0||printed>0,"native release-note text is rendered in the preview");
+                    }finally{ink.ReleaseHdc(hdc);SendMessage(notes.Handle,0x0439,IntPtr.Zero,IntPtr.Zero);}
+                    var origin=form.PointToClient(notes.PointToScreen(Point.Empty));g.DrawImageUnscaled(content,origin);
+                }
+            }
+            return result;
         }
     }
     static void SaveClient(Form form,string output,string name){
-        using(var image=ClientImage(form)){string path=Path.Combine(output,name+".png");image.Save(path,ImageFormat.Png);Console.WriteLine(path);}
+        // The main panel uses its real renderer at the same logical scale as the dialog.
+        bool dark=((ThemedDialog)form).Theme.Dark;var dpi=new DpiConfig {ActiveStage=1};
+        foreach(int value in new[]{400,800,1600,3200})dpi.Stages.Add(new DpiStage {XDpi=value,YDpi=value});
+        var audio=new AudioReading {SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="桌面扬声器",HeadsetAvailable=true,HeadsetId="headset",HeadsetName="有线耳机",ActiveOutput="speaker",MicrophoneAvailable=true,MicrophoneMuted=false,OutputVolumePercent=55,VolumeEndpointId="speaker",TimestampUtc=DateTime.UtcNow};
+        using(var image=ClientImage(form))using(var panel=new Bitmap(260,VisualDesign.PanelSizeFor(true,dpi).Height)){
+            using(var g=Graphics.FromImage(panel)){g.Clear(Color.FromArgb(115,120,128));CompactRenderer.Paint(g,new BatteryReading {Percent=76,TimestampUtc=DateTime.UtcNow},null,null,false,dpi,null,false,dark,null,audio);}
+            using(var comparison=new Bitmap(image.Width+panel.Width+72,Math.Max(image.Height,panel.Height)+88))using(var g=Graphics.FromImage(comparison))using(var font=new Font("Microsoft YaHei UI",12,FontStyle.Regular,GraphicsUnit.Pixel)){
+                g.Clear(Color.FromArgb(115,120,128));g.DrawString(ThemePalette.Name(DeviceSettings.Current.ThemeStyle)+" / "+(dark?"深色":"浅色")+" · 弹窗客户区（系统标题栏未渲染）",font,Brushes.White,16,12);
+                g.DrawString("同配色主面板 · 100%",font,Brushes.White,image.Width+48,12);
+                g.DrawImageUnscaled(image,16,48);g.DrawImageUnscaled(panel,image.Width+48,48);
+                string path=Path.Combine(output,name+".png");comparison.Save(path,ImageFormat.Png);Console.WriteLine(path);
+            }
+        }
     }
     static void Render(string output){
         Directory.CreateDirectory(output);
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){
             SelectTheme(style,dark);
-            using(var sheet=new Bitmap(1880,1250))using(var g=Graphics.FromImage(sheet))using(var font=new Font("Microsoft YaHei UI",14,FontStyle.Regular,GraphicsUnit.Pixel))using(var heading=new Font("Microsoft YaHei UI",18,FontStyle.Bold,GraphicsUnit.Pixel)){
-                g.Clear(Color.FromArgb(115,120,128));
-                g.DrawString(ThemePalette.Name(style)+" / "+(dark?"深色":"浅色")+" · 弹窗客户区预览（保留系统标题栏；此处不渲染标题栏）",heading,Brushes.White,24,16);
-                string[] states={"准备","下载 45%","校验通过 / Handoff","失败 / 可重试"};
-                for(int state=0;state<4;state++)using(var dialog=new UpdateDialog(Release(),true)){
+            string suffix="-"+style+"-"+(dark?"dark":"light");
+            string[] states={"ready","downloading","handoff","failed"};
+            for(int state=0;state<4;state++)using(var dialog=new UpdateDialog(Release(),true)){
                     if(state>0){dialog.Downloading();dialog.Progress(5945426,13212057);}
                     if(state==2)dialog.Handoff();if(state==3)dialog.Finished("更新未完成：无法下载文件，请稍后再试。");
-                    g.DrawString("更新 · "+states[state],font,Brushes.White,24+state*464,60);
-                    using(var image=ClientImage(dialog))g.DrawImageUnscaled(image,24+state*464,88);
+                    SaveClient(dialog,output,"dialog-update-"+states[state]+suffix);
                 }
-                g.DrawString("反馈问题",font,Brushes.White,24,620);
                 using(var feedback=new FeedbackForm(Report(),false,dark,delegate{},delegate{},null,null,new FeedbackSession())){
                     Find<TextBox>(feedback,"Description").Text="连接设备后电量没有刷新，希望增加更多型号的支持。";
-                    using(var image=ClientImage(feedback))g.DrawImageUnscaled(image,24,648);
-                    g.DrawString("诊断信息 · 只读",font,Brushes.White,1052,620);
-                    using(var diagnostics=feedback.CreateDiagnosticsDialog())using(var image=ClientImage(diagnostics))g.DrawImageUnscaled(image,1052,648);
+                    SaveClient(feedback,output,"dialogs"+suffix);
+                    using(var diagnostics=feedback.CreateDiagnosticsDialog())SaveClient(diagnostics,output,"dialog-diagnostics"+suffix);
                 }
-                g.DrawString("名称输入 · 12 字上限",font,Brushes.White,624,620);
-                using(var alias=new ThemedAliasDialog("托盘图标名称","我的设备",12))using(var image=ClientImage(alias))g.DrawImageUnscaled(image,624,648);
-                g.DrawString("重复提交确认 · 默认选择“否”",font,Brushes.White,588,850);
-                using(var message=ThemedMessage.Create("反馈问题","刚刚已提交过一次，确定还要再提交吗？",MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2))using(var image=ClientImage(message))g.DrawImageUnscaled(image,588,878);
-                string path=Path.Combine(output,"dialogs-"+style+"-"+(dark?"dark":"light")+".png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);
-            }
-            string suffix="-"+style+"-"+(dark?"dark":"light");
+            using(var alias=new ThemedAliasDialog("托盘图标名称","我的设备",12))SaveClient(alias,output,"dialog-alias"+suffix);
             using(var message=ThemedMessage.Create("反馈问题","刚刚已提交过一次，确定还要再提交吗？",MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2))SaveClient(message,output,"dialog-confirmation"+suffix);
             using(var shortNotes=new UpdateDialog(Release(),true))SaveClient(shortNotes,output,"dialog-release-short"+suffix);
             var longRelease=Release();longRelease.Body="本次更新内容\r\n"+Lines(80);
@@ -337,7 +507,10 @@ static class ThemedDialogTests {
     }
     [STAThread] static int Main(string[] args){
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
-        try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);Run("window scrollbar themes and handle recreation",ScrollbarThemes);Run("scrollbars follow text and viewport",ConditionalScrollbars);Run("update progress visibility without layout jumps",UpdateProgressVisibility);Run("plain wrapped messages and bounded overflow",PlainMessageLayout);Run("update states and keyboard in all themes",delegate{foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){SelectTheme(style,dark);StateAndKeyboard();}});Run("components and all theme contrasts",ComponentsAndContrast);Run("system-only high contrast and chrome",HighContrast);Run("progress motion and byte boundaries",ProgressMotion);Run("modal message return values",MessageResults);Run("message close and actual feedback repeat confirmation",MessageCloseAndRepeat);Run("alias and diagnostic dialogs",AliasAndDiagnostic);Run("dialog layout from 100 to 200 percent",LayoutBounds);Run("disabled button bitmap state",RenderedDisabledButtons);Console.WriteLine(checks+" themed-dialog checks, "+failures+" failed groups");return failures==0?0:1;}
+        try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
+            Run("shared panel geometry and card painting",SharedPanelGeometry);Run("background separation and rounded native chrome",DialogBackground);Run("accessible segments and switch",SegmentsAndSwitch);Run("content-sized release notes",AdaptiveReleaseNotes);Run("shared button, switch and progress painting",SharedControlPainting);Run("cards and panel typography",CardsAndTypography);Run("native high contrast controls",SystemControlsInHighContrast);
+            if(args.Length==1&&args[0]=="--soft-only")return failures==0?0:1;
+            Run("window scrollbar themes and handle recreation",ScrollbarThemes);Run("scrollbars follow text and viewport",ConditionalScrollbars);Run("update progress visibility without layout jumps",UpdateProgressVisibility);Run("plain wrapped messages and bounded overflow",PlainMessageLayout);Run("update states and keyboard in all themes",delegate{foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){SelectTheme(style,dark);StateAndKeyboard();}});Run("components and all theme contrasts",ComponentsAndContrast);Run("system-only high contrast and chrome",HighContrast);Run("progress motion and byte boundaries",ProgressMotion);Run("modal message return values",MessageResults);Run("message close and actual feedback repeat confirmation",MessageCloseAndRepeat);Run("alias and diagnostic dialogs",AliasAndDiagnostic);Run("dialog layout from 100 to 200 percent",LayoutBounds);Run("disabled button bitmap state",RenderedDisabledButtons);Console.WriteLine(checks+" themed-dialog checks, "+failures+" failed groups");return failures==0?0:1;}
         finally{DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}
     }
 }

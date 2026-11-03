@@ -129,6 +129,21 @@ static class UpdateTests {
     }
     static UpdateAsset Asset(string version,string name){return new UpdateAsset {Name=name,Size=100,Url="https://github.com/wushuai0802/myfinder-device-battery/releases/download/v"+version+"/"+name};}
     static UpdateRelease Release(string version,bool pre=false){return new UpdateRelease {Tag="v"+version,Prerelease=pre,Body="<script>bad()</script>\r\n[click](file:///C:/x)",Assets=new[]{Asset(version,UpdateTrust.ZipName(version)),Asset(version,"SHA256SUMS.txt"),Asset(version,"SHA256SUMS.txt.sig")}};}
+    static void PlainReleaseNotes(){
+        foreach(string text in new[]{"<script>bad()</script>\r\n[click](file:///C:/x)",@"{\rtf1\ansi\b This must remain literal RTF text\b0}","https://example.invalid/\r\nfile:///C:/x\r\n[click](javascript:bad())"}){
+            var release=Release("1.3.6");release.Body=text;
+            using(var dialog=new UpdateDialog(release,true)){
+                // The visual brief requires 1.4x line spacing. Both native edit
+                // types must preserve the same read-only, plain-text contract.
+                var notes=dialog.Controls.Find("ReleaseNotes",true).Single() as TextBoxBase;
+                Check(notes!=null&&notes.ReadOnly&&notes.Multiline,"release notes use a read-only native multiline text control");
+                dialog.Opacity=0;dialog.ShowInTaskbar=false;dialog.Show();Application.DoEvents();
+                Check(notes.Text.Replace("\r\n","\n")==text.Replace("\r\n","\n"),"HTML, RTF and URL release notes remain literal text after native handle creation");
+                var rich=notes as RichTextBox;
+                Check(rich==null||!rich.DetectUrls,"release notes do not generate active links");
+            }
+        }
+    }
     static string Hash(byte[] bytes){using(var sha=SHA256.Create())return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-","").ToLowerInvariant();}
     static byte[] Zip(string version,string app="myfinder-device-battery",string extra=null,bool badHash=false,int attributes=0){
         var files=new Dictionary<string,byte[]>();
@@ -255,8 +270,9 @@ static class UpdateTests {
             string receiptV2=marker.Replace("\"Schema\":1","\"Schema\":2");receiptV2=receiptV2.Substring(0,receiptV2.Length-1)+",\"Files\":[{\"path\":\"outputs/AtkMouseBattery.exe\",\"sha256\":\""+new string('0',64)+"\"}]}";
             File.WriteAllText(Path.Combine(portableData,"install.json"),receiptV2,new UTF8Encoding(true));
             Check(new UpdateProcess(portableExe,portableData).IsStable(CancellationToken.None),"stable decision reuses real installer with BOM and case-insensitive receipt");
+            PlainReleaseNotes();
             using(var dialog=new UpdateDialog(Release("1.3.6"),true)){
-                var notes=dialog.Controls.Find("ReleaseNotes",true).Single() as TextBox;Check(notes!=null&&notes.ReadOnly&&notes.Multiline&&notes.Text.Contains("<script>bad()</script>"),"malicious release notes shown by plain TextBox");
+                var notes=dialog.Controls.Find("ReleaseNotes",true).Single() as TextBoxBase;Check(notes!=null&&notes.ReadOnly&&notes.Multiline&&notes.Text.Contains("<script>bad()</script>"),"malicious release notes shown as literal text by a native edit control");
                 dialog.Opacity=0;dialog.ShowInTaskbar=false;dialog.Show();Application.DoEvents();
                 using(var image=new System.Drawing.Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(image,new System.Drawing.Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(Path.GetFullPath(args[0]),"update-dialog.png"));}
                 dialog.Close();

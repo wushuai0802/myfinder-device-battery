@@ -10,6 +10,9 @@ namespace AtkBatteryTray {
         internal static bool? HighContrastOverride=null;
         public static bool HighContrast {get{return HighContrastOverride??System.Windows.Forms.SystemInformation.HighContrast;}}
         public const int CardGap=8,GenericCardHeight=60;
+        internal const int SelectionHeight=30,VolumeTrackHeight=6;
+        internal const float SelectionRadius=7,VolumeTrackRadius=3,DeviceNameFontSize=11.5f,SubtitleFontSize=11,BodyFontSize=12;
+        internal const float ToggleWidth=30,ToggleHeight=18,ToggleKnobSize=14,ToggleInset=2;
         public const int SystemVolumeHeight=48;
         public static int SystemVolumeHeightFor(bool collapsed){return collapsed?32:SystemVolumeHeight;}
         public static int CurrentSystemVolumeHeight {get{return SystemVolumeHeightFor(DeviceSettings.Current.VolumeCollapsed);}}
@@ -46,13 +49,13 @@ namespace AtkBatteryTray {
         public static RectangleF SpeakerOutputRect {get{return SpeakerOutputRectFor(null);}}
         public static RectangleF HeadsetOutputRect {get{return HeadsetOutputRectFor(null);}}
         public static RectangleF MicrophoneMuteRect {get{return MicrophoneMuteRectFor(null);}}
-        public static RectangleF SpeakerOutputRectFor(DpiConfig dpi){return new RectangleF(11,MouseCardHeight(dpi)+63,86,30);}
-        public static RectangleF HeadsetOutputRectFor(DpiConfig dpi){return new RectangleF(99,MouseCardHeight(dpi)+63,86,30);}
-        public static RectangleF MicrophoneMuteRectFor(DpiConfig dpi){return new RectangleF(191,MouseCardHeight(dpi)+63,58,30);}
+        public static RectangleF SpeakerOutputRectFor(DpiConfig dpi){return new RectangleF(11,MouseCardHeight(dpi)+63,86,SelectionHeight);}
+        public static RectangleF HeadsetOutputRectFor(DpiConfig dpi){return new RectangleF(99,MouseCardHeight(dpi)+63,86,SelectionHeight);}
+        public static RectangleF MicrophoneMuteRectFor(DpiConfig dpi){return new RectangleF(191,MouseCardHeight(dpi)+63,58,SelectionHeight);}
         public static RectangleF StageRect(int index,int count) {
             count=Math.Max(1,Math.Min(8,count));int columns=Math.Min(4,count),column=index%columns,row=index/columns;
             float width=(236-(columns-1)*2f)/columns;
-            return new RectangleF(12+column*(width+2),55+row*30,width,count>4?28:30);
+            return new RectangleF(12+column*(width+2),55+row*SelectionHeight,width,count>4?28:SelectionHeight);
         }
         public static Bitmap Tray(int? percent,bool charge,bool dark,bool stale){return TrayGlyph.Render(percent,charge,dark,stale,32);}
         public static Bitmap Tray(int? percent,bool charge,bool dark,bool stale,int size){return TrayGlyph.Render(percent,charge,dark,stale,size);}

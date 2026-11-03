@@ -75,16 +75,16 @@ namespace AtkBatteryTray {
             }
             g.Restore(state);
         }
-        static void Fill(Graphics g,RectangleF rect,Color color,float radius) {
+        internal static void Fill(Graphics g,RectangleF rect,Color color,float radius) {
             using(var path=VisualDesign.RoundRect(rect.X,rect.Y,rect.Width,rect.Height,radius))using(var brush=new SolidBrush(color))g.FillPath(brush,path);
         }
-        static void Outline(Graphics g,RectangleF rect,Color color,float width) {
-            using(var path=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1,7))using(var pen=new Pen(color,width))g.DrawPath(pen,path);
+        internal static void Outline(Graphics g,RectangleF rect,Color color,float width) {
+            using(var path=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1,rect.Height-1,VisualDesign.SelectionRadius))using(var pen=new Pen(color,width))g.DrawPath(pen,path);
         }
-        static void Highlight(Graphics g,RectangleF rect,int id,PanelFeedback feedback,bool dark) {
+        internal static void Highlight(Graphics g,RectangleF rect,int id,PanelFeedback feedback,bool dark) {
             if(feedback!=null&&(feedback.HoverAction==id||feedback.PressedAction==id)) {
                 if(VisualDesign.HighContrast)Outline(g,rect,Blue(dark),feedback.PressedAction==id?2:1);
-                else {Fill(g,rect,ThemePalette.Current(dark).Interaction(feedback.PressedAction==id),7);Outline(g,rect,Blue(dark),1);}
+                else {Fill(g,rect,ThemePalette.Current(dark).Interaction(feedback.PressedAction==id),VisualDesign.SelectionRadius);Outline(g,rect,Blue(dark),1);}
             }
         }
         static void Meter(Graphics g,BatteryView view,float top,bool dark,PanelFeedback feedback,int action) {
@@ -106,21 +106,26 @@ namespace AtkBatteryTray {
             Fill(g,new RectangleF(11,top+13,22,27),ThemePalette.Current(dark).IconFill,7);
             DrawSymbol(g,icon,new RectangleF(15,top+17,14,19),Fg(dark));
             bool reveal=feedback!=null&&(feedback.HoverAction==action||feedback.KeyboardFocus==action);
-            DrawLabel(g,name,new RectangleF(38,top+8,reveal?111:125,20),11.5f,true,Fg(dark),StringAlignment.Near);
+            DrawLabel(g,name,new RectangleF(38,top+8,reveal?111:125,20),VisualDesign.DeviceNameFontSize,true,Fg(dark),StringAlignment.Near);
             if(reveal)DrawSymbol(g,"chevron",new RectangleF(151,top+14,7,10),Muted(dark));
-            DrawLabel(g,subtitle,new RectangleF(38,top+28,123,19),11,false,Muted(dark),StringAlignment.Near);
+            DrawLabel(g,subtitle,new RectangleF(38,top+28,123,19),VisualDesign.SubtitleFontSize,false,Muted(dark),StringAlignment.Near);
         }
-        static void Selection(Graphics g,RectangleF rect,string label,string icon,bool selected,bool enabled,bool hovered,bool pressed,bool pending,bool dark) {
-            if(selected&&!enabled)Fill(g,rect,Track(dark),7);
-            else if(selected)Fill(g,rect,ThemePalette.Current(dark).Selected,7);
-            else if(enabled&&(hovered||pressed)){Fill(g,rect,ThemePalette.Current(dark).Interaction(pressed),7);Outline(g,rect,Blue(dark),1);}
+        internal static void Selection(Graphics g,RectangleF rect,string label,string icon,bool selected,bool enabled,bool hovered,bool pressed,bool pending,bool dark) {
+            if(selected&&!enabled)Fill(g,rect,Track(dark),VisualDesign.SelectionRadius);
+            else if(selected)Fill(g,rect,ThemePalette.Current(dark).Selected,VisualDesign.SelectionRadius);
+            else if(enabled&&(hovered||pressed))Highlight(g,rect,0,new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1},dark);
             if(enabled&&pending&&!selected)Outline(g,rect,Blue(dark),1.2f);
             Color color=!enabled?Muted(dark):selected||VisualDesign.HighContrast&&(hovered||pressed)?PopupPages.SelectedForeground(dark):Fg(dark);
             if(!String.IsNullOrEmpty(icon)) {
                 float width=label.Length*11+18;float x=rect.X+(rect.Width-width)/2;
                 DrawSymbol(g,icon,new RectangleF(x,rect.Y+(rect.Height-13)/2,13,13),color);
                 DrawLabel(g,label,new RectangleF(x+17,rect.Y,rect.Right-x-18,rect.Height),11,false,color,StringAlignment.Near);
-            }else DrawLabel(g,label,rect,11.5f,selected,color,StringAlignment.Center);
+            }else DrawLabel(g,label,rect,VisualDesign.DeviceNameFontSize,selected,color,StringAlignment.Center);
+        }
+        internal static void DrawVolumeTrack(Graphics g,RectangleF meter,bool dark,float fraction,float start=0,Color? fill=null) {
+            Fill(g,meter,Track(dark),VisualDesign.VolumeTrackRadius);
+            float width=meter.Width*Math.Max(0,Math.Min(1,fraction));
+            if(width>0)Fill(g,new RectangleF(meter.X+meter.Width*start,meter.Y,width,meter.Height),fill??Blue(dark),Math.Min(VisualDesign.VolumeTrackRadius,width/2));
         }
         internal static void SystemVolume(Graphics g,RectangleF rect,AudioReading audio,bool dark,PanelFeedback feedback) {
             bool collapsed=DeviceSettings.Current.VolumeCollapsed;
@@ -154,10 +159,9 @@ namespace AtkBatteryTray {
             string label="系统音量 · "+(enabled&&preview>=0?"待应用 · ":"")+endpoint;
             DrawLabel(g,label,new RectangleF(slider.X+11,slider.Y+2,slider.Width-64,23),11,false,enabled?Fg(dark):Muted(dark),StringAlignment.Near);
             DrawLabel(g,value.HasValue?value+"%":"--",new RectangleF(slider.Right-49,slider.Y+2,38,23),11,false,enabled?Fg(dark):Muted(dark),StringAlignment.Far);
-            var meter=PopupPages.VolumeTrack(slider);Fill(g,meter,Track(dark),3);
+            var meter=PopupPages.VolumeTrack(slider);DrawVolumeTrack(g,meter,dark,value.GetValueOrDefault()/100f);
             if(value.HasValue) {
                 float width=meter.Width*value.Value/100f;
-                if(width>0)Fill(g,new RectangleF(meter.X,meter.Y,width,meter.Height),Blue(dark),Math.Min(3,width/2));
                 float x=meter.X+width;
                 float diameter=feedback!=null&&(feedback.HoverAction==240||feedback.PressedAction==240)?14:12;
                 var knob=new RectangleF(x-diameter/2,meter.Y+meter.Height/2-diameter/2,diameter,diameter);
