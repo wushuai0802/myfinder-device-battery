@@ -65,6 +65,8 @@ static class UiMenusTests {
                             shown=true;Check(form.SelectedCategory==category,"entry selects the correct feedback type");
                             Check((bool)Field(Popup,"ignoreDeactivate"),"the panel keeps its modal deactivation guard");
                             Check(Copied==beforeCopy&&Opened==beforeOpen,"opening feedback does not copy or open a browser");
+                            // Explicitly inject the empty relay so this fallback test stays offline.
+                            Set(form,"relay","");Set(Field(form,"client"),"relay","");
                             ((TextBox)form.Controls.Find("Description",true)[0]).Text="设备连接以后没有显示";
                             ((Button)form.Controls.Find("SubmitFeedback",true)[0]).PerformClick();
                             Check(Copied.StartsWith("类型："+FeedbackInput.CategoryLabel(category))&&Copied.Contains(Owner.CreateFeedbackReport().FullText),"browser fallback retains category and full sanitized diagnostics");
@@ -112,7 +114,7 @@ static class UiMenusTests {
             Check(!rows.Exists(delegate(PopupControl row){return row.Text=="当前状态";}),"more-options help omits an empty-state reason when devices are visible");
             Check(Texts(rows)=="请确认接收器已插好，设备已开机并唤醒|重新识别设备|查看支持清单|复制诊断摘要|反馈问题|反馈不代表一定能适配","help rows use the exact copy and order");
             var feedback=rows.Find(delegate(PopupControl row){return row.Text=="反馈问题";});
-            Check(feedback.Id==258&&feedback.Detail=="提交需要 GitHub 账号","help shares feedback action 258 and the empty-relay account description");
+            Check(feedback.Id==258&&feedback.Detail=="在程序内提交，不需要 GitHub 账号","help shares feedback action 258 and the configured-relay description");
             Check(rows[1].Information&&rows[6].Information,"help explanations are static text");
             int reads=f.Reads;f.Activate(f.Find("重新识别设备"));Pump(delegate{return !f.Owner.IsRefreshing;});
             Check(f.Reads>reads&&f.Find("重新识别设备").Id==0,"help rediscovery routes through the existing sync-all action");

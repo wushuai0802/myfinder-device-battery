@@ -33,17 +33,30 @@ static class FeedbackFormTests {
         return new FeedbackForm(Report(),false,false,copy??delegate{},open??delegate{},relay,http,session??new FeedbackSession(),confirm??delegate{return true;});
     }
     static void Show(FeedbackForm form){form.Opacity=0;form.Show();Application.DoEvents();Find<TextBox>(form,"Description").Text="设备连接后没有显示电量";}
+    static void RelayConfiguration(){
+        var uri=new Uri(FeedbackRelay.Url,UriKind.Absolute);
+        Check(uri.Scheme==Uri.UriSchemeHttps,"shipped relay uses HTTPS");
+        Check(uri.Host=="myfinder-feedback-relay.wushuai0802.deno.net","shipped relay uses the deployed host");
+        Check(FeedbackRelay.Url=="https://myfinder-feedback-relay.wushuai0802.deno.net","shipped relay is the exact base URL without a trailing slash");
+        Check(FeedbackRelay.Endpoint(FeedbackRelay.Url).AbsoluteUri==FeedbackRelay.Url+"/feedback","shipped relay builds the feedback endpoint");
+        var http=new FakeHttp();using(var form=Form(http,null)){
+            Show(form);var submit=Find<Button>(form,"SubmitFeedback");
+            Check(submit.Text=="提交"&&Find<Label>(form,"FeedbackNotice").Text.Contains("公开显示在 GitHub"),"default form offers in-app submission with the public issue notice");
+            submit.PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="已提交，编号 #42";});
+            Check(http.Calls==1&&http.Uri.AbsoluteUri==FeedbackRelay.Url+"/feedback","default form sends once to the shipped endpoint through fake HTTP");form.Close();
+        }
+    }
     static void Validation(){
-        Check(FeedbackRelay.Url=="","shipped relay is empty");
         Check(FeedbackInput.DefaultCategory(true)=="device"&&FeedbackInput.DefaultCategory(false)=="other","two entry defaults");
         string[] ids={"device","battery","ui","other"},labels={"设备不识别","电量或 DPI 不对","界面或操作","其他"};
         for(int i=0;i<ids.Length;i++){Check(FeedbackInput.CategoryAt(i)==ids[i],"category mapping "+i);Check(FeedbackInput.CategoryLabel(ids[i])==labels[i],"category label "+i);}
         foreach(string text in new[]{null,""," \r\n\t ","1234"," 1234 ",new string('中',2001)})Check(!FeedbackInput.Valid("other",text),"invalid trimmed length");
         foreach(string text in new[]{"12345"," \r\n12345\t ",new string('中',2000)})Check(FeedbackInput.Valid("device",text),"valid trimmed boundary");
         Check(!FeedbackInput.Valid("invented","12345"),"unknown category rejected");
-        foreach(bool missing in new[]{false,true})using(var form=new FeedbackForm(Report(),missing,false,delegate{},delegate{})){
+        foreach(bool missing in new[]{false,true})using(var form=new FeedbackForm(Report(),missing,false,delegate{},delegate{},"")){
             Check(form.SelectedCategory==FeedbackInput.DefaultCategory(missing),"actual radio default");Check(form.Text=="反馈问题"&&!form.ShowInTaskbar&&form.AutoScaleMode==AutoScaleMode.Dpi,"modal/DPI window properties");
             Check(Find<CheckBox>(form,"IncludeDiagnostics").Checked,"diagnostics checked by default");
+            Check(Find<Label>(form,"FeedbackNotice").Text=="将打开 GitHub 提交，需要 GitHub 账号","explicit empty relay retains the browser account notice");
             var submit=Find<Button>(form,"SubmitFeedback");var input=Find<TextBox>(form,"Description");Check(!submit.Enabled&&submit.Text=="在浏览器中提交","initial invalid description disables browser submission");
             input.Text=" 12345 ";Check(submit.Enabled&&Find<Label>(form,"FeedbackRemaining").Text.Contains("1995"),"trimmed remaining count");
             input.Text=new string('中',2001);Check(!submit.Enabled&&Find<Label>(form,"FeedbackRemaining").Text.Contains("超出 1"),"over-limit input stays visible and disabled");
@@ -187,7 +200,7 @@ static class FeedbackFormTests {
     }
     [STAThread] static int Main(string[] args){
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
-        Run("validation and defaults",Validation);Run("exact payload and HTTP policy",PayloadAndPolicy);Run("HTTP failure boundaries",Failures);Run("cancellation during send and read",Cancellation);Run("browser fallback",BrowserFallback);Run("success and repeat confirmation",SuccessAndRepeat);Run("diagnostic preview and DPI bounds",delegate{PreviewAndLayout(args.Length>0?args[0]:null);});
+        Run("shipped relay configuration",RelayConfiguration);Run("validation and defaults",Validation);Run("exact payload and HTTP policy",PayloadAndPolicy);Run("HTTP failure boundaries",Failures);Run("cancellation during send and read",Cancellation);Run("browser fallback",BrowserFallback);Run("success and repeat confirmation",SuccessAndRepeat);Run("diagnostic preview and DPI bounds",delegate{PreviewAndLayout(args.Length>0?args[0]:null);});
         Console.WriteLine(checks+" feedback checks, "+failures+" failed groups; no network or real clipboard/browser/configuration");return failures==0?0:1;
     }
 }

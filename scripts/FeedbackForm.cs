@@ -12,7 +12,7 @@ using AtkBattery;
 
 namespace AtkBattery {
     internal static class FeedbackRelay {
-        internal const string Url="";
+        internal const string Url="https://myfinder-feedback-relay.wushuai0802.deno.net";
         internal static void ValidateUri(Uri uri){
             if(uri==null||!uri.IsAbsoluteUri||uri.Scheme!=Uri.UriSchemeHttps||uri.UserInfo.Length!=0||uri.Query.Length!=0||uri.Fragment.Length!=0)throw new ArgumentException("Invalid feedback relay URL.");
         }
