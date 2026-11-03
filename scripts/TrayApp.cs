@@ -935,8 +935,8 @@ namespace AtkBatteryTray {
             if(earliest!=DateTime.MaxValue){expiryTimer.Interval=Math.Max(250,Math.Min(91000,(int)(earliest-now).TotalMilliseconds));expiryTimer.Start();}
         }
         TrayView WirelessTray(string source) {
-            var pref=DeviceSettings.Current;var available=TrayCandidates(pref.TrayGroups.Count>0);
-            available.RemoveAll(delegate(WirelessCard card){return TrayConfiguration.Owner(pref,card.Id)!=TrayConfiguration.FirstId;});
+            var pref=DeviceSettings.Current;var available=TrayCandidates(true);
+            available.RemoveAll(delegate(WirelessCard card){return TrayConfiguration.Owner(pref,card.Id)!=TrayConfiguration.FirstId||card.Hidden&&card.Id!=pref.TrayDeviceId;});
             var selected=TraySelection.Select(available,source,pref.TrayDeviceId,activePhysicalId,activeNative,trayDeviceKey);
             trayDeviceKey=selected==null?null:selected.Id;
             return TraySelection.Present(available,selected,pref.TrayGroups.Count>0?TrayConfiguration.FirstName:null);
@@ -1196,7 +1196,7 @@ namespace AtkBatteryTray {
         }
         public string DiagnosticSummary() {
             var now=DateTime.UtcNow;var mouse=UiState.Mouse(Current,LastGood,now);var headset=UiState.Headset(Headset,now);
-            var text="MyFinder Device Battery "+AppRuntime.Version+"\r\n当前实例："+processId+" / "+processStartedAtUtc.ToString("o")+"\r\n诊断写入："+StorageHealthText+"\r\n鼠标："+mouse.Tooltip+"\r\n耳机："+headset.Tooltip+
+            var text="MyFinder Device Battery "+AppRuntime.Version+"\r\nWindows "+WindowsVersion.Read()+"\r\n当前实例："+processId+" / "+processStartedAtUtc.ToString("o")+"\r\n诊断写入："+StorageHealthText+"\r\n鼠标："+mouse.Tooltip+"\r\n耳机："+headset.Tooltip+
                 "\r\n耳机无线："+(ShowHeadset(Headset,Audio)?"已确认连接":"未确认连接")+"\r\n音源："+(Audio==null?"未确认":Audio.ActiveOutput)+
                 "\r\n后台间隔："+DeviceSettings.Current.BackgroundSeconds+"秒\r\n自启："+PopupPages.StartupState();
             text+="\r\n软件更新："+UpdateStatus;if(!String.IsNullOrEmpty(UpdateFailure))text+="\r\n上次更新失败："+UpdateFailure;
@@ -1226,7 +1226,7 @@ namespace AtkBatteryTray {
                 privateValues.AddRange(new[]{Audio.SpeakerName,Audio.HeadsetName,Audio.MicrophoneName,Audio.SpeakerId,Audio.HeadsetId,Audio.MicrophoneId,Audio.ConsoleOutputId,Audio.MultimediaOutputId,Audio.CommunicationsOutputId,Audio.VolumeEndpointId});
                 foreach(var device in Audio.Devices??new AudioDeviceChoice[0])if(device!=null){privateValues.Add(device.Name);privateValues.Add(device.Id);}
             }
-            return new FeedbackReport(AppRuntime.Version,Environment.OSVersion.Version.ToString(),cards,suppressedDevices,unadaptedDevices,GenericHealth,privateValues);
+            return new FeedbackReport(AppRuntime.Version,WindowsVersion.Read(),cards,suppressedDevices,unadaptedDevices,GenericHealth,privateValues);
         }
         internal string OpenFeedback(Action<string> copy=null,Action<string> open=null){
             var report=CreateFeedbackReport();

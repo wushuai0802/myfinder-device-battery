@@ -128,7 +128,12 @@ static class PopupStateRegressionTests {
             DeviceSettings.SetDeviceHidden(pref,c.Id,true);DeviceSettings.UseTransientConfiguration(pref);owner.ConfigurationChanged(false);layout=WirelessLayout.Build(owner,0,1000);
             var managed=WirelessLayout.Build(owner,0,1000,true);
             Check(layout.All.Count==2&&layout.All[0].Id==a.Id&&managed.All.Count==3&&managed.All[0].Hidden,"hidden devices leave the primary layout and stay restorable in management");
-            Check(Present(owner,"auto").Battery.Name!=c.Name&&owner.WirelessDevices==original&&owner.WirelessDevices[2]==c&&c.Fresh,"hiding a pinned device falls back without altering discovery state or reading evidence");
+            Check(Present(owner,"auto").Battery.Name==c.Name,"a hidden device remains selected when explicitly pinned in the first group");
+            Check(owner.WirelessDevices==original&&owner.WirelessDevices[2]==c&&c.Fresh&&c.Percent==50&&DeviceSettings.Current.TrayDeviceId==c.Id,"hiding a pinned device preserves discovery state, reading evidence and the pin");
+            pref.TrayDeviceId=null;DeviceSettings.UseTransientConfiguration(pref);owner.ConfigurationChanged(false);
+            Check(Present(owner,"lowest").Battery.Name==b.Name,"clearing the pin excludes the hidden lower-battery device from automatic selection");
+            pref.TrayDeviceId=c.Id;DeviceSettings.UseTransientConfiguration(pref);owner.ConfigurationChanged(false);
+            Check(Present(owner,"auto").Battery.Name==c.Name,"pinning the hidden device again restores it to first-group selection");
             var nav=new PopupNavigation {Page=PopupPage.Devices,VisibleChoices=2};var before=PopupPages.Build(owner,nav,false);var target=before.Find(delegate(PopupControl row){return row.DeviceKey==a.Id&&row.ActionKey=="manage";});
             DeviceSettings.MoveDevice(pref,a.Id,0,new[]{c.Id,a.Id,b.Id});DeviceSettings.UseTransientConfiguration(pref);var after=PopupPages.Build(owner,nav,false);var same=PopupPages.FindStable(after,target.StableKey);
             Check(same!=null&&same.Id!=target.Id&&PopupPages.SameAction(target,same),"management focus and action identity follow a device when its numeric row changes");

@@ -426,18 +426,18 @@ static class ThemeTests {
         }
     }
     static void RenderTrayIcons(){
-        int?[] levels={0,15,46,80,100,null,46,46};string[] labels={"0%","15%","46%","80%","100%","无读数","充电","历史"};
+        int?[] levels={0,1,15,46,80,100,null,46,46};string[] labels={"0%","1%","15%","46%","80%","100%","无读数","充电","历史"};
         string[] kinds={"mouse","keyboard","headset","device"};
-        using(var sheet=new Bitmap(1408,1088,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(sheet)){
+        using(var sheet=new Bitmap(180+levels.Length*152+12,1088,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(sheet)){
             g.Clear(Color.FromArgb(115,120,128));
-            CompactRenderer.DrawLabel(g,"托盘图标 / 原生像素尺寸；设备图标依次为鼠标、键盘、耳机、通用设备",new RectangleF(12,4,1384,28),15,true,Color.White,StringAlignment.Near);
-            for(int state=0;state<8;state++)CompactRenderer.DrawLabel(g,labels[state],new RectangleF(180+state*152,32,152,24),13,true,Color.White,StringAlignment.Center);
+            CompactRenderer.DrawLabel(g,"托盘图标 / 原生像素尺寸；设备图标依次为鼠标、键盘、耳机、通用设备；1% 检查最小填充",new RectangleF(12,4,sheet.Width-24,28),15,true,Color.White,StringAlignment.Near);
+            for(int state=0;state<levels.Length;state++)CompactRenderer.DrawLabel(g,labels[state],new RectangleF(180+state*152,32,152,24),13,true,Color.White,StringAlignment.Center);
             int row=0;foreach(bool dark in new[]{false,true})foreach(string style in new[]{"number","device"})foreach(int size in new[]{16,20,24,32}){
                 int y=60+row++*64;Color background=dark?Color.FromArgb(32,32,32):Color.FromArgb(243,243,243);using(var brush=new SolidBrush(background))g.FillRectangle(brush,0,y,sheet.Width,64);
                 CompactRenderer.DrawLabel(g,(dark?"深色":"浅色")+" / "+(style=="number"?"数字":"设备")+" / "+size+"px",new RectangleF(10,y,164,64),13,false,dark?Color.White:Color.Black,StringAlignment.Near);
-                for(int state=0;state<8;state++){
+                for(int state=0;state<levels.Length;state++){
                     int count=style=="device"?4:1;float start=180+state*152+(152-(count*size+(count-1)*4))/2f;
-                    for(int kind=0;kind<count;kind++)using(var bitmap=style=="device"?TrayGlyph.RenderDevice(levels[state],state==6,dark,state==7,size,kinds[kind]):TrayGlyph.Render(levels[state],state==6,dark,state==7,size))g.DrawImageUnscaled(bitmap,(int)start+kind*(size+4),y+(64-size)/2);
+                    for(int kind=0;kind<count;kind++)using(var bitmap=style=="device"?TrayGlyph.RenderDevice(levels[state],state==7,dark,state==8,size,kinds[kind]):TrayGlyph.Render(levels[state],state==7,dark,state==8,size))g.DrawImageUnscaled(bitmap,(int)start+kind*(size+4),y+(64-size)/2);
                 }
             }
             string path=Path.Combine(output,"tray-icons.png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);

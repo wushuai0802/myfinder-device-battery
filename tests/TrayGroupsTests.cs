@@ -177,6 +177,38 @@ static class TrayGroupsTests {
             var menu=first.ContextMenuStrip;pref=DeviceSettings.Current;TrayConfiguration.Remove(pref,group.Id);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);Check(first.ContextMenuStrip==menu&&!menu.IsDisposed&&icons.First==original,"removing a real extra NotifyIcon preserves the original icon and shared menu");
         }
     }
+    static void HiddenCandidates(bool extraGroups){
+        using(var f=new Fixture()){
+            var hidden=Device("hidden");hidden.Percent=1;
+            f.Owner.WirelessDevices=Append(f.Owner.WirelessDevices,hidden);
+            var pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add(hidden.Id);pref.TraySource="lowest";
+            TrayGroup group=null;if(extraGroups){group=TrayConfiguration.Add(pref);TrayConfiguration.Move(pref,"headset",group.Id);}
+            DeviceSettings.UseTransientConfiguration(pref);
+            foreach(string source in new[]{"lowest","auto","active","mouse","keyboard","headset"}){
+                var view=(TrayView)Call(f.Owner,"WirelessTray",source);
+                Check(!view.Tooltip.Contains("hidden")&&view.Battery.Percent==65,"hidden device is excluded from first-group automatic rule "+source+" with extra groups="+extraGroups);
+            }
+            pref.TrayDeviceId=hidden.Id;DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+            var first=(NotifyIcon)Field(f.Owner,"tray");
+            Check(first.Text.Contains("hidden 1%"),"a first-group pin displays a hidden device with extra groups="+extraGroups);
+            pref.TrayDeviceId=null;DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+            Check(!first.Text.Contains("hidden"),"clearing the pin excludes the hidden device again with extra groups="+extraGroups);
+            pref.HiddenDeviceIds.Add("mouse");pref.HiddenDeviceIds.Add("keyboard");pref.HiddenDeviceIds.Add("headset");DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+            Check(((TrayView)Call(f.Owner,"WirelessTray","lowest")).Battery.Percent==null,"all hidden devices leave first-group automatic selection empty with extra groups="+extraGroups);
+            pref.TrayDeviceId=hidden.Id;DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+            Check(first.Text.Contains("hidden 1%"),"the pin remains visible when every device is hidden with extra groups="+extraGroups);
+            if(group!=null){
+                var icons=(TrayIconSet)Field(f.Owner,"trayIcons");var notify=(NotifyIcon)Field(icons.For(group.Id),"tray");
+                Check(notify.Text.EndsWith("headset 65%"),"hidden members remain automatic candidates in an extra group");
+                TrayConfiguration.Move(pref,hidden.Id,group.Id);group.DeviceId=hidden.Id;DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+                Check(notify.Text.EndsWith("hidden 1%")&&!first.Text.Contains("hidden"),"an extra group owns its hidden pin even if the first group still pins it");
+                foreach(string id in new[]{"mouse","keyboard"}){
+                    var next=TrayConfiguration.Add(pref);TrayConfiguration.Move(pref,id,next.Id);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+                    Check(((NotifyIcon)Field(icons.For(next.Id),"tray")).Text.EndsWith(id+" 65%"),"hidden members also display in group "+pref.TrayGroups.Count);
+                }
+            }
+        }
+    }
     static void NotifyClick(NotifyIcon icon,int clicks){
         var down=Message.Create(IntPtr.Zero,0x400,IntPtr.Zero,new IntPtr(clicks==2?0x203:0x201));var up=Message.Create(IntPtr.Zero,0x400,IntPtr.Zero,new IntPtr(0x202));
         typeof(NotifyIcon).GetMethod("WmMouseDown",Private).Invoke(icon,new object[]{down,MouseButtons.Left,clicks});typeof(NotifyIcon).GetMethod("WmMouseUp",Private).Invoke(icon,new object[]{up,MouseButtons.Left});
@@ -219,17 +251,41 @@ static class TrayGroupsTests {
     static void DeviceRendering(){
         VisualDesign.HighContrastOverride=false;
         foreach(int size in new[]{16,20,24,32})foreach(bool dark in new[]{false,true})foreach(string kind in new[]{"mouse","keyboard","headset","device"}){
-            foreach(int? percent in new int?[]{0,15,46,80,100,null})using(var bitmap=TrayGlyph.RenderDevice(percent,false,dark,false,size,kind)){
+            foreach(int? percent in new int?[]{0,1,15,46,80,100,null})using(var bitmap=TrayGlyph.RenderDevice(percent,false,dark,false,size,kind)){
                 Check(bitmap.Width==size&&bitmap.Height==size,"device icon has the requested native size");
                 Check(bitmap.GetPixel(0,0).A==0&&bitmap.GetPixel(size-1,size-1).A==0,"glyphs preserve transparent corners");
-                int y=(int)(28.5f*size/32),filled=0;for(int x=0;x<size;x++)if(bitmap.GetPixel(x,y).A>120)filled++;
-                float expected=26*size/32f*(percent??0)/100f;Check(Math.Abs(filled-expected)<=2,"battery bar tracks the value within antialiasing tolerance: "+size+" "+percent+" got "+filled);
-                if(!percent.HasValue||percent.Value==0)Check(filled==0,"unknown and zero readings have an empty battery bar");
                 for(int x=0;x<size;x++)for(int z=0;z<size;z++)if(bitmap.GetPixel(x,z).A>24)Check(x>0&&x<size-1&&z>0&&z<size-1,"device strokes fit inside the canvas: "+size+" "+kind+" "+percent+" at "+x+","+z+" alpha "+bitmap.GetPixel(x,z).A);
             }
-            using(var stale=TrayGlyph.RenderDevice(46,false,dark,true,size,kind))using(var charge=TrayGlyph.RenderDevice(46,true,dark,false,size,kind))using(var normal=TrayGlyph.RenderDevice(46,false,dark,false,size,kind)){
+            using(var charge=TrayGlyph.RenderDevice(46,true,dark,false,size,kind))using(var normal=TrayGlyph.RenderDevice(46,false,dark,false,size,kind)){
                 bool different=false;for(int x=size*3/4;x<size;x++)for(int y=0;y<size/2;y++)different|=charge.GetPixel(x,y)!=normal.GetPixel(x,y);Check(different,"charging renders the existing lightning marker");
-                Color gray=stale.GetPixel(size/4,(int)(28.5f*size/32));Check(Math.Abs(gray.R-gray.B)<35,"historical readings use a gray battery bar");
+            }
+        }
+    }
+    static void BatteryBars(int size){
+        int minimum=size==16?4:size==20?5:size==24?6:8;
+        foreach(bool dark in new[]{false,true})foreach(string kind in new[]{"mouse","keyboard","headset","device"})using(var full=TrayGlyph.RenderDevice(100,false,dark,false,size,kind)){
+            int top=size,bottom=-1,rows=0;
+            for(int y=size-1;y>=(int)Math.Ceiling(size*.62);y--){
+                if(full.GetPixel(size/2,y).A>150){if(bottom<0)bottom=y;top=y;rows++;}else if(bottom>=0)break;
+            }
+            Check(rows>=minimum,"battery bar height at "+size+"px is at least "+minimum+"px; got "+rows);
+            Check(rows<=Math.Ceiling(size*.3),"battery bar stays in the lower portion of the icon");int middle=(top+bottom)/2;
+            for(int value=0;value<=100;value++)using(var bitmap=TrayGlyph.RenderDevice(value,false,dark,false,size,kind)){
+                int filled=0;for(int x=0;x<size;x++)if(bitmap.GetPixel(x,middle).A>150)filled++;
+                float expected=value==0?0:Math.Max(1,(size-2)*value/100f);
+                Check(Math.Abs(filled-expected)<=1,"proportional fill at "+size+"px / "+value+"%; expected "+expected+", got "+filled);
+                Check(value==0?filled==0:filled>=1,"zero is empty and every positive reading has a visible pixel");
+            }
+            using(var empty=TrayGlyph.RenderDevice(null,false,dark,false,size,kind))using(var zero=TrayGlyph.RenderDevice(0,false,dark,false,size,kind))using(var stale=TrayGlyph.RenderDevice(46,false,dark,true,size,kind))using(var charge=TrayGlyph.RenderDevice(46,true,dark,false,size,kind))using(var normal=TrayGlyph.RenderDevice(46,false,dark,false,size,kind)){
+                Check(empty.GetPixel(1,middle).A>24&&empty.GetPixel(size-2,middle).A>24&&empty.GetPixel(0,middle).A==0&&empty.GetPixel(size-1,middle).A==0,"track spans the width with a one-pixel margin");
+                Color track=empty.GetPixel(size/2,middle);Check(track.A>24&&track.A<150&&Math.Abs(track.R-track.B)<35,"unknown reading has a visible translucent gray track");
+                Check(full.GetPixel(1,top).A<full.GetPixel(size/2,top).A,"battery track and full fill have rounded corners");
+                Color gray=stale.GetPixel(2,middle),expectedGray=TrayGlyph.LevelColor(null,dark);Check(Math.Abs(gray.R-expectedGray.R)<=4&&Math.Abs(gray.G-expectedGray.G)<=4&&Math.Abs(gray.B-expectedGray.B)<=4,"historical fill uses the existing gray");
+                Color level=normal.GetPixel(2,middle),expectedLevel=TrayGlyph.LevelColor(46,dark);Check(Math.Abs(level.R-expectedLevel.R)<=4&&Math.Abs(level.G-expectedLevel.G)<=4&&Math.Abs(level.B-expectedLevel.B)<=4,"fresh fill uses the existing level color");
+                for(int y=top;y<=bottom;y++)for(int x=0;x<size;x++){
+                    Check(empty.GetPixel(x,y)==zero.GetPixel(x,y),"unknown and zero readings have the same empty track");
+                    Check(charge.GetPixel(x,y)==normal.GetPixel(x,y),"charging marker never covers the bar");
+                }
             }
         }
     }
@@ -238,7 +294,8 @@ static class TrayGroupsTests {
         var previous=DeviceSettings.Current;
         try {
             Run("configuration contract",Contracts);Run("selection contract",SelectionContract);Run("lifecycle contract",LifecycleContract);Run("device style contract",DeviceStyleContract);Run("preferences entry",PreferencesEntry);
-            Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
+            Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("hidden candidates without extra groups",delegate{HiddenCandidates(false);});Run("hidden candidates with extra groups",delegate{HiddenCandidates(true);});Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
+            foreach(int size in new[]{16,20,24,32}){int pixels=size;Run("battery bars at "+pixels+"px",delegate{BatteryBars(pixels);});}
             Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
     }

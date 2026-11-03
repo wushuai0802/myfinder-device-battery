@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -9,6 +10,36 @@ using System.Threading;
 using Microsoft.Win32;
 
 namespace AtkBattery {
+    // Reporting only: do not use manifest-independent versions for feature gates.
+    internal static class WindowsVersion {
+        [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct RtlVersionInfo {
+            internal uint Size,Major,Minor,Build,Platform;
+            [MarshalAs(UnmanagedType.ByValTStr,SizeConst=128)] internal string ServicePack;
+        }
+        [DllImport("ntdll.dll",CharSet=CharSet.Unicode,ExactSpelling=true)] static extern int RtlGetVersion(ref RtlVersionInfo version);
+        internal static string Read(){return Read(ReadNative,ReadRegistry,delegate{return Environment.OSVersion.Version;});}
+        internal static string Read(Func<Version> native,Func<string,object> registry,Func<Version> fallback){
+            Version version=null;try{version=native();}catch(Exception){}
+            if(version==null||version.Major<=0||version.Build<0){
+                int? major=ReadNumber(registry,"CurrentMajorVersionNumber"),minor=ReadNumber(registry,"CurrentMinorVersionNumber"),build=ReadNumber(registry,"CurrentBuildNumber");
+                if(!major.HasValue||major.Value<=0||!minor.HasValue||!build.HasValue)return fallback().ToString();
+                version=new Version(major.Value,minor.Value,build.Value);
+            }
+            int? revision=ReadNumber(registry,"UBR");
+            return version.Major.ToString(CultureInfo.InvariantCulture)+"."+version.Minor.ToString(CultureInfo.InvariantCulture)+"."+version.Build.ToString(CultureInfo.InvariantCulture)+(revision.HasValue?"."+revision.Value.ToString(CultureInfo.InvariantCulture):"");
+        }
+        static int? ReadNumber(Func<string,object> registry,string name){
+            try{int value;return Int32.TryParse(Convert.ToString(registry(name),CultureInfo.InvariantCulture),NumberStyles.None,CultureInfo.InvariantCulture,out value)?(int?)value:null;}catch(Exception){return null;}
+        }
+        static Version ReadNative(){
+            var value=new RtlVersionInfo {Size=(uint)Marshal.SizeOf(typeof(RtlVersionInfo)),ServicePack=String.Empty};
+            return RtlGetVersion(ref value)==0?new Version(checked((int)value.Major),checked((int)value.Minor),checked((int)value.Build)):null;
+        }
+        static object ReadRegistry(string name){
+            using(var machine=RegistryKey.OpenBaseKey(RegistryHive.LocalMachine,RegistryView.Registry64))
+            using(var key=machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))return key==null?null:key.GetValue(name);
+        }
+    }
     internal static class AtomicText {
         internal static void Write(string path,string text){
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));string temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";

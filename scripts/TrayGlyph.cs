@@ -54,15 +54,12 @@ namespace AtkBatteryTray {
                     g.Clear(Color.Transparent);g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.ScaleTransform(canvas/32f,canvas/32f);
                     Color gray=LevelColor(null,dark),foreground=VisualDesign.HighContrast?SystemColors.WindowText:dark?Color.FromArgb(244,246,248):Color.FromArgb(27,36,48);
                     Color symbol=percent.HasValue&&!stale?foreground:gray;
-                    if(kind=="mouse"||kind=="keyboard"||kind=="headset")CompactRenderer.DrawSymbol(g,kind,new RectangleF(4,2,24,21),symbol);
+                    if(kind=="mouse"||kind=="keyboard"||kind=="headset")CompactRenderer.DrawSymbol(g,kind,new RectangleF(4,1,24,19),symbol);
                     else {
-                        using(var pen=new Pen(symbol,1.9f))using(var shape=VisualDesign.RoundRect(7,3,18,19,3)){
-                            g.DrawPath(pen,shape);g.DrawLine(pen,12,8,20,8);g.DrawLine(pen,12,12,20,12);g.DrawEllipse(pen,14.5f,16,3,3);
+                        using(var pen=new Pen(symbol,1.9f))using(var shape=VisualDesign.RoundRect(7,2,18,17,3)){
+                            g.DrawPath(pen,shape);g.DrawLine(pen,12,6,20,6);g.DrawLine(pen,12,10,20,10);g.DrawEllipse(pen,14.5f,13,3,3);
                         }
                     }
-                    // A fixed, native-aligned track keeps 0% and unknown visibly empty.
-                    using(var brush=new SolidBrush(Color.FromArgb(75,gray)))g.FillRectangle(brush,3,27,26,3);
-                    if(percent.HasValue&&percent.Value>0)using(var brush=new SolidBrush(stale?gray:LevelColor(percent,dark)))g.FillRectangle(brush,3,27,26*Math.Max(0,Math.Min(100,percent.Value))/100f,3);
                     if(charge){
                         using(var marker=new SolidBrush(Color.FromArgb(12,17,21)))g.FillEllipse(marker,25f,1.2f,6.4f,9.6f);
                         PointF[] bolt={new PointF(29.1f,2.2f),new PointF(26.2f,6.2f),new PointF(28.1f,6.2f),new PointF(27.2f,9.6f),new PointF(30.2f,5.2f),new PointF(28.4f,5.2f)};
@@ -73,8 +70,21 @@ namespace AtkBatteryTray {
                 using(var g=Graphics.FromImage(result))using(var attributes=new ImageAttributes()){
                     g.CompositingMode=CompositingMode.SourceCopy;g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;
                     attributes.SetWrapMode(WrapMode.TileFlipXY);g.DrawImage(large,new Rectangle(0,0,size,size),0,0,canvas,canvas,GraphicsUnit.Pixel,attributes);
+                    // Paint the bar at native resolution so resampling cannot
+                    // brighten its colors or blur a one-pixel positive reading.
+                    g.CompositingMode=CompositingMode.SourceOver;g.SmoothingMode=SmoothingMode.AntiAlias;
+                    float barHeight=(float)Math.Round(size*.26f),barWidth=size-2,barTop=size-1-barHeight;
+                    Color gray=LevelColor(null,dark);
+                    using(var track=VisualDesign.RoundRect(1,barTop,barWidth,barHeight,1))
+                    using(var brush=new SolidBrush(Color.FromArgb(100,gray)))g.FillPath(brush,track);
+                    if(percent.HasValue&&percent.Value>0){
+                        float filled=Math.Max(1,barWidth*Math.Min(100,percent.Value)/100f);
+                        using(var fill=VisualDesign.RoundRect(1,barTop,filled,barHeight,1))
+                        using(var brush=new SolidBrush(stale?gray:LevelColor(percent,dark)))g.FillPath(brush,fill);
+                    }
                 }
-                result.SetPixel(0,0,Color.Transparent);result.SetPixel(size-1,0,Color.Transparent);result.SetPixel(0,size-1,Color.Transparent);result.SetPixel(size-1,size-1,Color.Transparent);
+                // Keep the native margin transparent after bicubic downsampling.
+                for(int pixel=0;pixel<size;pixel++){result.SetPixel(pixel,0,Color.Transparent);result.SetPixel(pixel,size-1,Color.Transparent);result.SetPixel(0,pixel,Color.Transparent);result.SetPixel(size-1,pixel,Color.Transparent);}
                 return result;
             }
         }
