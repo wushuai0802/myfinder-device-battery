@@ -103,7 +103,7 @@ namespace AtkBatteryTray {
         };
         TableLayoutPanel content,frame;Panel viewport;Control buttons;
         Func<int,int> minimumContentHeight,preferredContentHeight;
-        Size preferredClientSize;Rectangle lastWorkArea;bool fitting,loaded,scaling;
+        Size preferredClientSize;Rectangle lastWorkArea;bool fitting,layingOut,loaded,scaling;
         internal ThemedDialog():this(Style.Dark){}
         internal ThemedDialog(bool dark){
             Theme=new DialogTheme(dark);
@@ -128,16 +128,15 @@ namespace AtkBatteryTray {
             frame=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             frame.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));frame.RowStyles.Add(new RowStyle(SizeType.Percent,100));frame.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             frame.Controls.Add(viewport,0,0);frame.Controls.Add(buttons,0,1);Controls.Add(frame);AcceptButton=accept;CancelButton=cancel;ActiveControl=active;
-            frame.Layout+=delegate{FitToWorkingArea(false);};
+            frame.Layout+=delegate{LayoutClientArea();};
         }
         internal void FitToWorkingArea(bool center){
             if(!loaded||fitting||scaling||IsDisposed||Disposing)return;fitting=true;
             try{
                 var area=WorkingAreaProvider(this);if(area.Width<=0||area.Height<=0)return;
                 center|=area!=lastWorkArea;lastWorkArea=area;
-                // Override WinForms' default maximum track size too, so injected work
-                // areas are authoritative even on small CI desktops.
-                if(MaximumSize!=area.Size)MaximumSize=area.Size;
+                // The work area determines the requested size. Windows (or a caller's
+                // MaximumSize) can still grant a smaller actual client rectangle.
                 int chromeWidth=Width-ClientSize.Width,chromeHeight=Height-ClientSize.Height;
                 int width=Math.Max(1,Math.Min(preferredClientSize.Width>0?preferredClientSize.Width:ClientSize.Width,area.Width-chromeWidth));
                 int height=preferredClientSize.Height>0?preferredClientSize.Height:ClientSize.Height;
@@ -147,31 +146,36 @@ namespace AtkBatteryTray {
                 }
                 height=Math.Max(1,Math.Min(height,area.Height-chromeHeight));
                 if(ClientSize!=new Size(width,height))ClientSize=new Size(width,height);
-                if(content!=null){
-                    frame.PerformLayout();
-                    // The scrollbar reduces width, so remeasure wrapping with it present.
-                    for(int pass=0;pass<3;pass++){
-                        int bodyWidth=Math.Max(1,viewport.ClientSize.Width);
-                        content.Width=bodyWidth;content.PerformLayout();
-                        int minimum=Math.Max(1,minimumContentHeight(bodyWidth));
-                        bool scroll=minimum>viewport.ClientSize.Height;
-                        viewport.AutoScroll=scroll;viewport.AutoScrollMinSize=new Size(0,scroll?minimum:0);
-                        content.SetBounds(0,scroll?viewport.AutoScrollPosition.Y:0,Math.Max(1,viewport.ClientSize.Width),Math.Max(viewport.ClientSize.Height,minimum));
-                        content.PerformLayout();
-                    }
-                }
                 int x=center?area.Left+(area.Width-Width)/2:Math.Max(area.Left,Math.Min(Left,area.Right-Width));
                 int y=center?area.Top+(area.Height-Height)/2:Math.Max(area.Top,Math.Min(Top,area.Bottom-Height));
                 Location=new Point(x,y);
-            }finally{fitting=false;}
+            }finally{fitting=false;LayoutClientArea();}
+        }
+        void LayoutClientArea(){
+            if(!loaded||content==null||fitting||layingOut||scaling||IsDisposed||Disposing)return;layingOut=true;
+            try{
+                // Client-size notifications can precede dock layout. Bound the frame
+                // explicitly so no measurement uses the previously requested height.
+                frame.Bounds=new Rectangle(Padding.Left,Padding.Top,Math.Max(0,ClientSize.Width-Padding.Horizontal),Math.Max(0,ClientSize.Height-Padding.Vertical));
+                frame.PerformLayout();
+                // Keep the existing flexible rows: shrink them to their readable
+                // minimum first, then scroll only the content above the button bar.
+                // The scrollbar reduces width, so remeasure wrapping with it present.
+                for(int pass=0;pass<3;pass++){
+                    int bodyWidth=Math.Max(1,viewport.ClientSize.Width);
+                    content.Width=bodyWidth;content.PerformLayout();
+                    int minimum=Math.Max(1,minimumContentHeight(bodyWidth));
+                    bool scroll=minimum>viewport.ClientSize.Height;
+                    viewport.AutoScroll=scroll;viewport.AutoScrollMinSize=new Size(0,scroll?minimum:0);
+                    content.SetBounds(0,scroll?viewport.AutoScrollPosition.Y:0,Math.Max(1,viewport.ClientSize.Width),Math.Max(viewport.ClientSize.Height,minimum));
+                    content.PerformLayout();
+                }
+            }finally{layingOut=false;}
         }
         protected override void OnLoad(EventArgs e){loaded=true;FitToWorkingArea(true);base.OnLoad(e);}
-        protected override void OnShown(EventArgs e){FitToWorkingArea(true);base.OnShown(e);}
-        protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);if(loaded)FitToWorkingArea(false);}
-        protected override void OnSizeChanged(EventArgs e){
-            if(loaded&&!fitting&&!scaling)preferredClientSize=ClientSize;
-            base.OnSizeChanged(e);if(loaded)FitToWorkingArea(false);
-        }
+        protected override void OnShown(EventArgs e){base.OnShown(e);LayoutClientArea();}
+        protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);LayoutClientArea();}
+        protected override void OnClientSizeChanged(EventArgs e){base.OnClientSizeChanged(e);LayoutClientArea();}
         protected override void OnLocationChanged(EventArgs e){
             base.OnLocationChanged(e);if(loaded&&!fitting&&WorkingAreaProvider(this)!=lastWorkArea)FitToWorkingArea(true);
         }

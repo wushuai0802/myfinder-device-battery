@@ -86,11 +86,12 @@ static class ThemedDialogTests {
         try{using(var dialog=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
             dialog.Scale(new SizeF(2,2));dialog.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
             var original=dialog.Size;var input=Find<TextBox>(dialog,"Description");int originalInput=input.Height;
-            var viewport=Find<Panel>(dialog,"DialogContentViewport");Check(!viewport.VerticalScroll.Visible,"roomy work area needs no content scrolling");
+            var viewport=Find<Panel>(dialog,"DialogContentViewport");bool originalScroll=viewport.VerticalScroll.Visible;
+            Check(input.Height>=3*input.Font.Height,"initial client keeps the readable minimum even if Windows clamps it");
             area=new Rectangle(-1280,40,1280,720);dialog.Location=new Point(-1200,80);Application.DoEvents();Fits(dialog,area,"monitor move");
-            Check(input.Height<originalInput&&input.Height>=3*input.Font.Height&&viewport.VerticalScroll.Visible,"monitor move shrinks to readable minimum, then scrolls");
+            Check(input.Height<=originalInput&&input.Height>=3*input.Font.Height&&viewport.VerticalScroll.Visible,"monitor move shrinks to readable minimum, then scrolls");
             area=new Rectangle(0,0,3200,2400);dialog.Location=new Point(10,10);Application.DoEvents();Fits(dialog,area,"return to large monitor");
-            Check(dialog.Size==original&&input.Height==originalInput&&!viewport.VerticalScroll.Visible,"returning restores preferred size and removes scrolling");
+            Check(dialog.Size==original&&input.Height==originalInput&&viewport.VerticalScroll.Visible==originalScroll,"returning restores the original actual size and scrolling state");
             // Send the native DPI notification using a valid suggested RECT. The work
             // area changes without a preceding move, so this must trigger a new fit.
             area=new Rectangle(20,30,1024,768);int before=reads;IntPtr rect=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(PrintRect)));
@@ -100,6 +101,47 @@ static class ThemedDialogTests {
             }finally{Marshal.FreeHGlobal(rect);}
             Fits(dialog,area,"DPI notification");Check(reads>before&&input.Height>=3*input.Font.Height,"DPI notification remeasures the work area and minimum");
         }}finally{ThemedDialog.WorkingAreaProvider=previous;}
+    }
+    static void ActualClientSizeLayout(string kind){
+        // Sizes are logical pixels; scale them along with the controls. The native
+        // maximum simulates a screen clamp even when the injected work area is large.
+        foreach(float scale in new[]{1f,2f})using(var feedback=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
+            var release=Release();release.Body=Lines(80);
+            using(var dialog=kind=="feedback"?(ThemedDialog)feedback:kind=="diagnostic"?feedback.CreateDiagnosticsDialog():kind=="update"?new UpdateDialog(release,true):kind=="message"?ThemedMessage.Create("确认",Lines(100),MessageBoxButtons.YesNo):new ThemedAliasDialog("名称","设备",12)){
+                dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
+                foreach(var logical in new[]{new Size(512,384),new Size(400,300),new Size(512,384)}){
+                    var limit=new Size((int)(logical.Width*scale),(int)(logical.Height*scale));
+                    var maximum=new Size(limit.Width+dialog.Width-dialog.ClientSize.Width,limit.Height+dialog.Height-dialog.ClientSize.Height);
+                    dialog.MaximumSize=maximum;dialog.ClientSize=limit;Application.DoEvents();
+                    string context=kind+" client "+logical+" at "+scale;
+                    Check(dialog.MaximumSize==maximum&&dialog.ClientSize.Width<=limit.Width&&dialog.ClientSize.Height<=limit.Height,context+": system size limit is respected");
+                    var button=(Control)dialog.AcceptButton;var bounds=button.RectangleToScreen(button.ClientRectangle);
+                    Check(button.Visible,context+": primary button is visible");
+                    for(Control parent=button.Parent;parent!=null;parent=parent.Parent)
+                        Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),context+": primary button is fully inside client and ancestors");
+                    Check(Math.Abs(dialog.RectangleToScreen(dialog.ClientRectangle).Bottom-dialog.Padding.Bottom-button.Parent.RectangleToScreen(button.Parent.ClientRectangle).Bottom)<=1,context+": button bar stays at the client bottom");
+                    if(kind=="feedback"){
+                        var input=Find<TextBox>(dialog,"Description");Check(input.Height>=3*input.Font.Height,context+": description keeps its three-line minimum");
+                    }else if(kind=="diagnostic"){
+                        var text=Find<TextBox>(dialog,"DiagnosticText");Check(text.Height>=5*text.Font.Height,context+": diagnostics keep their five-line minimum");
+                    }else if(kind=="update"){
+                        var notes=Find<ThemedReleaseNotes>(dialog,"ReleaseNotes");Check(notes.Height>=3*notes.LineHeight,context+": notes keep their three-line minimum");
+                    }else if(kind=="alias"){
+                        var input=Find<TextBox>(dialog,"AliasInput");Check(input.Parent.Height>=input.PreferredHeight+input.Parent.Padding.Vertical,context+": alias input is not compressed");
+                    }
+                    var viewport=Find<Panel>(dialog,"DialogContentViewport");var content=(TableLayoutPanel)viewport.Controls[0];
+                    if(kind=="feedback")Check(viewport.AutoScroll&&viewport.VerticalScroll.Visible,context+": minimum content enables scrolling");
+                    viewport.AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
+                    var last=content.GetControlFromPosition(0,content.RowCount-1);
+                    Check(last.RectangleToScreen(last.ClientRectangle).Bottom<=viewport.RectangleToScreen(viewport.ClientRectangle).Bottom,context+": last content control is reachable");
+                    Check(button.RectangleToScreen(button.ClientRectangle)==bounds,context+": scrolling leaves the button bar fixed");
+                    if(kind=="message"){
+                        var text=Find<Label>(dialog,"MessageText");var scroll=(ScrollableControl)text.Parent;scroll.AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
+                        Check(text.RectangleToScreen(text.ClientRectangle).Bottom<=scroll.RectangleToScreen(scroll.ClientRectangle).Bottom,context+": last message line is reachable");
+                    }
+                }
+            }
+        }
     }
     static void Key(Form form,Keys key){typeof(Form).GetMethod("ProcessDialogKey",Members).Invoke(form,new object[]{key});Application.DoEvents();}
     static void SharedPanelGeometry(){
@@ -597,6 +639,8 @@ static class ThemedDialogTests {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
         var previousArea=ThemedDialog.WorkingAreaProvider;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
+            foreach(string kind in new[]{"feedback","diagnostic","update","message","alias"})Run("actual client size: "+kind,delegate{ActualClientSizeLayout(kind);});
+            if(args.Length==1&&args[0]=="--client-only")return failures==0?0:1;
             Run("injected work areas",InjectedWorkAreas);Run("monitor and DPI changes",WorkAreaAndDpiChanges);
             if(args.Length==1&&args[0]=="--fit-only")return failures==0?0:1;
             Run("shared panel geometry and card painting",SharedPanelGeometry);Run("background separation and rounded native chrome",DialogBackground);Run("accessible segments and switch",SegmentsAndSwitch);Run("content-sized release notes",AdaptiveReleaseNotes);Run("shared button, switch and progress painting",SharedControlPainting);Run("cards and panel typography",CardsAndTypography);Run("native high contrast controls",SystemControlsInHighContrast);

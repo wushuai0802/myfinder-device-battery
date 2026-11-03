@@ -209,7 +209,7 @@ static class FeedbackFormTests {
     }
     static void PreviewAndLayout(string output){
         var previous=ThemedDialog.WorkingAreaProvider;
-        // This assertion tests the roomy layout, not the test machine's desktop.
+        // Request a roomy layout, but Windows may still clamp the actual window.
         ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{
         using(var form=Form(new FakeHttp(),"")){
@@ -221,7 +221,9 @@ static class FeedbackFormTests {
         }
         foreach(bool dark in new[]{false,true})foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})using(var form=new FeedbackForm(Report(),false,dark,delegate{},delegate{},Relay,new FakeHttp(),new FeedbackSession())){
             form.Scale(new SizeF(scale,scale));form.Font=new Font("Microsoft YaHei UI",9*scale);Show(form);var submit=Find<Button>(form,"SubmitFeedback");var input=Find<TextBox>(form,"Description");
-            Check(submit.RectangleToScreen(submit.ClientRectangle).Bottom<=form.RectangleToScreen(form.ClientRectangle).Bottom&&input.Height>=100,"form controls fit at scale "+scale);
+            var viewport=Find<Panel>(form,"DialogContentViewport");
+            Check(submit.Visible&&form.RectangleToScreen(form.ClientRectangle).Contains(submit.RectangleToScreen(submit.ClientRectangle)),"primary button fits actual client at scale "+scale);
+            Check(input.Height>=100||viewport.AutoScroll&&viewport.VerticalScroll.Visible&&input.Height>=3*input.Font.Height,"description stays roomy or scrolls at its readable minimum at scale "+scale);
             var note=Find<Label>(form,"FeedbackNotice");Check(note.GetPreferredSize(new Size(note.Width,0)).Height<=note.Height,"full public/privacy notice fits at scale "+scale);
             if(output!=null&&scale==1f)using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(output,dark?"feedback-dark.png":"feedback-light.png"));}
             form.Close();
