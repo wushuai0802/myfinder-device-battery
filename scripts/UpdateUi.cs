@@ -44,10 +44,10 @@ namespace AtkBatteryTray {
             Func<int> surrounding=delegate{SizeStatus();return versionCard.Height+versionCard.Margin.Vertical+statusArea.Height+statusArea.Margin.Vertical+section.Padding.Vertical+section.Margin.Vertical;};
             ConfigureLayout(layout,buttons,delegate(int width){return surrounding()+2*notes.LineHeight+4;},delegate(int width){return surrounding()+notes.PreferredNotesHeight(width-section.Padding.Horizontal);});
             notes.TextChanged+=delegate{FitToWorkingArea(false);};
-            Shown+=delegate{notes.Select(0,0);ActiveControl=install;install.Focus();};
+            Shown+=delegate{notes.Select(0,0);FocusAction(handedOff?null:downloading?cancel:install);};
             install.Click+=delegate{if(InstallRequested!=null)InstallRequested();};
             skip.Click+=delegate{if(SkipRequested!=null)SkipRequested();};
-            cancel.Click+=delegate{if(downloading){if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";cancel.Enabled=false;}else Close();};
+            cancel.Click+=delegate{if(downloading){if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";FocusAction(null);cancel.Enabled=false;}else Close();};
             FormClosing+=delegate(object sender,FormClosingEventArgs e){if(downloading&&!handedOff){e.Cancel=true;if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";}};
         }
         static string Notes(string text){
@@ -61,14 +61,19 @@ namespace AtkBatteryTray {
             statusArea.Height=statusArea.Padding.Vertical+status.Font.Height+(progressShown?progress.Height+gap:0);
         }
         void ShowProgress(bool visible){progressShown=visible;progress.Visible=visible;SizeStatus();FitToWorkingArea(false);}
-        internal void Downloading(){downloading=true;handedOff=false;install.Enabled=false;skip.Enabled=false;cancel.Enabled=true;status.ForeColor=Theme.Muted;status.Text="正在下载和校验…";ShowProgress(true);progress.Value=0;progress.Indeterminate=true;}
+        void FocusAction(Control action){
+            ActiveControl=action!=null&&action.Enabled?action:null;
+            if(!ContainsFocus)return;
+            if(ActiveControl!=null)ActiveControl.Focus();else Focus();
+        }
+        internal void Downloading(){downloading=true;handedOff=false;cancel.Enabled=true;FocusAction(cancel);install.Enabled=false;skip.Enabled=false;status.ForeColor=Theme.Muted;status.Text="正在下载和校验…";ShowProgress(true);progress.Value=0;progress.Indeterminate=true;}
         internal void Progress(long bytes,long total){
             if(IsDisposed)return;int percent=total>0?(int)Math.Max(0,Math.Min(100,bytes*100.0/total)):0;
             status.Text="已下载 "+(Math.Max(0,bytes)/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB"+(total>0?" / "+(total/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB（"+percent.ToString(CultureInfo.InvariantCulture)+"%）":"");
             progress.Indeterminate=total<=0;progress.Value=percent;
         }
-        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;status.ForeColor=text.StartsWith("已取消",StringComparison.Ordinal)?Theme.Muted:Theme.Error;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;progress.Indeterminate=false;progress.Value=0;ShowProgress(false);}
-        internal void Handoff(){handedOff=true;cancel.Enabled=false;ShowProgress(true);progress.Indeterminate=false;progress.Value=100;status.ForeColor=Theme.Muted;status.Text="签名与文件校验通过，正在退出并安装…";}
+        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;status.ForeColor=text.StartsWith("已取消",StringComparison.Ordinal)?Theme.Muted:Theme.Error;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;progress.Indeterminate=false;progress.Value=0;ShowProgress(false);FocusAction(install);}
+        internal void Handoff(){handedOff=true;FocusAction(null);cancel.Enabled=false;ShowProgress(true);progress.Indeterminate=false;progress.Value=100;status.ForeColor=Theme.Muted;status.Text="签名与文件校验通过，正在退出并安装…";}
         internal void Shutdown(){handedOff=true;downloading=false;Close();}
     }
     [DataContract] internal sealed class UpdateResult {

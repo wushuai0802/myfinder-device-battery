@@ -20,6 +20,7 @@ static class ThemedDialogTests {
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
     [DllImport("user32.dll")] static extern IntPtr GetActiveWindow();
+    [DllImport("user32.dll")] static extern IntPtr GetFocus();
     delegate bool EnumWindow(IntPtr window,IntPtr parameter);
     [DllImport("user32.dll")] static extern bool EnumThreadWindows(uint thread,EnumWindow callback,IntPtr parameter);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
@@ -416,6 +417,85 @@ static class ThemedDialogTests {
             Check(diagnostic.ActiveControl==diagnostic.AcceptButton&&text.SelectionLength==0&&text.HideSelection&&text.TabStop,"diagnostics open unselected on Close and retain Tab access");
             Key(diagnostic,Keys.Tab);Check(text.Focused,"Tab reaches the diagnostic text from Close");
         }
+    }
+    static void UpdateStateFocus(string state,bool beforeShow){
+        using(var dialog=new UpdateDialog(Release(),true)){
+            var install=Find<Button>(dialog,"InstallUpdate");var later=Find<Button>(dialog,"LaterUpdate");var skip=Find<Button>(dialog,"SkipUpdate");
+            var notes=Find<RichTextBox>(dialog,"ReleaseNotes");
+            if(!beforeShow){Show(dialog);dialog.ActiveControl=state=="download-skip"?skip:install;dialog.ActiveControl.Focus();}
+            dialog.Downloading();
+            if(state=="handoff")dialog.Handoff();
+            else if(state=="failure")dialog.Finished("更新未完成：测试错误");
+            else if(state=="cancelled")dialog.Finished("已取消更新。");
+            else if(state=="cancelling"){if(beforeShow)Call(later,"OnClick",EventArgs.Empty);else later.PerformClick();}
+            if(beforeShow)Show(dialog);else Application.DoEvents();
+            Control expected=state=="handoff"||state=="cancelling"?null:state=="failure"||state=="cancelled"?install:later;
+            Check(dialog.ActiveControl==expected,state+": active control is the available action or the window");
+            Check(GetFocus()==(expected==null?dialog.Handle:expected.Handle),state+": native focus matches after layout");
+            Check(!notes.Focused,state+": focus never remains in release notes");
+            if(expected==later){
+                dialog.Progress(1,2);Application.DoEvents();Check(later.Focused,"progress preserves Later focus");
+                notes.Focus();notes.Select(0,3);dialog.Progress(2,3);Application.DoEvents();
+                Check(notes.Focused&&notes.SelectionLength==3,"progress preserves deliberate note selection");
+            }
+        }
+    }
+    static void CheckCaretInput(TextBoxBase input,List<IntPtr> calls,bool readOnly){
+        Check(input.Focus(),input.Name+": input can receive focus");Application.DoEvents();
+        Check(calls.Contains(input.Handle)==readOnly,input.Name+": native focus hides only read-only carets");
+        foreach(string method in new[]{"OnEnter","OnGotFocus"}){
+            calls.Clear();Call(input,method,EventArgs.Empty);
+            Check(calls.Contains(input.Handle)==readOnly,input.Name+": "+method+" hides only read-only carets");
+        }
+        calls.Clear();input.Select(1,3);
+        Check(input.SelectionStart==1&&input.SelectionLength==3&&input.SelectedText==input.Text.Substring(1,3),input.Name+": selection remains available for copying");
+        Check(calls.Contains(input.Handle)==readOnly,input.Name+": programmatic selection hides only read-only carets");
+        calls.Clear();SendMessage(input.Handle,0x0100,(IntPtr)Keys.Right,IntPtr.Zero);SendMessage(input.Handle,0x0101,(IntPtr)Keys.Right,IntPtr.Zero);
+        Check(calls.Contains(input.Handle)==readOnly,input.Name+": keyboard selection hides only read-only carets");
+        calls.Clear();var start=input.GetPositionFromCharIndex(1);start.Offset(1,input.Font.Height/2);
+        SendMessage(input.Handle,0x0201,(IntPtr)1,(IntPtr)((start.Y<<16)|(start.X&0xffff)));
+        SendMessage(input.Handle,0x0203,(IntPtr)1,(IntPtr)((start.Y<<16)|(start.X&0xffff)));
+        SendMessage(input.Handle,0x0202,IntPtr.Zero,(IntPtr)((start.Y<<16)|(start.X&0xffff)));
+        Check(input.SelectionLength>0,input.Name+": mouse double-click still selects text");
+        Check(calls.Contains(input.Handle)==readOnly,input.Name+": mouse selection hides only read-only carets");
+        calls.Clear();typeof(Control).GetMethod("RecreateHandle",Members).Invoke(input,null);Application.DoEvents();input.Focus();Call(input,"OnGotFocus",EventArgs.Empty);
+        Check(calls.Contains(input.Handle)==readOnly,input.Name+": recreated handle retains caret policy");
+        if(readOnly){
+            input.Select(input.TextLength,0);input.ScrollToCaret();
+            Check(input.GetPositionFromCharIndex(0).Y<0,input.Name+": read-only text still scrolls");
+        }else{
+            string original=input.Text;input.Select(0,0);SendMessage(input.Handle,0x0102,(IntPtr)'Z',IntPtr.Zero);
+            Check(input.Text=="Z"+original,input.Name+": editable input still accepts typing");
+        }
+    }
+    static void ReadOnlyCaretCalls(bool highContrast){
+        var hook=Type("DialogCaret").GetField("HideCaret",BindingFlags.Static|BindingFlags.NonPublic);
+        Check(hook!=null,"native HideCaret call is injectable");var previous=hook.GetValue(null);var calls=new List<IntPtr>();
+        hook.SetValue(null,new Func<IntPtr,bool>(delegate(IntPtr window){calls.Add(window);return true;}));VisualDesign.HighContrastOverride=highContrast;
+        try{
+            var release=Release();release.Body=Lines(80);
+            using(var update=new UpdateDialog(release,true)){
+                Show(update);var notes=Find<RichTextBox>(update,"ReleaseNotes");calls.Clear();CheckCaretInput(notes,calls,true);
+            }
+            using(var feedback=new FeedbackForm(Report(),false,false,delegate{},delegate{},"")){
+                using(var diagnostic=feedback.CreateDiagnosticsDialog()){
+                    var text=Find<TextBox>(diagnostic,"DiagnosticText");text.Text=Lines(80);Show(diagnostic);calls.Clear();CheckCaretInput(text,calls,true);
+                }
+                Show(feedback);var description=Find<TextBox>(feedback,"Description");description.Text="editable description";calls.Clear();CheckCaretInput(description,calls,false);
+            }
+            using(var alias=new ThemedAliasDialog("名称","editable name",64)){
+                Show(alias);calls.Clear();CheckCaretInput(alias.Input,calls,false);
+            }
+            using(var message=ThemedMessage.Create("确认",Lines(80),MessageBoxButtons.YesNo)){
+                Show(message);Check(Find<Label>(message,"MessageText")!=null,"confirmation uses plain text without a caret");
+            }
+        }finally{hook.SetValue(null,previous);VisualDesign.HighContrastOverride=false;}
+    }
+    static void CaretRegressions(){
+        foreach(bool beforeShow in new[]{false,true})foreach(string state in new[]{"download","download-skip","handoff","failure","cancelled","cancelling"}){
+            string label=state+(beforeShow?" before show":" after show");Run("update focus: "+label,delegate{UpdateStateFocus(state,beforeShow);});
+        }
+        foreach(bool highContrast in new[]{false,true})Run("read-only caret calls, high contrast="+highContrast,delegate{ReadOnlyCaretCalls(highContrast);});
     }
     static void CompactUpdateSize(){
         foreach(float dpiScale in new[]{1f,1.25f,1.5f,2f})WithDpi((int)Math.Round(dpiScale*96),delegate{
@@ -1068,6 +1148,10 @@ static class Host {
         var previousArea=ThemedDialog.WorkingAreaProvider;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
             bool regular=args.Length==0||args.Length==1&&!args[0].StartsWith("--",StringComparison.Ordinal);
+            if(regular||args.Length==1&&args[0]=="--caret-only"){
+                CaretRegressions();
+                if(!regular){Console.WriteLine(checks+" caret/focus checks, "+failures+" failed groups");return failures==0?0:1;}
+            }
             if(regular||args.Length==1&&(args[0]=="--paint2-only"||args[0]=="--paint3-only")){
                 foreach(string kind in new[]{"feedback","update","alias","message","diagnostic"})Run("control overlap: "+kind,delegate{DialogControlLayout(kind);});
                 Run("single segment client pixels",SegmentClientPixels);Run("native background dispatch",BackgroundDispatch);

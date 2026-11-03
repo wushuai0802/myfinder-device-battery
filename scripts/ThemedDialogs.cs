@@ -146,6 +146,41 @@ namespace AtkBatteryTray {
         }
     }
 
+    internal sealed class DialogCaret:NativeWindow {
+        [DllImport("user32.dll",EntryPoint="HideCaret")] static extern bool NativeHideCaret(IntPtr window);
+        internal static Func<IntPtr,bool> HideCaret=NativeHideCaret;
+        readonly TextBoxBase input;
+        internal DialogCaret(TextBoxBase input){
+            this.input=input;
+            input.Enter+=delegate{Hide();};input.GotFocus+=delegate{Hide();};
+            var rich=input as RichTextBox;if(rich!=null)rich.SelectionChanged+=delegate{Hide();};
+            input.HandleCreated+=delegate{AssignHandle(input.Handle);};
+            input.HandleDestroyed+=delegate{if(Handle!=IntPtr.Zero)ReleaseHandle();};
+            if(input.IsHandleCreated)AssignHandle(input.Handle);
+        }
+        void Hide(){if(input.IsHandleCreated&&input.ReadOnly&&input.Multiline)HideCaret(input.Handle);}
+        protected override void WndProc(ref Message message){
+            base.WndProc(ref message);
+            if(!input.Focused)return;
+            // EDIT has no SelectionChanged event. Hide after native focus/selection
+            // processing as well: WM_SETFOCUS can create the caret after GotFocus.
+            switch(message.Msg){
+                case 0x0007: // WM_SETFOCUS
+                case 0x00B1: // EM_SETSEL
+                case 0x0437: // EM_EXSETSEL (RichEdit)
+                case 0x0100: // WM_KEYDOWN
+                case 0x0101: // WM_KEYUP
+                case 0x0102: // WM_CHAR
+                case 0x0201: // WM_LBUTTONDOWN
+                case 0x0202: // WM_LBUTTONUP
+                case 0x0203: // WM_LBUTTONDBLCLK
+                    Hide();break;
+                case 0x0200: // WM_MOUSEMOVE while selecting
+                    if((message.WParam.ToInt64()&1)!=0)Hide();break;
+            }
+        }
+    }
+
     internal class ThemedDialog:Form {
         internal readonly DialogTheme Theme;
         readonly Font bodyFont,titleFont,descriptionFont,cardTitleFont;
@@ -535,6 +570,7 @@ namespace AtkBatteryTray {
         internal ThemedReleaseNotes(DialogTheme theme){
             this.theme=theme;ReadOnly=true;Multiline=true;WordWrap=true;DetectUrls=false;BorderStyle=theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;
             BackColor=theme.Card;ForeColor=theme.Foreground;ScrollBars=RichTextBoxScrollBars.None;HideSelection=true;SelectionLength=0;
+            new DialogCaret(this);
             DialogScrollbars.Track(this,theme);TextChanged+=delegate{FormatLines();UpdateViewport();};
         }
         internal int LineHeight {get{return (int)Math.Ceiling(Font.Height*1.4);}}

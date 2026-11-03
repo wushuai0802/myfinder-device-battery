@@ -231,6 +231,7 @@ namespace AtkBatteryTray {
             var dialog=new ThemedDialog(Theme.Dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var text=new TextBox {Name="DiagnosticText",AccessibleName="诊断信息",Text=report.FullText,ReadOnly=true,Multiline=true,WordWrap=false,HideSelection=true,SelectionLength=0,TabStop=true};
+            new DialogCaret(text);
             var card=new ThemedSection(dialog.Theme) {Name="DiagnosticsCard",Dock=DockStyle.Fill};
             text.BorderStyle=dialog.Theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;text.BackColor=dialog.Theme.Card;text.ForeColor=dialog.Theme.Foreground;text.Dock=DockStyle.Fill;card.Controls.Add(text);DialogScrollbars.Attach(text,dialog.Theme);layout.Controls.Add(card,0,0);
             var close=new ThemedButton(dialog.Theme,ThemedButtonKind.Primary) {Text="关闭",DialogResult=DialogResult.Cancel,AutoSize=true,Anchor=AnchorStyles.Right,Margin=Padding.Empty};layout.Controls.Add(close,0,1);
