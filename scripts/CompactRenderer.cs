@@ -311,6 +311,7 @@ namespace AtkBatteryTray {
             }
         }
         static RectangleF DrawSync(Graphics g,string text,float top,float maximumWidth,bool dark,bool failure,PanelFeedback feedback) {
+            if(feedback!=null&&!String.IsNullOrEmpty(feedback.UpdatedNotice)){text=feedback.UpdatedNotice;failure=false;}
             var pill=SyncPillRect(g,text,top,maximumWidth);
             Fill(g,pill,ThemePalette.Current(dark).SyncFill,7);Highlight(g,pill,0,feedback,dark);
             DrawSymbol(g,"refresh",new RectangleF(11,top+9,12,12),Muted(dark));

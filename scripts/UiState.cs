@@ -31,12 +31,13 @@ namespace AtkBatteryTray {
     public sealed class PanelFeedback {
         public int PendingStage=-1;
         public string PendingOutput, DpiFailure, AudioFailure;
+        public string UpdatedNotice;
         public bool MicrophonePending, ManualRefreshing,AudioBlocked;
         public bool ShowPendingHints;
         public int HoverAction=-1,PressedAction=-1;
         public int KeyboardFocus=-1;
         public int VolumePreview=-1;
-        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction+"|"+VolumePreview;}}
+        public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction+"|"+VolumePreview+"|"+UpdatedNotice;}}
     }
     public static class UiState {
         // Receiver audio endpoints can remain active after the wireless headset disconnects.

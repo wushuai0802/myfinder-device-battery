@@ -72,6 +72,9 @@ namespace AtkBatteryTray {
         HeadsetReading displayHeadset;
         AudioReading displayAudio;
         Point anchor;
+        TrayPanelAnchor? updatedAnchor;
+        string updatedNotice;
+        readonly System.Windows.Forms.Timer updatedNoticeTimer=new System.Windows.Forms.Timer {Interval=6000};
         float animationProgress;
         readonly Stopwatch motionClock=new Stopwatch();
         float motionStart,motionTarget,motionDurationMs;
@@ -138,6 +141,7 @@ namespace AtkBatteryTray {
             animation.Interval=16;animation.Tick+=delegate {AdvanceAnimation();};
             layoutAnimation.Interval=16;layoutAnimation.Tick+=delegate {AdvanceLayout();};
             feedbackTimer.Interval=285;feedbackTimer.Tick+=delegate {feedbackTimer.Stop();Invalidate();};
+            updatedNoticeTimer.Tick+=delegate{updatedNoticeTimer.Stop();updatedNotice=null;Invalidate();};
             pageAnimation.Interval=16;pageAnimation.Tick+=delegate {
                 float t=Math.Min(1f,(float)pageClock.Elapsed.TotalMilliseconds/160f);pageProgress=1f-(float)Math.Pow(1-t,3);
                 if(t>=1f){pageProgress=1;pageAnimation.Stop();}UpdateLayoutSize();Invalidate();
@@ -324,6 +328,7 @@ namespace AtkBatteryTray {
         }
         void SchedulePendingHint(){feedbackTimer.Stop();feedbackTimer.Start();}
         internal void Notice(string text){navigation.Notice=text;Invalidate();}
+        internal void NoticeUpdated(){updatedNotice="已更新到 "+AppRuntime.Version;updatedNoticeTimer.Stop();updatedNoticeTimer.Start();Invalidate();}
         void ShowFeedback(){
             using(var dialog=new FeedbackForm(owner.CreateFeedbackReport(),navigation.Page==PopupPage.DeviceMissing,Style.Dark,copyText,openLink)){
                 feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
@@ -393,6 +398,7 @@ namespace AtkBatteryTray {
             if(navigation.Page!=PopupPage.Main)targetSize=PopupPages.SizeFor(ControlsForPage());
             if(pageProgress<1f)targetSize.Height=(int)Math.Round(pageStartHeight+(targetSize.Height-pageStartHeight)*pageProgress);
             Size physical=UiState.ScaleSize(targetSize,dpiScale);
+            if(updatedAnchor.HasValue){var area=updatedAnchor.Value.WorkArea;physical=new Size(Math.Min(physical.Width,area.Width),Math.Min(physical.Height,area.Height));}
             if(ClientSize!=physical) {
                 ClientSize=physical;
                 if(!layeredRendering)UpdateFallbackRegion();
@@ -442,12 +448,14 @@ namespace AtkBatteryTray {
         protected override void OnHandleCreated(EventArgs e) {
             base.OnHandleCreated(e);if(ignoreDeactivate)QueueOpeningGuardRelease(presentationEpoch);
         }
-        public void OpenAnimated(bool fromLauncher=false) {
+        public void OpenAnimated(bool fromLauncher=false) {OpenAnimatedCore(fromLauncher,null);}
+        internal void OpenUpdated(TrayPanelAnchor placement){OpenAnimatedCore(false,placement);}
+        void OpenAnimatedCore(bool fromLauncher,TrayPanelAnchor? placement) {
             if(disposingPopup||Disposing||IsDisposed)return;
             presentationDepth++;
             try {
-                BeginPresentation();anchor=Cursor.Position;
-                if(fromLauncher){var screen=Screen.FromPoint(anchor).WorkingArea;anchor=new Point(screen.Right-24,screen.Top+16);}
+                BeginPresentation();updatedAnchor=placement;anchor=placement.HasValue?placement.Value.Point:Cursor.Position;
+                if(!placement.HasValue&&fromLauncher){var screen=Screen.FromPoint(anchor).WorkingArea;anchor=new Point(screen.Right-24,screen.Top+16);}
                 dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;
                 frameAlpha=3;PositionForSize(6);Show();Activate();owner.PanelOpened();AnimateTo(1f,190f);
             } finally {
@@ -457,6 +465,7 @@ namespace AtkBatteryTray {
             }
         }
         void PositionForSize(int slideY) {
+            if(updatedAnchor.HasValue){var placement=updatedAnchor.Value;Location=TrayPanelPlacement.Position(anchor,placement.WorkArea,Size,placement.Edge);return;}
             var screen=Screen.FromPoint(anchor).WorkingArea;
             int margin=(int)Math.Round(8*dpiScale);
             int x=Math.Max(screen.Left+margin,Math.Min(anchor.X-Width/2,screen.Right-Width-margin));
@@ -505,7 +514,7 @@ namespace AtkBatteryTray {
             if(closing)Reveal();
             else CloseAnimated();
         }
-        void ResetPage(){CancelPointerInteraction();navigation.Reset();SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
+        void ResetPage(){updatedNotice=null;updatedNoticeTimer.Stop();CancelPointerInteraction();navigation.Reset();SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
         void AnimateTo(float target,float durationMs) {
             if(PopupPages.Reduced){animationProgress=target;frameAlpha=target>0? (byte)255:(byte)0;animation.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
             motionStart=animationProgress;motionTarget=target;
@@ -523,6 +532,7 @@ namespace AtkBatteryTray {
             Invalidate();
         }
         protected override void Dispose(bool disposing) {
+            if(disposing&&!disposingPopup)updatedNoticeTimer.Dispose();
             if(disposing&&!disposingPopup){disposingPopup=true;presentationEpoch++;ignoreDeactivate=true;CancelPointerInteraction();lastHoverTip=null;owner.SetAudioScope(null);CancelDeferredDeactivation();deactivateRelease.Stop();deactivateRelease.Dispose();owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
             base.Dispose(disposing);
         }
@@ -627,7 +637,7 @@ namespace AtkBatteryTray {
                 }
             }
         }
-        PanelFeedback Feedback(){var value=owner.GetFeedback();value.KeyboardFocus=keyboardFocusVisible?keyboardFocus:-1;value.HoverAction=hoverAction;value.PressedAction=pressedAction;value.VolumePreview=navigation.VolumePreview>=0?navigation.VolumePreview:owner.DesiredVolume??-1;return value;}
+        PanelFeedback Feedback(){var value=owner.GetFeedback();value.UpdatedNotice=updatedNotice;value.KeyboardFocus=keyboardFocusVisible?keyboardFocus:-1;value.HoverAction=hoverAction;value.PressedAction=pressedAction;value.VolumePreview=navigation.VolumePreview>=0?navigation.VolumePreview:owner.DesiredVolume??-1;return value;}
         static RectangleF StageRect(int index,int count) {
             return VisualDesign.StageRect(index,count);
         }
@@ -654,6 +664,8 @@ namespace AtkBatteryTray {
         readonly System.Windows.Forms.Timer refresh=new System.Windows.Forms.Timer();
         readonly System.Windows.Forms.Timer liveSync=new System.Windows.Forms.Timer();
         readonly Control dispatch=new Control();
+        UpdatedPanelRequest updatedPanelRequest;
+        bool updatedNoticeShown;
         readonly Func<bool,MouseSnapshot> readSnapshot;
         readonly Func<int,DpiConfig> selectStage;
         readonly Func<NativeDpiRequest,DpiConfig> writeNativeDpi;
@@ -835,6 +847,17 @@ namespace AtkBatteryTray {
             if(details!=null&&!details.IsDisposed){details.Reveal();return;}
             details=new Details(this);details.OpenAnimated(fromLauncher);
         }
+        internal void RequestUpdatedPanel() {
+            if(disposed)return;
+            if(updatedPanelRequest==null)updatedPanelRequest=new UpdatedPanelRequest(delegate{return TrayPanelPlacement.FindIcon(tray);},TrayPanelPlacement.Fallback,OpenUpdatedPanel);
+            updatedPanelRequest.Start();
+        }
+        internal void OpenUpdatedPanel(TrayPanelAnchor placement) {
+            if(disposed)return;
+            if(details==null||details.IsDisposed)details=new Details(this);
+            details.OpenUpdated(placement);
+            if(!updatedNoticeShown){updatedNoticeShown=true;details.NoticeUpdated();}
+        }
         internal bool LeftButtonPressed {get{return readLeftButton();}}
         internal bool OwnsDetails(Details popup){return !disposed&&details==popup;}
         internal void HandleTrayMouseDown(MouseButtons button) {
@@ -853,8 +876,8 @@ namespace AtkBatteryTray {
             if(close){if(target!=null&&!target.IsDisposed&&OwnsDetails(target))target.CloseAnimated();return;}
             ShowDetails();
         }
-        internal void ListenForShowRequest(ShowPanelSignal signal) {
-            signal.Listen(delegate {if(disposed)return;try {dispatch.BeginInvoke((MethodInvoker)delegate {if(!disposed)ShowDetails(true);});}catch(InvalidOperationException){}});
+        internal void ListenForShowRequest(ShowPanelSignal signal,bool updated=false) {
+            signal.Listen(delegate {if(disposed)return;try {dispatch.BeginInvoke((MethodInvoker)delegate {if(disposed)return;if(updated)RequestUpdatedPanel();else ShowDetails(true);});}catch(InvalidOperationException){}});
         }
         internal void ListenForExitRequest(ShowPanelSignal signal){signal.Listen(delegate{try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)ExitThread();});}catch(InvalidOperationException){}});}
         public void ShowSettings() {
@@ -1435,6 +1458,7 @@ namespace AtkBatteryTray {
         }
         protected override void ExitThreadCore() {
             if(updates!=null)updates.Dispose();
+            if(updatedPanelRequest!=null)updatedPanelRequest.Dispose();
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
             if(genericWorker!=null)genericWorker.Dispose();
             if(persistStatus)AudioBrokerClient.Shutdown();fileWriter.Dispose();
@@ -1483,11 +1507,13 @@ namespace AtkBatteryTray {
                 }
                 return;
             }
-            bool fresh;using(var signal=new ShowPanelSignal())using(var stop=new ShowPanelSignal("Local\\MyFinderDeviceBattery.Exit"))using(var mutex=new Mutex(true,"Local\\ATK-A9-Air-Battery-Tray",out fresh)) {
-                if(!fresh){if(args.Length==1&&args[0]=="--show")signal.Request();return;}
+            var request=PanelStartup.Parse(args);
+            bool fresh;using(var signal=new ShowPanelSignal())using(var updated=new ShowPanelSignal(PanelStartup.UpdatedSignalName))using(var stop=new ShowPanelSignal("Local\\MyFinderDeviceBattery.Exit"))using(var mutex=new Mutex(true,"Local\\ATK-A9-Air-Battery-Tray",out fresh)) {
+                if(!fresh){PanelStartup.Forward(request,signal,updated);return;}
                 Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
                 DialogVisibility.ConsumeStartupShowCommand();
-                var context=new TrayContext(args.Length==1&&args[0]=="--show");context.ListenForShowRequest(signal);context.ListenForExitRequest(stop);Application.Run(context);
+                var context=new TrayContext(request==PanelOpenRequest.Launcher);context.ListenForShowRequest(signal);context.ListenForShowRequest(updated,true);context.ListenForExitRequest(stop);
+                if(request==PanelOpenRequest.Updated)updated.Request();Application.Run(context);
             }
         }
     }

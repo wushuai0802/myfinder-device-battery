@@ -29,7 +29,7 @@ function New-Package([string]$Directory,[string]$Version){
     [IO.File]::WriteAllText((Join-Path $Directory 'release.json'),($release|ConvertTo-Json))
     [IO.File]::WriteAllText((Join-Path $Directory 'engine\server.py'),('# payload '+$Version))
     $cs=Join-Path $fixture ('host-'+$Version+'.cs')
-    [IO.File]::WriteAllText($cs,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$Version+'")] class Fixture {static void Main(string[] args){if(args.Length==1 && args[0]=="--show") System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(typeof(Fixture).Assembly.Location),"started.txt"),"'+$Version+'");}}'))
+    [IO.File]::WriteAllText($cs,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$Version+'")] class Fixture {static void Main(string[] args){if(args.Length==0 || args.Length==1 && args[0]=="--show-updated") System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(typeof(Fixture).Assembly.Location),"started.txt"),"'+$Version+'|"+string.Join(" ",args));}}'))
     & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') /nologo /target:winexe /platform:x64 ('/out:'+(Join-Path $Directory 'outputs\AtkMouseBattery.exe')) $cs
     if($LASTEXITCODE -ne 0){throw 'Fixture build failed.'}
     Copy-Item -LiteralPath (Join-Path $Directory 'outputs\AtkMouseBattery.exe') -Destination (Join-Path $Directory 'engine\runtime\python.exe')
@@ -99,7 +99,8 @@ Install-DeviceBattery -SourceRoot (Split-Path -Parent $PSScriptRoot) -InstallDir
     Assert ((Read-DeviceBatteryReceipt $data).Version -ceq $expectedVersion) 'isolated helper records the expected installed version'
     $clock=[Diagnostics.Stopwatch]::StartNew()
     while(-not (Test-Path -LiteralPath $started) -and $clock.ElapsedMilliseconds -lt 5000){Start-Sleep -Milliseconds 25}
-    Assert ((Test-Path -LiteralPath $started) -and [IO.File]::ReadAllText($started) -ceq $expectedVersion) ('isolated helper actually launches fixture version '+$expectedVersion)
+    $expectedArguments=if($ValidationFailure){''}else{'--show-updated'}
+    Assert ((Test-Path -LiteralPath $started) -and [IO.File]::ReadAllText($started) -ceq ($expectedVersion+'|'+$expectedArguments)) ('isolated helper launches fixture version '+$expectedVersion+' with the correct success/recovery arguments')
     Assert (-not (Test-Path -LiteralPath $work)) 'isolated helper cleans its staging directory'
 }
 function Test-RecoveryRestart([string]$Fault,[switch]$LaunchFailure,[switch]$ResultFailure) {
@@ -144,6 +145,7 @@ function Test-RecoveryRestart([string]$Fault,[switch]$LaunchFailure,[switch]$Res
         try {$null=Invoke-DeviceBatteryUpdate @parameters}catch{$thrown=$_.Exception.Message}
         Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) ('recovery attempts the known executable after '+$Fault+' failure; launchFailure='+$LaunchFailure+'; resultFailure='+$ResultFailure)
         Assert (-not $script:lastRestartHasWindowStyle) ('recovery restart omits WindowStyle after '+$Fault+' failure')
+        Assert (-not $script:lastRestartHasArguments) ('recovery restart has no show arguments after '+$Fault+' failure')
         Assert ($script:recoveryReads -eq 0) 'recovery performs no hash, manifest or receipt checks'
         if($ResultFailure){Assert ($thrown -ceq 'fixture result write failure') 'result-write failure still attempts recovery'}
         else {
@@ -203,7 +205,9 @@ try {
         [CmdletBinding()]param([string]$FilePath,[string]$ArgumentList,[string]$WorkingDirectory,[string]$WindowStyle,[switch]$PassThru)
         $script:restarts+=,$FilePath
         $script:lastRestartHasWindowStyle=$PSBoundParameters.ContainsKey('WindowStyle')
-        Assert ($ArgumentList -ceq '--show' -and $WorkingDirectory -ceq (Split-Path -Parent $FilePath)) 'restart directly uses the exact executable and show argument'
+        $script:lastRestartHasArguments=$PSBoundParameters.ContainsKey('ArgumentList')
+        $script:lastRestartArguments=$ArgumentList
+        Assert ($WorkingDirectory -ceq (Split-Path -Parent $FilePath)) 'restart directly uses the exact executable directory'
         if($script:restartFailure){throw 'fixture launch failure'}
     }
     function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDirectory,[string]$DataDirectory){
@@ -225,6 +229,7 @@ try {
     Assert ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -ceq $settingsHash) 'settings preserved on success'
     Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) 'restart uses exact Unicode install path'
     Assert (-not $script:lastRestartHasWindowStyle) 'successful restart omits WindowStyle so the first dialog can appear'
+    Assert ($script:lastRestartArguments -ceq '--show-updated') 'successful restart requests the tray-anchored updated panel'
     Assert (-not (Test-Path -LiteralPath $work)) 'successful handoff staging cleaned'
     $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
     Assert ($result.status -ceq 'success') 'success result persisted'
@@ -276,6 +281,7 @@ try {
     Assert ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -ceq $settingsHash) 'settings preserved on rollback'
     Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) 'old version restarts after rollback'
     Assert (-not $script:lastRestartHasWindowStyle) 'rollback restart omits WindowStyle so the first dialog can appear'
+    Assert (-not $script:lastRestartHasArguments) 'rollback restart is quiet without either show argument'
     $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
     Assert ($result.status -ceq 'failed' -and $result.reason -like '*fixture mid-install failure*') 'failure reason available next launch'
     Assert (-not (Test-Path -LiteralPath $parameters.WorkDirectory)) 'failed handoff staging cleaned'
