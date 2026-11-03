@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Runtime.Serialization;
 using System.Threading;
@@ -8,32 +9,53 @@ using System.Windows.Forms;
 using AtkBattery;
 
 namespace AtkBatteryTray {
-    internal sealed class UpdateDialog:Form {
-        readonly Button install=new Button(),skip=new Button(),cancel=new Button();
-        readonly Label status=new Label();readonly ProgressBar progress=new ProgressBar();
+    internal sealed class UpdateDialog:ThemedDialog {
+        readonly ThemedButton install,skip,cancel;
+        readonly Label status;readonly ThemedProgress progress;
         bool downloading,handedOff;
         internal event Action InstallRequested,SkipRequested,CancelRequested;
         internal UpdateDialog(UpdateRelease release,bool stable){
             Text="MyFinder 设备电量 · 软件更新";StartPosition=FormStartPosition.CenterScreen;ShowInTaskbar=true;
-            FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;AutoScaleMode=AutoScaleMode.Dpi;Font=new Font("Microsoft YaHei UI",9);
-            ClientSize=new Size(520,430);Padding=new Padding(16);
-            var title=new Label {Text="有新版本 "+release.Version,Location=new Point(16,16),Size=new Size(488,28),Font=new Font(Font,FontStyle.Bold)};
-            var notes=new TextBox {Name="ReleaseNotes",Text=UpdateText.Notes(release.Body),ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,WordWrap=true,Location=new Point(16,50),Size=new Size(488,235),TabStop=true};
-            status.Location=new Point(16,294);status.Size=new Size(488,56);status.Text=stable?"点击“更新并重启”后才会下载，完成签名与文件校验后安装。":"当前为绿色模式。打开发布页面下载；安装到稳定目录后可以一键更新。";
-            progress.Location=new Point(16,354);progress.Size=new Size(488,15);
-            install.Text=stable?"更新并重启":"打开发布页面";install.Location=new Point(326,389);install.Size=new Size(178,28);
-            skip.Text="跳过此版本";skip.Location=new Point(16,389);skip.Size=new Size(120,28);
-            cancel.Text="取消";cancel.Location=new Point(232,389);cancel.Size=new Size(86,28);
-            Controls.AddRange(new Control[]{title,notes,status,progress,install,skip,cancel});CancelButton=cancel;
+            ClientSize=new Size(440,500);
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=6,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            for(int i=0;i<6;i++)layout.RowStyles.Add(new RowStyle(i==2?SizeType.Percent:SizeType.AutoSize,i==2?100:0));
+            var title=Caption("发现新版本",true);title.Name="UpdateTitle";title.Margin=Padding.Empty;layout.Controls.Add(title,0,0);
+            var versions=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,Margin=new Padding(0,6,0,16)};
+            var current=Caption("当前 "+AppRuntime.Version+" → ");current.Margin=Padding.Empty;
+            var next=Caption(release.Version);next.Name="NewVersion";next.ForeColor=Theme.Accent;next.Margin=Padding.Empty;
+            versions.Controls.AddRange(new Control[]{current,next});layout.Controls.Add(versions,0,1);
+            var notes=new TextBox {Name="ReleaseNotes",AccessibleName="发布说明",Text=Notes(release.Body),ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,WordWrap=true,TabStop=true};
+            var section=new ThemedSection(Theme) {Dock=DockStyle.Fill,Margin=new Padding(0,0,0,16)};
+            notes.BorderStyle=BorderStyle.None;notes.BackColor=Theme.Section;notes.ForeColor=Theme.Foreground;notes.Dock=DockStyle.Fill;section.Controls.Add(notes);
+            layout.Controls.Add(section,0,2);
+            status=Caption(stable?"点击‘更新并重启’后下载，签名和文件校验通过后才安装。":"当前为绿色模式。打开发布页面下载；安装到稳定目录后可以一键更新。",false,true);
+            status.Name="UpdateStatus";status.Dock=DockStyle.Fill;status.Margin=new Padding(0,0,0,12);layout.Controls.Add(status,0,3);
+            progress=new ThemedProgress(Theme) {Name="UpdateProgress",Dock=DockStyle.Top,Margin=new Padding(0,0,0,16)};layout.Controls.Add(progress,0,4);
+            install=new ThemedButton(Theme,ThemedButtonKind.Primary) {Name="InstallUpdate",Text=stable?"更新并重启":"打开发布页面",AutoSize=true,TabIndex=1};
+            skip=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="SkipUpdate",Text="跳过此版本",AutoSize=true,Margin=Padding.Empty,TabIndex=3};
+            cancel=new ThemedButton(Theme) {Name="LaterUpdate",Text="稍后",AutoSize=true,TabIndex=2};
+            var buttons=new TableLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,ColumnCount=3,RowCount=1,Margin=Padding.Empty};
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            skip.Anchor=AnchorStyles.Left;buttons.Controls.Add(skip,0,0);buttons.Controls.Add(cancel,1,0);buttons.Controls.Add(install,2,0);
+            layout.Controls.Add(buttons,0,5);Controls.Add(layout);AcceptButton=install;CancelButton=cancel;ActiveControl=install;
             install.Click+=delegate{if(InstallRequested!=null)InstallRequested();};
             skip.Click+=delegate{if(SkipRequested!=null)SkipRequested();};
             cancel.Click+=delegate{if(downloading){if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";cancel.Enabled=false;}else Close();};
             FormClosing+=delegate(object sender,FormClosingEventArgs e){if(downloading&&!handedOff){e.Cancel=true;if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";}};
         }
-        internal void Downloading(){downloading=true;handedOff=false;install.Enabled=false;skip.Enabled=false;cancel.Enabled=true;status.Text="正在下载和校验…";progress.Style=ProgressBarStyle.Marquee;}
-        internal void Progress(long bytes,long total){if(IsDisposed)return;status.Text="正在下载："+(bytes/1024)+" KB"+(total>0?" / "+(total/1024)+" KB":"");if(total>0){progress.Style=ProgressBarStyle.Continuous;progress.Value=(int)Math.Min(100,bytes*100/total);}}
-        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;progress.Style=ProgressBarStyle.Continuous;progress.Value=0;}
-        internal void Handoff(){handedOff=true;cancel.Enabled=false;status.Text="校验完成，正在等待程序正常退出并安装…";}
+        static string Notes(string text){
+            var lines=UpdateText.Notes(text).Replace("\r\n","\n").Replace('\r','\n').Split('\n');
+            for(int i=0;i<lines.Length;i++)if(lines[i].StartsWith("- ",StringComparison.Ordinal))lines[i]="• "+lines[i].Substring(2);
+            return String.Join(Environment.NewLine,lines);
+        }
+        internal void Downloading(){downloading=true;handedOff=false;install.Enabled=false;skip.Enabled=false;cancel.Enabled=true;status.ForeColor=Theme.Muted;status.Text="正在下载和校验…";progress.Value=0;progress.Indeterminate=true;}
+        internal void Progress(long bytes,long total){
+            if(IsDisposed)return;int percent=total>0?(int)Math.Max(0,Math.Min(100,bytes*100.0/total)):0;
+            status.Text="已下载 "+(Math.Max(0,bytes)/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB"+(total>0?" / "+(total/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB（"+percent.ToString(CultureInfo.InvariantCulture)+"%）":"");
+            progress.Indeterminate=total<=0;progress.Value=percent;
+        }
+        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;status.ForeColor=text.StartsWith("已取消",StringComparison.Ordinal)?Theme.Muted:Theme.Error;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;progress.Indeterminate=false;progress.Value=0;}
+        internal void Handoff(){handedOff=true;cancel.Enabled=false;progress.Indeterminate=false;progress.Value=100;status.ForeColor=Theme.Muted;status.Text="签名与文件校验通过，正在退出并安装…";}
         internal void Shutdown(){handedOff=true;downloading=false;Close();}
     }
     [DataContract] internal sealed class UpdateResult {

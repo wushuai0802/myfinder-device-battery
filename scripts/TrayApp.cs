@@ -331,11 +331,9 @@ namespace AtkBatteryTray {
             }
         }
         void EditAlias(bool mouse,string deviceKey=null,string groupKey=null) {
-            bool dark=Style.Dark;var pref=DeviceSettings.Current;
-            using(var dialog=new Form {Text=groupKey!=null?"托盘图标名称":deviceKey!=null?"设备显示名称":mouse?"鼠标显示名称":"耳机显示名称",ShowInTaskbar=false,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false,StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(280,106),BackColor=dark?Color.FromArgb(41,45,52):Color.FromArgb(250,251,253),ForeColor=PopupPages.Foreground(dark),Font=new Font("Microsoft YaHei UI",9)})
-            using(var input=new TextBox {Text=groupKey!=null?TrayConfiguration.Name(pref,groupKey):deviceKey!=null?navigation.SelectedDeviceName:mouse?pref.MouseAlias:pref.HeadsetAlias,MaxLength=groupKey!=null?12:32,Location=new Point(14,15),Width=252,BackColor=PopupPages.Track(dark),ForeColor=PopupPages.Foreground(dark),BorderStyle=BorderStyle.FixedSingle})
-            using(var save=new Button {Text="保存",DialogResult=DialogResult.OK,Location=new Point(191,62),Size=new Size(75,28)}) {
-                dialog.Controls.Add(input);dialog.Controls.Add(save);dialog.AcceptButton=save;ignoreDeactivate=true;
+            var pref=DeviceSettings.Current;
+            using(var dialog=new ThemedAliasDialog(groupKey!=null?"托盘图标名称":deviceKey!=null?"设备显示名称":mouse?"鼠标显示名称":"耳机显示名称",groupKey!=null?TrayConfiguration.Name(pref,groupKey):deviceKey!=null?navigation.SelectedDeviceName:mouse?pref.MouseAlias:pref.HeadsetAlias,groupKey!=null?12:32)) {
+                var input=dialog.Input;ignoreDeactivate=true;
                 try {if(dialog.ShowDialog(this)==DialogResult.OK){pref=DeviceSettings.Current;if(groupKey!=null){TrayConfiguration.Rename(pref,groupKey,input.Text);owner.SavePreferences(pref);}else {if(deviceKey!=null){pref.DeviceAliases[deviceKey]=input.Text;navigation.SelectedDeviceName=input.Text;}else if(mouse)pref.MouseAlias=input.Text;else pref.HeadsetAlias=input.Text;DeviceSettings.SaveConfiguration(pref);}owner.ConfigurationChanged(false);}}
                 finally{ignoreDeactivate=false;}
             }
@@ -1378,12 +1376,12 @@ namespace AtkBatteryTray {
             var refreshDevices=new ToolStripMenuItem("刷新设备列表");refreshDevices.Click+=delegate {RequestAudioRead(true);};audioSettingsMenu.DropDownItems.Add(refreshDevices);
             var reset=new ToolStripMenuItem("恢复默认音源识别");reset.Click+=delegate {
                 try {DeviceSettings.ResetAudio();ConfigurationChanged();}
-                catch(Exception e){MessageBox.Show("无法保存音源设置："+e.Message,"设备电量",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+                catch(Exception e){ThemedMessage.Show(null,"设备电量","无法保存音源设置："+e.Message,MessageBoxButtons.OK);}
             };audioSettingsMenu.DropDownItems.Add(reset);
         }
         void SaveAudioEndpoint(string role,string id) {
             try {DeviceSettings.SetEndpoint(role,id);ConfigurationChanged();}
-            catch(Exception e){MessageBox.Show("无法保存音源设置："+e.Message,"设备电量",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+            catch(Exception e){ThemedMessage.Show(null,"设备电量","无法保存音源设置："+e.Message,MessageBoxButtons.OK);}
         }
         void RequestRead(bool includeBattery,bool queueWhenBusy) {
             if(persistStatus&&!NativeMousePresent)return;

@@ -224,7 +224,7 @@ static class TrayGroupsTests {
                 timer.Tick+=delegate {
                     foreach(Form dialog in Application.OpenForms)if(dialog.Text=="托盘图标名称"){
                         timer.Stop();shown=true;
-                        try{TextBox input=null;foreach(Control control in dialog.Controls)if(control is TextBox)input=(TextBox)control;Check(input!=null&&input.MaxLength==12,"group rename reuses the name dialog with a twelve-character input");input.Text="  改名分组  ";dialog.DialogResult=DialogResult.OK;}
+                        try{var inputs=dialog.Controls.Find("AliasInput",true);var input=inputs.Length==1?inputs[0] as TextBox:null;Check(input!=null&&input.MaxLength==12,"group rename reuses the name dialog with a twelve-character input");input.Text="  改名分组  ";dialog.DialogResult=DialogResult.OK;}
                         catch(Exception error){failure=error;dialog.DialogResult=DialogResult.Cancel;}break;
                     }
                 };
