@@ -227,6 +227,84 @@ static class ThemedDialogTests {
         internal int Paints;
         protected override void OnPaint(PaintEventArgs e){Paints++;e.Graphics.Clear(Color.Magenta);base.OnPaint(e);}
     }
+    static List<Control> VisibleTree(Control root){
+        var result=new List<Control>();
+        foreach(Control child in root.Controls)if(child.Visible){result.Add(child);result.AddRange(VisibleTree(child));}
+        return result;
+    }
+    static bool Ancestor(Control parent,Control child){
+        for(Control current=child.Parent;current!=null;current=current.Parent)if(current==parent)return true;
+        return false;
+    }
+    static Rectangle VisibleBounds(Control control){
+        var bounds=control.RectangleToScreen(control.ClientRectangle);
+        for(Control parent=control.Parent;parent!=null;parent=parent.Parent)bounds=Rectangle.Intersect(bounds,parent.RectangleToScreen(parent.ClientRectangle));
+        return bounds;
+    }
+    static string ControlPath(Control control){return control.Parent==null?control.GetType().Name:ControlPath(control.Parent)+"/"+(control.Name.Length==0?control.GetType().Name:control.Name);}
+    static void NoOverlap(Control root){
+        var controls=VisibleTree(root);
+        for(int i=0;i<controls.Count;i++)for(int j=i+1;j<controls.Count;j++){
+            var first=controls[i];var second=controls[j];
+            if(Ancestor(first,second)||Ancestor(second,first))continue;
+            var overlap=Rectangle.Intersect(VisibleBounds(first),VisibleBounds(second));
+            Check(overlap.Width<=0||overlap.Height<=0,"overlap "+overlap+": "+ControlPath(first)+" and "+ControlPath(second));
+        }
+    }
+    static void DialogControlLayout(string kind){
+        SelectTheme("ocean",false);
+        foreach(float scale in new[]{1f,1.25f,1.5f,2f})WithDpi((int)Math.Round(96*scale),delegate{
+            using(var feedback=new FeedbackForm(Report(),true,false,delegate{},delegate{},""))
+            using(var dialog=kind=="feedback"?(ThemedDialog)feedback:kind=="diagnostic"?feedback.CreateDiagnosticsDialog():kind=="update"?new UpdateDialog(Release(),true):kind=="message"?ThemedMessage.Create("确认",Lines(30),MessageBoxButtons.YesNo):new ThemedAliasDialog("名称","设备",12)){
+                dialog.Scale(new SizeF(scale,scale));Show(dialog);
+                foreach(int width in new[]{0,360,540}){
+                    if(width>0)dialog.ClientSize=new Size((int)(width*scale),dialog.ClientSize.Height);
+                    Application.DoEvents();NoOverlap(dialog);
+                    if(kind=="feedback"){
+                        var remaining=Find<Label>(dialog,"FeedbackRemaining");var description=Find<Control>(dialog,"FeedbackDescriptionCard");
+                        int copies=0;foreach(var control in VisibleTree(dialog))if(control is Label&&control.Text==remaining.Text)copies++;
+                        Check(copies==1&&Ancestor(description,remaining),"one count prompt owned by the description card");
+                        Check(description.RectangleToScreen(description.ClientRectangle).Contains(remaining.RectangleToScreen(remaining.ClientRectangle)),"count prompt stays in the description card");
+                        var card=Find<Control>(dialog,"FeedbackDiagnosticsCard");
+                        var leaves=new List<Control>();foreach(var control in VisibleTree(card))if(control.Controls.Count==0)leaves.Add(control);
+                        Check(leaves.Count==2&&leaves.Contains(Find<Control>(dialog,"IncludeDiagnostics"))&&leaves.Contains(Find<Control>(dialog,"ViewDiagnostics")),"diagnostic card has only switch and preview leaves");
+                        if(scale==1f&&width==0)foreach(var control in VisibleTree(dialog))if(control.Name=="FeedbackRemaining"||Ancestor(card,control))Console.WriteLine(ControlPath(control)+" bounds="+dialog.RectangleToClient(control.RectangleToScreen(control.ClientRectangle)));
+                    }
+                    var update=dialog as UpdateDialog;if(update!=null){update.Downloading();Application.DoEvents();NoOverlap(dialog);update.Finished("已取消更新。");Application.DoEvents();NoOverlap(dialog);}
+                }
+            }
+        });
+    }
+    static void SegmentClientPixels(){
+        SelectTheme("ocean",false);var theme=new DialogTheme(false);
+        using(var feedback=new FeedbackForm(Report(),true,false,delegate{},delegate{},"")){
+            Show(feedback);var group=(Control)Field(feedback,"categories");
+            using(var bitmap=new Bitmap(group.Width,group.Height))using(var graphics=Graphics.FromImage(bitmap)){
+                graphics.Clear(Color.Black);
+                Call(group,"OnPaintBackground",new PaintEventArgs(graphics,group.ClientRectangle));Call(group,"OnPaint",new PaintEventArgs(graphics,group.ClientRectangle));
+                foreach(var point in new[]{new Point(0,0),new Point(bitmap.Width-1,0),new Point(0,bitmap.Height-1),new Point(bitmap.Width-1,bitmap.Height-1)})Check(bitmap.GetPixel(point.X,point.Y).ToArgb()==group.Parent.BackColor.ToArgb(),"segment outer corner is actual card color");
+                for(int y=0;y<bitmap.Height;y++)for(int x=0;x<bitmap.Width;x++){var pixel=bitmap.GetPixel(x,y);Check(pixel.R>=12||pixel.G>=12||pixel.B>=12,"near-black segment pixel at "+x+","+y);}
+            }
+            Check(group.Controls.Count==0,"the entire segmented picker must be one control without child radio HWNDs");
+        }
+    }
+    static void BackgroundDispatch(){
+        using(var form=new FeedbackForm(Report(),true,false,delegate{},delegate{},"")){
+            Show(form);
+            foreach(string name in new[]{"Category-device","Category-battery","IncludeDiagnostics"}){
+                var control=Find<Control>(form,name);
+                bool opaque=(bool)typeof(Control).GetMethod("GetStyle",Members).Invoke(control,new object[]{ControlStyles.Opaque});
+                Console.WriteLine(name+" ControlStyles.Opaque="+opaque);
+                using(var bitmap=new Bitmap(control.Width,control.Height))using(var graphics=Graphics.FromImage(bitmap)){
+                    graphics.Clear(Color.Magenta);
+                    // WinForms omits OnPaintBackground for controls carrying Opaque.
+                    if(!opaque)Call(control,"OnPaintBackground",new PaintEventArgs(graphics,control.ClientRectangle));
+                    Call(control,"OnPaint",new PaintEventArgs(graphics,control.ClientRectangle));
+                    Check(bitmap.GetPixel(0,0).ToArgb()==control.BackColor.ToArgb(),name+": WM_PAINT dispatch fills rounded exterior pixels");
+                }
+            }
+        }
+    }
     static void OpaqueDialogPainting(){
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
             SelectTheme(style,dark);var theme=new DialogTheme(dark);
@@ -901,6 +979,11 @@ static class Host {
         NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
         var previousArea=ThemedDialog.WorkingAreaProvider;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
+            if(args.Length==1&&args[0]=="--paint2-only"){
+                foreach(string kind in new[]{"feedback","update","alias","message","diagnostic"})Run("control overlap: "+kind,delegate{DialogControlLayout(kind);});
+                Run("single segment client pixels",SegmentClientPixels);Run("native background dispatch",BackgroundDispatch);
+                Console.WriteLine(checks+" paint2 checks, "+failures+" failed groups");return failures==0?0:1;
+            }
             if(args.Length==0||args.Length==1&&args[0]=="--paint-only"){
                 Run("opaque dialog paint",OpaqueDialogPainting);Run("initial read-only focus",InitialReadOnlyFocus);Run("compact update size",CompactUpdateSize);
                 Console.WriteLine(checks+" paint/focus/size checks, "+failures+" failed groups");if(args.Length==1)return failures==0?0:1;
