@@ -65,10 +65,7 @@ static class ThemeTests {
             var palette=Palette(Styles[i],dark);var colors=Colors[i*2+(dark?0:1)];
             for(int j=0;j<Roles.Length;j++)Check(Role(palette,Roles[j]).ToArgb()==Hex(colors[j]).ToArgb(),Styles[i]+" "+dark+" exact "+Roles[j]);
             var card=Role(palette,"Card");Check(Contrast(Role(palette,"Foreground"),card)>=4.5,"primary contrast");Check(Contrast(Role(palette,"Muted"),card)>=4.5,"secondary contrast");
-            var background=Role(palette,"Background");
-            Check(background==ThemePalette.Blend(card,dark?Color.Black:Role(palette,"Foreground"),dark?64:13),"dialog background mixes only existing palette colors");
-            Check(Luminance(card)-Luminance(background)>=.004,"card floats above background: relative luminance delta >= .004");
-            Check(Contrast(Role(palette,"Foreground"),background)>=4.5&&Contrast(Role(palette,"Muted"),background)>=4.5,"dialog background text contrast");
+            Check(palette.GetType().GetField("Background",BindingFlags.Instance|BindingFlags.NonPublic)==null,"unused dialog background role is removed");
             Check(Contrast(Role(palette,"Accent"),card)>=3,"accent contrast");Check(Contrast(Role(palette,"SelectedForeground"),Role(palette,"Selected"))>=4.5,"selected contrast");
             foreach(int value in new[]{10,30,80})Check(Contrast(Level(value,dark),card)>=3,"semantic contrast "+Styles[i]+" "+dark+" "+value);
             var pref=new AudioBindings();Style(pref,Styles[i]);DeviceSettings.UseTransientConfiguration(pref);

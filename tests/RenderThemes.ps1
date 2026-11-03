@@ -1,6 +1,7 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly)
+param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly)
 $ErrorActionPreference='Stop'
+if($InteractionsOnly -and $DialogsOnly){throw 'InteractionsOnly and DialogsOnly cannot be combined.'}
 $root=Split-Path -Parent $PSScriptRoot
 $previewOutput=[IO.Path]::GetFullPath($OutputDirectory)
 $temporaryRoot=[IO.Path]::GetFullPath($env:TEMP).TrimEnd('\','/')
@@ -21,6 +22,7 @@ $previewRelease=Read-DeviceBatteryRelease $root
 $previewMetadata=Join-Path $compileDirectory 'AssemblyInfo.preview.cs'
 [IO.File]::WriteAllText($previewMetadata,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$previewRelease.version+'")]'),(New-Object Text.UTF8Encoding($false)))
 $sources+=$previewMetadata
+if(-not $DialogsOnly){
 $interactionExecutable=Join-Path $compileDirectory 'RenderInteractions.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:HoverTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$interactionExecutable" $sources (Join-Path $PSScriptRoot 'HoverTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Interaction preview compilation failed.'}
@@ -37,6 +39,7 @@ if($LASTEXITCODE -ne 0){throw 'Theme preview compilation failed.'}
 # four native sizes, light/dark taskbars); it never runs settings tests or actions.
 & $executable --render $previewOutput
 if($LASTEXITCODE -ne 0){throw 'Theme preview rendering failed.'}
+}
 $dialogExecutable=Join-Path $compileDirectory 'RenderDialogs.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:ThemedDialogTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$dialogExecutable" $sources (Join-Path $PSScriptRoot 'ThemedDialogTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Dialog preview compilation failed.'}
@@ -45,6 +48,7 @@ if($LASTEXITCODE -ne 0){throw 'Dialog preview compilation failed.'}
 # Every dialog image pairs the real form with a same-palette, same-scale main
 # panel rendered by CompactRenderer. Includes all update states, feedback,
 # diagnostics, alias, confirmation, and short/long release notes in all palettes.
+# Unified card-colored clients use 20px padding, 14px regions and inset text fields.
 # DrawToBitmap may omit native themed scrollbars; injected-call tests verify theme selection.
 & $dialogExecutable --render $previewOutput
 if($LASTEXITCODE -ne 0){throw 'Dialog preview rendering failed.'}

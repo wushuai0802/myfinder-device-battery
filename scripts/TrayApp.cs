@@ -449,12 +449,13 @@ namespace AtkBatteryTray {
             base.OnHandleCreated(e);if(ignoreDeactivate)QueueOpeningGuardRelease(presentationEpoch);
         }
         public void OpenAnimated(bool fromLauncher=false) {OpenAnimatedCore(fromLauncher,null);}
+        internal void OpenFromTray(Point point){OpenAnimatedCore(false,null,point);}
         internal void OpenUpdated(TrayPanelAnchor placement){OpenAnimatedCore(false,placement);}
-        void OpenAnimatedCore(bool fromLauncher,TrayPanelAnchor? placement) {
+        void OpenAnimatedCore(bool fromLauncher,TrayPanelAnchor? placement,Point? click=null) {
             if(disposingPopup||Disposing||IsDisposed)return;
             presentationDepth++;
             try {
-                BeginPresentation();updatedAnchor=placement;anchor=placement.HasValue?placement.Value.Point:Cursor.Position;
+                BeginPresentation();updatedAnchor=placement;anchor=placement.HasValue?placement.Value.Point:click??owner.CursorPosition();
                 if(!placement.HasValue&&fromLauncher){var screen=Screen.FromPoint(anchor).WorkingArea;anchor=new Point(screen.Right-24,screen.Top+16);}
                 dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;
                 frameAlpha=3;PositionForSize(6);Show();Activate();owner.PanelOpened();AnimateTo(1f,190f);
@@ -723,6 +724,7 @@ namespace AtkBatteryTray {
         bool activeNative;
         DateTime activeSwitchedAt=DateTime.MinValue;
         readonly Action<AudioBindings> saveConfiguration;
+        internal Func<Point> CursorPosition=delegate{return Cursor.Position;};
         DateTime audioOperationStarted;
         bool pendingHeadsetRefresh,manualRefresh;
         int stageInFlight=-1;
@@ -849,7 +851,7 @@ namespace AtkBatteryTray {
         }
         internal void RequestUpdatedPanel() {
             if(disposed)return;
-            if(updatedPanelRequest==null)updatedPanelRequest=new UpdatedPanelRequest(delegate{return TrayPanelPlacement.FindIcon(tray);},TrayPanelPlacement.Fallback,OpenUpdatedPanel);
+            if(updatedPanelRequest==null)updatedPanelRequest=new UpdatedPanelRequest(delegate{return TrayPanelPlacement.FindIcon(tray,DeviceSettings.Current.LastTrayIconPosition);},TrayPanelPlacement.Fallback,OpenUpdatedPanel);
             updatedPanelRequest.Start();
         }
         internal void OpenUpdatedPanel(TrayPanelAnchor placement) {
@@ -874,7 +876,11 @@ namespace AtkBatteryTray {
             bool close=trayPressPending?trayPressCloses:target!=null&&!target.IsDisposed;
             trayPressPending=false;trayPressCloses=false;trayPressTarget=null;
             if(close){if(target!=null&&!target.IsDisposed&&OwnsDetails(target))target.CloseAnimated();return;}
-            ShowDetails();
+            var point=CursorPosition();var preferences=DeviceSettings.Current;
+            preferences.LastTrayIconPosition=TrayIconPosition.Capture(point,Screen.FromPoint(point).Bounds);
+            try{saveConfiguration(preferences);}catch(Exception){SafeDiagnostic.Transition("tray_position","save_failed");}
+            if(details!=null&&!details.IsDisposed){details.Reveal();return;}
+            details=new Details(this);details.OpenFromTray(point);
         }
         internal void ListenForShowRequest(ShowPanelSignal signal,bool updated=false) {
             signal.Listen(delegate {if(disposed)return;try {dispatch.BeginInvoke((MethodInvoker)delegate {if(disposed)return;if(updated)RequestUpdatedPanel();else ShowDetails(true);});}catch(InvalidOperationException){}});

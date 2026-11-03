@@ -148,7 +148,7 @@ namespace AtkBatteryTray {
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
-            var typeCard=new ThemedSection(Theme) {Name="FeedbackTypeCard",Dock=DockStyle.Fill,Height=78};
+            var typeCard=new ThemedSection(Theme) {Name="FeedbackTypeCard",Dock=DockStyle.Fill,Height=54};
             var typeTitle=Caption("类型",false,false,true);typeTitle.Dock=DockStyle.Top;
             categories.Dock=DockStyle.Bottom;categories.Margin=Padding.Empty;
             for(int i=0;i<4;i++){
@@ -232,8 +232,7 @@ namespace AtkBatteryTray {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var text=new TextBox {Name="DiagnosticText",AccessibleName="诊断信息",Text=report.FullText,ReadOnly=true,Multiline=true,WordWrap=false,HideSelection=true,SelectionLength=0,TabStop=true};
             new DialogCaret(text);
-            var card=new ThemedSection(dialog.Theme) {Name="DiagnosticsCard",Dock=DockStyle.Fill};
-            text.BorderStyle=dialog.Theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;text.BackColor=dialog.Theme.Card;text.ForeColor=dialog.Theme.Foreground;text.Dock=DockStyle.Fill;card.Controls.Add(text);DialogScrollbars.Attach(text,dialog.Theme);layout.Controls.Add(card,0,0);
+            var card=new ThemedTextBox(dialog.Theme,text) {Name="DiagnosticsCard",Dock=DockStyle.Fill};layout.Controls.Add(card,0,0);
             var close=new ThemedButton(dialog.Theme,ThemedButtonKind.Primary) {Text="关闭",DialogResult=DialogResult.Cancel,AutoSize=true,Anchor=AnchorStyles.Right,Margin=Padding.Empty};layout.Controls.Add(close,0,1);
             dialog.Controls.Add(layout);dialog.AcceptButton=close;dialog.CancelButton=close;dialog.ActiveControl=close;
             dialog.ConfigureLayout(layout,close,delegate(int width){return card.Padding.Vertical+card.Margin.Vertical+5*text.Font.Height+SystemInformation.HorizontalScrollBarHeight+4;});return dialog;

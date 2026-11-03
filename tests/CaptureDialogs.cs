@@ -40,6 +40,8 @@ internal static class CaptureDialogs {
         Require(IsWindowVisible(form.Handle)&&form.Opacity==1,"Fixture must be natively visible and opaque");
         Require(Screen.PrimaryScreen.WorkingArea.Contains(form.Bounds),"Window must fit the primary visible work area: "+form.Bounds);
         float scale=DialogDpi.Scale(form);
+        Require(form.BackColor==form.Theme.Card&&Math.Abs(form.Padding.Left-20*scale)<=1,"Dialog must use one card-colored surface with 20px padding");
+        AssertSurfaces(form,form.Theme,scale);
         Console.WriteLine(form.GetType().Name+" DPI="+Math.Round(scale*96)+" bounds="+form.Bounds);
         if(form is UpdateDialog){
             var notes=Find<ThemedReleaseNotes>(form,"ReleaseNotes");
@@ -49,6 +51,14 @@ internal static class CaptureDialogs {
             if(notes.LineCountFor(notes.Width)<=6)Require(form.Height/scale<=420,"Typical update window exceeds 420 logical pixels");
         }
         AssertReadOnly(form);
+    }
+    static void AssertSurfaces(Control root,DialogTheme theme,float scale){
+        foreach(Control child in root.Controls){
+            if(child.GetType()==typeof(ThemedSection))Require(child.Padding==Padding.Empty&&child.BackColor==theme.Card&&Math.Abs(child.Margin.Bottom-14*scale)<=1,"Content regions must be flat with 14px gaps");
+            var text=child as TextBoxBase;
+            if(text!=null)Require(text.Parent is ThemedTextBox&&text.BorderStyle==BorderStyle.None&&text.BackColor==theme.Track&&Math.Abs(text.Parent.Padding.Left-10*scale)<=1,"Text must use a shared borderless inset field");
+            AssertSurfaces(child,theme,scale);
+        }
     }
     static void AssertReadOnly(Control control){
         var text=control as TextBoxBase;
@@ -144,7 +154,10 @@ internal static class CaptureDialogs {
     }
     static void Validate(Form form,Bitmap image,bool opening){
         var themed=(ThemedDialog)form;var pixels=new Pixels(image);var client=Region(form,form);
-        Require(Near(pixels.At(client.Left+2,client.Top+2),themed.Theme.Background,8),"Desktop capture is blank, obscured, or not the fixture");
+        Require(Near(pixels.At(client.Left+2,client.Top+2),themed.Theme.Card,8),"Desktop capture is blank, obscured, or not the fixture");
+        // The whole outer margin is the same surface, including between regions.
+        var margin=new Rectangle(client.Left+2,client.Top+2,Math.Max(1,themed.Padding.Left/2),Math.Max(1,client.Height-4));
+        Require(pixels.Count(margin,delegate(Color c){return !Near(c,themed.Theme.Card,8);})==0,"Dialog outer margin contains a second background or card border");
         var feedback=form as FeedbackForm;
         if(feedback!=null){
             var group=Find<ThemedSegments>(form,"Categories");

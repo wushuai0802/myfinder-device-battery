@@ -19,7 +19,7 @@ namespace AtkBatteryTray {
             ClientSize=new Size(380,340);
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var versionCard=new ThemedSection(Theme) {Name="VersionCard",Dock=DockStyle.Fill,Height=78};
+            var versionCard=new ThemedSection(Theme) {Name="VersionCard",Dock=DockStyle.Fill,Height=54};
             var versionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var title=Caption("发现新版本",true);title.Name="UpdateTitle";title.Margin=Padding.Empty;versionLayout.Controls.Add(title,0,0);
@@ -28,7 +28,7 @@ namespace AtkBatteryTray {
             var next=Caption(release.Version);next.Name="NewVersion";next.ForeColor=Theme.Accent;next.Margin=Padding.Empty;
             versions.Controls.AddRange(new Control[]{current,next});versionLayout.Controls.Add(versions,0,1);versionCard.Controls.Add(versionLayout);layout.Controls.Add(versionCard,0,0);
             var notes=new ThemedReleaseNotes(Theme) {Name="ReleaseNotes",AccessibleName="发布说明",Text=Notes(release.Body),TabStop=true,Dock=DockStyle.Fill};
-            var section=new ThemedSection(Theme) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};section.Controls.Add(notes);layout.Controls.Add(section,0,1);
+            var section=new ThemedTextBox(Theme,notes) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};layout.Controls.Add(section,0,1);
             status=Caption(stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。",false,true);
             status.Name="UpdateStatus";status.AutoSize=false;status.AutoEllipsis=true;status.Dock=DockStyle.Fill;status.Margin=Padding.Empty;
             statusArea=new ThemedSection(Theme) {Name="UpdateStatusCard",Dock=DockStyle.Fill};

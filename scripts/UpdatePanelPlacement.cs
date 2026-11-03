@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using AtkBattery;
 
 namespace AtkBatteryTray {
     internal enum PanelOpenRequest {None,Launcher,Updated}
@@ -39,6 +40,30 @@ namespace AtkBatteryTray {
         static Point Center(Rectangle rect){return new Point(rect.Left+rect.Width/2,rect.Top+rect.Height/2);}
         internal static TrayPanelAnchor ForIcon(Rectangle icon,TaskbarEdge edge,Func<Point,Rectangle> workingArea) {
             return Anchor(icon,workingArea(Center(icon)),edge);
+        }
+        static TaskbarEdge NearestEdge(Point point,Rectangle bounds){
+            int distance=Math.Abs(point.Y-bounds.Bottom);var edge=TaskbarEdge.Bottom;
+            int next=Math.Abs(point.Y-bounds.Top);if(next<distance){distance=next;edge=TaskbarEdge.Top;}
+            next=Math.Abs(point.X-bounds.Left);if(next<distance){distance=next;edge=TaskbarEdge.Left;}
+            next=Math.Abs(point.X-bounds.Right);if(next<distance)edge=TaskbarEdge.Right;
+            return edge;
+        }
+        // Pure priority resolution. A shell rectangle on an auto-hidden taskbar
+        // may describe an invisible Windows icon instead of MDF's visible mirror.
+        internal static TrayPanelAnchor? FindAnchor(Point? lastPoint,Rectangle? lastScreen,Rectangle? icon,bool autoHide,Rectangle[] screens,Rectangle[] workAreas,Rectangle? taskbar,TaskbarEdge edge){
+            if(screens.Length!=workAreas.Length)throw new ArgumentException("Screen/work-area mismatch");
+            for(int i=0;i<screens.Length;i++)
+                if(lastPoint.HasValue&&lastScreen.HasValue&&lastScreen.Value==screens[i]&&screens[i].Width>0&&screens[i].Height>0&&screens[i].Contains(lastPoint.Value))
+                    return new TrayPanelAnchor(lastPoint.Value,workAreas[i],NearestEdge(lastPoint.Value,screens[i]));
+            if(!autoHide&&icon.HasValue&&icon.Value.Width>0&&icon.Value.Height>0)
+                for(int i=0;i<screens.Length;i++)if(screens[i].Contains(icon.Value)){
+                    var iconEdge=taskbar.HasValue&&screens[i].Contains(Center(taskbar.Value))?edge:NearestEdge(Center(icon.Value),screens[i]);
+                    return Anchor(icon,workAreas[i],iconEdge);
+                }
+            return null;
+        }
+        internal static TrayPanelAnchor Fallback(Rectangle screen,Rectangle workArea,TaskbarEdge edge){
+            return Anchor(null,workArea,workArea.Top>screen.Top?TaskbarEdge.Top:edge);
         }
         // Physical coordinates throughout. The caller caps panel size to the work area.
         internal static Point Position(Point anchor,Rectangle workArea,Size panel,TaskbarEdge edge) {
@@ -78,23 +103,26 @@ namespace AtkBatteryTray {
                 rect=data.Rect.Rectangle;edge=(TaskbarEdge)data.Edge;return true;
             }catch(DllNotFoundException){return false;}catch(EntryPointNotFoundException){return false;}
         }
-        internal static TrayPanelAnchor? FindIcon(NotifyIcon icon) {
-            Rectangle rect;if(!TryIconRect(icon,out rect))return null;
-            var point=Center(rect);var screen=Screen.FromPoint(point);Rectangle taskbar;TaskbarEdge edge;
-            if(!TryTaskbar(out taskbar,out edge)||Screen.FromRectangle(taskbar).DeviceName!=screen.DeviceName) {
-                // ABM_GETTASKBARPOS describes the primary taskbar. A secondary
-                // monitor's icon must keep its own screen and nearest edge.
-                var bounds=screen.Bounds;int distance=Math.Abs(point.Y-bounds.Bottom);edge=TaskbarEdge.Bottom;
-                int next=Math.Abs(point.Y-bounds.Top);if(next<distance){distance=next;edge=TaskbarEdge.Top;}
-                next=Math.Abs(point.X-bounds.Left);if(next<distance){distance=next;edge=TaskbarEdge.Left;}
-                next=Math.Abs(point.X-bounds.Right);if(next<distance)edge=TaskbarEdge.Right;
-            }
-            return ForIcon(rect,edge,delegate(Point location){return Screen.FromPoint(location).WorkingArea;});
+        static bool TaskbarAutoHide(){
+            var data=new AppBarData {Size=(uint)Marshal.SizeOf(typeof(AppBarData))};
+            try{return (SHAppBarMessage(4,ref data).ToUInt64()&1)!=0;}
+            catch(DllNotFoundException){return true;}catch(EntryPointNotFoundException){return true;}
+        }
+        internal static TrayPanelAnchor? FindIcon(NotifyIcon icon,TrayIconPosition last=null) {
+            var displays=Screen.AllScreens;var screens=new Rectangle[displays.Length];var areas=new Rectangle[displays.Length];
+            for(int i=0;i<displays.Length;i++){screens[i]=displays[i].Bounds;areas[i]=displays[i].WorkingArea;}
+            Point? point=last==null?(Point?)null:last.Point;Rectangle? bounds=last==null?(Rectangle?)null:last.Bounds;
+            var remembered=FindAnchor(point,bounds,null,true,screens,areas,null,TaskbarEdge.Bottom);
+            if(remembered.HasValue)return remembered;
+            Rectangle rect,taskbar;TaskbarEdge edge;
+            Rectangle? iconRect=TryIconRect(icon,out rect)?rect:(Rectangle?)null;
+            Rectangle? bar=TryTaskbar(out taskbar,out edge)?taskbar:(Rectangle?)null;
+            return FindAnchor(null,null,iconRect,TaskbarAutoHide(),screens,areas,bar,edge);
         }
         internal static TrayPanelAnchor Fallback() {
             Rectangle taskbar;TaskbarEdge edge;
-            if(TryTaskbar(out taskbar,out edge))return Anchor(null,Screen.FromRectangle(taskbar).WorkingArea,edge);
-            return Anchor(null,Screen.PrimaryScreen.WorkingArea,TaskbarEdge.Bottom);
+            var screen=TryTaskbar(out taskbar,out edge)?Screen.FromRectangle(taskbar):Screen.PrimaryScreen;
+            return Fallback(screen.Bounds,screen.WorkingArea,edge);
         }
     }
     // UI-thread retries allow Explorer to register a newly-created NotifyIcon

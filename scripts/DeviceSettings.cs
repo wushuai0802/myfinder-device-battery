@@ -7,6 +7,21 @@ using System.Xml;
 
 namespace AtkBattery {
     [DataContract]
+    public sealed class TrayIconPosition {
+        [DataMember(Order=0)] public int X;
+        [DataMember(Order=1)] public int Y;
+        [DataMember(Order=2)] public int ScreenX;
+        [DataMember(Order=3)] public int ScreenY;
+        [DataMember(Order=4)] public int ScreenWidth;
+        [DataMember(Order=5)] public int ScreenHeight;
+        public TrayIconPosition Clone(){return (TrayIconPosition)MemberwiseClone();}
+        internal System.Drawing.Point Point {get{return new System.Drawing.Point(X,Y);}}
+        internal System.Drawing.Rectangle Bounds {get{return new System.Drawing.Rectangle(ScreenX,ScreenY,ScreenWidth,ScreenHeight);}}
+        internal static TrayIconPosition Capture(System.Drawing.Point point,System.Drawing.Rectangle bounds){
+            return new TrayIconPosition {X=point.X,Y=point.Y,ScreenX=bounds.X,ScreenY=bounds.Y,ScreenWidth=bounds.Width,ScreenHeight=bounds.Height};
+        }
+    }
+    [DataContract]
     public sealed class AudioEndpointBindings {
         [DataMember(Order=0, EmitDefaultValue=false)] public string SpeakerEndpointId;
         [DataMember(Order=1, EmitDefaultValue=false)] public string HeadsetEndpointId;
@@ -50,6 +65,7 @@ namespace AtkBattery {
         [DataMember(Order=22, EmitDefaultValue=false)] public List<TrayGroup> TrayGroups = new List<TrayGroup>();
         [DataMember(Order=23)] public string TrayIconStyle = "number";
         [DataMember(Order=24, EmitDefaultValue=false)] public bool TrayGroupHintShown;
+        [DataMember(Order=25, EmitDefaultValue=false)] public TrayIconPosition LastTrayIconPosition;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
@@ -68,6 +84,7 @@ namespace AtkBattery {
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };
             if(AudioDeviceBindings!=null)foreach(var pair in AudioDeviceBindings)copy.AudioDeviceBindings[pair.Key]=pair.Value==null?null:pair.Value.Clone();
             copy.TrayIconStyle=TrayIconStyle;copy.TrayGroupHintShown=TrayGroupHintShown;
+            copy.LastTrayIconPosition=LastTrayIconPosition==null?null:LastTrayIconPosition.Clone();
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
         }

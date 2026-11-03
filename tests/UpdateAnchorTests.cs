@@ -32,6 +32,8 @@ static class UpdateAnchorTests {
         }
     }
     static void Positions() {
+        var mdf=TrayPanelPlacement.Fallback(new Rectangle(0,0,2560,1440),new Rectangle(0,24,2560,1392),TaskbarEdge.Bottom);
+        Check(mdf.Point==new Point(2559,24)&&mdf.Edge==TaskbarEdge.Top,"auto-hidden bottom taskbar with MDF uses the upper-right work area");
         var area=new Rectangle(0,0,1600,900);var size=new Size(260,300);
         var anchors=new[]{new Point(900,920),new Point(900,-20),new Point(-20,600),new Point(1620,600)};
         var edges=new[]{TaskbarEdge.Bottom,TaskbarEdge.Top,TaskbarEdge.Left,TaskbarEdge.Right};
@@ -58,6 +60,43 @@ static class UpdateAnchorTests {
         var iconRect=new Rectangle(-120,8,20,24);Point selected=Point.Empty;
         var monitor=TrayPanelPlacement.ForIcon(iconRect,TaskbarEdge.Top,delegate(Point point){selected=point;return point.X<0?secondaryArea:primary;});
         Check(selected==new Point(-110,20)&&monitor.WorkArea==secondaryArea,"monitor selected from the icon, not cursor or primary screen");
+    }
+    static void AnchorPriority(){
+        var screen=new Rectangle(0,0,2560,1440);var area=new Rectangle(0,24,2560,1392);
+        var taskbar=new Rectangle(0,1392,2560,48);var icon=new Rectangle(2480,1400,24,24);var click=new Point(2100,12);
+        var screens=new[]{screen,new Rectangle(-1920,0,1920,1080)};var areas=new[]{area,new Rectangle(-1920,0,1920,1040)};
+        var chosen=TrayPanelPlacement.FindAnchor(click,screen,icon,true,screens,areas,taskbar,TaskbarEdge.Bottom);
+        Check(chosen.HasValue&&chosen.Value.Point==click&&chosen.Value.WorkArea==area&&chosen.Value.Edge==TaskbarEdge.Top,"MDF click wins over the hidden bottom tray");
+        var location=TrayPanelPlacement.Position(chosen.Value.Point,area,new Size(260,300),chosen.Value.Edge);
+        Check(location==new Point(1970,24),"MDF remembered click opens below the top icon");
+        Check(TrayPanelPlacement.FindAnchor(click,screen,icon,false,screens,areas,taskbar,TaskbarEdge.Bottom).Value.Point==click,"remembered click also wins over a visible shell icon");
+        Check(!TrayPanelPlacement.FindAnchor(null,null,icon,true,screens,areas,taskbar,TaskbarEdge.Bottom).HasValue,"auto-hidden taskbar rectangle is ignored without a last click");
+        var stale=new Rectangle(0,0,2560,1600);
+        Check(!TrayPanelPlacement.FindAnchor(click,stale,icon,true,screens,areas,taskbar,TaskbarEdge.Bottom).HasValue,"screen bounds must match exactly");
+        Check(!TrayPanelPlacement.FindAnchor(new Point(3000,10),screen,null,false,screens,areas,null,TaskbarEdge.Bottom).HasValue,"saved point outside its screen is ignored");
+        chosen=TrayPanelPlacement.FindAnchor(click,stale,icon,false,screens,areas,taskbar,TaskbarEdge.Bottom);
+        Check(chosen.HasValue&&chosen.Value.Point==new Point(2492,1412)&&chosen.Value.Edge==TaskbarEdge.Bottom,"valid visible shell icon follows stale remembered screen");
+        foreach(var hidden in new[]{new Rectangle(2570,1400,24,24),new Rectangle(2550,1400,24,24),Rectangle.Empty})
+            Check(!TrayPanelPlacement.FindAnchor(null,null,hidden,false,screens,areas,taskbar,TaskbarEdge.Bottom).HasValue,"shell icon must be fully inside a current screen");
+        chosen=TrayPanelPlacement.FindAnchor(new Point(-100,20),screens[1],icon,true,screens,areas,taskbar,TaskbarEdge.Bottom);
+        Check(chosen.Value.WorkArea==areas[1]&&chosen.Value.Edge==TaskbarEdge.Top,"remembered click selects its negative-coordinate monitor");
+        chosen=TrayPanelPlacement.FindAnchor(null,null,new Rectangle(-150,2,20,20),false,screens,areas,taskbar,TaskbarEdge.Bottom);
+        Check(chosen.Value.WorkArea==areas[1]&&chosen.Value.Edge==TaskbarEdge.Top,"secondary shell icon uses its own screen edge");
+        foreach(TaskbarEdge edge in Enum.GetValues(typeof(TaskbarEdge))){
+            var fallback=TrayPanelPlacement.Fallback(screens[1],areas[1],edge);
+            Check(fallback.Edge==edge&&fallback.Point==TrayPanelPlacement.Anchor(null,areas[1],edge).Point,"no top reservation preserves taskbar corner: "+edge);
+        }
+    }
+    static void PositionSettings(){
+        string path=System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tray-position-settings.json");
+        var settings=new AudioBindings {Theme="dark",MouseAlias="保留名称"};
+        DeviceSettings.SaveBindings(path,settings);
+        Check(!System.IO.File.ReadAllText(path).Contains("LastTrayIconPosition")&&DeviceSettings.LoadBindings(path).LastTrayIconPosition==null,"old configuration omits the optional position and loads empty");
+        settings.LastTrayIconPosition=TrayIconPosition.Capture(new Point(-100,12),new Rectangle(-1920,0,1920,1080));
+        DeviceSettings.SaveBindings(path,settings);var restored=DeviceSettings.LoadBindings(path);
+        Check(restored.LastTrayIconPosition.Point==new Point(-100,12)&&restored.LastTrayIconPosition.Bounds==new Rectangle(-1920,0,1920,1080),"last click and complete screen bounds survive config reload");
+        var copy=restored.Clone();copy.LastTrayIconPosition.X=999;
+        Check(restored.LastTrayIconPosition.X==-100&&copy.Theme=="dark"&&copy.MouseAlias=="保留名称","configuration clones isolate the position and preserve preferences");
     }
     static void Retries() {
         var anchor=TrayPanelPlacement.Anchor(null,new Rectangle(0,0,800,600),TaskbarEdge.Bottom);
@@ -86,7 +125,9 @@ static class UpdateAnchorTests {
     }
     static void PopupRouting() {
         DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false,Theme="light"});
-        using(var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot();},delegate(int stage){throw new Exception("unexpected hardware write");})) {
+        int saves=0,reads=0;var fixedPoint=new Point(Screen.PrimaryScreen.Bounds.Left+150,Screen.PrimaryScreen.Bounds.Top+12);
+        using(var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot();},delegate(int stage){throw new Exception("unexpected hardware write");},null,null,configurationWriter:delegate(AudioBindings settings){saves++;DeviceSettings.UseTransientConfiguration(settings);})) {
+            owner.CursorPosition=delegate{reads++;return fixedPoint;};
             var screen=Screen.PrimaryScreen.WorkingArea;
             var anchor=TrayPanelPlacement.Anchor(null,screen,TaskbarEdge.Bottom);
             string name="Local\\UpdateAnchorPopup-"+Guid.NewGuid().ToString("N");
@@ -111,16 +152,25 @@ static class UpdateAnchorTests {
             popup.Close();
             PanelStartup.Forward(PanelOpenRequest.Launcher,launcher,updated);
             Pump(delegate{var current=(Details)Field(owner,"details");return current!=null&&current!=popup&&!current.IsDisposed;});popup=(Details)Field(owner,"details");
-            var cursorScreen=Screen.FromPoint(Cursor.Position).WorkingArea;
+            var cursorScreen=Screen.FromPoint(fixedPoint).WorkingArea;
             Check((Point)Field(popup,"anchor")==new Point(cursorScreen.Right-24,cursorScreen.Top+16),"launcher keeps its existing upper-right anchor");
-            popup.Close();owner.HandleTrayMouseUp(MouseButtons.Left);popup=(Details)Field(owner,"details");
-            Check((Point)Field(popup,"anchor")==Cursor.Position,"tray click keeps its existing cursor anchor");
+            Check(saves==0,"updated and legacy launcher paths do not record an icon click");
+            popup.Close();reads=0;owner.HandleTrayMouseUp(MouseButtons.Left);popup=(Details)Field(owner,"details");
+            Check((Point)Field(popup,"anchor")==fixedPoint&&reads==1,"tray click samples the injected cursor once and keeps that anchor");
+            var stored=DeviceSettings.Current.LastTrayIconPosition;
+            Check(saves==1&&stored.Point==fixedPoint&&stored.Bounds==Screen.FromPoint(fixedPoint).Bounds,"up-only MDF click saves the point and screen bounds");
+            owner.HandleTrayMouseUp(MouseButtons.Right);Check(saves==1,"right click does not overwrite the last opening");
+            popup.Close();fixedPoint.Offset(50,0);owner.HandleTrayMouseDown(MouseButtons.Left);owner.HandleTrayMouseUp(MouseButtons.Left);popup=(Details)Field(owner,"details");
+            Check(saves==2&&DeviceSettings.Current.LastTrayIconPosition.Point==fixedPoint,"paired tray clicks update the saved position");
+            owner.HandleTrayMouseDown(MouseButtons.Left);owner.HandleTrayMouseUp(MouseButtons.Left);Check(saves==2,"closing a panel does not record another opening");
+            popup.Close();owner.RequestUpdatedPanel();popup=(Details)Field(owner,"details");
+            Check(((TrayPanelAnchor)Field(popup,"updatedAnchor")).Point==fixedPoint&&saves==2,"updated request reads the saved click without rewriting it");
             }
             owner.ExitThread();
         }
     }
     [STAThread] static int Main() {
-        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();Retries();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
+        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();AnchorPriority();PositionSettings();Retries();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
 }

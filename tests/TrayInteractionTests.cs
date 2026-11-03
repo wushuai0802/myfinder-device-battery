@@ -86,6 +86,7 @@ static class TrayInteractionTests {
         internal readonly TrayContext Context;
         internal readonly NotifyIcon Notify;
         internal bool LeftDown;
+        internal readonly System.Drawing.Point CursorPoint=new System.Drawing.Point(Screen.PrimaryScreen.Bounds.Left+150,Screen.PrimaryScreen.Bounds.Top+12);
         internal int MouseClicks,MouseDowns,MouseUps,Writes;
         internal Fixture(bool reduced=false) {
             typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,
@@ -98,7 +99,8 @@ static class TrayInteractionTests {
                 delegate(string target){Interlocked.Increment(ref Writes);return Audio();},
                 delegate(bool mute){Interlocked.Increment(ref Writes);return Audio();},
                 delegate(string endpoint,int volume){Interlocked.Increment(ref Writes);return Audio();},
-                delegate{return LeftDown;});
+                delegate{return LeftDown;},configurationWriter:DeviceSettings.UseTransientConfiguration);
+            Context.CursorPosition=delegate{return CursorPoint;};
             Notify=(NotifyIcon)TrayField.GetValue(Context);
             Notify.MouseClick+=delegate(object sender,MouseEventArgs e){if(e.Button==MouseButtons.Left)MouseClicks++;};
             Notify.MouseDown+=delegate(object sender,MouseEventArgs e){if(e.Button==MouseButtons.Left)MouseDowns++;};
@@ -156,10 +158,9 @@ static class TrayInteractionTests {
     static void SlowClicks() {
         using(var f=new Fixture()) {
             f.Down();Check(f.Current==null,"a closed tray press waits for release before opening");
-            var releasePosition=Cursor.Position;f.Up();
+            f.Up();
             var first=f.Current;
-            if(Cursor.Position==releasePosition)Check((System.Drawing.Point)AnchorField.GetValue(first)==releasePosition,"tray release anchors the new popup at the unchanged pointer position");
-            else Console.WriteLine("UNAVAILABLE tray pointer anchor: the physical cursor moved during the release callback");
+            Check((System.Drawing.Point)AnchorField.GetValue(first)==f.CursorPoint,"tray release anchors the new popup at the injected pointer position");
             Until(delegate{return !(bool)IgnoreDeactivateField.GetValue(first);},"first opening guard settles");PumpFor(230);
             f.Down();PumpFor(60);
             Check(f.Current==first&&!first.IsClosing&&!first.IsDisposed,"an open tray press waits for release before closing");

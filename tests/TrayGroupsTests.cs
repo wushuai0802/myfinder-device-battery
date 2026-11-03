@@ -173,7 +173,10 @@ static class TrayGroupsTests {
             Check(extraNotify.ContextMenuStrip==first.ContextMenuStrip&&!extraNotify.Visible&&!first.Visible,"all icons share the existing menu and test icons stay hidden");
             f.Owner.WirelessDevices=new WirelessDevice[0];f.Owner.ConfigurationChanged(false);Check(extraNotify.Text=="耳机组：没有已连接的设备"&&icons.For(group.Id)==extra,"an empty group keeps its icon and connection message");
             var status=f.Owner.BuildStatusJson();Check(!status.Contains("耳机组")&&!status.Contains("TrayGroups"),"extra groups do not leak into the MyDockFinder state schema");
-            f.Popup.Dispose();NotifyClick(extraNotify,1);var panel=(Details)Field(f.Owner,"details");Check(panel!=null&&!panel.IsDisposed,"an additional icon opens the shared panel");NotifyClick(first,2);Check(panel.IsDisposed,"a double-click release on the first icon uses the same panel toggle");
+            var click=new Point(Screen.PrimaryScreen.Bounds.Left+200,Screen.PrimaryScreen.Bounds.Top+12);f.Owner.CursorPosition=delegate{return click;};
+            f.Popup.Dispose();NotifyClick(extraNotify,1);var panel=(Details)Field(f.Owner,"details");Check(panel!=null&&!panel.IsDisposed,"an additional icon opens the shared panel");
+            Check(DeviceSettings.Current.LastTrayIconPosition.Point==click,"an additional tray icon records the same injected click position");
+            NotifyClick(first,2);Check(panel.IsDisposed,"a double-click release on the first icon uses the same panel toggle");
             var menu=first.ContextMenuStrip;pref=DeviceSettings.Current;TrayConfiguration.Remove(pref,group.Id);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);Check(first.ContextMenuStrip==menu&&!menu.IsDisposed&&icons.First==original,"removing a real extra NotifyIcon preserves the original icon and shared menu");
         }
     }
