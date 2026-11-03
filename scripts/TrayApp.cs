@@ -1486,6 +1486,7 @@ namespace AtkBatteryTray {
             bool fresh;using(var signal=new ShowPanelSignal())using(var stop=new ShowPanelSignal("Local\\MyFinderDeviceBattery.Exit"))using(var mutex=new Mutex(true,"Local\\ATK-A9-Air-Battery-Tray",out fresh)) {
                 if(!fresh){if(args.Length==1&&args[0]=="--show")signal.Request();return;}
                 Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+                DialogVisibility.ConsumeStartupShowCommand();
                 var context=new TrayContext(args.Length==1&&args[0]=="--show");context.ListenForShowRequest(signal);context.ListenForExitRequest(stop);Application.Run(context);
             }
         }

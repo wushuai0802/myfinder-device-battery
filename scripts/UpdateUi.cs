@@ -125,12 +125,12 @@ namespace AtkBatteryTray {
         internal void ConfigurationChanged(){lock(gate){if(!DeviceSettings.Current.AutoCheckUpdates&&automaticInFlight&&checkCancel!=null)checkCancel.Cancel();}changed();}
         internal void Open(){if(available!=null)ShowAvailable();else Check(false);}
         void ShowAvailable(){
-            if(dialog!=null&&!dialog.IsDisposed){dialog.Activate();return;}var release=available;if(release==null)return;
+            if(dialog!=null&&!dialog.IsDisposed){DialogVisibility.RestoreAndActivate(dialog);return;}var release=available;if(release==null)return;
             ThreadPool.QueueUserWorkItem(delegate{
                 bool stable=false;try{stable=installer.IsStable(CancellationToken.None);}catch(Exception){SafeDiagnostic.Transition("updates","update_install_probe_failed");}
                 bool installed=stable;
                 Post(delegate{
-                    if(dialog!=null&&!dialog.IsDisposed){dialog.Activate();return;}
+                    if(dialog!=null&&!dialog.IsDisposed){DialogVisibility.RestoreAndActivate(dialog);return;}
                     var form=new UpdateDialog(release,installed);dialog=form;
                     form.SkipRequested+=delegate{
                         ThreadPool.QueueUserWorkItem(delegate{try{checker.Skip(release.Version);Post(delegate{if(available==release)available=null;status="已跳过 "+release.Version;changed();form.Close();});}catch(Exception){Post(delegate{form.Finished("无法保存跳过记录，请稍后再试。");});}});

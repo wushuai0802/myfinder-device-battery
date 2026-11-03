@@ -6,6 +6,33 @@ using System.Windows.Forms;
 using AtkBattery;
 
 namespace AtkBatteryTray {
+    internal static class DialogVisibility {
+        const int Hide=0,ShowNormal=1,Restore=9;
+        [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+        internal static void ConsumeStartupShowCommand(){
+            // Older updaters launch us with STARTUPINFO/SW_HIDE. Windows applies that
+            // startup command to the first ShowWindow call, hiding the first dialog.
+            // Consume it before any dialogs exist. A message-only window can never
+            // appear on screen or in the taskbar, even under a normal startup command.
+            // https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-showwindow
+            // https://learn.microsoft.com/windows/win32/winmsg/window-features#message-only-windows
+            var helper=new NativeWindow();
+            try{helper.CreateHandle(new CreateParams {Parent=new IntPtr(-3)});ShowWindow(helper.Handle,Hide);}
+            finally{helper.DestroyHandle();}
+        }
+        internal static void EnsureShown(Form form){
+            if(form.IsDisposed||form.Disposing||!form.IsHandleCreated)return;
+            if(!IsWindowVisible(form.Handle)){ShowWindow(form.Handle,ShowNormal);form.Activate();}
+        }
+        internal static void RestoreAndActivate(Form form){
+            if(form.IsDisposed||form.Disposing)return;
+            if(!form.Visible)form.Show();
+            if(IsIconic(form.Handle))ShowWindow(form.Handle,Restore);
+            EnsureShown(form);form.Activate();
+        }
+    }
     internal static class DialogDpi {
         // Reflection keeps the Graphics fallback usable on Frameworks before 4.7.
         static readonly System.Reflection.PropertyInfo deviceDpi=typeof(Control).GetProperty("DeviceDpi");
@@ -185,7 +212,7 @@ namespace AtkBatteryTray {
             }finally{layingOut=false;}
         }
         protected override void OnLoad(EventArgs e){loaded=true;FitToWorkingArea(true);base.OnLoad(e);}
-        protected override void OnShown(EventArgs e){base.OnShown(e);LayoutClientArea();}
+        protected override void OnShown(EventArgs e){base.OnShown(e);LayoutClientArea();DialogVisibility.EnsureShown(this);}
         protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);LayoutClientArea();}
         protected override void OnClientSizeChanged(EventArgs e){base.OnClientSizeChanged(e);LayoutClientArea();}
         protected override void OnLocationChanged(EventArgs e){

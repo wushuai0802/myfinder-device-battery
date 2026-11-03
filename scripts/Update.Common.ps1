@@ -58,7 +58,7 @@ function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDi
 }
 
 function Start-DeviceBatteryUpdatedApp([string]$Executable) {
-    $null=Start-Process -FilePath $Executable -ArgumentList '--show' -WorkingDirectory (Split-Path -Parent $Executable) -WindowStyle Hidden -PassThru
+    $null=Start-Process -FilePath $Executable -ArgumentList '--show' -WorkingDirectory (Split-Path -Parent $Executable) -PassThru
 }
 
 function Write-DeviceBatteryUpdateResult([string]$DataDirectory,[string]$Status,[string]$Version,[string]$Reason) {
@@ -124,7 +124,7 @@ function Invoke-DeviceBatteryUpdate {
             if($stopped){
                 # Validation or result writing may be the failure: still try the known executable.
                 try {
-                    $null=Start-Process -FilePath $Executable -ArgumentList '--show' -WorkingDirectory ([IO.Path]::GetDirectoryName($Executable)) -WindowStyle Hidden -PassThru -ErrorAction Stop
+                    $null=Start-Process -FilePath $Executable -ArgumentList '--show' -WorkingDirectory ([IO.Path]::GetDirectoryName($Executable)) -PassThru -ErrorAction Stop
                 }catch {Write-DeviceBatteryUpdateResult $DataDirectory 'failed' $Version ($reason+' Recovery restart failed: '+$_.Exception.Message)}
             }
         }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
@@ -15,6 +16,19 @@ using AtkBatteryTray;
 static class ThemedDialogTests {
     const BindingFlags Members=BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic;
     static int checks,failures;
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
+    [DllImport("user32.dll")] static extern IntPtr GetActiveWindow();
+    delegate bool EnumWindow(IntPtr window,IntPtr parameter);
+    [DllImport("user32.dll")] static extern bool EnumThreadWindows(uint thread,EnumWindow callback,IntPtr parameter);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct StartupInfo {
+        internal uint Size;internal IntPtr Reserved,Desktop,Title;
+        internal uint X,Y,Width,Height,XChars,YChars,Fill,Flags;
+        internal ushort Show,ReservedSize;internal IntPtr ReservedBytes,Input,Output,Error;
+    }
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern void GetStartupInfo(out StartupInfo info);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
     [StructLayout(LayoutKind.Sequential)] struct PrintRect {internal int Left,Top,Right,Bottom;}
     [StructLayout(LayoutKind.Sequential)] struct PrintRange {internal IntPtr Device,Target;internal PrintRect Area,Page;internal int First,Last;}
@@ -707,10 +721,127 @@ static class ThemedDialogTests {
             }
         });});
     }
+    static int ThreadWindowCount(){int count=0;EnumThreadWindows(GetCurrentThreadId(),delegate{count++;return true;},IntPtr.Zero);return count;}
+    static void ConsumeStartupShowCommand(){
+        var type=Type("DialogVisibility");
+        type.GetMethod("ConsumeStartupShowCommand",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,null);
+    }
+    static int HiddenHost(string kind){
+        // No tray context, hardware readers, settings files, update network or real app launch.
+        using(var watchdog=new System.Threading.Timer(delegate{Fatal(new TimeoutException("dialog host timeout"));},null,8000,Timeout.Infinite)){
+            StartupInfo startup;GetStartupInfo(out startup);
+            if(kind!="startup")Check((startup.Flags&1)!=0&&startup.Show==0,"host received STARTF_USESHOWWINDOW/SW_HIDE (flags="+startup.Flags+", show="+startup.Show+")");
+            if(kind=="startup"){
+                int before=ThreadWindowCount();IntPtr active=GetActiveWindow();ConsumeStartupShowCommand();
+                Check(ThreadWindowCount()==before&&GetActiveWindow()==active,"startup helper leaves no window or activation change");
+            }
+            using(Form form=kind=="startup"?(Form)new Form():kind=="update"?new UpdateDialog(Release(),true):new ThemedDialog())
+            using(var timer=new System.Windows.Forms.Timer {Interval=200})
+            using(var context=new ApplicationContext()){
+                // Match UpdateDialog's taskbar mode. WinForms otherwise creates an
+                // owner window that can consume the startup command before this one.
+                form.Text="Hidden-start regression fixture";form.ShowInTaskbar=true;
+                timer.Tick+=delegate{
+                    timer.Stop();Check(IsWindowVisible(form.Handle),kind+": first dialog is natively visible");
+                    Check(!IsIconic(form.Handle),kind+": first dialog is not minimized");form.Close();context.ExitThread();
+                };
+                if(kind=="startup")ShowWindow(form.Handle,1);else form.Show();
+                timer.Start();Application.Run(context);return 0;
+            }
+        }
+    }
+    static string hostDirectory,hostExecutable;
+    static string HostExecutable(){
+        if(hostExecutable!=null)return hostExecutable;
+        hostDirectory=Path.Combine(Path.GetTempPath(),"myfinder-dialog-host-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(hostDirectory);
+        string executable=Path.Combine(hostDirectory,"HiddenDialogHost.exe");
+        // Use a GUI-subsystem host through ShellExecute to match updater launches.
+        // Invoke only the test entry point, never the real tray application's Main.
+        using(var compiler=System.CodeDom.Compiler.CodeDomProvider.CreateProvider("CSharp")){
+            var options=new System.CodeDom.Compiler.CompilerParameters {GenerateExecutable=true,OutputAssembly=executable,CompilerOptions="/target:winexe /platform:x64"};
+            options.TempFiles=new System.CodeDom.Compiler.TempFileCollection(hostDirectory,false);
+            var result=compiler.CompileAssemblyFromSource(options,@"using System;using System.Reflection;
+static class Host {
     [STAThread] static int Main(string[] args){
-        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
+        AppDomain.CurrentDomain.UnhandledException+=delegate(object sender,UnhandledExceptionEventArgs e){Console.Error.WriteLine(e.ExceptionObject);Console.Error.Flush();Environment.Exit(1);};
+        try{Console.SetError(new System.IO.StreamWriter(args[1]){AutoFlush=true});var forwarded=new string[args.Length-2];Array.Copy(args,2,forwarded,0,forwarded.Length);return (int)Assembly.LoadFrom(args[0]).EntryPoint.Invoke(null,new object[]{forwarded});}
+        catch(Exception e){Console.Error.WriteLine(e);return 1;}
+    }
+}");
+            if(result.Errors.HasErrors)throw new Exception("Hidden host compilation failed: "+result.Errors[0]);
+        }
+        return hostExecutable=executable;
+    }
+    static void Child(string arguments,ProcessWindowStyle style,bool success,string error){
+        string tests=typeof(ThemedDialogTests).Assembly.Location,errorPath=null;
+        var info=new ProcessStartInfo(tests,arguments) {UseShellExecute=false,CreateNoWindow=true,WindowStyle=style,RedirectStandardOutput=true,RedirectStandardError=true};
+        if(arguments.StartsWith("--hidden-host ",StringComparison.Ordinal)){
+            string host=HostExecutable();errorPath=Path.Combine(hostDirectory,Guid.NewGuid().ToString("N")+".stderr");
+            info=new ProcessStartInfo(host,"\""+tests+"\" \""+errorPath+"\" "+arguments) {UseShellExecute=true,WindowStyle=style};
+        }
+        // Exception cases launch the test executable directly so a wrapper's catch
+        // cannot mask a missing Main/ThreadException/UnhandledException handler.
+        using(var process=Process.Start(info)){
+            try{
+                var stdout=info.RedirectStandardOutput?process.StandardOutput.ReadToEndAsync():null;
+                var errors=info.RedirectStandardError?process.StandardError.ReadToEndAsync():null;
+                Check(process.WaitForExit(12000),"child exits within timeout: "+arguments);
+                if(errors!=null)Check(stdout.Wait(1000)&&errors.Wait(1000),"child output drains: "+arguments);
+                string stderr=errors!=null?errors.Result:File.ReadAllText(errorPath);
+                Check(success?process.ExitCode==0:process.ExitCode==1,"child exit code "+process.ExitCode+": "+arguments+"\n"+stderr);
+                if(error!=null)Check(stderr.Contains(error),"child reports exception on stderr: "+arguments);
+            }finally{if(!process.HasExited){process.Kill();process.WaitForExit(5000);}}
+        }
+    }
+    static void ExistingUpdateWindow(string state){
+        using(var form=new UpdateDialog(Release(),true)){
+            Show(form);
+            if(state=="managed-hidden")form.Hide();else ShowWindow(form.Handle,state=="minimized"?6:0);
+            Check(state=="minimized"?IsIconic(form.Handle):!IsWindowVisible(form.Handle),"fixture begins "+state);
+            // Bypass the constructor's live update timer; exercise the actual existing-window branch.
+            var controller=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));
+            typeof(UpdateController).GetField("dialog",Members).SetValue(controller,form);Call(controller,"ShowAvailable");Application.DoEvents();
+            Check(IsWindowVisible(form.Handle)&&!IsIconic(form.Handle),"ShowAvailable restores "+state+" window");
+            Check(Object.ReferenceEquals(Field(controller,"dialog"),form),"ShowAvailable reuses the same dialog");
+        }
+    }
+    static int ExceptionHost(string kind){
+        if(kind=="main")throw new InvalidOperationException("fixture main exception");
+        using(var watchdog=new System.Threading.Timer(delegate{Fatal(new TimeoutException("exception host timeout"));},null,8000,Timeout.Infinite)){
+            if(kind=="worker"){
+                var thread=new Thread(delegate(){throw new InvalidOperationException("fixture worker exception");});thread.Start();thread.Join();
+            }else using(var timer=new System.Windows.Forms.Timer {Interval=50})using(var context=new ApplicationContext()){
+                timer.Tick+=delegate{timer.Stop();throw new InvalidOperationException("fixture UI exception");};timer.Start();Application.Run(context);
+            }
+        }
+        return 2;
+    }
+    static void Fatal(object error){
+        try{Console.Error.WriteLine(error);Console.Error.Flush();}finally{Environment.Exit(1);}
+    }
+    [STAThread] static int Main(string[] args){
+        // Install both handlers before initialization, including --render. Exiting here
+        // prevents WinForms/Windows Error Reporting from leaving an unattended error box.
+        AppDomain.CurrentDomain.UnhandledException+=delegate(object sender,UnhandledExceptionEventArgs e){Fatal(e.ExceptionObject);};
+        Application.ThreadException+=delegate(object sender,ThreadExceptionEventArgs e){Fatal(e.Exception);};
+        try{Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);return MainCore(args);}
+        catch(Exception error){Console.Error.WriteLine(error);return 1;}
+        finally{if(hostDirectory!=null)Directory.Delete(hostDirectory,true);}
+    }
+    static int MainCore(string[] args){
+        NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
         var previousArea=ThemedDialog.WorkingAreaProvider;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
+            if(args.Length==2&&args[0]=="--hidden-host")return HiddenHost(args[1]);
+            if(args.Length==2&&args[0]=="--exception-host")return ExceptionHost(args[1]);
+            if(args.Length==0||!args[0].StartsWith("--",StringComparison.Ordinal)||args[0]=="--visibility-only"){
+                foreach(string kind in new[]{"themed","update","startup"})Run("hidden startup: "+kind,delegate{Child("--hidden-host "+kind,ProcessWindowStyle.Hidden,true,null);});
+                Run("normal startup helper has no visible side effects",delegate{Child("--hidden-host startup",ProcessWindowStyle.Normal,true,null);});
+                foreach(string state in new[]{"native-hidden","managed-hidden","minimized"})Run("existing update: "+state,delegate{ExistingUpdateWindow(state);});
+                foreach(string kind in new[]{"main","UI","worker"})Run("caught host exception: "+kind,delegate{Child("--exception-host "+kind,ProcessWindowStyle.Hidden,false,"fixture "+kind+" exception");});
+                Run("caught render exception",delegate{Child("--render \""+Application.ExecutablePath+"\"",ProcessWindowStyle.Hidden,false,"System.IO.IOException");});
+                if(args.Length==1&&args[0]=="--visibility-only"){Console.WriteLine(checks+" visibility/exception checks, "+failures+" failed groups");return failures==0?0:1;}
+            }
             Run("button height is independent of default font",ButtonFontScaling);
             Run("button and segment heights at 96/120/144/192 DPI",ButtonDpiMatrix);Run("window DPI and Graphics fallback",DpiSource);
             if(args.Length==1&&args[0]=="--dpi-only")return failures==0?0:1;

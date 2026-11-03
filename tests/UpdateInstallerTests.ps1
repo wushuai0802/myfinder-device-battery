@@ -143,6 +143,7 @@ function Test-RecoveryRestart([string]$Fault,[switch]$LaunchFailure,[switch]$Res
         $parameters.WorkDirectory=Work;$thrown=$null
         try {$null=Invoke-DeviceBatteryUpdate @parameters}catch{$thrown=$_.Exception.Message}
         Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) ('recovery attempts the known executable after '+$Fault+' failure; launchFailure='+$LaunchFailure+'; resultFailure='+$ResultFailure)
+        Assert (-not $script:lastRestartHasWindowStyle) ('recovery restart omits WindowStyle after '+$Fault+' failure')
         Assert ($script:recoveryReads -eq 0) 'recovery performs no hash, manifest or receipt checks'
         if($ResultFailure){Assert ($thrown -ceq 'fixture result write failure') 'result-write failure still attempts recovery'}
         else {
@@ -201,7 +202,8 @@ try {
     function Start-Process {
         [CmdletBinding()]param([string]$FilePath,[string]$ArgumentList,[string]$WorkingDirectory,[string]$WindowStyle,[switch]$PassThru)
         $script:restarts+=,$FilePath
-        Assert ($ArgumentList -ceq '--show' -and $WorkingDirectory -ceq (Split-Path -Parent $FilePath) -and $WindowStyle -ceq 'Hidden') 'restart directly uses the exact executable and hidden launch arguments'
+        $script:lastRestartHasWindowStyle=$PSBoundParameters.ContainsKey('WindowStyle')
+        Assert ($ArgumentList -ceq '--show' -and $WorkingDirectory -ceq (Split-Path -Parent $FilePath)) 'restart directly uses the exact executable and show argument'
         if($script:restartFailure){throw 'fixture launch failure'}
     }
     function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDirectory,[string]$DataDirectory){
@@ -222,6 +224,7 @@ try {
     Assert ((Read-DeviceBatteryReceipt $data).Version -ceq '1.3.6') 'old version updates transactionally'
     Assert ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -ceq $settingsHash) 'settings preserved on success'
     Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) 'restart uses exact Unicode install path'
+    Assert (-not $script:lastRestartHasWindowStyle) 'successful restart omits WindowStyle so the first dialog can appear'
     Assert (-not (Test-Path -LiteralPath $work)) 'successful handoff staging cleaned'
     $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
     Assert ($result.status -ceq 'success') 'success result persisted'
@@ -272,6 +275,7 @@ try {
     Assert ((Read-DeviceBatteryPackageManifest $target).version -ceq '1.3.4') 'all old payload hashes restored'
     Assert ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -ceq $settingsHash) 'settings preserved on rollback'
     Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) 'old version restarts after rollback'
+    Assert (-not $script:lastRestartHasWindowStyle) 'rollback restart omits WindowStyle so the first dialog can appear'
     $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
     Assert ($result.status -ceq 'failed' -and $result.reason -like '*fixture mid-install failure*') 'failure reason available next launch'
     Assert (-not (Test-Path -LiteralPath $parameters.WorkDirectory)) 'failed handoff staging cleaned'
