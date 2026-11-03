@@ -10,6 +10,7 @@ New-Item -ItemType Directory -Path $extracted,$startup,$programs -Force | Out-Nu
 $zip=[IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($ZipPath))
 try {
     foreach($entry in $zip.Entries) {
+        if($entry.FullName.Contains('\')){throw 'The final ZIP contains a backslash entry path.'}
         $candidate=[IO.Path]::GetFullPath((Join-Path $extracted $entry.FullName))
         if(-not $candidate.StartsWith($extracted+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'ZIP entry escapes extraction directory.'}
         if($entry.FullName.EndsWith('/')){continue}
@@ -26,10 +27,38 @@ function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShor
     $script:iconRefreshPaths=@($Executable,$StartupShortcut,$ManualShortcut)
 }
 $manifest=Read-DeviceBatteryPackageManifest $extracted
-# Validate the actual unsigned CI package using the independent offline updater validator.
+# Extract and validate the actual unsigned CI archive using the offline updater validator.
 # A release signature is created locally after CI; this never needs the private key.
-$validation=Start-Process -FilePath (Join-Path $extracted 'outputs\AtkMouseBattery.exe') -ArgumentList @('--validate-update-directory',('"'+$extracted+'"'),$manifest.version) -WindowStyle Hidden -PassThru
-try{if(-not $validation.WaitForExit(30000) -or $validation.ExitCode -ne 0){throw 'The independent updater package validator rejected the CI package.'}}finally{$validation.Dispose()}
+function Assert-SmokeArchiveValidation([string]$Archive,[string]$Destination,[int]$ExpectedExitCode) {
+    $validation=Start-Process -FilePath (Join-Path $extracted 'outputs\AtkMouseBattery.exe') -ArgumentList @('--validate-update-archive',('"'+[IO.Path]::GetFullPath($Archive)+'"'),('"'+$Destination+'"'),$manifest.version) -WindowStyle Hidden -PassThru
+    try {
+        if(-not $validation.WaitForExit(30000) -or $validation.ExitCode -ne $ExpectedExitCode){throw ('The offline archive validator did not return the expected exit code: '+$ExpectedExitCode)}
+    } finally {
+        if(-not $validation.HasExited){$validation.Kill();$null=$validation.WaitForExit(5000)}
+        $validation.Dispose()
+    }
+}
+$validated=Join-Path $testRoot 'updater validated package'
+Assert-SmokeArchiveValidation $ZipPath $validated 0
+Assert-SmokeArchiveValidation $ZipPath $validated 1
+$null=Read-DeviceBatteryPackageManifest $validated
+$invalidArchive=Join-Path $testRoot 'invalid.zip'
+[IO.File]::WriteAllBytes($invalidArchive,[byte[]](1,2,3))
+Assert-SmokeArchiveValidation $invalidArchive (Join-Path $testRoot 'invalid extraction') 1
+# Change only a nested entry separator in an otherwise valid release archive.
+# Accepting backslashes would extract the same manifest-valid payload on Windows.
+$backslashArchive=Join-Path $testRoot 'backslash.zip'
+Copy-Item -LiteralPath $ZipPath -Destination $backslashArchive
+Add-Type -AssemblyName System.IO.Compression
+$unsafeZip=[IO.Compression.ZipFile]::Open($backslashArchive,[IO.Compression.ZipArchiveMode]::Update)
+try {
+    $original=$unsafeZip.GetEntry('engine/server.py')
+    $renamed=$unsafeZip.CreateEntry('engine\server.py',[IO.Compression.CompressionLevel]::Optimal)
+    $source=$original.Open()
+    try {$destination=$renamed.Open();try{$source.CopyTo($destination)}finally{$destination.Dispose()}}finally{$source.Dispose()}
+    $original.Delete()
+} finally {$unsafeZip.Dispose()}
+Assert-SmokeArchiveValidation $backslashArchive (Join-Path $testRoot 'backslash extraction') 1
 $checksum=Join-Path (Split-Path -Parent $ZipPath) 'SHA256SUMS.txt'
 $actualHash=(Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $expectedLine=$actualHash+'  '+[IO.Path]::GetFileName($ZipPath)
@@ -137,6 +166,7 @@ try {
     if($leftovers.Count -gt 0){throw 'Installed package smoke left running child processes.'}
     Uninstall-DeviceBatteryStartup -SourceRoot $extracted -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs -RemoveProgram -RemoveData|Out-Null
     $report=[ordered]@{schema=1;version=$manifest.version;zipSha256=$actualHash;packageFiles=@($manifest.files).Count;
+        archiveValidation=$true;backslashArchiveRejected=$true;invalidArchiveRejected=$true;existingExtractionRejected=$true;
         isolatedInstall=$true;actualAppSmoke=$true;portableReaderImports=$true;providerCount=$result.providerCount;
         gracefulEofCleanup=$true;abruptParentCleanup=$true;hardwareAccess=$false;realStartupChanged=$false}
     [IO.File]::WriteAllText((Join-Path $testRoot 'package-smoke-result.json'),($report | ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))

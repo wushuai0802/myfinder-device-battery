@@ -1423,6 +1423,12 @@ namespace AtkBatteryTray {
             if(args.Length==3&&args[0]=="--validate-update-directory"){
                 try{UpdateVersion.Parse(args[2]);UpdatePackageVerifier.ValidateDirectory(Path.GetFullPath(args[1]),args[2],CancellationToken.None);}catch(Exception){Environment.ExitCode=1;}return;
             }
+            if(args.Length>0&&args[0]=="--validate-update-archive"){
+                try{
+                    if(args.Length!=4)throw new ArgumentException("Expected archive, fresh directory and version.");
+                    UpdatePackageVerifier.ExtractAndValidate(Path.GetFullPath(args[1]),Path.GetFullPath(args[2]),args[3],CancellationToken.None);
+                }catch(Exception){Environment.ExitCode=1;}return;
+            }
             if(args.Length==1&&args[0]=="--audio-broker"){AudioBrokerClient.RunServer();return;}
             if(args.Length==1&&args[0]=="--exit"){using(var stop=new ShowPanelSignal("Local\\MyFinderDeviceBattery.Exit"))stop.Request();return;}
             if(args.Length==1&&args[0]=="--package-smoke"){

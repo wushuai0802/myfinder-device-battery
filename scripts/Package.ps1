@@ -53,7 +53,18 @@ foreach($document in @('compatibility.md','verification.md')) {
 }
 $manifest=New-DeviceBatteryPackageManifest $stage
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
+Add-Type -AssemblyName System.IO.Compression
+$archive=[IO.Compression.ZipFile]::Open($zip,[IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach($item in (Get-ChildItem -LiteralPath $stage -Recurse -Force)) {
+        $relative=$item.FullName.Substring($stage.Length+1).Replace('\','/')
+        if($item.PSIsContainer) {
+            if(@(Get-ChildItem -LiteralPath $item.FullName -Force).Count -eq 0){$null=$archive.CreateEntry($relative+'/',[IO.Compression.CompressionLevel]::Optimal)}
+            continue
+        }
+        $null=[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive,$item.FullName,$relative,[IO.Compression.CompressionLevel]::Optimal)
+    }
+} finally {$archive.Dispose()}
 $sum=Join-Path $OutputDirectory 'SHA256SUMS.txt'
 [IO.File]::WriteAllText($sum,((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($zip)+[Environment]::NewLine),(New-Object Text.UTF8Encoding($false)))
 [pscustomobject]@{Version=$release.version;Zip=$zip;Checksums=$sum;Stage=$stage;Manifest=(Join-Path $stage 'package-manifest.json');Files=@($manifest.files).Count}
