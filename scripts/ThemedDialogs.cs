@@ -212,7 +212,18 @@ namespace AtkBatteryTray {
             }finally{layingOut=false;}
         }
         protected override void OnLoad(EventArgs e){loaded=true;FitToWorkingArea(true);base.OnLoad(e);}
-        protected override void OnShown(EventArgs e){base.OnShown(e);LayoutClientArea();DialogVisibility.EnsureShown(this);}
+        protected override void OnShown(EventArgs e){
+            base.OnShown(e);LayoutClientArea();DialogVisibility.EnsureShown(this);
+            ClearInitialReadOnlySelection(this);
+            // RichEdit formatting/scrollbar creation can briefly select text during
+            // handle creation. Reapply the dialog's chosen action after initial layout.
+            var action=ActiveControl as Button;
+            if(action!=null)action.Focus();
+        }
+        static void ClearInitialReadOnlySelection(Control root){
+            var text=root as TextBoxBase;if(text!=null&&text.ReadOnly){text.HideSelection=true;text.Select(0,0);}
+            foreach(Control child in root.Controls)ClearInitialReadOnlySelection(child);
+        }
         protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);LayoutClientArea();}
         protected override void OnClientSizeChanged(EventArgs e){base.OnClientSizeChanged(e);LayoutClientArea();}
         protected override void OnLocationChanged(EventArgs e){
@@ -231,13 +242,21 @@ namespace AtkBatteryTray {
             if(message.Msg==0x02E0&&loaded)FitToWorkingArea(true);
         }
         internal Label Caption(string text,bool title=false,bool description=false,bool cardTitle=false){
-            return new Label {Text=text,AutoSize=true,UseMnemonic=false,BackColor=Theme.HighContrast?SystemColors.Window:Color.Transparent,ForeColor=description?Theme.Muted:Theme.Foreground,Font=title?titleFont:cardTitle?cardTitleFont:description?descriptionFont:bodyFont,Margin=new Padding(0,0,0,4)};
+            return new Label {Text=text,AutoSize=true,UseMnemonic=false,BackColor=Theme.Card,ForeColor=description?Theme.Muted:Theme.Foreground,Font=title?titleFont:cardTitle?cardTitleFont:description?descriptionFont:bodyFont,Margin=new Padding(0,0,0,4)};
         }
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);ThemedTitleBar.Apply(Handle,Theme);}
         protected override void Dispose(bool disposing){base.Dispose(disposing);if(disposing){bodyFont.Dispose();titleFont.Dispose();descriptionFont.Dispose();cardTitleFont.Dispose();}}
     }
 
     internal enum ThemedButtonKind {Primary,Secondary,Text}
+    internal static class DialogPaint {
+        internal static void Background(Control control,PaintEventArgs e,Color color){
+            using(var brush=new SolidBrush(color))e.Graphics.FillRectangle(brush,control.ClientRectangle);
+        }
+        internal static void InheritBackground(Control control){
+            if(control.Parent!=null)control.BackColor=control.Parent.BackColor;
+        }
+    }
     internal sealed class ThemedButton:Button {
         readonly DialogTheme theme;readonly ThemedButtonKind kind;
         bool hovered,pressed;
@@ -245,8 +264,8 @@ namespace AtkBatteryTray {
             this.theme=theme;this.kind=kind;
             FlatStyle=theme.HighContrast?FlatStyle.Standard:FlatStyle.Flat;FlatAppearance.BorderSize=0;UseVisualStyleBackColor=theme.HighContrast;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
-            BackColor=theme.HighContrast?SystemColors.Control:Color.Transparent;ForeColor=theme.Foreground;Height=VisualDesign.SelectionHeight;Padding=new Padding(14,0,14,0);Margin=new Padding(VisualDesign.CardGap,0,0,0);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            BackColor=theme.HighContrast?SystemColors.Control:theme.Background;ForeColor=theme.Foreground;Height=VisualDesign.SelectionHeight;Padding=new Padding(14,0,14,0);Margin=new Padding(VisualDesign.CardGap,0,0,0);
             AccessibleRole=AccessibleRole.PushButton;
         }
         float ScaleFactor {get{return DialogDpi.Scale(this);}}
@@ -278,6 +297,9 @@ namespace AtkBatteryTray {
             if(Enabled&&(hovered||pressed||Focused&&ShowFocusCues))CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);
             e.Graphics.Restore(state);
         }
+        protected override void OnParentChanged(EventArgs e){base.OnParentChanged(e);if(!theme.HighContrast)DialogPaint.InheritBackground(this);}
+        protected override void OnParentBackColorChanged(EventArgs e){base.OnParentBackColorChanged(e);if(!theme.HighContrast)DialogPaint.InheritBackground(this);}
+        protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         public override void NotifyDefault(bool value){base.NotifyDefault(value);Invalidate();}
         protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
         protected override void OnMouseLeave(EventArgs e){hovered=false;Invalidate();base.OnMouseLeave(e);}
@@ -296,11 +318,17 @@ namespace AtkBatteryTray {
         internal ThemedSection(DialogTheme theme){
             this.theme=theme;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
-            BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;Padding=new Padding(12);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            BackColor=theme.HighContrast?SystemColors.Window:theme.Card;ForeColor=theme.Foreground;Padding=new Padding(12);
             Margin=new Padding(0,0,0,VisualDesign.CardGap);
         }
         protected float ScaleFactor {get{return DialogDpi.Scale(this);}}
+        protected override void OnPaintBackground(PaintEventArgs e){
+            if(theme.HighContrast)base.OnPaintBackground(e);
+            // The flat parent color covers the rounded corners without asking the
+            // parent to paint (and accidentally replaying its children) into our DC.
+            else DialogPaint.Background(this,e,Parent==null?BackColor:Parent.BackColor);
+        }
         protected override void OnPaint(PaintEventArgs e){
             base.OnPaint(e);if(theme.HighContrast||Width<2||Height<2)return;
             float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
@@ -332,9 +360,11 @@ namespace AtkBatteryTray {
         internal ThemedSegments(DialogTheme theme){
             this.theme=theme;TabStop=false;AccessibleRole=AccessibleRole.Grouping;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
             BackColor=theme.HighContrast?SystemColors.Window:theme.Card;
         }
         float ScaleFactor {get{return DialogDpi.Scale(this);}}
+        protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         int ColumnsFor(int width){
             int minimum=0;foreach(Control child in Controls)minimum=Math.Max(minimum,child.GetPreferredSize(Size.Empty).Width);
             return width>=minimum*4+6*ScaleFactor?4:2;
@@ -367,8 +397,8 @@ namespace AtkBatteryTray {
         internal ThemedSegment(DialogTheme theme){
             this.theme=theme;AutoSize=false;Margin=Padding.Empty;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
-            BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;
+            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            BackColor=theme.HighContrast?SystemColors.Window:theme.Card;ForeColor=theme.Foreground;
         }
         float ScaleFactor {get{return DialogDpi.Scale(this);}}
         public override Size GetPreferredSize(Size proposedSize){
@@ -379,10 +409,12 @@ namespace AtkBatteryTray {
             var group=Parent as ThemedSegments;if(group!=null&&(keyData&Keys.Modifiers)==Keys.None&&group.MoveSelection(this,keyData&Keys.KeyCode))return true;
             return base.ProcessDialogKey(keyData);
         }
+        protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}
-            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.SetClip(ClientRectangle,CombineMode.Intersect);e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
             var rect=new RectangleF(0,0,Width/scale,Height/scale);
+            CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
             CompactRenderer.Selection(e.Graphics,rect,Text,null,Checked,Enabled,hovered,pressed,false,theme.Dark);
             if(Focused&&ShowFocusCues)CompactRenderer.Outline(e.Graphics,rect,theme.Accent,1);e.Graphics.Restore(state);
         }
@@ -400,14 +432,15 @@ namespace AtkBatteryTray {
         internal ThemedSwitch(DialogTheme theme){
             this.theme=theme;AutoSize=true;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
-            BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;
+            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            BackColor=theme.HighContrast?SystemColors.Window:theme.Card;ForeColor=theme.Foreground;
         }
         float ScaleFactor {get{return DialogDpi.Scale(this);}}
         public override Size GetPreferredSize(Size proposedSize){
             if(theme.HighContrast)return base.GetPreferredSize(proposedSize);
             using(var font=new Font(Font.FontFamily,VisualDesign.BodyFontSize*ScaleFactor,FontStyle.Regular,GraphicsUnit.Pixel))return new Size(TextRenderer.MeasureText(Text,font).Width+(int)Math.Round(57*ScaleFactor),(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));
         }
+        protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}
             float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
@@ -437,7 +470,7 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,ref Paragraph paragraph);
         internal ThemedReleaseNotes(DialogTheme theme){
             this.theme=theme;ReadOnly=true;Multiline=true;WordWrap=true;DetectUrls=false;BorderStyle=theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;
-            BackColor=theme.Card;ForeColor=theme.Foreground;ScrollBars=RichTextBoxScrollBars.None;
+            BackColor=theme.Card;ForeColor=theme.Foreground;ScrollBars=RichTextBoxScrollBars.None;HideSelection=true;SelectionLength=0;
             DialogScrollbars.Track(this,theme);TextChanged+=delegate{FormatLines();UpdateViewport();};
         }
         internal int LineHeight {get{return (int)Math.Ceiling(Font.Height*1.4);}}
@@ -448,7 +481,7 @@ namespace AtkBatteryTray {
             int line=TextRenderer.MeasureText("A",Font,new Size(Int32.MaxValue,Int32.MaxValue),flags).Height;
             return Math.Max(1,(int)Math.Ceiling(size.Height/(double)Math.Max(1,line)));
         }
-        internal int PreferredNotesHeight(int width){return Math.Max(3,Math.Min(12,LineCountFor(width)))*LineHeight+4;}
+        internal int PreferredNotesHeight(int width){return Math.Max(2,Math.Min(8,LineCountFor(width)))*LineHeight+4;}
         void FormatLines(){
             if(!IsHandleCreated||theme.HighContrast)return;
             int start=SelectionStart,length=SelectionLength;SelectAll();
@@ -474,10 +507,14 @@ namespace AtkBatteryTray {
     internal sealed class ThemedMessageBody:Panel {
         readonly Label message;bool arranging;
         internal ThemedMessageBody(DialogTheme theme,string title,string text){
-            message=new Label {Name="MessageText",AccessibleName=title,Text=text,UseMnemonic=false,ForeColor=theme.Foreground,BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent};
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
+            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            BackColor=theme.Card;
+            message=new Label {Name="MessageText",AccessibleName=title,Text=text,UseMnemonic=false,ForeColor=theme.Foreground,BackColor=theme.Card};
             Controls.Add(message);DialogScrollbars.Track(this,theme);
         }
         public override Size GetPreferredSize(Size proposedSize){return message.GetPreferredSize(new Size(Math.Max(1,proposedSize.Width),0));}
+        protected override void OnPaintBackground(PaintEventArgs e){DialogPaint.Background(this,e,BackColor);}
         protected override void OnLayout(LayoutEventArgs e){
             if(arranging||message==null){base.OnLayout(e);return;}
             arranging=true;
@@ -498,7 +535,7 @@ namespace AtkBatteryTray {
         internal ThemedProgress(DialogTheme theme){
             this.theme=theme;Height=VisualDesign.VolumeTrackHeight;TabStop=false;AccessibleRole=AccessibleRole.ProgressBar;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);BackColor=theme.HighContrast?SystemColors.Control:Color.Transparent;
+            SetStyle(ControlStyles.SupportsTransparentBackColor,false);BackColor=theme.HighContrast?SystemColors.Control:theme.Card;
             animation.Tick+=delegate{UpdateAnimation();Invalidate();};
         }
         bool Reduced {get{return DeviceSettings.Current.ReducedMotion||!SystemInformation.IsMenuAnimationEnabled||theme.HighContrast;}}
@@ -508,6 +545,7 @@ namespace AtkBatteryTray {
         void UpdateAnimation(){if(indeterminate&&Visible&&IsHandleCreated&&!Reduced)animation.Start();else animation.Stop();}
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);UpdateAnimation();}
         protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);UpdateAnimation();}
+        protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}if(Width<=0||Height<=0)return;UpdateAnimation();
             float scale=DialogDpi.Scale(this);var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;

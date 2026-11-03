@@ -11,12 +11,12 @@ using AtkBattery;
 namespace AtkBatteryTray {
     internal sealed class UpdateDialog:ThemedDialog {
         readonly ThemedButton install,skip,cancel;
-        readonly Label status;readonly ThemedProgress progress;
-        bool downloading,handedOff;
+        readonly Label status;readonly ThemedProgress progress;readonly ThemedSection statusArea;
+        bool downloading,handedOff,progressShown;
         internal event Action InstallRequested,SkipRequested,CancelRequested;
         internal UpdateDialog(UpdateRelease release,bool stable){
             Text="MyFinder 设备电量 · 软件更新";StartPosition=FormStartPosition.CenterScreen;ShowInTaskbar=true;
-            ClientSize=new Size(440,380);
+            ClientSize=new Size(380,340);
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var versionCard=new ThemedSection(Theme) {Name="VersionCard",Dock=DockStyle.Fill,Height=78};
@@ -29,9 +29,9 @@ namespace AtkBatteryTray {
             versions.Controls.AddRange(new Control[]{current,next});versionLayout.Controls.Add(versions,0,1);versionCard.Controls.Add(versionLayout);layout.Controls.Add(versionCard,0,0);
             var notes=new ThemedReleaseNotes(Theme) {Name="ReleaseNotes",AccessibleName="发布说明",Text=Notes(release.Body),TabStop=true,Dock=DockStyle.Fill};
             var section=new ThemedSection(Theme) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};section.Controls.Add(notes);layout.Controls.Add(section,0,1);
-            status=Caption(stable?"点击‘更新并重启’后下载，签名和文件校验通过后才安装。":"当前为绿色模式。打开发布页面下载；安装到稳定目录后可以一键更新。",false,true);
-            status.Name="UpdateStatus";status.AutoSize=false;status.Dock=DockStyle.Fill;status.Margin=Padding.Empty;
-            var statusArea=new ThemedSection(Theme) {Name="UpdateStatusCard",Dock=DockStyle.Fill,Height=72};
+            status=Caption(stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。",false,true);
+            status.Name="UpdateStatus";status.AutoSize=false;status.AutoEllipsis=true;status.Dock=DockStyle.Fill;status.Margin=Padding.Empty;
+            statusArea=new ThemedSection(Theme) {Name="UpdateStatusCard",Dock=DockStyle.Fill};
             progress=new ThemedProgress(Theme) {Name="UpdateProgress",Dock=DockStyle.Bottom,Visible=false};
             statusArea.Controls.Add(status);statusArea.Controls.Add(progress);layout.Controls.Add(statusArea,0,2);
             install=new ThemedButton(Theme,ThemedButtonKind.Primary) {Name="InstallUpdate",Text=stable?"更新并重启":"打开发布页面",AutoSize=true,TabIndex=1};
@@ -41,9 +41,10 @@ namespace AtkBatteryTray {
             buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             skip.Anchor=AnchorStyles.Left;buttons.Controls.Add(skip,0,0);buttons.Controls.Add(cancel,1,0);buttons.Controls.Add(install,2,0);
             layout.Controls.Add(buttons,0,3);Controls.Add(layout);AcceptButton=install;CancelButton=cancel;ActiveControl=install;
-            Func<int> surrounding=delegate{return versionCard.Height+versionCard.Margin.Vertical+statusArea.Height+statusArea.Margin.Vertical+section.Padding.Vertical+section.Margin.Vertical;};
-            ConfigureLayout(layout,buttons,delegate(int width){return surrounding()+3*notes.LineHeight+4;},delegate(int width){return surrounding()+notes.PreferredNotesHeight(width-section.Padding.Horizontal);});
+            Func<int> surrounding=delegate{SizeStatus();return versionCard.Height+versionCard.Margin.Vertical+statusArea.Height+statusArea.Margin.Vertical+section.Padding.Vertical+section.Margin.Vertical;};
+            ConfigureLayout(layout,buttons,delegate(int width){return surrounding()+2*notes.LineHeight+4;},delegate(int width){return surrounding()+notes.PreferredNotesHeight(width-section.Padding.Horizontal);});
             notes.TextChanged+=delegate{FitToWorkingArea(false);};
+            Shown+=delegate{notes.Select(0,0);ActiveControl=install;install.Focus();};
             install.Click+=delegate{if(InstallRequested!=null)InstallRequested();};
             skip.Click+=delegate{if(SkipRequested!=null)SkipRequested();};
             cancel.Click+=delegate{if(downloading){if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";cancel.Enabled=false;}else Close();};
@@ -54,7 +55,12 @@ namespace AtkBatteryTray {
             for(int i=0;i<lines.Length;i++)if(lines[i].StartsWith("- ",StringComparison.Ordinal))lines[i]="• "+lines[i].Substring(2);
             return String.Join(Environment.NewLine,lines);
         }
-        void ShowProgress(bool visible){progress.Visible=visible;status.Padding=new Padding(0,0,0,visible?(int)Math.Round(12*Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize):0);}
+        void SizeStatus(){
+            int gap=progressShown?(int)Math.Round(12*DialogDpi.Scale(this)):0;
+            status.Padding=new Padding(0,0,0,gap);
+            statusArea.Height=statusArea.Padding.Vertical+status.Font.Height+(progressShown?progress.Height+gap:0);
+        }
+        void ShowProgress(bool visible){progressShown=visible;progress.Visible=visible;SizeStatus();FitToWorkingArea(false);}
         internal void Downloading(){downloading=true;handedOff=false;install.Enabled=false;skip.Enabled=false;cancel.Enabled=true;status.ForeColor=Theme.Muted;status.Text="正在下载和校验…";ShowProgress(true);progress.Value=0;progress.Indeterminate=true;}
         internal void Progress(long bytes,long total){
             if(IsDisposed)return;int percent=total>0?(int)Math.Max(0,Math.Min(100,bytes*100.0/total)):0;
