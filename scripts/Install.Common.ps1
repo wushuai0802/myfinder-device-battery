@@ -261,7 +261,7 @@ function Install-DeviceBattery {
             }
         }
     }
-    $files=@($package.files)+@([pscustomobject]@{path='package-manifest.json';length=(Get-Item -LiteralPath (Join-Path $source 'package-manifest.json')).Length;sha256=(Get-FileHash -LiteralPath (Join-Path $source 'package-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()})
+    $files=@($package.files)+@([pscustomobject]@{path='package-manifest.json';length=(Get-Item -LiteralPath (Join-Path $source 'package-manifest.json')).Length;sha256=(Get-DeviceBatteryFileHash (Join-Path $source 'package-manifest.json')).ToLowerInvariant()})
     $newPaths=@{};$oldPaths=@{};$changed=New-Object 'System.Collections.Generic.List[object]';$obsolete=New-Object 'System.Collections.Generic.List[object]'
     if($previous -and $previous.Schema -eq 2){foreach($entry in @($previous.Files)){$oldPaths[[string]$entry.path]=$entry}}
     foreach($entry in $files) {
@@ -270,7 +270,7 @@ function Install-DeviceBattery {
         if(Test-Path -LiteralPath $to) {
             if(-not (Test-Path -LiteralPath $to -PathType Leaf)){throw 'An incoming file is occupied by an existing directory.'}
             if($previous -and $previous.Schema -eq 2 -and -not $oldPaths.ContainsKey($relative)){throw ('An unowned target file was preserved: '+$relative)}
-            if((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ieq $entry.sha256){continue}
+            if((Get-DeviceBatteryFileHash $to) -ieq $entry.sha256){continue}
         }
         $changed.Add(@{Relative=$relative;Destination=$to;Entry=$entry})
     }
@@ -279,7 +279,7 @@ function Install-DeviceBattery {
         $to=Resolve-DeviceBatteryPayloadPath $target $relative
         if(Test-Path -LiteralPath $to -PathType Leaf) {
             # A user-modified obsolete file is no longer ours to delete.
-            if((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ieq $oldPaths[$relative].sha256){$obsolete.Add($to)}
+            if((Get-DeviceBatteryFileHash $to) -ieq $oldPaths[$relative].sha256){$obsolete.Add($to)}
         }
     }
     $payloadChanged=$changed.Count -gt 0 -or $obsolete.Count -gt 0
@@ -329,7 +329,7 @@ function Install-DeviceBattery {
             Add-DeviceBatteryUndo $undo $item.Destination $temporary
             New-Item -ItemType Directory -Path (Split-Path -Parent $item.Destination) -Force | Out-Null
             Copy-Item -LiteralPath (Resolve-DeviceBatteryPayloadPath $stage $item.Relative) -Destination $item.Destination -Force -ErrorAction Stop
-            if((Get-FileHash -LiteralPath $item.Destination -Algorithm SHA256).Hash -ine $item.Entry.sha256){throw ('Copy verification failed: '+$item.Relative)}
+            if((Get-DeviceBatteryFileHash $item.Destination) -ine $item.Entry.sha256){throw ('Copy verification failed: '+$item.Relative)}
         }
         foreach($path in $obsolete){Add-DeviceBatteryUndo $undo $path $temporary;Remove-Item -LiteralPath $path -Force -ErrorAction Stop}
         $installed=[ordered]@{AppId=$script:DeviceBatteryAppId;Schema=2;Version=$package.version;ConfigSchema=$package.configSchema;EngineSchema=$package.engineSchema;
@@ -416,7 +416,7 @@ function Uninstall-DeviceBatteryStartup {
         foreach($entry in @($receipt.Files)) {
             $path=Resolve-DeviceBatteryPayloadPath $target ([string]$entry.path)
             if(Test-Path -LiteralPath $path -PathType Leaf) {
-                if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ieq $entry.sha256){$owned.Add($path)}
+                if((Get-DeviceBatteryFileHash $path) -ieq $entry.sha256){$owned.Add($path)}
             }
         }
         $owned.Add($marker)

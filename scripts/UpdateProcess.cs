@@ -20,7 +20,9 @@ namespace AtkBattery {
             var info=new ProcessStartInfo(Path.Combine(system,@"WindowsPowerShell\v1.0\powershell.exe"));
             var command=new StringBuilder("-NoProfile -ExecutionPolicy Bypass -File "+Quote(Path.GetFullPath(script)));
             foreach(string arg in arguments)command.Append(' ').Append(Quote(arg));
-            info.Arguments=command.ToString();info.UseShellExecute=false;info.CreateNoWindow=true;info.WindowStyle=ProcessWindowStyle.Hidden;return info;
+            info.Arguments=command.ToString();info.UseShellExecute=false;info.CreateNoWindow=true;info.WindowStyle=ProcessWindowStyle.Hidden;
+            // Windows PowerShell must discover its own modules, even when the app came from pwsh.
+            info.EnvironmentVariables.Remove("PSModulePath");return info;
         }
         public bool IsStable(CancellationToken token){
             token.ThrowIfCancellationRequested();string script=Path.Combine(root,@"scripts\Apply-Update.ps1");if(!File.Exists(script))return false;

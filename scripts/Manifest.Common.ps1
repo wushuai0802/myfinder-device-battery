@@ -1,5 +1,17 @@
 $script:DeviceBatteryAppId = 'myfinder-device-battery'
 
+function Get-DeviceBatteryFileHash([string]$LiteralPath) {
+    $stream=$null;$sha=$null
+    try {
+        $stream=[IO.File]::OpenRead($LiteralPath)
+        $sha=[Security.Cryptography.SHA256]::Create()
+        return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','')
+    } finally {
+        if($sha){$sha.Dispose()}
+        if($stream){$stream.Dispose()}
+    }
+}
+
 function Read-DeviceBatteryRelease([string]$Root) {
     $release=Get-Content -LiteralPath (Join-Path $Root 'release.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if($release.schema -ne 1 -or $release.appId -cne $script:DeviceBatteryAppId -or
@@ -66,7 +78,7 @@ function New-DeviceBatteryPackageManifest([string]$Root) {
             $relative=$item.FullName.Substring($base.Length+1).Replace('\','/')
             if($relative -eq 'package-manifest.json' -or $relative -eq '.myfinder-device-battery-install.json'){continue}
             $null=Resolve-DeviceBatteryPayloadPath $base $relative
-            $files.Add([pscustomobject][ordered]@{path=$relative;length=$item.Length;sha256=(Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()})
+            $files.Add([pscustomobject][ordered]@{path=$relative;length=$item.Length;sha256=(Get-DeviceBatteryFileHash $item.FullName).ToLowerInvariant()})
             if($files.Count -gt 5000){throw 'Package exceeds the file limit.'}
         }
     }
@@ -93,7 +105,7 @@ function Read-DeviceBatteryPackageManifest([string]$Root) {
             [string]$entry.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or $entry.length -isnot [ValueType] -or $entry.length -lt 0) {throw 'Invalid or duplicate package file entry.'}
         $seen[[string]$entry.path]=$true
         if(-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-Item -LiteralPath $file).Length -ne $entry.length -or
-            (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ine $entry.sha256) {throw ('Package file is missing or changed: '+$entry.path)}
+            (Get-DeviceBatteryFileHash $file) -ine $entry.sha256) {throw ('Package file is missing or changed: '+$entry.path)}
     }
     foreach($required in @('release.json','LICENSE','THIRD_PARTY_NOTICES.md','outputs/AtkMouseBattery.exe',
         'scripts/Manifest.Common.ps1','scripts/Install.Common.ps1','scripts/Install-Startup.ps1','scripts/Uninstall-Startup.ps1',

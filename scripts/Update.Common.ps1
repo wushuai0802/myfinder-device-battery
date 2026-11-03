@@ -105,10 +105,9 @@ function Invoke-DeviceBatteryUpdate {
     param([string]$Executable,[string]$DataDirectory,[string]$Version,[string]$WorkDirectory,[int]$ParentId,[string]$ParentStartUtc)
     $work=Assert-DeviceBatteryUpdateWork $DataDirectory $WorkDirectory $Version
     $installDirectory=Split-Path -Parent (Split-Path -Parent ([IO.Path]::GetFullPath($Executable)))
-    $stopped=$false;$oldVersion=$null
+    $stopped=$false
     try {
         if(-not (Test-DeviceBatteryUpdateInstallation $Executable $DataDirectory)){throw 'The running copy is not the recorded stable installation.'}
-        $oldVersion=(Get-Item -LiteralPath $Executable).VersionInfo.ProductVersion
         if(-not (Wait-DeviceBatteryUpdateParent $ParentId $ParentStartUtc $Executable)){throw 'Timed out waiting for the application to exit normally; no installation was attempted.'}
         $stopped=$true
         if(-not (Test-DeviceBatteryUpdateInstallation $Executable $DataDirectory)){throw 'The stable installation changed while waiting.'}
@@ -119,14 +118,15 @@ function Invoke-DeviceBatteryUpdate {
         Start-DeviceBatteryUpdatedApp $Executable
     }catch {
         $reason=$_.Exception.Message
-        Write-DeviceBatteryUpdateResult $DataDirectory 'failed' $Version $reason
-        if($stopped){
-            # An incomplete rollback must not launch an unverified mixture of versions.
-            try {
-                $restored=Read-DeviceBatteryPackageManifest $installDirectory
-                if($restored.version -cne $oldVersion){throw 'Old-version recovery verification failed.'}
-                Start-DeviceBatteryUpdatedApp $Executable
-            }catch {Write-DeviceBatteryUpdateResult $DataDirectory 'failed' $Version ($reason+' Recovery restart failed: '+$_.Exception.Message)}
+        try {
+            Write-DeviceBatteryUpdateResult $DataDirectory 'failed' $Version $reason
+        }finally{
+            if($stopped){
+                # Validation or result writing may be the failure: still try the known executable.
+                try {
+                    $null=Start-Process -FilePath $Executable -ArgumentList '--show' -WorkingDirectory ([IO.Path]::GetDirectoryName($Executable)) -WindowStyle Hidden -PassThru -ErrorAction Stop
+                }catch {Write-DeviceBatteryUpdateResult $DataDirectory 'failed' $Version ($reason+' Recovery restart failed: '+$_.Exception.Message)}
+            }
         }
     }finally{Remove-DeviceBatteryUpdateWork $work}
 }

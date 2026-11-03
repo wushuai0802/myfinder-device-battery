@@ -17,6 +17,45 @@ static class UpdateTests {
     static void Check(bool value,string name){if(!value)throw new Exception("FAIL "+name);passed++;}
     static void Reject(Action action,string name){bool rejected=false;try{action();}catch(Exception){rejected=true;}Check(rejected,name);}
     static void Throws<T>(Action action,string name) where T:Exception {bool rejected=false;try{action();}catch(T){rejected=true;}Check(rejected,name);}
+    static void HelperEnvironment(string root){
+        const string sentinel="MYFINDER_UPDATE_TEST_ENV";
+        string modules=Environment.GetEnvironmentVariable("PSModulePath"),previous=Environment.GetEnvironmentVariable(sentinel);
+        try {
+            string inherited=Path.Combine(root,"PowerShell 7 modules");
+            Environment.SetEnvironmentVariable("PSModulePath",inherited);Environment.SetEnvironmentVariable(sentinel,"preserved");
+            var start=UpdateProcess.HelperStartInfo(Path.Combine(root,"Apply-Update.ps1"),new string[0]);
+            Check(!start.EnvironmentVariables.ContainsKey("PSModulePath"),"helper drops inherited PSModulePath");
+            Check(Environment.GetEnvironmentVariable("PSModulePath")==inherited,"helper leaves parent PSModulePath unchanged");
+            foreach(System.Collections.DictionaryEntry variable in Environment.GetEnvironmentVariables())
+                if(!((string)variable.Key).Equals("PSModulePath",StringComparison.OrdinalIgnoreCase))
+                    Check(start.EnvironmentVariables[(string)variable.Key]==(string)variable.Value,"helper preserves environment variable "+variable.Key);
+        }finally{Environment.SetEnvironmentVariable("PSModulePath",modules);Environment.SetEnvironmentVariable(sentinel,previous);}
+    }
+    static void FailureNotification(string root){
+        string data=Path.Combine(root,"failure notification");Directory.CreateDirectory(data);
+        string path=Path.Combine(data,"update-result.json"),reason="fixture hash validation failed";
+        using(var dispatch=new Control()){
+            dispatch.CreateControl();var handle=dispatch.Handle;
+            foreach(string status in new[]{"failed","failed","success"}){
+                bool notified=status=="failed"&&File.Exists(path);int changes=0,balloons=0;
+                var result=new UpdateResult {Schema=1,Status=status,Version="1.3.6",Reason=reason,Notified=notified};
+                string original=UpdateJson.Text(result);File.WriteAllText(path,original);
+                var controller=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));
+                var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                typeof(UpdateController).GetField("data",flags).SetValue(controller,data);
+                typeof(UpdateController).GetField("dispatch",flags).SetValue(controller,dispatch);
+                typeof(UpdateController).GetField("changed",flags).SetValue(controller,(Action)delegate{changes++;});
+                typeof(UpdateController).GetField("balloon",flags).SetValue(controller,(Action<string,string,bool>)delegate(string title,string text,bool update){
+                    balloons++;Check(title=="上次更新失败"&&text==reason&&!update,"failure notification shows the persisted reason");
+                });
+                typeof(UpdateController).GetMethod("Initialize",flags).Invoke(controller,null);Application.DoEvents();
+                Check(controller.LastFailure==(status=="failed"?reason:null),"next launch exposes only failed update reasons");
+                Check(changes==(status=="failed"?1:0)&&balloons==(status=="failed"&&!notified?1:0),"failure notification is shown once across launches");
+                if(status=="success")Check(File.ReadAllText(path)==original,"success result path remains unchanged");
+                else Check(UpdateJson.ReadFile<UpdateResult>(path,16384).Notified,"failure notification acknowledgement is persisted");
+            }
+        }
+    }
     sealed class Http:IUpdateTransport {
         internal readonly Queue<UpdateResponse> Responses=new Queue<UpdateResponse>();
         internal readonly List<Uri> Requests=new List<Uri>();
@@ -113,6 +152,7 @@ static class UpdateTests {
     [STAThread] static int Main(string[] args){
         string root=Path.Combine(Path.GetFullPath(args[0]),"update-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try {
+            HelperEnvironment(root);FailureNotification(root);
             NetworkTimeouts();
             UpdateVersion a,b;Check(UpdateVersion.TryParse("1.3.5-beta.1",out a)&&UpdateVersion.TryParse("1.3.5",out b)&&a.CompareTo(b)<0,"beta before stable");
             Check(UpdateVersion.Parse("1.3.5").CompareTo(UpdateVersion.Parse("1.3.6-beta.1"))<0,"stable before next beta");

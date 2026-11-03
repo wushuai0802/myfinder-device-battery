@@ -29,11 +29,131 @@ function New-Package([string]$Directory,[string]$Version){
     [IO.File]::WriteAllText((Join-Path $Directory 'release.json'),($release|ConvertTo-Json))
     [IO.File]::WriteAllText((Join-Path $Directory 'engine\server.py'),('# payload '+$Version))
     $cs=Join-Path $fixture ('host-'+$Version+'.cs')
-    [IO.File]::WriteAllText($cs,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$Version+'")] class Fixture {static void Main(){}}'))
+    [IO.File]::WriteAllText($cs,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$Version+'")] class Fixture {static void Main(string[] args){if(args.Length==1 && args[0]=="--show") System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(typeof(Fixture).Assembly.Location),"started.txt"),"'+$Version+'");}}'))
     & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') /nologo /target:winexe /platform:x64 ('/out:'+(Join-Path $Directory 'outputs\AtkMouseBattery.exe')) $cs
     if($LASTEXITCODE -ne 0){throw 'Fixture build failed.'}
     Copy-Item -LiteralPath (Join-Path $Directory 'outputs\AtkMouseBattery.exe') -Destination (Join-Path $Directory 'engine\runtime\python.exe')
     $null=New-DeviceBatteryPackageManifest $Directory
+}
+function Test-ModuleIndependentHashes {
+    Assert ([bool](Get-Command Get-DeviceBatteryFileHash -ErrorAction SilentlyContinue)) 'shared module-independent SHA256 function exists'
+    foreach($name in @('empty.txt','ordinary.txt',(([string][char]0x4e2d)+[char]0x6587+'.txt'),'hash with spaces.txt')) {
+        $path=Join-Path $fixture $name
+        $bytes=[byte[]]@()
+        if($name -ne 'empty.txt'){$bytes=[byte[]]@(0,1,2,127,128,255,13,10)}
+        [IO.File]::WriteAllBytes($path,$bytes)
+        $expected=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        Assert ((Get-DeviceBatteryFileHash $path) -ceq $expected) ('shared SHA256 matches uppercase Get-FileHash for '+$name)
+        $handle=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+        $handle.Dispose()
+    }
+}
+function Test-IsolatedHelperEnvironment([switch]$ValidationFailure) {
+    $null=Install-DeviceBattery @install
+    $started=Join-Path $target 'outputs\started.txt'
+    if(Test-Path -LiteralPath $started){Remove-Item -LiteralPath $started -Force}
+    $package=Join-Path $fixture ('isolated helper package-'+[Guid]::NewGuid().ToString('N'))
+    Copy-Item -LiteralPath $candidate -Destination $package -Recurse
+    # Keep real transaction/hash/rollback code, but route shortcuts and registry probes to fixtures.
+    [IO.File]::WriteAllText((Join-Path $package 'scripts\Install-Startup.ps1'),@'
+param([string]$InstallDirectory,[string]$DataDirectory,[switch]$PreserveStartup)
+$ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'Install.Common.ps1')
+function Get-DeviceBatteryStartupApproval([string]$Name){return $null}
+function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShortcut,[string]$ManualShortcut){}
+$fixture=Split-Path -Parent $DataDirectory
+Install-DeviceBattery -SourceRoot (Split-Path -Parent $PSScriptRoot) -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -StartupDirectory (Join-Path $fixture 'fake Startup') -ProgramsDirectory (Join-Path $fixture 'fake Programs') -PreserveStartup:$PreserveStartup
+'@)
+    $null=New-DeviceBatteryPackageManifest $package
+    $work=Work
+    # The harmless fixture executable accepts the independent verifier invocation. Its C# verifier
+    # is covered in UpdateTests; seed that boundary's output before running the real helper.
+    Copy-Item -LiteralPath $package -Destination (Join-Path $work 'verified') -Recurse
+    if($ValidationFailure){[IO.File]::WriteAllText((Join-Path $work 'verified\engine\server.py'),'# fixture validation failure')}
+    $modules=Join-Path $fixture 'PowerShell 7 modules only'
+    if(-not (Test-Path -LiteralPath $modules)){
+        New-Item -ItemType Directory -Path $modules|Out-Null
+        $pwsh=Get-Command pwsh.exe -ErrorAction Stop
+        Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $pwsh.Source) 'Modules\Microsoft.PowerShell.Utility') -Destination $modules -Recurse
+    }
+    $info=New-Object Diagnostics.ProcessStartInfo
+    $info.FileName=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
+    $arguments=@((Join-Path $project 'scripts\Apply-Update.ps1'),'-ExecutablePath',$exe,'-DataDirectory',$data,'-Version','1.3.6','-WorkDirectory',$work,'-ParentId','2147483647','-ParentStartUtc','2026-01-01T00:00:00Z')
+    $info.Arguments='-NoProfile -ExecutionPolicy Bypass -File '+(@($arguments|ForEach-Object {ConvertTo-DeviceBatteryUpdateArgument $_}) -join ' ')
+    $info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.WindowStyle='Hidden'
+    $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true;$info.EnvironmentVariables['PSModulePath']=$modules
+    $process=[Diagnostics.Process]::Start($info)
+    try {
+        $output=$process.StandardOutput.ReadToEndAsync();$errors=$process.StandardError.ReadToEndAsync()
+        $finished=$process.WaitForExit(30000)
+        if(-not $finished){$process.Kill();$process.WaitForExit()}
+        [IO.File]::WriteAllText((Join-Path $fixture 'helper-stdout.txt'),$output.Result)
+        [IO.File]::WriteAllText((Join-Path $fixture 'helper-stderr.txt'),$errors.Result)
+        Assert ($finished -and $process.ExitCode -eq 0) ('isolated Windows PowerShell helper exits normally: '+$errors.Result)
+    }finally{$process.Dispose()}
+    $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw -Encoding UTF8|ConvertFrom-Json
+    $expectedStatus=if($ValidationFailure){'failed'}else{'success'}
+    $expectedVersion=if($ValidationFailure){'1.3.4'}else{'1.3.6'}
+    Assert ($result.status -ceq $expectedStatus) ('Windows PowerShell helper handles PowerShell 7-only PSModulePath: '+$result.reason)
+    if($ValidationFailure){Assert ($result.reason -like '*Package file is missing or changed: engine/server.py*' -and $result.reason -notlike '*Recovery restart failed*') 'isolated helper records validation failure without misreporting recovery'}
+    Assert ((Read-DeviceBatteryReceipt $data).Version -ceq $expectedVersion) 'isolated helper records the expected installed version'
+    $clock=[Diagnostics.Stopwatch]::StartNew()
+    while(-not (Test-Path -LiteralPath $started) -and $clock.ElapsedMilliseconds -lt 5000){Start-Sleep -Milliseconds 25}
+    Assert ((Test-Path -LiteralPath $started) -and [IO.File]::ReadAllText($started) -ceq $expectedVersion) ('isolated helper actually launches fixture version '+$expectedVersion)
+    Assert (-not (Test-Path -LiteralPath $work)) 'isolated helper cleans its staging directory'
+}
+function Test-RecoveryRestart([string]$Fault,[switch]$LaunchFailure,[switch]$ResultFailure) {
+    $null=Install-DeviceBattery @install
+    $manifestReader=${function:Read-DeviceBatteryPackageManifest};$receiptReader=${function:Read-DeviceBatteryReceipt}
+    $hashReader=${function:Get-DeviceBatteryFileHash};$resultWriter=${function:Write-DeviceBatteryUpdateResult}
+    $script:validationFault=$Fault;$script:validationFaultActive=$false;$script:recovering=$false;$script:recoveryReads=0
+    $script:restarts=@();$script:restartFailure=$LaunchFailure.IsPresent
+    $previousWaitResult=$script:waitResult;$script:waitResult=$true
+    function Read-DeviceBatteryPackageManifest([string]$Root) {
+        if($script:recovering){$script:recoveryReads++;throw 'fixture recovery manifest unavailable'}
+        if($script:validationFaultActive -and $script:validationFault -eq 'manifest'){throw 'fixture manifest validation failure'}
+        & $manifestReader $Root
+    }
+    function Read-DeviceBatteryReceipt([string]$DataDirectory) {
+        if($script:recovering){$script:recoveryReads++;throw 'fixture recovery receipt unavailable'}
+        if($script:validationFaultActive -and $script:validationFault -eq 'receipt'){throw 'fixture receipt validation failure'}
+        & $receiptReader $DataDirectory
+    }
+    function Get-FileHash {
+        param([string]$LiteralPath,[string]$Algorithm)
+        if($script:recovering){$script:recoveryReads++;throw 'fixture recovery hash unavailable'}
+        if($script:validationFaultActive -and $script:validationFault -eq 'hash'){throw 'fixture hash validation failure'}
+        Microsoft.PowerShell.Utility\Get-FileHash @PSBoundParameters
+    }
+    function Get-DeviceBatteryFileHash([string]$LiteralPath) {
+        if($script:recovering){$script:recoveryReads++;throw 'fixture recovery hash unavailable'}
+        if($script:validationFaultActive -and $script:validationFault -eq 'hash'){throw 'fixture hash validation failure'}
+        & $hashReader $LiteralPath
+    }
+    function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDirectory,[string]$DataDirectory) {
+        $script:validationFaultActive=$true
+        try {Install-DeviceBattery -SourceRoot $Package -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -StartupDirectory $startup -ProgramsDirectory $programs -PreserveStartup}
+        catch {$script:recovering=$true;throw}
+    }
+    function Write-DeviceBatteryUpdateResult([string]$DataDirectory,[string]$Status,[string]$Version,[string]$Reason) {
+        if($ResultFailure){throw 'fixture result write failure'}
+        & $resultWriter $DataDirectory $Status $Version $Reason
+    }
+    try {
+        $parameters.WorkDirectory=Work;$thrown=$null
+        try {$null=Invoke-DeviceBatteryUpdate @parameters}catch{$thrown=$_.Exception.Message}
+        Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) ('recovery attempts the known executable after '+$Fault+' failure; launchFailure='+$LaunchFailure+'; resultFailure='+$ResultFailure)
+        Assert ($script:recoveryReads -eq 0) 'recovery performs no hash, manifest or receipt checks'
+        if($ResultFailure){Assert ($thrown -ceq 'fixture result write failure') 'result-write failure still attempts recovery'}
+        else {
+            Assert ($null -eq $thrown) 'installer failure is recorded without escaping the helper'
+            $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw -Encoding UTF8|ConvertFrom-Json
+            Assert ($result.status -ceq 'failed' -and $result.reason -like ('*fixture '+$Fault+' validation failure*')) 'result preserves the original validation failure'
+            if($LaunchFailure){Assert ($result.reason -like '*Recovery restart failed: fixture launch failure*') 'only a launch failure records Recovery restart failed'}
+            else {Assert ($result.reason -notlike '*Recovery restart failed*') 'unavailable validation never becomes a recovery launch failure'}
+        }
+        Assert (-not (Test-Path -LiteralPath $parameters.WorkDirectory)) 'validation-failure staging is cleaned'
+    }finally{$script:validationFaultActive=$false;$script:recovering=$false;$script:restartFailure=$false;$script:waitResult=$previousWaitResult}
 }
 New-Item -ItemType Directory -Path $fixture -Force|Out-Null
 try {
@@ -77,7 +197,13 @@ try {
     # Signature, ZIP and directory rejection are tested by UpdateTests. This fixture only substitutes
     # the already-verified package boundary, never the transactional installer or rollback code.
     function Confirm-DeviceBatteryUpdatePackage([string]$Executable,[string]$WorkDirectory,[string]$Version){return $candidate}
-    function Start-DeviceBatteryUpdatedApp([string]$Executable){$script:restarts+=,$Executable}
+    $script:restartFailure=$false
+    function Start-Process {
+        [CmdletBinding()]param([string]$FilePath,[string]$ArgumentList,[string]$WorkingDirectory,[string]$WindowStyle,[switch]$PassThru)
+        $script:restarts+=,$FilePath
+        Assert ($ArgumentList -ceq '--show' -and $WorkingDirectory -ceq (Split-Path -Parent $FilePath) -and $WindowStyle -ceq 'Hidden') 'restart directly uses the exact executable and hidden launch arguments'
+        if($script:restartFailure){throw 'fixture launch failure'}
+    }
     function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDirectory,[string]$DataDirectory){
         $script:installCalls++
         # Invoke the same transaction in this scope so the fake registry/icon functions remain
@@ -145,7 +271,7 @@ try {
     Assert ($script:copyFailure -and (Read-DeviceBatteryReceipt $data).Version -ceq '1.3.4') 'mid-install failure rolls back receipt'
     Assert ((Read-DeviceBatteryPackageManifest $target).version -ceq '1.3.4') 'all old payload hashes restored'
     Assert ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -ceq $settingsHash) 'settings preserved on rollback'
-    Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) 'verified old version restarts after rollback'
+    Assert ($script:restarts.Count -eq 1 -and $script:restarts[0] -ceq $exe) 'old version restarts after rollback'
     $result=Get-Content -LiteralPath (Join-Path $data 'update-result.json') -Raw|ConvertFrom-Json
     Assert ($result.status -ceq 'failed' -and $result.reason -like '*fixture mid-install failure*') 'failure reason available next launch'
     Assert (-not (Test-Path -LiteralPath $parameters.WorkDirectory)) 'failed handoff staging cleaned'
@@ -211,6 +337,20 @@ function Install-DeviceBattery {
     Assert ($forwarded.PreserveStartup -and $forwarded.InstallDirectory -ceq $target -and $forwarded.DataDirectory -ceq $data) 'real update helper and entry point forward preserve mode and exact paths'
     $ordinary=& (Join-Path $forwardScripts 'Install-Startup.ps1') -InstallDirectory $target -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs
     Assert (-not $ordinary.PreserveStartup) 'ordinary entry point defaults to the original install mode'
+    $regressionFailures=@()
+    foreach($regression in @(
+        {Test-ModuleIndependentHashes},
+        {Test-IsolatedHelperEnvironment},
+        {Test-IsolatedHelperEnvironment -ValidationFailure},
+        {Test-RecoveryRestart 'hash'},
+        {Test-RecoveryRestart 'manifest'},
+        {Test-RecoveryRestart 'receipt'},
+        {Test-RecoveryRestart 'manifest' -LaunchFailure},
+        {Test-RecoveryRestart 'manifest' -ResultFailure}
+    )) {
+        try {& $regression}catch{$regressionFailures+=,$_.Exception.Message;Write-Output $_.Exception.Message}
+    }
+    if($regressionFailures.Count -gt 0){throw ($regressionFailures -join [Environment]::NewLine)}
     Write-Output ('PASS '+$script:passed+' update installer checks on PowerShell '+$PSVersionTable.PSVersion+'; fake folders only')
 }finally {
     if(Test-Path Function:\Copy-Item){Remove-Item Function:\Copy-Item}
