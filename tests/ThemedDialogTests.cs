@@ -108,6 +108,107 @@ static class ThemedDialogTests {
             dialog.Shutdown();Check(!progress.AnimationRunning,"disposed progress owns no active timer");
         }
     }
+    static string Lines(int count){return String.Join(Environment.NewLine,Array.ConvertAll(new int[count],delegate(int unused){return "第几行：设备连接与更新说明";}));}
+    static void ScrollbarThemes(){
+        var hook=Type("DialogScrollbars").GetField("SetWindowTheme",BindingFlags.Static|BindingFlags.NonPublic);
+        Check(hook!=null,"window theme call is injectable");var previous=hook.GetValue(null);
+        var calls=new List<string>();var handles=new List<IntPtr>();
+        hook.SetValue(null,new Func<IntPtr,string,string,int>(delegate(IntPtr window,string theme,string sub){Check(sub==null,"no theme sub-ID");handles.Add(window);calls.Add(theme);return 0;}));
+        try{
+            foreach(bool dark in new[]{true,false}){
+                SelectTheme("ocean",dark);calls.Clear();handles.Clear();
+                using(var update=new UpdateDialog(Release(),true))using(var feedback=new FeedbackForm(Report(),false,dark,delegate{},delegate{},""))using(var diagnostic=feedback.CreateDiagnosticsDialog()){
+                    Show(update);Show(feedback);Show(diagnostic);
+                    foreach(var input in new[]{Find<TextBox>(update,"ReleaseNotes"),Find<TextBox>(feedback,"Description"),Find<TextBox>(diagnostic,"DiagnosticText")}){
+                        Check(handles.Contains(input.Handle),"real multiline handle receives window theme: "+input.Name);
+                        int before=calls.Count;typeof(Control).GetMethod("RecreateHandle",Members).Invoke(input,null);
+                        Check(calls.Count>before&&handles[handles.Count-1]==input.Handle,"recreated edit handle reapplies theme: "+input.Name);
+                    }
+                    Check(calls.TrueForAll(delegate(string theme){return theme==(dark?"DarkMode_Explorer":"Explorer");}),"all multiline calls use the current light/dark theme");
+                    using(var message=ThemedMessage.Create("确认",Lines(90),MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)){
+                        int before=calls.Count;Show(message);Check(calls.Count>before,"overflow message scroll area receives window theme");
+                    }
+                }
+            }
+            VisualDesign.HighContrastOverride=true;calls.Clear();
+            using(var update=new UpdateDialog(Release(),true))using(var feedback=new FeedbackForm(Report(),false,true,delegate{},delegate{},""))using(var diagnostic=feedback.CreateDiagnosticsDialog())using(var message=ThemedMessage.Create("确认",Lines(90),MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)){
+                Show(update);Show(feedback);Show(diagnostic);Show(message);Check(calls.Count==0,"high contrast never calls SetWindowTheme");
+            }
+            VisualDesign.HighContrastOverride=false;
+            foreach(bool missingEntry in new[]{false,true}){
+                hook.SetValue(null,new Func<IntPtr,string,string,int>(delegate{if(missingEntry)throw new EntryPointNotFoundException();return -1;}));
+                using(var update=new UpdateDialog(Release(),true)){Show(update);Check(update.Visible,"theme failure is ignored");}
+            }
+        }finally{hook.SetValue(null,previous);VisualDesign.HighContrastOverride=false;}
+    }
+    static void ConditionalScrollbars(){
+        foreach(bool dark in new[]{true,false}){
+            SelectTheme("ocean",dark);
+            var longRelease=Release();longRelease.Body=Lines(80);
+            using(var initialLong=new UpdateDialog(longRelease,true)){
+                Show(initialLong);Check(Find<TextBox>(initialLong,"ReleaseNotes").ScrollBars==ScrollBars.Vertical,"initial long notes settle after handle creation");
+                using(var bitmap=ClientImage(initialLong))Check(bitmap.Width==initialLong.ClientSize.Width,"initial long notes render without handle recreation during creation");
+            }
+            using(var update=new UpdateDialog(Release(),true)){
+                Show(update);var notes=Find<TextBox>(update,"ReleaseNotes");
+                Check(notes.ScrollBars==ScrollBars.None,"short release notes have no scrollbars");
+                notes.Text=Lines(80);Application.DoEvents();Check(notes.ScrollBars==ScrollBars.Vertical,"long release notes scroll vertically");
+                notes.Text="简短说明";Application.DoEvents();Check(notes.ScrollBars==ScrollBars.None,"shortened release notes remove scrollbars");
+                notes.Text=new string('中',400);Application.DoEvents();Check(notes.ScrollBars==ScrollBars.Vertical,"wrapped notes measure their actual height");
+                update.ClientSize=new Size(1000,1200);Application.DoEvents();Check(notes.ScrollBars==ScrollBars.None,"resizing rechecks wrapped notes");
+            }
+            using(var feedback=new FeedbackForm(Report(),false,dark,delegate{},delegate{},"")){
+                Show(feedback);var description=Find<TextBox>(feedback,"Description");
+                Check(description.ScrollBars==ScrollBars.None,"empty feedback has no scrollbars");
+                description.Text=new string('中',1900);Application.DoEvents();Check(description.ScrollBars==ScrollBars.Vertical,"typing long feedback enables scrolling");
+                description.Text="简短描述";Application.DoEvents();Check(description.ScrollBars==ScrollBars.None,"deleting feedback removes scrollbar");
+                using(var diagnostic=feedback.CreateDiagnosticsDialog()){
+                    Show(diagnostic);var input=Find<TextBox>(diagnostic,"DiagnosticText");
+                    input.Text="短诊断";Application.DoEvents();Check(input.ScrollBars==ScrollBars.None,"short diagnostics have no scrollbars");
+                    input.Text=Lines(80);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Vertical,"tall diagnostics only scroll vertically");
+                    input.Text=new string('W',300);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Horizontal,"wide diagnostics only scroll horizontally");
+                    input.Text=Lines(80)+Environment.NewLine+new string('W',300);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Both,"wide and tall diagnostics scroll both ways");
+                    input.Text=Lines(5);diagnostic.ClientSize=new Size(620,180);Application.DoEvents();Check(input.ScrollBars==ScrollBars.Vertical,"shrinking diagnostics enables vertical scrollbar");
+                    diagnostic.ClientSize=new Size(620,500);Application.DoEvents();Check(input.ScrollBars==ScrollBars.None,"growing diagnostics removes vertical scrollbar");
+                }
+            }
+        }
+    }
+    static void UpdateProgressVisibility(){
+        using(var dialog=new UpdateDialog(Release(),true)){
+            Show(dialog);var progress=(ThemedProgress)Field(dialog,"progress");var status=(Label)Field(dialog,"status");var install=(Button)Field(dialog,"install");var notes=Find<TextBox>(dialog,"ReleaseNotes");
+            Check(!progress.Visible,"ready hides empty progress track");
+            Rectangle notesBounds=notes.RectangleToScreen(notes.ClientRectangle);Point button=install.PointToScreen(Point.Empty);int readyStatusHeight=status.Height;
+            for(int state=0;state<6;state++){
+                if(state==0)dialog.Downloading();if(state==1)dialog.Progress(1,2);if(state==2)dialog.Handoff();if(state==3)dialog.Finished("更新未完成：测试错误");if(state==4)dialog.Finished("已取消更新。");if(state==5)dialog.Downloading();
+                Application.DoEvents();bool visible=state<3||state==5;
+                Check(progress.Visible==visible,"progress visibility in state "+state);
+                Check(notes.RectangleToScreen(notes.ClientRectangle)==notesBounds&&install.PointToScreen(Point.Empty)==button,"notes and buttons remain fixed in state "+state);
+                Check(visible?status.Height<readyStatusHeight:status.Height==readyStatusHeight,"status uses hidden progress space in state "+state);
+            }
+        }
+        using(var portable=new UpdateDialog(Release(),false)){Show(portable);Check(!((Control)Field(portable,"progress")).Visible,"portable ready hides progress");}
+    }
+    static bool ContainsTextBox(Control control){if(control is TextBoxBase)return true;foreach(Control child in control.Controls)if(ContainsTextBox(child))return true;return false;}
+    static void PlainMessageLayout(){
+        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
+            int previousHeight=0;
+            foreach(int lines in new[]{1,8,100})using(var dialog=ThemedMessage.Create("反馈问题",lines==1?"刚刚已提交过一次，确定还要再提交吗？":Lines(lines),MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)){
+                dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",14*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
+                Check(!ContainsTextBox(dialog),"message contains no text boxes at "+scale);
+                var body=Find<Label>(dialog,"MessageText");Check(body.ForeColor==dialog.ForeColor&&Math.Abs(body.Font.SizeInPoints-dialog.Font.SizeInPoints)<.1,"message uses foreground and body font");
+                var no=Find<ThemedButton>(dialog,"MessageNo");var yes=Find<ThemedButton>(dialog,"MessageYes");
+                Check(dialog.AcceptButton==no&&dialog.ActiveControl==no,"No retains default keyboard focus");
+                Check(yes.FillFor(false,false)==dialog.Theme.Selected&&no.FillFor(false,false)==dialog.Theme.Card,"Yes has primary styling independently of focus");
+                Check(dialog.ClientSize.Height>=previousHeight,"message grows with text until capped");previousHeight=dialog.ClientSize.Height;
+                Check(dialog.ClientSize.Height<=560*scale+2,"message height is capped at "+scale);
+                var area=(ScrollableControl)body.Parent;Check(area.VerticalScroll.Visible==(lines==100)&&!area.HorizontalScroll.Visible,"only overflowing message scrolls at "+scale);
+                Check(body.Height>=body.GetPreferredSize(new Size(body.Width,0)).Height,"wrapped message text is not clipped");
+                Check(no.RectangleToScreen(no.ClientRectangle).Bottom<=dialog.RectangleToScreen(dialog.ClientRectangle).Bottom,"message buttons remain visible");
+                if(lines==100){area.AutoScrollPosition=new Point(0,body.Height);Application.DoEvents();Check(area.AutoScrollPosition.Y<0,"long message can reach later text");}
+            }
+        }
+    }
     static void MessageResults(){
         var show=Type("ThemedMessage").GetMethod("Show",BindingFlags.Static|BindingFlags.NonPublic,null,new[]{typeof(IWin32Window),typeof(string),typeof(string),typeof(MessageBoxButtons)},null);
         foreach(var buttons in new[]{MessageBoxButtons.OK,MessageBoxButtons.OKCancel,MessageBoxButtons.YesNo,MessageBoxButtons.YesNoCancel,MessageBoxButtons.RetryCancel,MessageBoxButtons.AbortRetryIgnore}){
@@ -197,6 +298,9 @@ static class ThemedDialogTests {
             return image.Clone(area,PixelFormat.Format32bppArgb);
         }
     }
+    static void SaveClient(Form form,string output,string name){
+        using(var image=ClientImage(form)){string path=Path.Combine(output,name+".png");image.Save(path,ImageFormat.Png);Console.WriteLine(path);}
+    }
     static void Render(string output){
         Directory.CreateDirectory(output);
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){
@@ -224,11 +328,16 @@ static class ThemedDialogTests {
                 using(var message=ThemedMessage.Create("反馈问题","刚刚已提交过一次，确定还要再提交吗？",MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2))using(var image=ClientImage(message))g.DrawImageUnscaled(image,588,878);
                 string path=Path.Combine(output,"dialogs-"+style+"-"+(dark?"dark":"light")+".png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);
             }
+            string suffix="-"+style+"-"+(dark?"dark":"light");
+            using(var message=ThemedMessage.Create("反馈问题","刚刚已提交过一次，确定还要再提交吗？",MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2))SaveClient(message,output,"dialog-confirmation"+suffix);
+            using(var shortNotes=new UpdateDialog(Release(),true))SaveClient(shortNotes,output,"dialog-release-short"+suffix);
+            var longRelease=Release();longRelease.Body="本次更新内容\r\n"+Lines(80);
+            using(var longNotes=new UpdateDialog(longRelease,true))SaveClient(longNotes,output,"dialog-release-long"+suffix);
         }
     }
     [STAThread] static int Main(string[] args){
-        NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
-        try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);Run("update states and keyboard in all themes",delegate{foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){SelectTheme(style,dark);StateAndKeyboard();}});Run("components and all theme contrasts",ComponentsAndContrast);Run("system-only high contrast and chrome",HighContrast);Run("progress motion and byte boundaries",ProgressMotion);Run("modal message return values",MessageResults);Run("message close and actual feedback repeat confirmation",MessageCloseAndRepeat);Run("alias and diagnostic dialogs",AliasAndDiagnostic);Run("dialog layout from 100 to 200 percent",LayoutBounds);Run("disabled button bitmap state",RenderedDisabledButtons);Console.WriteLine(checks+" themed-dialog checks, "+failures+" failed groups");return failures==0?0:1;}
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
+        try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);Run("window scrollbar themes and handle recreation",ScrollbarThemes);Run("scrollbars follow text and viewport",ConditionalScrollbars);Run("update progress visibility without layout jumps",UpdateProgressVisibility);Run("plain wrapped messages and bounded overflow",PlainMessageLayout);Run("update states and keyboard in all themes",delegate{foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){SelectTheme(style,dark);StateAndKeyboard();}});Run("components and all theme contrasts",ComponentsAndContrast);Run("system-only high contrast and chrome",HighContrast);Run("progress motion and byte boundaries",ProgressMotion);Run("modal message return values",MessageResults);Run("message close and actual feedback repeat confirmation",MessageCloseAndRepeat);Run("alias and diagnostic dialogs",AliasAndDiagnostic);Run("dialog layout from 100 to 200 percent",LayoutBounds);Run("disabled button bitmap state",RenderedDisabledButtons);Console.WriteLine(checks+" themed-dialog checks, "+failures+" failed groups");return failures==0?0:1;}
         finally{DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}
     }
 }

@@ -156,7 +156,7 @@ namespace AtkBatteryTray {
             }
             layout.Controls.Add(categories,0,1);layout.Controls.Add(Caption("描述（必填，5–2000 字）"),0,2);
             var hint=Caption("发生了什么？用的是什么设备、怎么连接的？",false,true);layout.Controls.Add(hint,0,3);
-            description.Name="Description";description.AccessibleName="描述";description.Multiline=true;description.AcceptsReturn=true;description.ScrollBars=ScrollBars.Vertical;description.Dock=DockStyle.Fill;
+            description.Name="Description";description.AccessibleName="描述";description.Multiline=true;description.AcceptsReturn=true;description.Dock=DockStyle.Fill;
             description.TextChanged+=delegate{UpdateValidation();};layout.Controls.Add(new ThemedTextBox(Theme,description) {Dock=DockStyle.Fill,Margin=new Padding(0,5,0,4)},0,4);
             remaining.Name="FeedbackRemaining";remaining.AutoSize=true;remaining.Font=hint.Font;remaining.ForeColor=Theme.Muted;remaining.Margin=new Padding(0,0,0,16);layout.Controls.Add(remaining,0,5);
             var diagnosticRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,Margin=new Padding(0,0,0,10),WrapContents=true};
@@ -207,7 +207,7 @@ namespace AtkBatteryTray {
         internal ThemedDialog CreateDiagnosticsDialog(){
             var dialog=new ThemedDialog(Theme.Dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var text=new TextBox {Name="DiagnosticText",AccessibleName="诊断信息",Text=report.FullText,ReadOnly=true,Multiline=true,WordWrap=false,ScrollBars=ScrollBars.Both};
+            var text=new TextBox {Name="DiagnosticText",AccessibleName="诊断信息",Text=report.FullText,ReadOnly=true,Multiline=true,WordWrap=false};
             layout.Controls.Add(new ThemedTextBox(dialog.Theme,text) {Dock=DockStyle.Fill,Margin=new Padding(0,0,0,16)},0,0);
             var close=new ThemedButton(dialog.Theme,ThemedButtonKind.Primary) {Text="关闭",DialogResult=DialogResult.Cancel,AutoSize=true,Anchor=AnchorStyles.Right,Margin=Padding.Empty};layout.Controls.Add(close,0,1);
             dialog.Controls.Add(layout);dialog.AcceptButton=close;dialog.CancelButton=close;dialog.ActiveControl=close;return dialog;

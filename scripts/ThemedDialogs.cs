@@ -59,6 +59,53 @@ namespace AtkBatteryTray {
         }
     }
 
+    internal static class DialogScrollbars {
+        [DllImport("uxtheme.dll",EntryPoint="SetWindowTheme",CharSet=CharSet.Unicode,ExactSpelling=true)] static extern int NativeSetWindowTheme(IntPtr window,string theme,string subId);
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,ref RectangleRect rect);
+        [StructLayout(LayoutKind.Sequential)] struct RectangleRect {internal int Left,Top,Right,Bottom;}
+        internal static Func<IntPtr,string,string,int> SetWindowTheme=NativeSetWindowTheme;
+        internal static void Track(Control control,DialogTheme theme){
+            control.HandleCreated+=delegate{Apply(control,theme);};if(control.IsHandleCreated)Apply(control,theme);
+        }
+        static void Apply(Control control,DialogTheme theme){
+            if(theme.HighContrast||VisualDesign.HighContrast)return;
+            try{SetWindowTheme(control.Handle,theme.Dark?"DarkMode_Explorer":"Explorer",null);}
+            catch(DllNotFoundException){}catch(EntryPointNotFoundException){}catch(ExternalException){}
+        }
+        internal static void Attach(TextBox input,DialogTheme theme){
+            Track(input,theme);bool updating=false,ready=input.IsHandleCreated;
+            EventHandler update=delegate{
+                if(updating||!ready||!input.IsHandleCreated||!input.Multiline)return;
+                updating=true;try{Update(input);}finally{updating=false;}
+            };
+            // ScrollBars recreates the EDIT handle. Wait until its creation has fully returned.
+            input.HandleCreated+=delegate{ready=false;input.BeginInvoke((MethodInvoker)delegate{if(input.IsDisposed||!input.IsHandleCreated)return;ready=true;update(input,EventArgs.Empty);});};
+            input.HandleDestroyed+=delegate{ready=false;};input.TextChanged+=update;input.ClientSizeChanged+=update;input.FontChanged+=update;
+            update(input,EventArgs.Empty);
+        }
+        static RectangleRect TextRect(TextBox input){var rect=new RectangleRect();SendMessage(input.Handle,0x00B2,IntPtr.Zero,ref rect);return rect;}
+        static void Update(TextBox input){
+            var rect=TextRect(input);bool hadVertical=(input.ScrollBars&ScrollBars.Vertical)!=0,hadHorizontal=(input.ScrollBars&ScrollBars.Horizontal)!=0;
+            int width=Math.Max(1,rect.Right-rect.Left+(hadVertical?SystemInformation.VerticalScrollBarWidth:0));
+            int height=Math.Max(1,rect.Bottom-rect.Top+(hadHorizontal?SystemInformation.HorizontalScrollBarHeight:0));
+            bool vertical=false,horizontal=false;var flags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.TextBoxControl|TextFormatFlags.ExpandTabs;
+            // Start with the full viewport, then account for either scrollbar taking space.
+            for(int pass=0;pass<3;pass++){
+                int availableWidth=Math.Max(1,width-(vertical?SystemInformation.VerticalScrollBarWidth:0));
+                var size=TextRenderer.MeasureText(input.Text+"\u200b",input.Font,new Size(input.WordWrap?availableWidth:Int32.MaxValue,Int32.MaxValue),flags|(input.WordWrap?TextFormatFlags.WordBreak:0));
+                horizontal=!input.WordWrap&&size.Width>availableWidth;
+                vertical=size.Height>height-(horizontal?SystemInformation.HorizontalScrollBarHeight:0);
+            }
+            var wanted=(vertical?ScrollBars.Vertical:ScrollBars.None)|(horizontal?ScrollBars.Horizontal:ScrollBars.None);
+            if(input.ScrollBars!=wanted)input.ScrollBars=wanted;
+            // The native EDIT control is authoritative for wrapped lines and trailing newlines.
+            rect=TextRect(input);int lines=SendMessage(input.Handle,0x00BA,IntPtr.Zero,IntPtr.Zero).ToInt32();
+            bool actualVertical=(long)lines*input.Font.Height>rect.Bottom-rect.Top;
+            if(actualVertical!=vertical){wanted=(actualVertical?ScrollBars.Vertical:ScrollBars.None)|(horizontal?ScrollBars.Horizontal:ScrollBars.None);if(input.ScrollBars!=wanted)input.ScrollBars=wanted;}
+        }
+    }
+
     internal class ThemedDialog:Form {
         internal readonly DialogTheme Theme;
         readonly Font bodyFont,titleFont,descriptionFont;
@@ -161,10 +208,31 @@ namespace AtkBatteryTray {
             input.BorderStyle=BorderStyle.None;input.BackColor=theme.Section;input.ForeColor=theme.Foreground;
             input.Dock=DockStyle.Fill;input.Margin=Padding.Empty;Controls.Add(input);
             input.GotFocus+=delegate{Invalidate();};input.LostFocus+=delegate{Invalidate();};
+            if(input.Multiline)DialogScrollbars.Attach(input,theme);
             Height=input.PreferredHeight+Padding.Vertical;
         }
         protected override void OnFontChanged(EventArgs e){base.OnFontChanged(e);if(Input!=null&&!Input.Multiline)Height=Input.PreferredHeight+Padding.Vertical;}
         protected override Color Outline {get{return Input.ContainsFocus?theme.Accent:theme.Border;}}
+    }
+
+    internal sealed class ThemedMessageBody:Panel {
+        readonly Label message;bool arranging;
+        internal ThemedMessageBody(DialogTheme theme,string title,string text){
+            message=new Label {Name="MessageText",AccessibleName=title,Text=text,UseMnemonic=false,ForeColor=theme.Foreground,BackColor=Color.Transparent};
+            Controls.Add(message);DialogScrollbars.Track(this,theme);
+        }
+        public override Size GetPreferredSize(Size proposedSize){return message.GetPreferredSize(new Size(Math.Max(1,proposedSize.Width),0));}
+        protected override void OnLayout(LayoutEventArgs e){
+            if(arranging||message==null){base.OnLayout(e);return;}
+            arranging=true;
+            try{
+                int width=Math.Max(1,ClientSize.Width+(VerticalScroll.Visible?SystemInformation.VerticalScrollBarWidth:0));
+                var size=GetPreferredSize(new Size(width,0));bool overflow=size.Height>ClientSize.Height;
+                if(overflow){width=Math.Max(1,width-SystemInformation.VerticalScrollBarWidth);size=GetPreferredSize(new Size(width,0));}
+                AutoScroll=overflow;AutoScrollMinSize=new Size(0,overflow?size.Height:0);
+                message.SetBounds(0,AutoScrollPosition.Y,width,size.Height);base.OnLayout(e);
+            }finally{arranging=false;}
+        }
     }
 
     internal sealed class ThemedProgress:Control {
@@ -220,9 +288,9 @@ namespace AtkBatteryTray {
             var dialog=new ThemedDialog {Text=title,ClientSize=new Size(440,210)};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.Controls.Add(dialog.Caption(title,true),0,0);
-            var message=new TextBox {Name="MessageText",AccessibleName=title,Text=text,Multiline=true,ReadOnly=true,WordWrap=true,ScrollBars=ScrollBars.Vertical};
-            layout.Controls.Add(new ThemedTextBox(dialog.Theme,message) {Dock=DockStyle.Fill,Margin=new Padding(0,12,0,16)},0,1);
+            var heading=dialog.Caption(title,true);layout.Controls.Add(heading,0,0);
+            var message=new ThemedMessageBody(dialog.Theme,title,text) {Dock=DockStyle.Fill,Margin=new Padding(0,12,0,16)};
+            layout.Controls.Add(message,0,1);
             var bar=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,FlowDirection=FlowDirection.RightToLeft,Margin=Padding.Empty};
             DialogResult[] results;
             switch(buttons){
@@ -246,6 +314,18 @@ namespace AtkBatteryTray {
             if(cancelControl==null){dialog.ControlBox=false;dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(dialog.DialogResult==DialogResult.Cancel)e.Cancel=true;};}
             else if(buttons==MessageBoxButtons.OK)dialog.FormClosing+=delegate{if(dialog.DialogResult==DialogResult.Cancel||dialog.DialogResult==DialogResult.None)dialog.DialogResult=DialogResult.OK;};
             layout.Controls.Add(bar,0,2);dialog.Controls.Add(layout);
+            bool resizing=false;
+            LayoutEventHandler fit=delegate{
+                if(resizing)return;resizing=true;
+                try{
+                    int width=Math.Max(1,dialog.ClientSize.Width-dialog.Padding.Horizontal);float scale=dialog.Font.SizeInPoints*96f/72f/14f;
+                    int surrounding=dialog.Padding.Vertical+heading.GetPreferredSize(new Size(width,0)).Height+heading.Margin.Vertical+message.Margin.Vertical+bar.GetPreferredSize(new Size(width,0)).Height+bar.Margin.Vertical;
+                    int maximum=Math.Min((int)Math.Round(560*scale),Screen.FromControl(dialog).WorkingArea.Height-(dialog.Height-dialog.ClientSize.Height)-(int)Math.Round(48*scale));
+                    int height=Math.Min(surrounding+message.GetPreferredSize(new Size(width,0)).Height,Math.Max(surrounding,maximum));
+                    if(dialog.ClientSize.Height!=height)dialog.ClientSize=new Size(dialog.ClientSize.Width,height);
+                }finally{resizing=false;}
+            };
+            dialog.Layout+=fit;fit(dialog,new LayoutEventArgs(dialog,null));
             dialog.AcceptButton=defaultControl;dialog.CancelButton=cancelControl;dialog.ActiveControl=defaultControl;return dialog;
         }
     }
