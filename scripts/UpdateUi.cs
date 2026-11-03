@@ -41,18 +41,9 @@ namespace AtkBatteryTray {
             buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             skip.Anchor=AnchorStyles.Left;buttons.Controls.Add(skip,0,0);buttons.Controls.Add(cancel,1,0);buttons.Controls.Add(install,2,0);
             layout.Controls.Add(buttons,0,3);Controls.Add(layout);AcceptButton=install;CancelButton=cancel;ActiveControl=install;
-            bool fitting=false;
-            Action fit=delegate{
-                if(fitting||IsDisposed)return;fitting=true;
-                try{
-                    int width=Math.Max(1,ClientSize.Width-Padding.Horizontal);float scale=Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;
-                    int surrounding=Padding.Vertical+versionCard.Height+versionCard.Margin.Vertical+statusArea.Height+statusArea.Margin.Vertical+section.Padding.Vertical+section.Margin.Vertical+buttons.GetPreferredSize(new Size(width,0)).Height;
-                    int maximum=Math.Max(1,Screen.FromControl(this).WorkingArea.Height-(Height-ClientSize.Height)-(int)Math.Round(32*scale));
-                    int height=Math.Min(maximum,surrounding+notes.PreferredNotesHeight(width-section.Padding.Horizontal));
-                    if(ClientSize.Height!=height)ClientSize=new Size(ClientSize.Width,height);
-                }finally{fitting=false;}
-            };
-            notes.TextChanged+=delegate{fit();};FontChanged+=delegate{fit();};SizeChanged+=delegate{fit();};Shown+=delegate{fit();};fit();
+            Func<int> surrounding=delegate{return versionCard.Height+versionCard.Margin.Vertical+statusArea.Height+statusArea.Margin.Vertical+section.Padding.Vertical+section.Margin.Vertical;};
+            ConfigureLayout(layout,buttons,delegate(int width){return surrounding()+3*notes.LineHeight+4;},delegate(int width){return surrounding()+notes.PreferredNotesHeight(width-section.Padding.Horizontal);});
+            notes.TextChanged+=delegate{FitToWorkingArea(false);};
             install.Click+=delegate{if(InstallRequested!=null)InstallRequested();};
             skip.Click+=delegate{if(SkipRequested!=null)SkipRequested();};
             cancel.Click+=delegate{if(downloading){if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";cancel.Enabled=false;}else Close();};

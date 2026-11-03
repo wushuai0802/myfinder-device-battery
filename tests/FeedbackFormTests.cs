@@ -182,7 +182,36 @@ static class FeedbackFormTests {
             Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="暂时无法提交";});Check(!Find<Button>(form,"ViewIssue").Visible&&opens==0,"untrusted success URL never exposed as a browser action");form.Close();
         }
     }
+    static void SmallWorkAreaStates(){
+        var previous=ThemedDialog.WorkingAreaProvider;var area=new Rectangle(0,0,1024,768);
+        ThemedDialog.WorkingAreaProvider=delegate{return area;};
+        try{foreach(string state in new[]{"browser","failure","success"}){
+            var http=new FakeHttp {Reply=delegate{return state=="failure"?Response(500):Success();}};
+            using(var form=Form(http,state=="browser"?"":Relay)){
+                form.Scale(new SizeF(2,2));form.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);Show(form);
+                if(state!="browser"){
+                    Find<Button>(form,"SubmitFeedback").PerformClick();
+                    Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?"暂时无法提交":"已提交，编号 #42");});
+                }
+                Check(area.Contains(form.Bounds),state+": entire feedback window fits");
+                foreach(string name in new[]{"SubmitFeedback","CancelFeedback","BrowserFallback","ViewIssue"}){
+                    var button=Find<Button>(form,name);if(!button.Visible)continue;
+                    var bounds=button.RectangleToScreen(button.ClientRectangle);
+                    for(Control parent=button.Parent;parent!=null;parent=parent.Parent)Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),state+": "+name+" fully visible through ancestors");
+                }
+                var input=Find<TextBox>(form,"Description");Check(input.Height>=3*input.Font.Height,state+": description keeps three lines");
+                var viewport=Find<Panel>(form,"DialogContentViewport");Check(viewport.AutoScroll&&viewport.VerticalScroll.Visible,state+": content can scroll");
+                viewport.AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
+                var status=Find<Label>(form,"FeedbackStatus");Check(status.RectangleToScreen(status.ClientRectangle).Bottom<=viewport.RectangleToScreen(viewport.ClientRectangle).Bottom,state+": final status reachable");
+                form.Close();
+            }
+        }}finally{ThemedDialog.WorkingAreaProvider=previous;}
+    }
     static void PreviewAndLayout(string output){
+        var previous=ThemedDialog.WorkingAreaProvider;
+        // This assertion tests the roomy layout, not the test machine's desktop.
+        ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
+        try{
         using(var form=Form(new FakeHttp(),"")){
             Show(form);Exception failure=null;bool previewed=false;using(var timer=new System.Windows.Forms.Timer {Interval=10}){
                 timer.Tick+=delegate{foreach(Form window in Application.OpenForms)if(window.Text=="诊断信息"){timer.Stop();try{var text=Find<TextBox>(window,"DiagnosticText");Check(text.ReadOnly&&text.Multiline&&text.Text==Report().FullText&&!window.ShowInTaskbar,"preview shows exactly the full diagnostics in a read-only modal");previewed=true;}catch(Exception e){failure=e;}window.Close();break;}};
@@ -197,10 +226,12 @@ static class FeedbackFormTests {
             if(output!=null&&scale==1f)using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(output,dark?"feedback-dark.png":"feedback-light.png"));}
             form.Close();
         }
+        }finally{ThemedDialog.WorkingAreaProvider=previous;}
     }
     [STAThread] static int Main(string[] args){
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
         Run("shipped relay configuration",RelayConfiguration);Run("validation and defaults",Validation);Run("exact payload and HTTP policy",PayloadAndPolicy);Run("HTTP failure boundaries",Failures);Run("cancellation during send and read",Cancellation);Run("browser fallback",BrowserFallback);Run("success and repeat confirmation",SuccessAndRepeat);Run("diagnostic preview and DPI bounds",delegate{PreviewAndLayout(args.Length>0?args[0]:null);});
+        Run("small work area feedback states",SmallWorkAreaStates);
         Console.WriteLine(checks+" feedback checks, "+failures+" failed groups; no network or real clipboard/browser/configuration");return failures==0?0:1;
     }
 }

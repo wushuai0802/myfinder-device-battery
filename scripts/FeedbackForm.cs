@@ -185,6 +185,17 @@ namespace AtkBatteryTray {
             view.Name="ViewIssue";view.Text="在浏览器中查看";view.AutoSize=true;view.MinimumSize=new Size(132,30);view.Visible=false;
             view.Click+=delegate{if(receipt!=null&&FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url))try{open(receipt.Url);}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}};
             buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback});layout.Controls.Add(buttons,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
+            ConfigureLayout(layout,buttons,delegate(int width){
+                int textWidth=Math.Max(1,width-descriptionCard.Padding.Horizontal);
+                int minimum=descriptionCard.Padding.Vertical;
+                foreach(Control child in descriptionLayout.Controls){
+                    minimum+=child.Margin.Vertical;
+                    minimum+=child is ThemedTextBox?3*description.Font.Height+child.Padding.Vertical+4:child.GetPreferredSize(new Size(textWidth,0)).Height;
+                }
+                return typeCard.Height+typeCard.Margin.Vertical+minimum+descriptionCard.Margin.Vertical
+                    +diagnosticCard.GetPreferredSize(new Size(width,0)).Height+diagnosticCard.Margin.Vertical
+                    +noticeCard.GetPreferredSize(new Size(width,0)).Height+noticeCard.Margin.Vertical;
+            });
             FormClosing+=delegate{AbortSubmission();};UpdateValidation();
         }
         void UpdateValidation(){
@@ -223,7 +234,8 @@ namespace AtkBatteryTray {
             var card=new ThemedSection(dialog.Theme) {Name="DiagnosticsCard",Dock=DockStyle.Fill};
             text.BorderStyle=dialog.Theme.HighContrast?BorderStyle.Fixed3D:BorderStyle.None;text.BackColor=dialog.Theme.Card;text.ForeColor=dialog.Theme.Foreground;text.Dock=DockStyle.Fill;card.Controls.Add(text);DialogScrollbars.Attach(text,dialog.Theme);layout.Controls.Add(card,0,0);
             var close=new ThemedButton(dialog.Theme,ThemedButtonKind.Primary) {Text="关闭",DialogResult=DialogResult.Cancel,AutoSize=true,Anchor=AnchorStyles.Right,Margin=Padding.Empty};layout.Controls.Add(close,0,1);
-            dialog.Controls.Add(layout);dialog.AcceptButton=close;dialog.CancelButton=close;dialog.ActiveControl=close;return dialog;
+            dialog.Controls.Add(layout);dialog.AcceptButton=close;dialog.CancelButton=close;dialog.ActiveControl=close;
+            dialog.ConfigureLayout(layout,close,delegate(int width){return card.Padding.Vertical+card.Margin.Vertical+5*text.Font.Height+SystemInformation.HorizontalScrollBarHeight+4;});return dialog;
         }
         void ShowDiagnostics(){using(var dialog=CreateDiagnosticsDialog())dialog.ShowDialog(this);}
         void AbortSubmission(){var cancellation=pending;if(cancellation!=null)try{cancellation.Cancel();}catch(ObjectDisposedException){}}

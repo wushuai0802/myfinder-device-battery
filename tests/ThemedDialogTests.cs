@@ -20,7 +20,7 @@ static class ThemedDialogTests {
     [StructLayout(LayoutKind.Sequential)] struct PrintRange {internal IntPtr Device,Target;internal PrintRect Area,Page;internal int First,Last;}
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,ref PrintRange range);
     static void Check(bool value,string message){if(!value)throw new Exception(message);checks++;}
-    static void Run(string name,Action test){try{test();Console.WriteLine("PASS "+name);}catch(Exception e){failures++;Console.Error.WriteLine("FAIL "+name+": "+(e.InnerException??e).Message);}}
+    static void Run(string name,Action test){try{test();Console.WriteLine("PASS "+name);}catch(Exception e){failures++;Console.Error.WriteLine("FAIL "+name+": "+(e.InnerException??e));}}
     static Type Type(string name){var type=typeof(UpdateDialog).Assembly.GetType("AtkBatteryTray."+name);Check(type!=null,name+" is available");return type;}
     static object Field(object instance,string name){return instance.GetType().GetField(name,Members).GetValue(instance);}
     static object Call(object instance,string method,params object[] args){return instance.GetType().GetMethod(method,Members).Invoke(instance,args);}
@@ -32,6 +32,75 @@ static class ThemedDialogTests {
     static Color ColorField(object instance,string name){return (Color)Field(instance,name);}
     static void SelectTheme(string style,bool dark){DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle=style,Theme=dark?"dark":"light",ReducedMotion=true,RememberReadings=false,VolumeCollapsed=false});}
     static void Show(Form form){form.Opacity=0;form.ShowInTaskbar=false;form.Show();Application.DoEvents();}
+    static void WithWorkArea(Rectangle area,Action test){
+        var previous=ThemedDialog.WorkingAreaProvider;
+        try{ThemedDialog.WorkingAreaProvider=delegate{return area;};test();}
+        finally{ThemedDialog.WorkingAreaProvider=previous;}
+    }
+    static void Fits(ThemedDialog dialog,Rectangle area,string context){
+        Check(area.Contains(dialog.Bounds),context+": entire window fits injected work area ("+dialog.Bounds+")");
+        Check(Math.Abs(dialog.Left-area.Left-(area.Width-dialog.Width)/2)<=1&&Math.Abs(dialog.Top-area.Top-(area.Height-dialog.Height)/2)<=1,context+": centered in work area");
+        var button=(Control)dialog.AcceptButton;var client=dialog.RectangleToScreen(dialog.ClientRectangle);
+        Check(button.Visible&&client.Contains(button.RectangleToScreen(button.ClientRectangle)),context+": primary button is fully visible");
+        for(Control parent=button.Parent;parent!=dialog;parent=parent.Parent)
+            Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(button.RectangleToScreen(button.ClientRectangle)),context+": primary button is not clipped by ancestors");
+    }
+    static void InjectedWorkAreas(){
+        foreach(var size in new[]{new Size(1920,1080),new Size(1280,720),new Size(1024,768)})foreach(float scale in new[]{1.5f,2f}){
+            var area=new Rectangle(new Point(-1400,40),size);string context=size+" at "+scale;
+            WithWorkArea(area,delegate{
+                using(var feedback=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
+                    feedback.Scale(new SizeF(scale,scale));feedback.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(feedback);Fits(feedback,area,"feedback "+context);
+                    var input=Find<TextBox>(feedback,"Description");Check(input.Height>=3*input.Font.Height,"description retains three lines: "+context);
+                    var viewport=Find<Panel>(feedback,"DialogContentViewport");var notice=Find<Control>(feedback,"FeedbackNoticeCard");
+                    if(size.Height<=768&&scale==2f){
+                        Check(viewport.AutoScroll&&viewport.VerticalScroll.Visible,"small work area scrolls feedback content: "+context);
+                        var button=(Control)feedback.AcceptButton;var before=button.RectangleToScreen(button.ClientRectangle);
+                        viewport.AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
+                        Check(viewport.AutoScrollPosition.Y<0&&notice.RectangleToScreen(notice.ClientRectangle).Bottom<=viewport.RectangleToScreen(viewport.ClientRectangle).Bottom,"can scroll to final card: "+context);
+                        Check(button.RectangleToScreen(button.ClientRectangle)==before,"scrolling does not move buttons: "+context);
+                    }
+                    using(var diagnostic=feedback.CreateDiagnosticsDialog()){
+                        diagnostic.Scale(new SizeF(scale,scale));diagnostic.Font=feedback.Font;Show(diagnostic);Fits(diagnostic,area,"diagnostic "+context);
+                        var text=Find<TextBox>(diagnostic,"DiagnosticText");Check(text.Height>=5*text.Font.Height,"diagnostics retain five lines: "+context);
+                    }
+                }
+                var release=Release();release.Body=Lines(80);using(var update=new UpdateDialog(release,true)){
+                    update.Scale(new SizeF(scale,scale));update.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(update);Fits(update,area,"update "+context);
+                    var notes=Find<ThemedReleaseNotes>(update,"ReleaseNotes");Check(notes.Height>=3*notes.LineHeight,"notes retain three lines: "+context);
+                }
+                using(var message=ThemedMessage.Create("确认",Lines(100),MessageBoxButtons.YesNo)){
+                    message.Scale(new SizeF(scale,scale));message.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(message);Fits(message,area,"message "+context);
+                    var text=Find<Label>(message,"MessageText");var scroll=(ScrollableControl)text.Parent;scroll.AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
+                    Check(scroll.AutoScrollPosition.Y<0&&text.RectangleToScreen(text.ClientRectangle).Bottom<=scroll.RectangleToScreen(scroll.ClientRectangle).Bottom,"message scroll reaches last line: "+context);
+                }
+                using(var alias=new ThemedAliasDialog("名称","设备",12)){
+                    alias.Scale(new SizeF(scale,scale));alias.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(alias);Fits(alias,area,"alias "+context);
+                }
+            });
+        }
+    }
+    static void WorkAreaAndDpiChanges(){
+        var previous=ThemedDialog.WorkingAreaProvider;var area=new Rectangle(0,0,3200,2400);int reads=0;
+        ThemedDialog.WorkingAreaProvider=delegate{reads++;return area;};
+        try{using(var dialog=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
+            dialog.Scale(new SizeF(2,2));dialog.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
+            var original=dialog.Size;var input=Find<TextBox>(dialog,"Description");int originalInput=input.Height;
+            var viewport=Find<Panel>(dialog,"DialogContentViewport");Check(!viewport.VerticalScroll.Visible,"roomy work area needs no content scrolling");
+            area=new Rectangle(-1280,40,1280,720);dialog.Location=new Point(-1200,80);Application.DoEvents();Fits(dialog,area,"monitor move");
+            Check(input.Height<originalInput&&input.Height>=3*input.Font.Height&&viewport.VerticalScroll.Visible,"monitor move shrinks to readable minimum, then scrolls");
+            area=new Rectangle(0,0,3200,2400);dialog.Location=new Point(10,10);Application.DoEvents();Fits(dialog,area,"return to large monitor");
+            Check(dialog.Size==original&&input.Height==originalInput&&!viewport.VerticalScroll.Visible,"returning restores preferred size and removes scrolling");
+            // Send the native DPI notification using a valid suggested RECT. The work
+            // area changes without a preceding move, so this must trigger a new fit.
+            area=new Rectangle(20,30,1024,768);int before=reads;IntPtr rect=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(PrintRect)));
+            try{
+                Marshal.StructureToPtr(new PrintRect {Left=20,Top=30,Right=1044,Bottom=798},rect,false);
+                SendMessage(dialog.Handle,0x02E0,(IntPtr)(144|(144<<16)),rect);Application.DoEvents();
+            }finally{Marshal.FreeHGlobal(rect);}
+            Fits(dialog,area,"DPI notification");Check(reads>before&&input.Height>=3*input.Font.Height,"DPI notification remeasures the work area and minimum");
+        }}finally{ThemedDialog.WorkingAreaProvider=previous;}
+    }
     static void Key(Form form,Keys key){typeof(Form).GetMethod("ProcessDialogKey",Members).Invoke(form,new object[]{key});Application.DoEvents();}
     static void SharedPanelGeometry(){
         SelectTheme("ocean",true);var theme=new DialogTheme(true);
@@ -87,7 +156,7 @@ static class ThemedDialogTests {
                 Show(dialog);var notes=Find<Control>(dialog,"ReleaseNotes");
                 Check(notes.Font.SizeInPoints*96/72==VisualDesign.BodyFontSize,"release notes use 12px body text");
                 Check(dialog.ClientSize.Height>previous,"short, medium and long notes grow the window");previous=dialog.ClientSize.Height;
-                Check(dialog.Height<=Screen.FromControl(dialog).WorkingArea.Height,"update window stays in the screen work area");
+                Check(dialog.Height<=ThemedDialog.WorkingAreaProvider(dialog).Height,"update window stays in the injected work area");
                 var scroll=notes.GetType().GetProperty("ScrollBars").GetValue(notes,null);Check(scroll.ToString()==(lines==80?"Vertical":"None"),"only notes exceeding twelve lines scroll");
                 var rich=(ThemedReleaseNotes)notes;Check(rich.Height>=3*rich.LineHeight&&rich.Height<=12*rich.LineHeight+5,"release viewport stays between three and twelve lines");
                 if(lines==7){int next=rich.Text.IndexOf('\n')+1;Check(Math.Abs(rich.GetPositionFromCharIndex(next).Y-rich.GetPositionFromCharIndex(0).Y-rich.LineHeight)<=1,"native rich edit applies 1.4x line spacing");}
@@ -103,7 +172,7 @@ static class ThemedDialogTests {
         foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
             var release=Release();release.Body=Lines(100);using(var dialog=new UpdateDialog(release,true)){
                 dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
-                Check(dialog.Height<=Screen.FromControl(dialog).WorkingArea.Height,"long notes obey the working-area cap at "+scale);
+                Check(dialog.Height<=ThemedDialog.WorkingAreaProvider(dialog).Height,"long notes obey the injected working-area cap at "+scale);
             }
         }
     }
@@ -504,13 +573,35 @@ static class ThemedDialogTests {
             var longRelease=Release();longRelease.Body="本次更新内容\r\n"+Lines(80);
             using(var longNotes=new UpdateDialog(longRelease,true))SaveClient(longNotes,output,"dialog-release-long"+suffix);
         }
+        WithWorkArea(new Rectangle(0,0,1024,768),delegate{
+            SelectTheme("ocean",true);
+            using(var feedback=new FeedbackForm(Report(),false,true,delegate{},delegate{},FeedbackRelay.Url)){
+                feedback.Scale(new SizeF(2,2));feedback.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);
+                Find<TextBox>(feedback,"Description").Text="连接设备后电量没有刷新，希望增加更多型号的支持。";
+                SaveClient(feedback,output,"dialog-fit-feedback-top-200");
+                Find<Panel>(feedback,"DialogContentViewport").AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
+                SaveClient(feedback,output,"dialog-fit-feedback-bottom-200");
+                using(var diagnostic=feedback.CreateDiagnosticsDialog()){
+                    diagnostic.Scale(new SizeF(2,2));diagnostic.Font=feedback.Font;SaveClient(diagnostic,output,"dialog-fit-diagnostics-200");
+                }
+            }
+            var release=Release();release.Body=Lines(80);using(var update=new UpdateDialog(release,true)){
+                update.Scale(new SizeF(2,2));update.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);SaveClient(update,output,"dialog-fit-update-200");
+            }
+            using(var message=ThemedMessage.Create("确认",Lines(100),MessageBoxButtons.YesNo)){
+                message.Scale(new SizeF(2,2));message.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);SaveClient(message,output,"dialog-fit-message-200");
+            }
+        });
     }
     [STAThread] static int Main(string[] args){
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
+        var previousArea=ThemedDialog.WorkingAreaProvider;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
+            Run("injected work areas",InjectedWorkAreas);Run("monitor and DPI changes",WorkAreaAndDpiChanges);
+            if(args.Length==1&&args[0]=="--fit-only")return failures==0?0:1;
             Run("shared panel geometry and card painting",SharedPanelGeometry);Run("background separation and rounded native chrome",DialogBackground);Run("accessible segments and switch",SegmentsAndSwitch);Run("content-sized release notes",AdaptiveReleaseNotes);Run("shared button, switch and progress painting",SharedControlPainting);Run("cards and panel typography",CardsAndTypography);Run("native high contrast controls",SystemControlsInHighContrast);
             if(args.Length==1&&args[0]=="--soft-only")return failures==0?0:1;
             Run("window scrollbar themes and handle recreation",ScrollbarThemes);Run("scrollbars follow text and viewport",ConditionalScrollbars);Run("update progress visibility without layout jumps",UpdateProgressVisibility);Run("plain wrapped messages and bounded overflow",PlainMessageLayout);Run("update states and keyboard in all themes",delegate{foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false}){SelectTheme(style,dark);StateAndKeyboard();}});Run("components and all theme contrasts",ComponentsAndContrast);Run("system-only high contrast and chrome",HighContrast);Run("progress motion and byte boundaries",ProgressMotion);Run("modal message return values",MessageResults);Run("message close and actual feedback repeat confirmation",MessageCloseAndRepeat);Run("alias and diagnostic dialogs",AliasAndDiagnostic);Run("dialog layout from 100 to 200 percent",LayoutBounds);Run("disabled button bitmap state",RenderedDisabledButtons);Console.WriteLine(checks+" themed-dialog checks, "+failures+" failed groups");return failures==0?0:1;}
-        finally{DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}
+        finally{ThemedDialog.WorkingAreaProvider=previousArea;DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}
     }
 }

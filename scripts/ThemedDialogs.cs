@@ -96,6 +96,14 @@ namespace AtkBatteryTray {
     internal class ThemedDialog:Form {
         internal readonly DialogTheme Theme;
         readonly Font bodyFont,titleFont,descriptionFont,cardTitleFont;
+        // Tests supply physical pixel work areas, independent of the host monitor.
+        internal static Func<Control,Rectangle> WorkingAreaProvider=delegate(Control control){
+            var form=control as Form;
+            return (control.Visible?Screen.FromControl(control):form!=null&&form.Owner!=null?Screen.FromControl(form.Owner):Screen.FromPoint(Cursor.Position)).WorkingArea;
+        };
+        TableLayoutPanel content,frame;Panel viewport;Control buttons;
+        Func<int,int> minimumContentHeight,preferredContentHeight;
+        Size preferredClientSize;Rectangle lastWorkArea;bool fitting,loaded,scaling;
         internal ThemedDialog():this(Style.Dark){}
         internal ThemedDialog(bool dark){
             Theme=new DialogTheme(dark);
@@ -106,7 +114,78 @@ namespace AtkBatteryTray {
             AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;Font=bodyFont;
             BackColor=Theme.Background;ForeColor=Theme.Foreground;Padding=new Padding(16);
             FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
-            StartPosition=FormStartPosition.CenterParent;ShowInTaskbar=false;
+            StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;
+        }
+        // Keep each dialog's existing cards and button layout; only the content scrolls.
+        internal void ConfigureLayout(TableLayoutPanel body,Control buttonBar,Func<int,int> minimum,Func<int,int> preferred=null){
+            var accept=AcceptButton;var cancel=CancelButton;var active=ActiveControl;
+            content=body;buttons=buttonBar;minimumContentHeight=minimum;preferredContentHeight=preferred;
+            preferredClientSize=ClientSize;StartPosition=FormStartPosition.Manual;
+            content.Controls.Remove(buttons);content.RowStyles.RemoveAt(content.RowStyles.Count-1);content.RowCount--;
+            Controls.Remove(content);content.Dock=DockStyle.None;content.Anchor=AnchorStyles.Top|AnchorStyles.Left;
+            viewport=new Panel {Name="DialogContentViewport",Dock=DockStyle.Fill,Margin=Padding.Empty};
+            DialogScrollbars.Track(viewport,Theme);viewport.Controls.Add(content);
+            frame=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
+            frame.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));frame.RowStyles.Add(new RowStyle(SizeType.Percent,100));frame.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            frame.Controls.Add(viewport,0,0);frame.Controls.Add(buttons,0,1);Controls.Add(frame);AcceptButton=accept;CancelButton=cancel;ActiveControl=active;
+            frame.Layout+=delegate{FitToWorkingArea(false);};
+        }
+        internal void FitToWorkingArea(bool center){
+            if(!loaded||fitting||scaling||IsDisposed||Disposing)return;fitting=true;
+            try{
+                var area=WorkingAreaProvider(this);if(area.Width<=0||area.Height<=0)return;
+                center|=area!=lastWorkArea;lastWorkArea=area;
+                // Override WinForms' default maximum track size too, so injected work
+                // areas are authoritative even on small CI desktops.
+                if(MaximumSize!=area.Size)MaximumSize=area.Size;
+                int chromeWidth=Width-ClientSize.Width,chromeHeight=Height-ClientSize.Height;
+                int width=Math.Max(1,Math.Min(preferredClientSize.Width>0?preferredClientSize.Width:ClientSize.Width,area.Width-chromeWidth));
+                int height=preferredClientSize.Height>0?preferredClientSize.Height:ClientSize.Height;
+                if(content!=null&&preferredContentHeight!=null){
+                    int bodyWidth=Math.Max(1,width-Padding.Horizontal);
+                    height=Padding.Vertical+buttons.GetPreferredSize(new Size(bodyWidth,0)).Height+buttons.Margin.Vertical+preferredContentHeight(bodyWidth);
+                }
+                height=Math.Max(1,Math.Min(height,area.Height-chromeHeight));
+                if(ClientSize!=new Size(width,height))ClientSize=new Size(width,height);
+                if(content!=null){
+                    frame.PerformLayout();
+                    // The scrollbar reduces width, so remeasure wrapping with it present.
+                    for(int pass=0;pass<3;pass++){
+                        int bodyWidth=Math.Max(1,viewport.ClientSize.Width);
+                        content.Width=bodyWidth;content.PerformLayout();
+                        int minimum=Math.Max(1,minimumContentHeight(bodyWidth));
+                        bool scroll=minimum>viewport.ClientSize.Height;
+                        viewport.AutoScroll=scroll;viewport.AutoScrollMinSize=new Size(0,scroll?minimum:0);
+                        content.SetBounds(0,scroll?viewport.AutoScrollPosition.Y:0,Math.Max(1,viewport.ClientSize.Width),Math.Max(viewport.ClientSize.Height,minimum));
+                        content.PerformLayout();
+                    }
+                }
+                int x=center?area.Left+(area.Width-Width)/2:Math.Max(area.Left,Math.Min(Left,area.Right-Width));
+                int y=center?area.Top+(area.Height-Height)/2:Math.Max(area.Top,Math.Min(Top,area.Bottom-Height));
+                Location=new Point(x,y);
+            }finally{fitting=false;}
+        }
+        protected override void OnLoad(EventArgs e){loaded=true;FitToWorkingArea(true);base.OnLoad(e);}
+        protected override void OnShown(EventArgs e){FitToWorkingArea(true);base.OnShown(e);}
+        protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);if(loaded)FitToWorkingArea(false);}
+        protected override void OnSizeChanged(EventArgs e){
+            if(loaded&&!fitting&&!scaling)preferredClientSize=ClientSize;
+            base.OnSizeChanged(e);if(loaded)FitToWorkingArea(false);
+        }
+        protected override void OnLocationChanged(EventArgs e){
+            base.OnLocationChanged(e);if(loaded&&!fitting&&WorkingAreaProvider(this)!=lastWorkArea)FitToWorkingArea(true);
+        }
+        protected override void ScaleControl(SizeF factor,BoundsSpecified specified){
+            bool wasScaling=scaling;scaling=true;
+            try{
+                base.ScaleControl(factor,specified);
+                preferredClientSize=new Size((int)Math.Round(preferredClientSize.Width*factor.Width),(int)Math.Round(preferredClientSize.Height*factor.Height));
+            }finally{scaling=wasScaling;}
+        }
+        protected override void WndProc(ref Message message){
+            base.WndProc(ref message);
+            // WM_DPICHANGED also covers Framework configurations without automatic DPI events.
+            if(message.Msg==0x02E0&&loaded)FitToWorkingArea(true);
         }
         internal Label Caption(string text,bool title=false,bool description=false,bool cardTitle=false){
             return new Label {Text=text,AutoSize=true,UseMnemonic=false,BackColor=Theme.HighContrast?SystemColors.Window:Color.Transparent,ForeColor=description?Theme.Muted:Theme.Foreground,Font=title?titleFont:cardTitle?cardTitleFont:description?descriptionFont:bodyFont,Margin=new Padding(0,0,0,4)};
@@ -303,7 +382,7 @@ namespace AtkBatteryTray {
     }
 
     internal sealed class ThemedReleaseNotes:RichTextBox {
-        readonly DialogTheme theme;bool updating;
+        readonly DialogTheme theme;bool updating,ready;
         [StructLayout(LayoutKind.Sequential)] struct Paragraph {
             internal uint Size,Mask;internal ushort Numbering,Effects;internal int StartIndent,RightIndent,Offset;internal ushort Alignment,TabCount;
             [MarshalAs(UnmanagedType.ByValArray,SizeConst=32)] internal int[] Tabs;
@@ -332,14 +411,16 @@ namespace AtkBatteryTray {
             SendMessage(Handle,0x0447,IntPtr.Zero,ref paragraph);Select(start,length);
         }
         void UpdateViewport(){
-            if(updating||!IsHandleCreated)return;updating=true;
+            if(updating||!ready||!IsHandleCreated)return;updating=true;
             try{
                 int width=ClientSize.Width+(ScrollBars==RichTextBoxScrollBars.Vertical?SystemInformation.VerticalScrollBarWidth:0);
                 bool overflow=LineCountFor(width)*LineHeight+4>ClientSize.Height;
                 var wanted=overflow?RichTextBoxScrollBars.Vertical:RichTextBoxScrollBars.None;if(ScrollBars!=wanted)ScrollBars=wanted;
             }finally{updating=false;}
         }
-        protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);FormatLines();BeginInvoke((MethodInvoker)delegate{if(!IsDisposed&&IsHandleCreated)UpdateViewport();});}
+        // ScrollBars recreates RichEdit's handle; wait for creation and initial layout.
+        protected override void OnHandleCreated(EventArgs e){ready=false;base.OnHandleCreated(e);FormatLines();BeginInvoke((MethodInvoker)delegate{if(!IsDisposed&&IsHandleCreated){ready=true;UpdateViewport();}});}
+        protected override void OnHandleDestroyed(EventArgs e){ready=false;base.OnHandleDestroyed(e);}
         protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);UpdateViewport();}
         protected override void OnFontChanged(EventArgs e){base.OnFontChanged(e);FormatLines();UpdateViewport();}
     }
@@ -404,6 +485,7 @@ namespace AtkBatteryTray {
             var save=new ThemedButton(Theme,ThemedButtonKind.Primary) {Text="保存",DialogResult=DialogResult.OK,AutoSize=true,TabIndex=2};
             var cancel=new ThemedButton(Theme) {Text="取消",DialogResult=DialogResult.Cancel,AutoSize=true,TabIndex=1};
             buttons.Controls.AddRange(new Control[]{save,cancel});layout.Controls.Add(card,0,0);layout.Controls.Add(buttons,0,1);Controls.Add(layout);AcceptButton=save;CancelButton=cancel;ActiveControl=Input;
+            ConfigureLayout(layout,buttons,delegate(int width){return card.Padding.Vertical+card.Margin.Vertical+input.Height;});
         }
     }
 
@@ -445,18 +527,12 @@ namespace AtkBatteryTray {
             if(cancelControl==null){dialog.ControlBox=false;dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(dialog.DialogResult==DialogResult.Cancel)e.Cancel=true;};}
             else if(buttons==MessageBoxButtons.OK)dialog.FormClosing+=delegate{if(dialog.DialogResult==DialogResult.Cancel||dialog.DialogResult==DialogResult.None)dialog.DialogResult=DialogResult.OK;};
             layout.Controls.Add(bar,0,1);dialog.Controls.Add(layout);
-            bool resizing=false;
-            LayoutEventHandler fit=delegate{
-                if(resizing)return;resizing=true;
-                try{
-                    int width=Math.Max(1,dialog.ClientSize.Width-dialog.Padding.Horizontal-card.Padding.Horizontal);float scale=dialog.Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;
-                    int surrounding=dialog.Padding.Vertical+card.Padding.Vertical+card.Margin.Vertical+heading.GetPreferredSize(new Size(width,0)).Height+heading.Margin.Vertical+message.Margin.Vertical+bar.GetPreferredSize(new Size(width,0)).Height+bar.Margin.Vertical;
-                    int maximum=Math.Min((int)Math.Round(560*scale),Screen.FromControl(dialog).WorkingArea.Height-(dialog.Height-dialog.ClientSize.Height)-(int)Math.Round(48*scale));
-                    int height=Math.Min(surrounding+message.GetPreferredSize(new Size(width,0)).Height,Math.Max(surrounding,maximum));
-                    if(dialog.ClientSize.Height!=height)dialog.ClientSize=new Size(dialog.ClientSize.Width,height);
-                }finally{resizing=false;}
-            };
-            dialog.Layout+=fit;fit(dialog,new LayoutEventArgs(dialog,null));
+            Func<int,int> surrounding=delegate(int width){return card.Padding.Vertical+card.Margin.Vertical+heading.GetPreferredSize(new Size(Math.Max(1,width-card.Padding.Horizontal),0)).Height+heading.Margin.Vertical+message.Margin.Vertical;};
+            dialog.ConfigureLayout(layout,bar,delegate(int width){return surrounding(width)+Math.Min(3*message.Font.Height,message.GetPreferredSize(new Size(Math.Max(1,width-card.Padding.Horizontal),0)).Height);},delegate(int width){
+                float scale=dialog.Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;
+                int maximum=(int)Math.Round(560*scale)-dialog.Padding.Vertical-bar.GetPreferredSize(new Size(width,0)).Height;
+                return Math.Min(maximum,surrounding(width)+message.GetPreferredSize(new Size(Math.Max(1,width-card.Padding.Horizontal),0)).Height);
+            });
             dialog.AcceptButton=defaultControl;dialog.CancelButton=cancelControl;dialog.ActiveControl=defaultControl;return dialog;
         }
     }
