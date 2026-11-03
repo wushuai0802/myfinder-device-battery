@@ -46,7 +46,7 @@ static class ThemedDialogTests {
             Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(button.RectangleToScreen(button.ClientRectangle)),context+": primary button is not clipped by ancestors");
     }
     static void InjectedWorkAreas(){
-        foreach(var size in new[]{new Size(1920,1080),new Size(1280,720),new Size(1024,768)})foreach(float scale in new[]{1.5f,2f}){
+        foreach(var size in new[]{new Size(1920,1080),new Size(1280,720),new Size(1024,768)})foreach(float scale in new[]{1.5f,2f})WithDpi((int)Math.Round(96*scale),delegate{
             var area=new Rectangle(new Point(-1400,40),size);string context=size+" at "+scale;
             WithWorkArea(area,delegate{
                 using(var feedback=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
@@ -78,9 +78,10 @@ static class ThemedDialogTests {
                     alias.Scale(new SizeF(scale,scale));alias.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(alias);Fits(alias,area,"alias "+context);
                 }
             });
-        }
+        });
     }
     static void WorkAreaAndDpiChanges(){
+        WithDpi(192,delegate{
         var previous=ThemedDialog.WorkingAreaProvider;var area=new Rectangle(0,0,3200,2400);int reads=0;
         ThemedDialog.WorkingAreaProvider=delegate{reads++;return area;};
         try{using(var dialog=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
@@ -101,11 +102,12 @@ static class ThemedDialogTests {
             }finally{Marshal.FreeHGlobal(rect);}
             Fits(dialog,area,"DPI notification");Check(reads>before&&input.Height>=3*input.Font.Height,"DPI notification remeasures the work area and minimum");
         }}finally{ThemedDialog.WorkingAreaProvider=previous;}
+        });
     }
     static void ActualClientSizeLayout(string kind){
         // Sizes are logical pixels; scale them along with the controls. The native
         // maximum simulates a screen clamp even when the injected work area is large.
-        foreach(float scale in new[]{1f,2f})using(var feedback=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
+        foreach(float scale in new[]{1f,2f})WithDpi((int)Math.Round(96*scale),delegate{using(var feedback=new FeedbackForm(Report(),false,false,delegate{},delegate{},FeedbackRelay.Url)){
             var release=Release();release.Body=Lines(80);
             using(var dialog=kind=="feedback"?(ThemedDialog)feedback:kind=="diagnostic"?feedback.CreateDiagnosticsDialog():kind=="update"?new UpdateDialog(release,true):kind=="message"?ThemedMessage.Create("确认",Lines(100),MessageBoxButtons.YesNo):new ThemedAliasDialog("名称","设备",12)){
                 dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
@@ -141,9 +143,72 @@ static class ThemedDialogTests {
                     }
                 }
             }
-        }
+        }});
     }
     static void Key(Form form,Keys key){typeof(Form).GetMethod("ProcessDialogKey",Members).Invoke(form,new object[]{key});Application.DoEvents();}
+    static void WithDpi(int dpi,Action test){
+        var previous=DialogDpi.DeviceDpiReader;
+        try{DialogDpi.DeviceDpiReader=delegate{return dpi;};test();}
+        finally{DialogDpi.DeviceDpiReader=previous;}
+    }
+    static void ButtonFontScaling(){
+        SelectTheme("ocean",true);var theme=new DialogTheme(true);
+        foreach(var sample in new[]{new {Name="Microsoft Sans Serif",Points=8.25f},new {Name="Segoe UI",Points=9f},new {Name="Microsoft YaHei UI",Points=9f}})
+        using(var font=new Font(sample.Name,sample.Points,FontStyle.Regular,GraphicsUnit.Point))
+        foreach(var kind in new[]{ThemedButtonKind.Primary,ThemedButtonKind.Secondary,ThemedButtonKind.Text})
+        using(var button=new ThemedButton(theme,kind) {Font=font,Text="Button"}){
+            int dpi=button.DeviceDpi,expected=(int)Math.Round(30*dpi/96f),actual=button.GetPreferredSize(Size.Empty).Height;
+            Check(actual==expected,sample.Name+" "+sample.Points+"pt "+kind+" at "+dpi+" DPI: expected height "+expected+", actual "+actual);
+        }
+    }
+    static void ButtonDpiMatrix(){
+        SelectTheme("ocean",true);var theme=new DialogTheme(true);
+        foreach(var sample in new[]{new {Name="Microsoft Sans Serif",Points=8.25f},new {Name="Segoe UI",Points=9f},new {Name="Microsoft YaHei UI",Points=9f}})
+        foreach(var display in new[]{new {Dpi=96,Height=30},new {Dpi=120,Height=38},new {Dpi=144,Height=45},new {Dpi=192,Height=60}})
+        WithDpi(display.Dpi,delegate{
+            using(var font=new Font(sample.Name,sample.Points,FontStyle.Regular,GraphicsUnit.Point))
+            using(var larger=new Font(sample.Name,sample.Points*2,FontStyle.Regular,GraphicsUnit.Point))
+            using(var form=new Form {AutoScaleMode=AutoScaleMode.None,Font=font})
+            using(var bar=new FlowLayoutPanel {AutoSize=true,WrapContents=false}){
+                form.Controls.Add(bar);
+                foreach(var kind in new[]{ThemedButtonKind.Primary,ThemedButtonKind.Secondary,ThemedButtonKind.Text})
+                using(var button=new ThemedButton(theme,kind) {Font=font,Text="Button",AutoSize=true}){
+                    bar.Controls.Add(button);bar.PerformLayout();
+                    string context=sample.Name+" "+sample.Points+"pt "+kind+" at "+display.Dpi+" DPI";
+                    var preferred=button.GetPreferredSize(Size.Empty);
+                    Check(preferred.Height==display.Height&&button.Height==display.Height,context+": preferred and laid-out heights are "+display.Height);
+                    button.Font=larger;
+                    Check(button.GetPreferredSize(Size.Empty)==preferred,context+": text measurement also uses DPI rather than incoming font size");
+                }
+                using(var segment=new ThemedSegment(theme) {Font=font,Text="Type"})
+                using(var toggle=new ThemedSwitch(theme) {Font=font,Text="Diagnostics"}){
+                    foreach(Control control in new Control[]{segment,toggle}){
+                        var preferred=control.GetPreferredSize(Size.Empty);control.Font=larger;
+                        Check(preferred.Height==display.Height&&control.GetPreferredSize(Size.Empty)==preferred,control.GetType().Name+": DPI determines height and label size at "+display.Dpi);
+                    }
+                }
+                using(var segments=new ThemedSegments(theme) {Font=font,Width=1200}){
+                    for(int i=0;i<4;i++)segments.Controls.Add(new ThemedSegment(theme) {Text="Type"});segments.PerformLayout();
+                    Check(segments.Height==display.Height&&segments.GetPreferredSize(new Size(1200,0)).Height==display.Height,"segment row uses DPI at "+display.Dpi);
+                    foreach(Control child in segments.Controls)Check(child.Height==display.Height,"segment child shares the DPI-scaled row height");
+                }
+            }
+        });
+    }
+    static void DpiSource(){
+        var previous=DialogDpi.DeviceDpiReader;
+        try{using(var form=new Form {AutoScaleMode=AutoScaleMode.None})using(var panel=new Panel())using(var button=new ThemedButton(new DialogTheme(false))){
+            form.Controls.Add(panel);panel.Controls.Add(button);
+            Check(DialogDpi.Scale(button)==form.DeviceDpi/96f,"native lookup uses the window DeviceDpi");
+            DialogDpi.DeviceDpiReader=delegate(Control control){return control==form?144:96;};
+            Check(button.GetPreferredSize(Size.Empty).Height==45,"window DPI wins over a child's stale DPI");
+            panel.Controls.Remove(button);
+            Check(button.GetPreferredSize(Size.Empty).Height==30,"standalone button uses its own DPI after reparenting");
+            panel.Controls.Add(button);DialogDpi.DeviceDpiReader=delegate{return 0;};
+            float expected;using(var graphics=form.CreateGraphics())expected=graphics.DpiX/96f;
+            Check(DialogDpi.Scale(button)==expected,"unavailable DeviceDpi falls back to window Graphics.DpiX");
+        }}finally{DialogDpi.DeviceDpiReader=previous;}
+    }
     static void SharedPanelGeometry(){
         SelectTheme("ocean",true);var theme=new DialogTheme(true);
         using(var primary=new ThemedButton(theme,ThemedButtonKind.Primary))using(var secondary=new ThemedButton(theme)){
@@ -211,12 +276,12 @@ static class ThemedDialogTests {
                 if(lines<=12)Check(notes.GetPositionFromCharIndex(notes.TextLength).Y+notes.Font.Height<=notes.ClientSize.Height,"last release-note line remains fully visible: "+lines);
             }
         }
-        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
+        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})WithDpi((int)Math.Round(96*scale),delegate{
             var release=Release();release.Body=Lines(100);using(var dialog=new UpdateDialog(release,true)){
                 dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
                 Check(dialog.Height<=ThemedDialog.WorkingAreaProvider(dialog).Height,"long notes obey the injected working-area cap at "+scale);
             }
-        }
+        });
     }
     static bool SamePixels(Bitmap left,Bitmap right){
         if(left.Size!=right.Size)return false;
@@ -234,11 +299,12 @@ static class ThemedDialogTests {
         }
     }
     static void SharedControlPainting(){
-        foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false})foreach(float scale in new[]{1f,2f}){
+        foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{true,false})foreach(float scale in new[]{1f,1.25f,1.5f,2f})WithDpi((int)Math.Round(96*scale),delegate{
             SelectTheme(style,dark);var theme=new DialogTheme(dark);
-            using(var font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel)){
-                foreach(var kind in new[]{ThemedButtonKind.Primary,ThemedButtonKind.Secondary,ThemedButtonKind.Text})using(var button=new ThemedButton(theme,kind) {Font=font,Text="按钮",Size=new Size((int)(120*scale),(int)(VisualDesign.SelectionHeight*scale))}){
-                    Check(button.GetPreferredSize(Size.Empty).Height==VisualDesign.StageRect(0,4).Height*scale,"dialog/button and DPI segment heights are identical");
+            // Keep the English default font fixed while the simulated monitor DPI changes.
+            using(var font=new Font("Microsoft Sans Serif",8.25f,FontStyle.Regular,GraphicsUnit.Point)){
+                foreach(var kind in new[]{ThemedButtonKind.Primary,ThemedButtonKind.Secondary,ThemedButtonKind.Text})using(var button=new ThemedButton(theme,kind) {Font=font,Text="按钮",Size=new Size((int)(120*scale),(int)Math.Round(VisualDesign.SelectionHeight*scale))}){
+                    Check(button.GetPreferredSize(Size.Empty).Height==(int)Math.Round(VisualDesign.StageRect(0,4).Height*scale),"dialog/button and DPI segment heights are identical");
                     for(int interaction=0;interaction<3;interaction++){
                         if(interaction==1)Call(button,"OnMouseEnter",EventArgs.Empty);if(interaction==2)Call(button,"OnMouseDown",new MouseEventArgs(MouseButtons.Left,1,10,10,0));
                         bool hover=interaction>0,pressed=interaction==2;
@@ -250,20 +316,26 @@ static class ThemedDialogTests {
                         });
                     }
                 }
-                using(var progress=new ThemedProgress(theme) {Font=font,Size=new Size((int)(180*scale),(int)(VisualDesign.VolumeTrackHeight*scale)),Value=45}){
-                    Check(progress.Height==PopupPages.VolumeTrack(new RectangleF(0,0,260,48)).Height*scale,"progress uses the volume track height");
+                using(var progress=new ThemedProgress(theme) {Font=font,Size=new Size((int)(180*scale),(int)Math.Round(VisualDesign.VolumeTrackHeight*scale)),Value=45}){
+                    Check(progress.Height==(int)Math.Round(PopupPages.VolumeTrack(new RectangleF(0,0,260,48)).Height*scale),"progress uses the volume track height");
                     Check(((ProgressBar)progress).Value==45&&progress.AccessibleDescription=="45%","native progress value and accessible percentage agree");
                     ComparePaint(progress,theme.Card,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.DrawVolumeTrack(g,rect,dark,.45f);});
                 }
-                foreach(bool on in new[]{true,false})using(var toggle=new ThemedSwitch(theme) {AutoSize=false,Font=font,Text="诊断",Checked=on,Size=new Size((int)(240*scale),(int)(30*scale))}){
+                foreach(bool on in new[]{true,false})using(var toggle=new ThemedSwitch(theme) {AutoSize=false,Font=font,Text="诊断",Checked=on,Size=new Size((int)(240*scale),(int)Math.Round(30*scale))}){
                     var geometry=PopupPages.ToggleBounds(new RectangleF(0,0,240,30));Check(geometry.Size==new SizeF(VisualDesign.ToggleWidth,VisualDesign.ToggleHeight),"switch uses the secondary page's exact bounds");
                     ComparePaint(toggle,theme.Card,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.DrawLabel(g,toggle.Text,new RectangleF(6,0,rect.Width-51,rect.Height),VisualDesign.DeviceNameFontSize,false,theme.Foreground,StringAlignment.Near);PopupPages.DrawToggle(g,rect,on,true,dark);});
                 }
-                foreach(bool selected in new[]{true,false})using(var segment=new ThemedSegment(theme) {Font=font,Text="类型",Checked=selected,Size=new Size((int)(120*scale),(int)(VisualDesign.SelectionHeight*scale))}){
+                foreach(bool selected in new[]{true,false})using(var segment=new ThemedSegment(theme) {Font=font,Text="类型",Checked=selected,Size=new Size((int)(120*scale),(int)Math.Round(VisualDesign.SelectionHeight*scale))}){
                     ComparePaint(segment,theme.Track,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.Selection(g,rect,segment.Text,null,selected,true,false,false,false,dark);});
                 }
+                using(var section=new ThemedSection(theme) {Font=font,Size=new Size((int)(200*scale),(int)(80*scale))}){
+                    ComparePaint(section,theme.Background,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.DrawSurface(g,new RectangleF(.5f,.5f,rect.Width-1,rect.Height-1),dark);});
+                }
+                using(var input=new TextBox())using(var wrapper=new ThemedTextBox(theme,input) {Font=font,Size=new Size((int)(200*scale),(int)(40*scale))}){
+                    ComparePaint(wrapper,theme.Card,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.Fill(g,rect,theme.Track,VisualDesign.SelectionRadius);});
+                }
             }
-        }
+        });
     }
     static void CardsAndTypography(){
         using(var update=new UpdateDialog(Release(),true))using(var feedback=new FeedbackForm(Report(),false,Style.Dark,delegate{},delegate{},""))using(var alias=new ThemedAliasDialog("名称","我的设备",12))using(var message=ThemedMessage.Create("确认","测试确认",MessageBoxButtons.OK))using(var diagnostic=feedback.CreateDiagnosticsDialog()){
@@ -455,7 +527,7 @@ static class ThemedDialogTests {
     }
     static bool ContainsTextBox(Control control){if(control is TextBoxBase)return true;foreach(Control child in control.Controls)if(ContainsTextBox(child))return true;return false;}
     static void PlainMessageLayout(){
-        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
+        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})WithDpi((int)Math.Round(96*scale),delegate{
             int previousHeight=0;
             foreach(int lines in new[]{1,8,100})using(var dialog=ThemedMessage.Create("反馈问题",lines==1?"刚刚已提交过一次，确定还要再提交吗？":Lines(lines),MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)){
                 dialog.Scale(new SizeF(scale,scale));dialog.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(dialog);
@@ -471,7 +543,7 @@ static class ThemedDialogTests {
                 Check(no.RectangleToScreen(no.ClientRectangle).Bottom<=dialog.RectangleToScreen(dialog.ClientRectangle).Bottom,"message buttons remain visible");
                 if(lines==100){area.AutoScrollPosition=new Point(0,body.Height);Application.DoEvents();Check(area.AutoScrollPosition.Y<0,"long message can reach later text");}
             }
-        }
+        });
     }
     static void MessageResults(){
         var show=Type("ThemedMessage").GetMethod("Show",BindingFlags.Static|BindingFlags.NonPublic,null,new[]{typeof(IWin32Window),typeof(string),typeof(string),typeof(MessageBoxButtons)},null);
@@ -521,7 +593,7 @@ static class ThemedDialogTests {
         }
     }
     static void LayoutBounds(){
-        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
+        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})WithDpi((int)Math.Round(96*scale),delegate{
             using(var feedback=new FeedbackForm(Report(),false,Style.Dark,delegate{},delegate{},"")){
                 feedback.Scale(new SizeF(scale,scale));feedback.Font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel);Show(feedback);
                 var submit=Find<Button>(feedback,"SubmitFeedback");var cancel=Find<Button>(feedback,"CancelFeedback");
@@ -538,7 +610,7 @@ static class ThemedDialogTests {
                 Check(!install.Bounds.IntersectsWith(cancel.Bounds)&&!cancel.Bounds.IntersectsWith(skip.Bounds)&&install.Right<=install.Parent.ClientSize.Width,"update buttons fit without overlap at "+scale);
                 var notes=Find<ThemedReleaseNotes>(update,"ReleaseNotes");Check(notes.Height>=3*notes.LineHeight,"notes retain at least three readable lines at "+scale);
             }
-        }
+        });
     }
     static void RenderedDisabledButtons(){
         using(var update=new UpdateDialog(Release(),true)){
@@ -615,7 +687,7 @@ static class ThemedDialogTests {
             var longRelease=Release();longRelease.Body="本次更新内容\r\n"+Lines(80);
             using(var longNotes=new UpdateDialog(longRelease,true))SaveClient(longNotes,output,"dialog-release-long"+suffix);
         }
-        WithWorkArea(new Rectangle(0,0,1024,768),delegate{
+        WithDpi(192,delegate{WithWorkArea(new Rectangle(0,0,1024,768),delegate{
             SelectTheme("ocean",true);
             using(var feedback=new FeedbackForm(Report(),false,true,delegate{},delegate{},FeedbackRelay.Url)){
                 feedback.Scale(new SizeF(2,2));feedback.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);
@@ -633,12 +705,15 @@ static class ThemedDialogTests {
             using(var message=ThemedMessage.Create("确认",Lines(100),MessageBoxButtons.YesNo)){
                 message.Scale(new SizeF(2,2));message.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);SaveClient(message,output,"dialog-fit-message-200");
             }
-        });
+        });});
     }
     [STAThread] static int Main(string[] args){
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
         var previousArea=ThemedDialog.WorkingAreaProvider;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
+            Run("button height is independent of default font",ButtonFontScaling);
+            Run("button and segment heights at 96/120/144/192 DPI",ButtonDpiMatrix);Run("window DPI and Graphics fallback",DpiSource);
+            if(args.Length==1&&args[0]=="--dpi-only")return failures==0?0:1;
             foreach(string kind in new[]{"feedback","diagnostic","update","message","alias"})Run("actual client size: "+kind,delegate{ActualClientSizeLayout(kind);});
             if(args.Length==1&&args[0]=="--client-only")return failures==0?0:1;
             Run("injected work areas",InjectedWorkAreas);Run("monitor and DPI changes",WorkAreaAndDpiChanges);

@@ -6,6 +6,18 @@ using System.Windows.Forms;
 using AtkBattery;
 
 namespace AtkBatteryTray {
+    internal static class DialogDpi {
+        // Reflection keeps the Graphics fallback usable on Frameworks before 4.7.
+        static readonly System.Reflection.PropertyInfo deviceDpi=typeof(Control).GetProperty("DeviceDpi");
+        internal static Func<Control,int> DeviceDpiReader=delegate(Control control){return deviceDpi==null?0:(int)deviceDpi.GetValue(control,null);};
+        internal static float Scale(Control control){
+            // Children may still have their old DPI during layout or reparenting.
+            Control window=control.FindForm()??control;
+            int dpi=DeviceDpiReader(window);if(dpi>0)return dpi/96f;
+            using(var graphics=window.CreateGraphics())return graphics.DpiX/96f;
+        }
+    }
+
     // Dialogs consume the panel's palette without deriving alternative control colors.
     internal sealed class DialogTheme {
         internal readonly bool Dark,HighContrast;
@@ -210,7 +222,7 @@ namespace AtkBatteryTray {
             BackColor=theme.HighContrast?SystemColors.Control:Color.Transparent;ForeColor=theme.Foreground;Height=VisualDesign.SelectionHeight;Padding=new Padding(14,0,14,0);Margin=new Padding(VisualDesign.CardGap,0,0,0);
             AccessibleRole=AccessibleRole.PushButton;
         }
-        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
+        float ScaleFactor {get{return DialogDpi.Scale(this);}}
         public override Size GetPreferredSize(Size proposedSize){
             Size text;using(var font=new Font(Font.FontFamily,VisualDesign.DeviceNameFontSize*ScaleFactor,kind==ThemedButtonKind.Primary?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))text=TextRenderer.MeasureText(Text,font,Size.Empty,TextFormatFlags.SingleLine);
             int width=Math.Max(MinimumSize.Width,text.Width+Padding.Horizontal),height=Math.Max(MinimumSize.Height,(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));
@@ -261,7 +273,7 @@ namespace AtkBatteryTray {
             BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;Padding=new Padding(12);
             Margin=new Padding(0,0,0,VisualDesign.CardGap);
         }
-        protected float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
+        protected float ScaleFactor {get{return DialogDpi.Scale(this);}}
         protected override void OnPaint(PaintEventArgs e){
             base.OnPaint(e);if(theme.HighContrast||Width<2||Height<2)return;
             float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
@@ -295,7 +307,7 @@ namespace AtkBatteryTray {
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
             BackColor=theme.HighContrast?SystemColors.Window:theme.Card;
         }
-        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
+        float ScaleFactor {get{return DialogDpi.Scale(this);}}
         int ColumnsFor(int width){
             int minimum=0;foreach(Control child in Controls)minimum=Math.Max(minimum,child.GetPreferredSize(Size.Empty).Width);
             return width>=minimum*4+6*ScaleFactor?4:2;
@@ -331,7 +343,7 @@ namespace AtkBatteryTray {
             SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
             BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;
         }
-        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
+        float ScaleFactor {get{return DialogDpi.Scale(this);}}
         public override Size GetPreferredSize(Size proposedSize){
             if(theme.HighContrast)return base.GetPreferredSize(proposedSize);
             using(var font=new Font(Font.FontFamily,VisualDesign.DeviceNameFontSize*ScaleFactor,FontStyle.Regular,GraphicsUnit.Pixel))return new Size(TextRenderer.MeasureText(Text,font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.SingleLine).Width+(int)Math.Round(20*ScaleFactor),(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));
@@ -364,8 +376,11 @@ namespace AtkBatteryTray {
             SetStyle(ControlStyles.SupportsTransparentBackColor,!theme.HighContrast);
             BackColor=theme.HighContrast?SystemColors.Window:Color.Transparent;ForeColor=theme.Foreground;
         }
-        float ScaleFactor {get{return Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;}}
-        public override Size GetPreferredSize(Size proposedSize){return theme.HighContrast?base.GetPreferredSize(proposedSize):new Size(TextRenderer.MeasureText(Text,Font).Width+(int)Math.Round(57*ScaleFactor),(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));}
+        float ScaleFactor {get{return DialogDpi.Scale(this);}}
+        public override Size GetPreferredSize(Size proposedSize){
+            if(theme.HighContrast)return base.GetPreferredSize(proposedSize);
+            using(var font=new Font(Font.FontFamily,VisualDesign.BodyFontSize*ScaleFactor,FontStyle.Regular,GraphicsUnit.Pixel))return new Size(TextRenderer.MeasureText(Text,font).Width+(int)Math.Round(57*ScaleFactor),(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));
+        }
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}
             float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
@@ -468,7 +483,7 @@ namespace AtkBatteryTray {
         protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);UpdateAnimation();}
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}if(Width<=0||Height<=0)return;UpdateAnimation();
-            float scale=Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            float scale=DialogDpi.Scale(this);var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
             float fraction=indeterminate?(Reduced?1:.28f):value/100f;
             float start=indeterminate&&!Reduced?(1-fraction)*(float)((Math.Sin(clock.Elapsed.TotalSeconds*Math.PI)+1)/2):0;
             CompactRenderer.DrawVolumeTrack(e.Graphics,new RectangleF(0,0,Width/scale,Height/scale),theme.Dark,fraction,start);e.Graphics.Restore(state);
@@ -533,7 +548,7 @@ namespace AtkBatteryTray {
             layout.Controls.Add(bar,0,1);dialog.Controls.Add(layout);
             Func<int,int> surrounding=delegate(int width){return card.Padding.Vertical+card.Margin.Vertical+heading.GetPreferredSize(new Size(Math.Max(1,width-card.Padding.Horizontal),0)).Height+heading.Margin.Vertical+message.Margin.Vertical;};
             dialog.ConfigureLayout(layout,bar,delegate(int width){return surrounding(width)+Math.Min(3*message.Font.Height,message.GetPreferredSize(new Size(Math.Max(1,width-card.Padding.Horizontal),0)).Height);},delegate(int width){
-                float scale=dialog.Font.SizeInPoints*96f/72f/VisualDesign.BodyFontSize;
+                float scale=DialogDpi.Scale(dialog);
                 int maximum=(int)Math.Round(560*scale)-dialog.Padding.Vertical-bar.GetPreferredSize(new Size(width,0)).Height;
                 return Math.Min(maximum,surrounding(width)+message.GetPreferredSize(new Size(Math.Max(1,width-card.Padding.Horizontal),0)).Height);
             });
