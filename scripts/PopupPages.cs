@@ -49,9 +49,10 @@ namespace AtkBatteryTray {
         internal static bool Reduced {get{return DeviceSettings.Current.ReducedMotion||!System.Windows.Forms.SystemInformation.IsMenuAnimationEnabled;}}
         static PopupControl Row(int id,string text,string value=null,string icon=null){return new PopupControl {Id=id,Text=text,Value=value,Icon=icon};}
         static PopupControl Info(string text,string value){var row=Row(-1,text,value);row.Information=true;row.ActionKey="info:"+text;return row;}
+        static string WrappedText(PopupControl row){return String.IsNullOrEmpty(row.Value)?row.Text:row.Text+"\n"+row.Value;}
         static PopupControl Toggle(int id,string text,bool value){var row=Row(id,text);row.Toggle=true;row.Checked=value;return row;}
         static string OutputName(AudioReading audio){return UiState.CurrentOutputName(audio);}
-        static List<WirelessCard> TrayDevices(TrayContext owner){return WirelessLayout.Build(owner,0,100000).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly;});}
+        static List<WirelessCard> TrayDevices(TrayContext owner){return WirelessLayout.Build(owner,0,100000,true).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&(card.Device!=null||card.NativeMouse||card.NativeHeadset);});}
         static string FixedTrayName(TrayContext owner,string id){var device=TrayDevices(owner).Find(delegate(WirelessCard card){return card.Id==id;});return "固定："+(device==null?"已断开的设备":device.Name);}
         internal static List<PopupControl> Build(TrayContext owner,PopupNavigation nav,bool headset,WirelessLayout wireless=null) {
             var rows=new List<PopupControl>();var pref=DeviceSettings.Current;var audio=nav.AudioDeviceKey!=null&&!owner.AudioControlsAvailable?null:owner.Audio;
@@ -169,6 +170,8 @@ namespace AtkBatteryTray {
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));
                 var feedbackRow=Row(258,"反馈到 GitHub",null,"info");feedbackRow.Detail="提交前可检查内容\n提交需要 GitHub 账号";rows.Add(feedbackRow);
             }else if(nav.Page==PopupPage.DeviceMissing) {
+                var layout=WirelessLayout.Build(owner,0,100000);
+                if(layout.All[0].Id=="empty"){var status=Info("当前状态",WirelessLayout.EmptyReason(owner,layout.AllHidden));status.WrapText=true;rows.Add(status);}
                 var explanation=Info("请确认接收器已插好，设备已开机并唤醒",null);explanation.WrapText=true;rows.Add(explanation);
                 rows.Add(Row(0,"重新识别设备",null,"refresh"));rows.Add(Row(259,"查看支持清单",null,"info"));rows.Add(Row(250,"复制诊断摘要",null,"info"));
                 var feedbackRow=Row(258,"反馈到 GitHub",null,"info");feedbackRow.Detail="提交前可检查内容\n提交需要 GitHub 账号";rows.Add(feedbackRow);
@@ -216,7 +219,7 @@ namespace AtkBatteryTray {
             }
             float y=44;
             foreach(var row in rows){float height=row.Slider?54:!String.IsNullOrEmpty(row.Detail)?26+18*row.Detail.Split('\n').Length:34;
-                if(row.WrapText)using(var bitmap=new Bitmap(1,1))using(var g=Graphics.FromImage(bitmap))using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))height=Math.Max(height,(float)Math.Ceiling(g.MeasureString(row.Text,font,new SizeF(211,1000)).Height)+12);
+                if(row.WrapText)using(var bitmap=new Bitmap(1,1))using(var g=Graphics.FromImage(bitmap))using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))height=Math.Max(height,(float)Math.Ceiling(g.MeasureString(WrappedText(row),font,new SizeF(211,1000)).Height)+12);
                 row.Rect=new RectangleF(10,y,240,height);y+=height+2;}
             rows.Insert(0,new PopupControl {Id=6,Text="返回",Rect=new RectangleF(8,5,34,34)});
             return WithIdentity(rows,nav,owner);
@@ -277,7 +280,7 @@ namespace AtkBatteryTray {
             rows.Add(new PopupControl {Id=1,Text="更多选项",Rect=new RectangleF(226,layout.Footer+1,28,28)});
             foreach(var card in layout.Cards) {
                 if(card.Id=="empty") {
-                    rows.Add(new PopupControl {Id=1000,Text="设备没显示？",Detail=card.Subtitle,Rect=new RectangleF(0,card.Top,260,card.Height),DeviceKey=card.Id,ActionKey="device-missing",Enabled=!owner.GenericScanning});
+                    rows.Add(new PopupControl {Id=1000,Text=layout.AllHidden?"设备管理":"设备没显示？",Detail=card.Subtitle,Rect=new RectangleF(0,card.Top,260,card.Height),DeviceKey=card.Id,ActionKey=layout.AllHidden?"devices":"device-missing",Enabled=!owner.GenericScanning});
                 }else if(card.NativeMouse) {
                     var name=VisualDesign.MouseNameRect;name.Y+=card.Top;var meter=VisualDesign.MouseMeterRect;meter.Y+=card.Top;
                     rows.Add(new PopupControl {Id=2,Text=card.Name,Rect=name,DeviceKey=card.Id});rows.Add(new PopupControl {Id=4,Text=card.Battery.Tooltip+"，点击刷新",Rect=meter,DeviceKey=card.Id});
@@ -354,7 +357,7 @@ namespace AtkBatteryTray {
                     using(var shape=VisualDesign.RoundRect(toggle.X,toggle.Y,toggle.Width,toggle.Height,9))using(var brush=new SolidBrush(!row.Enabled?track:row.Checked?row.Id==102?TrayGlyph.LevelColor(10,dark):blue:track))g.FillPath(brush,shape);
                     using(var brush=new SolidBrush(row.Enabled?Color.White:muted))g.FillEllipse(brush,toggle.X+(row.Checked?14:2),toggle.Y+2,14,14);
                 }else if(row.WrapText) {
-                    using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(color))using(var format=new StringFormat {LineAlignment=StringAlignment.Center})g.DrawString(row.Text,font,brush,new RectangleF(x,rect.Y+6,rect.Right-x-23,rect.Height-12),format);
+                    using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(color))using(var format=new StringFormat {LineAlignment=StringAlignment.Center})g.DrawString(WrappedText(row),font,brush,new RectangleF(x,rect.Y+6,rect.Right-x-23,rect.Height-12),format);
                 }else {
                     float textWidth=String.IsNullOrEmpty(row.Value)?rect.Right-x-23:Math.Min(105,rect.Right-x-90);
                     VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y+(String.IsNullOrEmpty(row.Detail)?0:1),textWidth,String.IsNullOrEmpty(row.Detail)?rect.Height:22),11.5f,false,row.Id==204?TrayGlyph.LevelColor(10,dark):color,StringAlignment.Near);

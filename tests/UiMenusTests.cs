@@ -82,9 +82,11 @@ static class UiMenusTests {
     }
     static void HelpActions(){
         using(var f=new Fixture()){
+            f.Owner.WirelessDevices=new[]{Device("help-device","帮助设备")};
             var page=MissingPage();f.Page(PopupPage.More);var entry=f.Find("设备没显示？");Call(f.Popup,"FocusControl",entry);f.Key(Keys.Enter);
             Check(f.Navigation.Page==page&&PopupPages.Title(f.Navigation)=="设备没显示？","keyboard entry opens the titled help page");
             var rows=Rows(f.Owner,page);
+            Check(!rows.Exists(delegate(PopupControl row){return row.Text=="当前状态";}),"more-options help omits an empty-state reason when devices are visible");
             Check(Texts(rows)=="请确认接收器已插好，设备已开机并唤醒|重新识别设备|查看支持清单|复制诊断摘要|反馈到 GitHub|反馈不代表一定能适配","help rows use the exact copy and order");
             var feedback=rows.Find(delegate(PopupControl row){return row.Text=="反馈到 GitHub";});
             Check(feedback.Id==258&&feedback.Detail=="提交前可检查内容\n提交需要 GitHub 账号","help shares feedback action 258 and its review/account description");
@@ -116,6 +118,63 @@ static class UiMenusTests {
             f.Activate(card);Check(f.Navigation.Page==PopupPage.Main,"router also rejects a stale empty-card action during scanning");
         }
     }
+    static void HiddenEmptyCard(){
+        using(var f=new Fixture()){
+            var device=Device("hidden-mouse","隐藏鼠标");f.Owner.WirelessDevices=new[]{device};
+            var pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add(device.Id);DeviceSettings.UseTransientConfiguration(pref);
+            f.Owner.GenericError="fixture error";
+            var layout=WirelessLayout.Build(f.Owner,0,1000);
+            Check(layout.All.Count==1&&layout.All[0].Id=="empty"&&layout.All[0].Subtitle=="设备已隐藏，可在设备管理中恢复","all-hidden card retains the original recovery reason ahead of reader errors");
+            var card=f.Controls().Find(delegate(PopupControl row){return row.DeviceKey=="empty";});
+            Check(card!=null&&card.Enabled&&card.Text=="设备管理"&&card.Detail==layout.All[0].Subtitle,"hidden empty-card target describes device management and recovery");
+            f.Click(card);Check(f.Navigation.Page==PopupPage.Devices,"hidden empty-card click opens device management");f.Key(Keys.Escape);
+            Call(f.Popup,"FocusControl",card);f.Key(Keys.Enter);Check(f.Navigation.Page==PopupPage.Devices,"hidden empty-card keyboard action opens device management");f.Key(Keys.Escape);
+            var handle=f.Popup.Handle;var tree=(AccessibleObject)Call(f.Popup,"CreateAccessibilityInstance");var controls=f.Controls();int index=controls.FindIndex(delegate(PopupControl row){return row.StableKey==card.StableKey;});
+            Check(tree.GetChild(index).Name=="设备管理"&&tree.GetChild(index).Description==layout.All[0].Subtitle,"hidden empty card exposes its recovery route to screen readers");
+            tree.GetChild(index).DoDefaultAction();Check(f.Navigation.Page==PopupPage.Devices,"hidden empty-card accessible action opens device management");f.Key(Keys.Escape);
+            Set(f.Owner,"genericBusy",1);layout=WirelessLayout.Build(f.Owner,0,1000);
+            Check(layout.All[0].Subtitle=="正在识别设备…"&&!f.Controls().Exists(delegate(PopupControl row){return row.DeviceKey=="empty"&&row.Enabled;}),"scanning still disables an all-hidden empty card");
+            f.Activate(card);Check(f.Navigation.Page==PopupPage.Main,"stale hidden-card action is rejected during scanning");Set(f.Owner,"genericBusy",0);
+            f.Owner.WirelessDevices=new WirelessDevice[0];
+            Check(WirelessLayout.Build(f.Owner,0,1000).All[0].Subtitle=="点这里查看原因","offline hidden settings alone do not claim all detected devices are hidden");
+        }
+    }
+    static void EmptyReasonsAndBounds(){
+        using(var f=new Fixture()){
+            Action<string,string> expect=delegate(string reason,string subtitle){
+                var layout=WirelessLayout.Build(f.Owner,0,1000);Check(layout.All[0].Subtitle==subtitle,"empty-card subtitle for "+reason);
+                var rows=Rows(f.Owner,MissingPage());var status=rows[1];
+                Check(status.Information&&status.Text=="当前状态"&&status.Value==reason&&status.WrapText,"help starts with the complete wrapped reason: "+reason);
+                Check(status.Rect.Bottom<rows[2].Rect.Top&&PopupPages.Hit(rows,new PointF(status.Rect.X+10,status.Rect.Y+10))==null,"current status is informational and does not overlap help actions");
+                foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true}){
+                    VisualDesign.HighContrastOverride=contrast;var size=UiState.ScaleSize(PopupPages.SizeFor(rows),scale);
+                    using(var bitmap=new Bitmap(size.Width,size.Height))using(var graphics=Graphics.FromImage(bitmap))using(var font=new Font("Microsoft YaHei UI",11.5f,FontStyle.Regular,GraphicsUnit.Pixel)){
+                        graphics.ScaleTransform(scale,scale);PopupPages.Paint(graphics,f.Owner,new PopupNavigation {Page=MissingPage()},rows,dark,-1,-1,0);
+                        var measured=graphics.MeasureString(status.Text+"\n"+status.Value,font,new SizeF(status.Rect.Width-29,1000));
+                        Check(measured.Height<=status.Rect.Height-12,"full status label and reason fit without truncation at "+scale+": "+reason);
+                        bool hasReasonInk=false;int bottom=(int)((status.Rect.Bottom-6)*scale),right=(int)((status.Rect.Right-23)*scale);
+                        for(int y=(int)((status.Rect.Y+6+font.GetHeight(graphics))*scale);y<bottom&&!hasReasonInk;y++)for(int x=(int)((status.Rect.X+6)*scale);x<right;x++)if(bitmap.GetPixel(x,y).ToArgb()!=bitmap.GetPixel((int)((status.Rect.X+1)*scale),y).ToArgb()){hasReasonInk=true;break;}
+                        Check(hasReasonInk,"wrapped current-state value is painted below its label at "+scale+": "+reason);
+                    }
+                }
+                VisualDesign.HighContrastOverride=null;
+            };
+            f.Owner.GenericReady=false;f.Owner.GenericError="fixture error";f.Owner.GenericFailureCount=1;f.Owner.GenericHealthSummary="fixture health";
+            expect("设备读取组件暂不可用","点这里查看原因");
+            f.Page(PopupPage.Main);f.Click(f.Controls().Find(delegate(PopupControl row){return row.DeviceKey=="empty";}));
+            Check(f.Navigation.Page==MissingPage()&&f.Controls()[1].Value=="设备读取组件暂不可用","reader-unavailable empty card opens help with its complete reason");
+            Set(f.Owner,"genericBusy",1);expect("正在识别设备…","正在识别设备…");Set(f.Owner,"genericBusy",0);
+            f.Owner.GenericError=null;expect("部分读取器暂不可用","点这里查看原因");
+            f.Owner.GenericFailureCount=0;expect("部分读取器暂不可用","点这里查看原因");
+            f.Owner.GenericHealthSummary=null;expect("设备读取组件尚未就绪","点这里查看原因");
+            f.Owner.GenericReady=true;expect("尚未连接兼容设备","点这里查看原因");
+            var device=Device("hidden-reason","隐藏键盘","keyboard");f.Owner.WirelessDevices=new[]{device};
+            var pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add(device.Id);DeviceSettings.UseTransientConfiguration(pref);
+            expect("设备已隐藏，可在设备管理中恢复","设备已隐藏，可在设备管理中恢复");
+            f.Page(MissingPage());var handle=f.Popup.Handle;var tree=(AccessibleObject)Call(f.Popup,"CreateAccessibilityInstance");
+            Check(tree.GetChild(1).Name=="当前状态"&&tree.GetChild(1).Value=="设备已隐藏，可在设备管理中恢复"&&tree.GetChild(1).Role==AccessibleRole.StaticText,"screen readers receive the full current status as static text");
+        }
+    }
     static void HiddenDetails(){
         using(var f=new Fixture())foreach(string id in new[]{"native:mouse","native:headset","hidden-generic"}){
             var pref=DeviceSettings.Current;pref.HiddenDeviceIds.Clear();pref.HiddenDeviceIds.Add(id);DeviceSettings.UseTransientConfiguration(pref);
@@ -129,7 +188,7 @@ static class UiMenusTests {
             f.Owner.NativeMousePresent=true;f.Owner.WirelessDevices=new[]{Device("mouse-a","鼠标 A"),Device("keyboard-b","键盘 B","keyboard"),Device("hidden-c","隐藏设备")};
             var pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add("hidden-c");pref.TraySource="active";DeviceSettings.UseTransientConfiguration(pref);
             var rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
-            Check(Texts(rows)=="当前使用的设备|最低电量|自动选择有数据的设备|鼠标优先|耳机优先|键盘优先|固定：ATK A9 Air+|固定：鼠标 A|固定：键盘 B","tray chooser orders the six rules before current visible devices");
+            Check(Texts(rows)=="当前使用的设备|最低电量|自动选择有数据的设备|鼠标优先|耳机优先|键盘优先|固定：ATK A9 Air+|固定：鼠标 A|固定：键盘 B|固定：隐藏设备","tray chooser orders the six rules before current devices, including hidden devices");
             Check(Selected(rows)==1&&rows[1].Id==415&&rows[2].Id==414&&rows[3].Id==410,"rule IDs and selection preserve the old configuration mapping");
             var ids=new HashSet<int>();foreach(var row in rows)Check(row.Id<0||ids.Add(row.Id),"tray choice IDs do not collide");
             int[] ruleIds={415,414,410,411,412,413};string[] sources={"active","lowest","auto","mouse","headset","keyboard"};
@@ -151,8 +210,34 @@ static class UiMenusTests {
             Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.Text=="固定：已断开的设备";}),"a disconnected fixed device has one explicit selected row");
             Check(DeviceSettings.Current.TrayDeviceId=="mouse-a","building a disconnected chooser never changes configuration");
             pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add("native:mouse");pref.TrayDeviceId="native:mouse";DeviceSettings.UseTransientConfiguration(pref);rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
-            Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.Text=="固定：已断开的设备";}),"hidden fixed device is preserved even though it is absent from the choices");
+            Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey=="native:mouse"&&row.Text=="固定："+pref.MouseAlias;}),"hidden connected native mouse keeps its real fixed-device name");
             Check(f.Saves==9,"rule and both pin entry points all use the injected settings writer");
+        }
+    }
+    static void HiddenFixedDevices(){
+        using(var f=new Fixture()){
+            var device=Device("hidden-pin","隐藏设备");f.Owner.WirelessDevices=new[]{device};
+            var pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add(device.Id);pref.DeviceAliases[device.Id]="隐藏设备别名";DeviceSettings.UseTransientConfiguration(pref);
+            f.Page(PopupPage.Preferences);f.Activate(f.ById(211));f.Activate(f.Find("固定：隐藏设备别名"));
+            Check(DeviceSettings.Current.TrayDeviceId==device.Id&&f.Navigation.Page==PopupPage.Preferences,"hidden device can be fixed through the existing chooser action");
+            Check(Rows(f.Owner,PopupPage.Preferences).Find(delegate(PopupControl row){return row.Id==211;}).Value=="固定：隐藏设备别名","hidden fixed device displays its real alias in preferences");
+            var rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
+            Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey==device.Id&&row.Text=="固定：隐藏设备别名";}),"hidden fixed device has one selected choice with its real name");
+            f.Owner.WirelessDevices=new WirelessDevice[0];rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
+            Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey==device.Id&&row.Text=="固定：已断开的设备";}),"disconnected hidden-device placeholder is reported as disconnected");
+            Check(Rows(f.Owner,PopupPage.Preferences).Find(delegate(PopupControl row){return row.Id==211;}).Value=="固定：已断开的设备","disconnected hidden pin is also explicit in preferences");
+            pref=DeviceSettings.Current;pref.TrayDeviceId=null;DeviceSettings.UseTransientConfiguration(pref);rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
+            Check(!rows.Exists(delegate(PopupControl row){return row.ActionKey=="tray:pin";}),"offline hidden management placeholders are not offered as current devices");
+            f.Owner.NativeMousePresent=true;f.Owner.Headset=new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=80,BatteryTimestampUtc=DateTime.UtcNow};
+            pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add("native:mouse");pref.HiddenDeviceIds.Add("native:headset");DeviceSettings.UseTransientConfiguration(pref);
+            foreach(string id in new[]{"native:mouse","native:headset"}){
+                pref=DeviceSettings.Current;pref.TrayDeviceId=id;DeviceSettings.UseTransientConfiguration(pref);rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
+                string name=id=="native:mouse"?pref.MouseAlias:pref.HeadsetAlias;
+                Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey==id&&row.Text=="固定："+name;}),"hidden native pin keeps its name: "+id);
+            }
+            f.Owner.NativeMousePresent=false;f.Owner.Headset=null;rows=Rows(f.Owner,PopupPage.ChoosePreference,211);
+            Check(Selected(rows)==1&&rows.Exists(delegate(PopupControl row){return row.Selected&&row.DeviceKey=="native:headset"&&row.Text=="固定：已断开的设备";}),"disconnected hidden native headset is not mistaken for a current card");
+            Check(f.Saves==1,"hidden-device choice uses only the injected configuration writer");
         }
     }
     static void LegacyVolumeDefaults(){
@@ -206,6 +291,7 @@ static class UiMenusTests {
     }
     static void HelpAccessibilityAndBounds(){
         using(var f=new Fixture()){
+            f.Owner.WirelessDevices=new[]{Device("help-device","帮助设备")};
             var page=MissingPage();f.Page(page);var handle=f.Popup.Handle;var tree=(AccessibleObject)Call(f.Popup,"CreateAccessibilityInstance");var controls=f.Controls();
             for(int i=0;i<controls.Count;i++){
                 var row=controls[i];var child=tree.GetChild(i);Check(child.Name==row.Text&&child.Description==row.Detail,"help uses the shared screen-reader text model");
@@ -231,7 +317,7 @@ static class UiMenusTests {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=cached.GetValue(null);
         try{
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
-            Run("more-options rows",MoreRows);Run("preference order",PreferenceOrder);Run("help actions and routes",HelpActions);Run("empty-card entry",EmptyCard);Run("hidden detail access",HiddenDetails);Run("tray rules and fixed devices",TrayRulesAndPins);Run("native pin consistency",NativePins);Run("tray pagination and identity",TrayPaginationAndIdentity);Run("new and legacy volume defaults",LegacyVolumeDefaults);Run("help accessibility and bounds",HelpAccessibilityAndBounds);
+            Run("more-options rows",MoreRows);Run("preference order",PreferenceOrder);Run("help actions and routes",HelpActions);Run("empty-card entry",EmptyCard);Run("hidden empty-card recovery",HiddenEmptyCard);Run("empty reasons and wrapped bounds",EmptyReasonsAndBounds);Run("hidden detail access",HiddenDetails);Run("tray rules and fixed devices",TrayRulesAndPins);Run("hidden fixed devices",HiddenFixedDevices);Run("native pin consistency",NativePins);Run("tray pagination and identity",TrayPaginationAndIdentity);Run("new and legacy volume defaults",LegacyVolumeDefaults);Run("help accessibility and bounds",HelpAccessibilityAndBounds);
             Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices, no real clipboard/browser/settings writes");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;cached.SetValue(null,previous);}
     }

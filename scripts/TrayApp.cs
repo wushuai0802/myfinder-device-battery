@@ -225,7 +225,7 @@ namespace AtkBatteryTray {
         void PerformAction(PopupControl control) {
             HidePointerTip();
             int id=control.Id;
-            if(control.DeviceKey=="empty"){if(!owner.GenericScanning)Go(PopupPage.DeviceMissing);return;}
+            if(control.DeviceKey=="empty"){if(!owner.GenericScanning)Go(WirelessLayout.Build(owner,0,100000).AllHidden?PopupPage.Devices:PopupPage.DeviceMissing);return;}
             if(id==241){CancelPointerInteraction();owner.SetVolumeCollapsed(!DeviceSettings.Current.VolumeCollapsed);return;}
             if(id==902||id==903){var layout=MainWireless();navigation.DeviceScroll=id==902?Math.Max(0,layout.Start-layout.Cards.Count):layout.End;UpdateLayoutSize();Invalidate();return;}
             if(id>=1000&&id<3000) {
