@@ -1,10 +1,17 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,
-    [switch]$ChecksOnly
+    [switch]$ChecksOnly,
+    # Capture without theme/glyph assertions; visibility and nonblank checks stay on.
+    [switch]$NoPixelChecks,
+    # Run image-only regressions without opening windows or capturing the desktop.
+    [switch]$PixelChecksOnly
 )
 $ErrorActionPreference='Stop'
 try {
+    if(($ChecksOnly -and $PixelChecksOnly) -or ($NoPixelChecks -and ($ChecksOnly -or $PixelChecksOnly))) {
+        throw 'ChecksOnly, PixelChecksOnly and NoPixelChecks cannot be combined.'
+    }
     $root=Split-Path -Parent $PSScriptRoot
     $output=[IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\','/')
     $temporaryRoot=[IO.Path]::GetFullPath($env:TEMP).TrimEnd('\','/')
@@ -32,7 +39,10 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Capture harness compilation failed.'}
     # The console host catches all UI/background exceptions and has a watchdog.
     # It shows only fixture dialogs and exits nonzero if the desktop is inaccessible.
-    if($ChecksOnly){& $executable --checks-only} else {& $executable $output}
+    if($PixelChecksOnly){& $executable --pixel-checks-only}
+    elseif($ChecksOnly){& $executable --checks-only}
+    elseif($NoPixelChecks){& $executable $output -NoPixelChecks}
+    else {& $executable $output}
     if($LASTEXITCODE -ne 0){throw ('Capture/checks failed with exit code '+$LASTEXITCODE+'. See stderr and retained PNGs.')}
     exit 0
 } catch {

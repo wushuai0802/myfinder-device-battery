@@ -20,7 +20,7 @@ internal static class CaptureDialogs {
     [DllImport("dwmapi.dll")] static extern int DwmFlush();
     [DllImport("kernel32.dll")] static extern uint SetErrorMode(uint mode);
     static readonly List<Form> windows=new List<Form>();
-    static string output;static int captures,checks;static PromptMask prompt;static bool checksOnly;
+    static string output;static int captures,checks;static PromptMask prompt;static bool checksOnly,noPixelChecks,pixelChecksOnly;
     static void Require(bool value,string message){if(!value)throw new InvalidOperationException(message);checks++;}
     static T Find<T>(Control root,string name) where T:Control {
         var found=root.Controls.Find(name,true);Require(found.Length==1,"Missing fixture control: "+name);return (T)found[0];
@@ -101,11 +101,27 @@ internal static class CaptureDialogs {
         Require(selected<Math.Max(4,region.Width*region.Height*.025),"Switch label/left margin contains selected-color contamination");
     }
     sealed class PromptMask {
-        readonly List<Point> ink=new List<Point>();readonly Color color;readonly Size size;
-        internal PromptMask(Pixels pixels,Rectangle bounds,Color foreground){
-            size=bounds.Size;color=foreground;
-            for(int y=0;y<size.Height;y++)for(int x=0;x<size.Width;x++)if(Near(pixels.At(bounds.X+x,bounds.Y+y),color,24))ink.Add(new Point(x,y));
+        const double MinimumContrast=20;
+        readonly List<Point> ink=new List<Point>(),paper=new List<Point>();readonly Color foreground,background;readonly Size size;
+        internal PromptMask(Pixels pixels,Rectangle bounds,Color foreground,Color background){
+            size=bounds.Size;this.foreground=foreground;this.background=background;
+            Require(bounds.Width>0&&bounds.Height>0&&new Rectangle(0,0,pixels.Width,pixels.Height).Contains(bounds),"Prompt bounds must be inside the capture");
+            for(int y=0;y<size.Height;y++)for(int x=0;x<size.Width;x++){
+                var color=pixels.At(bounds.X+x,bounds.Y+y);
+                if(IsInk(color))ink.Add(new Point(x,y));
+                else if(Near(color,background,8))paper.Add(new Point(x,y));
+            }
             Require(ink.Count>=20,"Cannot read the real-screen character-count prompt (desktop may be locked or covered)");
+            Require(paper.Count>=20,"Character-count prompt has no readable background");
+        }
+        bool IsInk(Color color){
+            // ClearType and grayscale antialiasing blend glyphs into the card.
+            // Compare contrast in the foreground's direction, not its exact RGB.
+            double contrast=Brightness(color)-Brightness(background);
+            if(Math.Abs(contrast)<MinimumContrast||contrast*(Brightness(foreground)-Brightness(background))<=0)return false;
+            int chroma=Math.Max(color.R,Math.Max(color.G,color.B))-Math.Min(color.R,Math.Min(color.G,color.B));
+            double hue=Math.Abs(color.GetHue()-foreground.GetHue());hue=Math.Min(hue,360-hue);
+            return chroma<=32||hue<=45;
         }
         internal bool FoundOutside(Pixels pixels,Rectangle search,Rectangle allowed){
             // Match actual antialiased glyphs, not the background. Several distant
@@ -114,10 +130,14 @@ internal static class CaptureDialogs {
             for(int y=search.Top;y<=search.Bottom-size.Height;y++)for(int x=search.Left;x<=search.Right-size.Width;x++){
                 if(allowed.Contains(new Rectangle(x,y,size.Width,size.Height)))continue;
                 bool candidate=true;
-                for(int a=0;a<7;a++){var p=ink[a*(ink.Count-1)/6];if(!Near(pixels.At(x+p.X,y+p.Y),color,28)){candidate=false;break;}}
+                for(int a=0;a<7;a++){var p=ink[a*(ink.Count-1)/6];if(!IsInk(pixels.At(x+p.X,y+p.Y))){candidate=false;break;}}
                 if(!candidate)continue;
-                int matched=0;foreach(var p in ink)if(Near(pixels.At(x+p.X,y+p.Y),color,28))matched++;
-                if(matched>=ink.Count*.92)return true;
+                int matched=0;foreach(var p in ink)if(IsInk(pixels.At(x+p.X,y+p.Y)))matched++;
+                if(matched<ink.Count*.92)continue;
+                // A solid dark rectangle also covers every ink anchor. Require
+                // the glyphs' negative space so it cannot masquerade as text.
+                int clear=0;foreach(var p in paper)if(!IsInk(pixels.At(x+p.X,y+p.Y)))clear++;
+                if(clear>=paper.Count*.92)return true;
             }
             return false;
         }
@@ -135,7 +155,7 @@ internal static class CaptureDialogs {
             var count=Find<Label>(form,"FeedbackRemaining");var allowed=Region(form,count);
             if(prompt==null&&count.Text.StartsWith("还需输入",StringComparison.Ordinal)&&allowed.Width>0&&allowed.Height==count.Height){
                 var prefix=allowed;prefix.Width=Math.Min(prefix.Width,TextRenderer.MeasureText("还需输入",count.Font).Width);
-                prompt=new PromptMask(pixels,prefix,count.ForeColor);
+                prompt=new PromptMask(pixels,prefix,count.ForeColor,count.BackColor);
             }
             if(prompt!=null)Require(!prompt.FoundOutside(pixels,client,allowed),"Character-count prompt appears outside its label");
         }
@@ -154,15 +174,25 @@ internal static class CaptureDialogs {
         var text=root as TextBoxBase;if(text!=null&&text.ReadOnly)yield return text;
         foreach(Control child in root.Controls)foreach(var nested in ReadOnlyControls(child))yield return nested;
     }
+    static void NonBlankPixels(Pixels pixels,Rectangle client){
+        Require(client.Width>0&&client.Height>0&&new Rectangle(0,0,pixels.Width,pixels.Height).Contains(client),"Capture has no visible client area");
+        var sample=pixels.At(client.Left,client.Top);
+        int different=pixels.Count(client,delegate(Color color){return !Near(color,sample,8);});
+        Require(different>=Math.Max(20,client.Width*client.Height*.001),"Desktop capture is empty or uniform (desktop may be locked or covered)");
+    }
     static void Capture(ThemedDialog form,string name,bool opening=false){
         Pump();Require(Screen.PrimaryScreen.WorkingArea.Contains(form.Bounds),"Capture outside the primary screen: "+name);
+        Require(IsWindowVisible(form.Handle)&&form.Opacity==1&&form.WindowState!=FormWindowState.Minimized,"Capture window must be visible, opaque and not minimized: "+name);
         // Explicitly requested non-screen mode exercises the exact same native
         // messages/layout. It never claims capture acceptance or writes fake PNGs.
         if(checksOnly)return;
         using(var image=new Bitmap(form.Width,form.Height,PixelFormat.Format32bppArgb)){
             using(var graphics=Graphics.FromImage(image))graphics.CopyFromScreen(form.Location,Point.Empty,image.Size,CopyPixelOperation.SourceCopy);
             string file=Path.Combine(output,name+".png");image.Save(file,ImageFormat.Png);captures++;
-            try{Validate(form,image,opening);}catch(Exception error){throw new InvalidOperationException(file+": "+error.Message,error);}
+            try{
+                NonBlankPixels(new Pixels(image),Region(form,form));
+                if(!noPixelChecks)Validate(form,image,opening);
+            }catch(Exception error){throw new InvalidOperationException(file+": "+error.Message,error);}
         }
     }
     static void ResizeAndInvalidate(ThemedDialog form,string name){
@@ -198,7 +228,7 @@ internal static class CaptureDialogs {
         using(var form=new FeedbackForm(Report(),true,dark,delegate{},delegate{},"",null,new FeedbackSession())){
             Open(form);Capture(form,"feedback-"+suffix+"-open",true);
             var remaining=Find<Label>(form,"FeedbackRemaining");Reveal(remaining);Capture(form,"feedback-"+suffix+"-prompt");
-            if(!checksOnly)Require(prompt!=null,"Character-count glyph template must be captured");
+            if(!checksOnly&&!noPixelChecks)Require(prompt!=null,"Character-count glyph template must be captured");
             string[] categories={"device","battery","ui","other"};
             var group=Find<ThemedSegments>(form,"Categories");
             for(int i=0;i<categories.Length;i++){
@@ -242,42 +272,103 @@ internal static class CaptureDialogs {
         var theme=new DialogTheme(true);var area=new Rectangle(0,0,200,40);
         using(var image=new Bitmap(200,40,PixelFormat.Format32bppArgb))using(var g=Graphics.FromImage(image)){
             g.Clear(theme.Track);SegmentPixels(new Pixels(image),area,theme);
-            foreach(var color in new[]{Color.Black,theme.Selected}){
+            foreach(var color in new[]{Color.Black,theme.Selected,ThemePalette.Blend(theme.Selected,Color.Gray,8)}){
                 g.Clear(theme.Track);using(var b=new SolidBrush(color))g.FillRectangle(b,0,0,150,40);
                 bool rejected=false;try{SegmentPixels(new Pixels(image),area,theme);}catch(InvalidOperationException){rejected=true;}Require(rejected,"Checker must reject injected segment contamination");
             }
-            g.Clear(theme.Card);SwitchPixels(new Pixels(image),area,theme,1);
-            using(var b=new SolidBrush(theme.Selected))g.FillRectangle(b,3,5,50,20);
-            bool switchRejected=false;try{SwitchPixels(new Pixels(image),area,theme,1);}catch(InvalidOperationException){switchRejected=true;}Require(switchRejected,"Checker must reject injected switch contamination");
-            g.Clear(theme.Card);ReadOnlyPixels(new Pixels(image),area,"fixture");
-            using(var b=new SolidBrush(SystemColors.Highlight))g.FillRectangle(b,0,0,150,30);
-            bool selectionRejected=false;try{ReadOnlyPixels(new Pixels(image),area,"fixture");}catch(InvalidOperationException){selectionRejected=true;}Require(selectionRejected,"Checker must reject initial selected text");
+            foreach(var color in new[]{theme.Selected,ThemePalette.Blend(theme.Selected,Color.Gray,8)}){
+                g.Clear(theme.Card);SwitchPixels(new Pixels(image),area,theme,1);
+                using(var b=new SolidBrush(color))g.FillRectangle(b,3,5,50,20);
+                bool rejected=false;try{SwitchPixels(new Pixels(image),area,theme,1);}catch(InvalidOperationException){rejected=true;}Require(rejected,"Checker must reject injected switch contamination with color tolerance");
+            }
+            foreach(var color in new[]{SystemColors.Highlight,ThemePalette.Blend(SystemColors.Highlight,Color.Gray,8)}){
+                g.Clear(theme.Card);ReadOnlyPixels(new Pixels(image),area,"fixture");
+                using(var b=new SolidBrush(color))g.FillRectangle(b,0,0,150,30);
+                bool rejected=false;try{ReadOnlyPixels(new Pixels(image),area,"fixture");}catch(InvalidOperationException){rejected=true;}Require(rejected,"Checker must reject initial selected text with color tolerance");
+            }
+            foreach(var color in new[]{Color.Black,Color.White,theme.Card}){
+                g.Clear(color);image.SetPixel(0,0,ThemePalette.Blend(color,Color.Gray,8));
+                bool rejected=false;try{NonBlankPixels(new Pixels(image),area);}catch(InvalidOperationException){rejected=true;}Require(rejected,"Even with pixel checks disabled, uniform/noisy blank captures must fail");
+            }
+            g.Clear(theme.Card);using(var b=new SolidBrush(theme.Muted))g.FillRectangle(b,20,10,60,20);
+            NonBlankPixels(new Pixels(image),area);
         }
+        foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
+            DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle=style,Theme=dark?"dark":"light",ReducedMotion=true});
+            PromptCheckerSelfTest(new DialogTheme(dark));
+        }
+        RealPromptRegression();
+    }
+    static void PromptCheckerSelfTest(DialogTheme theme){
         using(var image=new Bitmap(300,120,PixelFormat.Format32bppArgb))using(var g=Graphics.FromImage(image))using(var font=new Font("Microsoft YaHei UI",12,GraphicsUnit.Pixel)){
-            g.Clear(theme.Card);TextRenderer.DrawText(g,"还需输入",font,new Point(4,4),theme.Muted,theme.Card);
-            var allowed=new Rectangle(4,4,80,20);var mask=new PromptMask(new Pixels(image),allowed,theme.Muted);
+            var allowed=new Rectangle(4,4,80,20);
+            g.Clear(theme.Card);
+            bool blankRejected=false;try{new PromptMask(new Pixels(image),allowed,theme.Muted,theme.Card);}catch(InvalidOperationException){blankRejected=true;}
+            Require(blankRejected,"Blank prompt region must fail");
+            // Every glyph is blended far away from the configured foreground,
+            // reproducing the failure even when this machine renders solid text.
+            var blended=ThemePalette.Blend(theme.Card,theme.Muted,115);
+            TextRenderer.DrawText(g,"还需输入",font,new Point(4,4),blended,theme.Card);
+            Require(new Pixels(image).Count(allowed,delegate(Color color){return Near(color,theme.Muted,24);})<20,"Regression glyphs must be outside the old foreground tolerance");
+            var mask=new PromptMask(new Pixels(image),allowed,theme.Muted,theme.Card);
             Require(!mask.FoundOutside(new Pixels(image),new Rectangle(0,0,300,120),allowed),"Prompt in its own label must pass");
+            using(var b=new SolidBrush(blended))g.FillRectangle(b,100,60,100,30);
+            Require(!mask.FoundOutside(new Pixels(image),new Rectangle(0,0,300,120),allowed),"Solid foreground patch must not match a prompt");
+            using(var b=new SolidBrush(theme.Card))g.FillRectangle(b,100,60,100,30);
             using(var clone=image.Clone(allowed,PixelFormat.Format32bppArgb))g.DrawImageUnscaled(clone,100,60);
             Require(mask.FoundOutside(new Pixels(image),new Rectangle(0,0,300,120),allowed),"Checker must find a duplicate prompt outside its label");
         }
+    }
+    static void RealPromptRegression(){
+        // Maintainer's unlocked 96-DPI ocean/light capture from the task brief.
+        // Optional external fixture: never substitute a synthetic image for it.
+        const string file=@"C:\Users\Administrator\AppData\Local\Temp\dialog-real-2092409518\feedback-ocean-light-open.png";
+        Bitmap image;
+        try{
+            if(!File.Exists(file)){Console.WriteLine("SKIP real-screen prompt regression: fixture unavailable: "+file);return;}
+            image=new Bitmap(file);
+        }catch(IOException error){Console.WriteLine("SKIP real-screen prompt regression: "+error.Message);return;}
+        catch(UnauthorizedAccessException error){Console.WriteLine("SKIP real-screen prompt regression: "+error.Message);return;}
+        using(image){
+            Require(image.Size==new Size(546,597),"Real-screen regression fixture size changed; recheck its prompt coordinates");
+            var palette=ThemePalette.For("ocean",false);var allowed=new Rectangle(32,373,170,17);var prefix=new Rectangle(32,373,48,17);
+            var pixels=new Pixels(image);var mask=new PromptMask(pixels,prefix,palette.Muted,palette.Card);
+            var client=new Rectangle(4,28,538,565);
+            NonBlankPixels(pixels,client);
+            Require(!mask.FoundOutside(pixels,client,allowed),"Real-screen prompt must only appear in its own label");
+            using(var duplicate=(Bitmap)image.Clone())using(var g=Graphics.FromImage(duplicate))using(var glyphs=image.Clone(prefix,PixelFormat.Format32bppArgb)){
+                g.DrawImageUnscaled(glyphs,250,375);
+                Require(mask.FoundOutside(new Pixels(duplicate),client,allowed),"Real-screen glyph mask must detect an injected duplicate");
+            }
+            Console.WriteLine("PASS real-screen prompt regression: "+file);
+        }
+    }
+    static void ParseArguments(string[] args){
+        const string usage="Usage: CaptureDialogs.exe <TEMP output directory> [-NoPixelChecks | --no-pixel-checks] | --checks-only | --pixel-checks-only";
+        foreach(string arg in args){
+            if(arg.Equals("-NoPixelChecks",StringComparison.OrdinalIgnoreCase)||arg=="--no-pixel-checks")noPixelChecks=true;
+            else if(arg=="--checks-only")checksOnly=true;
+            else if(arg=="--pixel-checks-only")pixelChecksOnly=true;
+            else{Require(!arg.StartsWith("-",StringComparison.Ordinal)&&output==null,usage);output=Path.GetFullPath(arg);}
+        }
+        Require(!(checksOnly&&pixelChecksOnly)&&!(noPixelChecks&&(checksOnly||pixelChecksOnly)),usage);
+        Require((checksOnly||pixelChecksOnly)?output==null:output!=null,usage);
+        if(output!=null)Require(output.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),"Output must be below TEMP");
     }
     static void Fatal(object error){Console.Error.WriteLine(error);Console.Error.Flush();Environment.Exit(1);}
     [STAThread] static int Main(string[] args){
         SetErrorMode(3);AppDomain.CurrentDomain.UnhandledException+=delegate(object sender,UnhandledExceptionEventArgs e){Fatal(e.ExceptionObject);};
         Application.ThreadException+=delegate(object sender,ThreadExceptionEventArgs e){Fatal(e.Exception);};
         try{
+            ParseArguments(args);
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();DialogVisibility.ConsumeStartupShowCommand();
             VisualDesign.HighContrastOverride=false;
             DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle="ocean",Theme="dark",ReducedMotion=true});
-            PixelCheckerSelfTest();
-            Require(args.Length==1,"Usage: CaptureDialogs.exe <TEMP output directory> | --checks-only");
-            checksOnly=args[0]=="--checks-only";
-            if(!checksOnly){
-                output=Path.GetFullPath(args[0]);
-                Require(output.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),"Output must be below TEMP");
-                Directory.CreateDirectory(output);
-            }
+            if(!noPixelChecks)PixelCheckerSelfTest();
+            if(pixelChecksOnly){Console.WriteLine(checks+" pixel-checker assertions passed; native windows and real-screen capture NOT run");return 0;}
+            if(!checksOnly)Directory.CreateDirectory(output);
+            if(noPixelChecks)Console.WriteLine("Pixel checks SKIPPED; window visibility and nonblank capture checks remain enabled.");
             ThemedDialog.WorkingAreaProvider=delegate{return Screen.PrimaryScreen.WorkingArea;};
             using(var watchdog=new System.Threading.Timer(delegate{Fatal(new TimeoutException("Capture exceeded five minutes"));},null,300000,Timeout.Infinite)){
                 foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
@@ -294,7 +385,7 @@ internal static class CaptureDialogs {
                     Console.WriteLine("PASS "+suffix);
                 }
             }
-            Console.WriteLine(checksOnly?checks+" pixel-checker/native-interaction assertions passed; real-screen capture NOT run":captures+" real-screen PNGs; "+checks+" assertions passed; output="+output);return 0;
+            Console.WriteLine(checksOnly?checks+" pixel-checker/native-interaction assertions passed; real-screen capture NOT run":captures+" real-screen PNGs; "+checks+" assertions passed; pixel checks "+(noPixelChecks?"SKIPPED":"enabled")+"; output="+output);return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{foreach(var form in windows)if(!form.IsDisposed)form.Dispose();Application.ExitThread();}
     }
