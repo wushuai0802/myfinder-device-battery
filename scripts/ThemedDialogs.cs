@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
@@ -277,7 +278,7 @@ namespace AtkBatteryTray {
             this.theme=theme;this.kind=kind;
             FlatStyle=theme.HighContrast?FlatStyle.Standard:FlatStyle.Flat;FlatAppearance.BorderSize=0;UseVisualStyleBackColor=theme.HighContrast;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            SetStyle(ControlStyles.Opaque|ControlStyles.SupportsTransparentBackColor,false);
             BackColor=theme.HighContrast?SystemColors.Control:theme.Background;ForeColor=theme.Foreground;Height=VisualDesign.SelectionHeight;Padding=new Padding(14,0,14,0);Margin=new Padding(VisualDesign.CardGap,0,0,0);
             AccessibleRole=AccessibleRole.PushButton;
         }
@@ -329,7 +330,7 @@ namespace AtkBatteryTray {
         internal ThemedSection(DialogTheme theme){
             this.theme=theme;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            SetStyle(ControlStyles.Opaque|ControlStyles.SupportsTransparentBackColor,false);
             BackColor=theme.HighContrast?SystemColors.Window:theme.Card;ForeColor=theme.Foreground;Padding=new Padding(12);
             Margin=new Padding(0,0,0,VisualDesign.CardGap);
         }
@@ -365,85 +366,135 @@ namespace AtkBatteryTray {
         }
     }
 
-    // Retain the native radio/checkbox models, keyboard behavior and accessibility.
-    internal sealed class ThemedSegments:Panel {
-        readonly DialogTheme theme;int columns=4;bool arranging;
+    // One HWND owns the complete track; accessible children retain radio semantics.
+    internal sealed class ThemedSegments:Control {
+        readonly DialogTheme theme;readonly List<SegmentAccessibleObject> options=new List<SegmentAccessibleObject>();
+        int columns=4,selectedIndex=-1,hovered=-1,pressed=-1;bool arranging;
         internal ThemedSegments(DialogTheme theme){
-            this.theme=theme;TabStop=false;AccessibleRole=AccessibleRole.Grouping;
-            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            this.theme=theme;TabStop=true;AccessibleRole=AccessibleRole.Grouping;
+            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);
+            SetStyle(ControlStyles.Opaque|ControlStyles.SupportsTransparentBackColor,false);
             BackColor=theme.HighContrast?SystemColors.Window:theme.Card;
         }
         float ScaleFactor {get{return DialogDpi.Scale(this);}}
+        internal int OptionCount {get{return options.Count;}}
+        internal string SelectedValue {get{return selectedIndex<0?null:options[selectedIndex].SelectionValue;}}
+        internal int SelectedIndex {
+            get{return selectedIndex;}
+            set{
+                if(value<0||value>=options.Count)throw new ArgumentOutOfRangeException("value");
+                if(selectedIndex==value)return;
+                int previous=selectedIndex;selectedIndex=value;Invalidate();
+                if(previous>=0)AccessibilityNotifyClients(AccessibleEvents.StateChange,previous);
+                AccessibilityNotifyClients(AccessibleEvents.StateChange,value);AccessibilityNotifyClients(AccessibleEvents.Selection,value);
+                if(Focused)AccessibilityNotifyClients(AccessibleEvents.Focus,value);
+            }
+        }
+        internal void AddOption(string name,string text,string value){
+            options.Add(new SegmentAccessibleObject(this,options.Count,name,text,value));
+            if(selectedIndex<0)selectedIndex=0;PerformLayout();Invalidate();
+        }
+        // Keep the existing Category-* identifiers independently of native child controls.
+        internal AccessibleObject GetOption(string name){foreach(var option in options)if(option.ControlName==name)return option;throw new ArgumentException("Unknown segment: "+name);}
+        protected override void OnParentChanged(EventArgs e){base.OnParentChanged(e);DialogPaint.InheritBackground(this);}
+        protected override void OnParentBackColorChanged(EventArgs e){base.OnParentBackColorChanged(e);DialogPaint.InheritBackground(this);}
         protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         int ColumnsFor(int width){
-            int minimum=0;foreach(Control child in Controls)minimum=Math.Max(minimum,child.GetPreferredSize(Size.Empty).Width);
+            int minimum=0;
+            using(var font=new Font(Font.FontFamily,VisualDesign.DeviceNameFontSize*ScaleFactor,FontStyle.Regular,GraphicsUnit.Pixel))
+                foreach(var option in options)minimum=Math.Max(minimum,TextRenderer.MeasureText(option.Name,theme.HighContrast?Font:font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.SingleLine).Width+(int)Math.Round(20*ScaleFactor));
             return width>=minimum*4+6*ScaleFactor?4:2;
         }
-        public override Size GetPreferredSize(Size proposedSize){int width=proposedSize.Width>0?proposedSize.Width:Width;int count=ColumnsFor(width);return new Size(width,(int)Math.Round(((4/count)*VisualDesign.SelectionHeight+(4/count-1)*2)*ScaleFactor));}
+        int Rows(int count){return Math.Max(1,(options.Count+count-1)/count);}
+        int RowHeight {get{return (int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor);}}
+        int Gap {get{return (int)Math.Round(2*ScaleFactor);}}
+        public override Size GetPreferredSize(Size proposedSize){int width=proposedSize.Width>0?proposedSize.Width:Width;int rows=Rows(ColumnsFor(width));return new Size(width,rows*RowHeight+(rows-1)*Gap);}
+        internal Rectangle SegmentBounds(int index){
+            int width=Math.Max(1,(ClientSize.Width-(columns-1)*Gap)/columns),column=index%columns;
+            return new Rectangle(column*(width+Gap),index/columns*(RowHeight+Gap),column==columns-1?Math.Max(0,ClientSize.Width-column*(width+Gap)):width,RowHeight);
+        }
         protected override void OnLayout(LayoutEventArgs e){
-            base.OnLayout(e);if(arranging||Controls.Count==0)return;arranging=true;
+            base.OnLayout(e);if(arranging||options==null||options.Count==0)return;arranging=true;
             try{
-                columns=ColumnsFor(ClientSize.Width);int gap=(int)Math.Round(2*ScaleFactor),rowHeight=(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor);
-                int width=Math.Max(1,(ClientSize.Width-(columns-1)*gap)/columns);
-                for(int i=0;i<Controls.Count;i++)Controls[i].SetBounds(i%columns*(width+gap),i/columns*(rowHeight+gap),i%columns==columns-1?ClientSize.Width-i%columns*(width+gap):width,rowHeight);
-                Height=(4/columns)*rowHeight+(4/columns-1)*gap;Invalidate();
+                columns=ColumnsFor(ClientSize.Width);Height=Rows(columns)*RowHeight+(Rows(columns)-1)*Gap;Invalidate();
             }finally{arranging=false;}
         }
         protected override void OnPaint(PaintEventArgs e){
-            base.OnPaint(e);if(theme.HighContrast)return;
-            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-            for(int row=0;row<4/columns;row++)CompactRenderer.Fill(e.Graphics,new RectangleF(0,row*(VisualDesign.SelectionHeight+2),Width/scale,VisualDesign.SelectionHeight),theme.Track,VisualDesign.SelectionRadius);
+            base.OnPaint(e);float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.SetClip(ClientRectangle,CombineMode.Intersect);
+            if(!theme.HighContrast){
+                e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+                for(int row=0;row<Rows(columns);row++)CompactRenderer.Fill(e.Graphics,new RectangleF(0,row*(RowHeight+Gap)/scale,Width/scale,RowHeight/scale),theme.Track,VisualDesign.SelectionRadius);
+            }
+            for(int i=0;i<options.Count;i++){
+                var bounds=SegmentBounds(i);var segmentState=e.Graphics.Save();
+                var rect=new RectangleF(bounds.X/scale,bounds.Y/scale,bounds.Width/scale,bounds.Height/scale);
+                e.Graphics.SetClip(theme.HighContrast?(RectangleF)bounds:rect,CombineMode.Intersect);
+                if(theme.HighContrast){
+                    var radioState=!Enabled?(i==selectedIndex?System.Windows.Forms.VisualStyles.RadioButtonState.CheckedDisabled:System.Windows.Forms.VisualStyles.RadioButtonState.UncheckedDisabled):i==selectedIndex?System.Windows.Forms.VisualStyles.RadioButtonState.CheckedNormal:System.Windows.Forms.VisualStyles.RadioButtonState.UncheckedNormal;
+                    var glyph=RadioButtonRenderer.GetGlyphSize(e.Graphics,radioState);
+                    RadioButtonRenderer.DrawRadioButton(e.Graphics,new Point(bounds.Left,bounds.Top+(bounds.Height-glyph.Height)/2),radioState);
+                    var textBounds=Rectangle.FromLTRB(bounds.Left+glyph.Width+3,bounds.Top,bounds.Right,bounds.Bottom);
+                    TextRenderer.DrawText(e.Graphics,options[i].Name,Font,textBounds,Enabled?SystemColors.WindowText:SystemColors.GrayText,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis|TextFormatFlags.PreserveGraphicsClipping);
+                    if(Focused&&ShowFocusCues&&i==selectedIndex)ControlPaint.DrawFocusRectangle(e.Graphics,textBounds);
+                }else CompactRenderer.Selection(e.Graphics,rect,options[i].Name,null,i==selectedIndex,Enabled,i==hovered,i==pressed,false,theme.Dark,Focused&&ShowFocusCues&&i==selectedIndex,DialogInteraction.Card(this,scale,rect));
+                e.Graphics.Restore(segmentState);
+            }
             e.Graphics.Restore(state);
         }
-        internal bool MoveSelection(ThemedSegment current,Keys key){
-            int step=key==Keys.Left?-1:key==Keys.Right?1:key==Keys.Up?-columns:key==Keys.Down?columns:0;
-            if(step==0||!Enabled)return false;
-            int index=(Controls.IndexOf(current)+step+Controls.Count)%Controls.Count;var next=(RadioButton)Controls[index];
-            if(next.Enabled){next.Focus();next.Checked=true;}return true;
-        }
-    }
-    internal sealed class ThemedSegment:RadioButton {
-        readonly DialogTheme theme;bool hovered,pressed;
-        internal ThemedSegment(DialogTheme theme){
-            this.theme=theme;AutoSize=false;Margin=Padding.Empty;
-            SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
-            BackColor=theme.HighContrast?SystemColors.Window:theme.Card;ForeColor=theme.Foreground;
-        }
-        float ScaleFactor {get{return DialogDpi.Scale(this);}}
-        public override Size GetPreferredSize(Size proposedSize){
-            if(theme.HighContrast)return base.GetPreferredSize(proposedSize);
-            using(var font=new Font(Font.FontFamily,VisualDesign.DeviceNameFontSize*ScaleFactor,FontStyle.Regular,GraphicsUnit.Pixel))return new Size(TextRenderer.MeasureText(Text,font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.SingleLine).Width+(int)Math.Round(20*ScaleFactor),(int)Math.Round(VisualDesign.SelectionHeight*ScaleFactor));
-        }
+        int HitTest(Point point){for(int i=0;i<options.Count;i++)if(SegmentBounds(i).Contains(point)&&ClientRectangle.Contains(point))return i;return -1;}
         protected override bool ProcessDialogKey(Keys keyData){
-            var group=Parent as ThemedSegments;if(group!=null&&(keyData&Keys.Modifiers)==Keys.None&&group.MoveSelection(this,keyData&Keys.KeyCode))return true;
+            Keys key=keyData&Keys.KeyCode;
+            int step=key==Keys.Left?-1:key==Keys.Right?1:key==Keys.Up?-columns:key==Keys.Down?columns:0;
+            if((keyData&Keys.Modifiers)==Keys.None&&step!=0&&Enabled&&options.Count>0){SelectedIndex=(selectedIndex+step+options.Count)%options.Count;return true;}
             return base.ProcessDialogKey(keyData);
         }
-        protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
-        protected override void OnPaint(PaintEventArgs e){
-            if(theme.HighContrast){base.OnPaint(e);return;}
-            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.SetClip(ClientRectangle,CombineMode.Intersect);e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-            var rect=new RectangleF(0,0,Width/scale,Height/scale);
-            CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
-            CompactRenderer.Selection(e.Graphics,rect,Text,null,Checked,Enabled,hovered,pressed,false,theme.Dark,Focused&&ShowFocusCues,DialogInteraction.Card(this,scale,rect));
-            e.Graphics.Restore(state);
+        protected override void OnMouseMove(MouseEventArgs e){hovered=Enabled?HitTest(e.Location):-1;Invalidate();base.OnMouseMove(e);}
+        protected override void OnMouseLeave(EventArgs e){hovered=-1;Invalidate();base.OnMouseLeave(e);}
+        protected override void OnMouseDown(MouseEventArgs e){if(Enabled&&e.Button==MouseButtons.Left){Focus();pressed=HitTest(e.Location);Capture=true;Invalidate();}base.OnMouseDown(e);}
+        protected override void OnMouseUp(MouseEventArgs e){
+            int target=pressed;pressed=-1;Capture=false;
+            if(Enabled&&e.Button==MouseButtons.Left&&target>=0&&HitTest(e.Location)==target)SelectedIndex=target;
+            Invalidate();base.OnMouseUp(e);
         }
-        protected override void OnCheckedChanged(EventArgs e){base.OnCheckedChanged(e);Invalidate();}
-        protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
-        protected override void OnMouseLeave(EventArgs e){hovered=pressed=false;Invalidate();base.OnMouseLeave(e);}
-        protected override void OnMouseDown(MouseEventArgs e){pressed=e.Button==MouseButtons.Left;Invalidate();base.OnMouseDown(e);}
-        protected override void OnMouseUp(MouseEventArgs e){pressed=false;Invalidate();base.OnMouseUp(e);}
-        protected override void OnGotFocus(EventArgs e){Invalidate();base.OnGotFocus(e);}
-        protected override void OnLostFocus(EventArgs e){pressed=false;Invalidate();base.OnLostFocus(e);}
-        protected override void OnEnabledChanged(EventArgs e){hovered=pressed=false;Invalidate();base.OnEnabledChanged(e);}
+        protected override void OnMouseCaptureChanged(EventArgs e){pressed=-1;Invalidate();base.OnMouseCaptureChanged(e);}
+        protected override void OnGotFocus(EventArgs e){Invalidate();base.OnGotFocus(e);if(selectedIndex>=0)AccessibilityNotifyClients(AccessibleEvents.Focus,selectedIndex);}
+        protected override void OnLostFocus(EventArgs e){pressed=-1;Invalidate();base.OnLostFocus(e);}
+        protected override void OnEnabledChanged(EventArgs e){hovered=pressed=-1;Invalidate();base.OnEnabledChanged(e);}
+        protected override AccessibleObject CreateAccessibilityInstance(){return new SegmentsAccessibleObject(this);}
+        sealed class SegmentsAccessibleObject:ControlAccessibleObject {
+            readonly ThemedSegments owner;
+            internal SegmentsAccessibleObject(ThemedSegments owner):base(owner){this.owner=owner;}
+            public override int GetChildCount(){return owner.options.Count;}
+            public override AccessibleObject GetChild(int index){return index>=0&&index<owner.options.Count?owner.options[index]:null;}
+            public override AccessibleObject GetSelected(){return GetChild(owner.selectedIndex);}
+            public override AccessibleObject GetFocused(){return owner.Focused?GetSelected():null;}
+            public override AccessibleObject HitTest(int x,int y){return GetChild(owner.HitTest(owner.PointToClient(new Point(x,y))))??base.HitTest(x,y);}
+            public override AccessibleObject Navigate(AccessibleNavigation direction){if(direction==AccessibleNavigation.FirstChild)return GetChild(0);if(direction==AccessibleNavigation.LastChild)return GetChild(GetChildCount()-1);return base.Navigate(direction);}
+        }
+        sealed class SegmentAccessibleObject:AccessibleObject {
+            readonly ThemedSegments owner;readonly int index;readonly string label;
+            internal readonly string ControlName,SelectionValue;
+            internal SegmentAccessibleObject(ThemedSegments owner,int index,string name,string text,string value){this.owner=owner;this.index=index;ControlName=name;label=text;SelectionValue=value;}
+            public override string Name {get{return label;}set{}}
+            public override AccessibleRole Role {get{return AccessibleRole.RadioButton;}}
+            public override AccessibleObject Parent {get{return owner.AccessibilityObject;}}
+            public override Rectangle Bounds {get{return owner.RectangleToScreen(owner.SegmentBounds(index));}}
+            public override string DefaultAction {get{return "选择";}}
+            public override AccessibleStates State {get{return AccessibleStates.Focusable|AccessibleStates.Selectable|(owner.selectedIndex==index?AccessibleStates.Checked|AccessibleStates.Selected:0)|(owner.Focused&&owner.selectedIndex==index?AccessibleStates.Focused:0)|(!owner.Enabled?AccessibleStates.Unavailable:0)|(!owner.Visible?AccessibleStates.Invisible:0);}}
+            public override void DoDefaultAction(){if(owner.Enabled){owner.Focus();owner.SelectedIndex=index;}}
+            public override void Select(AccessibleSelection flags){if(!owner.Enabled)return;if((flags&AccessibleSelection.TakeFocus)!=0)owner.Focus();if((flags&(AccessibleSelection.TakeFocus|AccessibleSelection.TakeSelection|AccessibleSelection.AddSelection))!=0)owner.SelectedIndex=index;}
+            public override AccessibleObject Navigate(AccessibleNavigation direction){
+                int step=direction==AccessibleNavigation.Next||direction==AccessibleNavigation.Right?1:direction==AccessibleNavigation.Previous||direction==AccessibleNavigation.Left?-1:direction==AccessibleNavigation.Down?owner.columns:direction==AccessibleNavigation.Up?-owner.columns:0;
+                return step==0?null:owner.AccessibilityObject.GetChild(index+step);
+            }
+        }
     }
     internal sealed class ThemedSwitch:CheckBox {
         readonly DialogTheme theme;bool hovered,pressed;
         internal ThemedSwitch(DialogTheme theme){
             this.theme=theme;AutoSize=true;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            SetStyle(ControlStyles.Opaque|ControlStyles.SupportsTransparentBackColor,false);
             BackColor=theme.HighContrast?SystemColors.Window:theme.Card;ForeColor=theme.Foreground;
         }
         float ScaleFactor {get{return DialogDpi.Scale(this);}}
@@ -461,6 +512,8 @@ namespace AtkBatteryTray {
             PopupPages.DrawToggle(e.Graphics,rect,Checked,Enabled,theme.Dark);
             });e.Graphics.Restore(state);
         }
+        protected override void OnParentChanged(EventArgs e){base.OnParentChanged(e);DialogPaint.InheritBackground(this);}
+        protected override void OnParentBackColorChanged(EventArgs e){base.OnParentBackColorChanged(e);DialogPaint.InheritBackground(this);}
         protected override void OnCheckedChanged(EventArgs e){base.OnCheckedChanged(e);Invalidate();}
         protected override void OnMouseEnter(EventArgs e){hovered=true;Invalidate();base.OnMouseEnter(e);}
         protected override void OnMouseLeave(EventArgs e){hovered=pressed=false;Invalidate();base.OnMouseLeave(e);}
@@ -519,7 +572,7 @@ namespace AtkBatteryTray {
         readonly Label message;bool arranging;
         internal ThemedMessageBody(DialogTheme theme,string title,string text){
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,false);
+            SetStyle(ControlStyles.Opaque|ControlStyles.SupportsTransparentBackColor,false);
             BackColor=theme.Card;
             message=new Label {Name="MessageText",AccessibleName=title,Text=text,UseMnemonic=false,ForeColor=theme.Foreground,BackColor=theme.Card};
             Controls.Add(message);DialogScrollbars.Track(this,theme);
@@ -546,7 +599,7 @@ namespace AtkBatteryTray {
         internal ThemedProgress(DialogTheme theme){
             this.theme=theme;Height=VisualDesign.VolumeTrackHeight;TabStop=false;AccessibleRole=AccessibleRole.ProgressBar;
             SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,!theme.HighContrast);
-            SetStyle(ControlStyles.SupportsTransparentBackColor,false);BackColor=theme.HighContrast?SystemColors.Control:theme.Card;
+            SetStyle(ControlStyles.Opaque|ControlStyles.SupportsTransparentBackColor,false);BackColor=theme.HighContrast?SystemColors.Control:theme.Card;
             animation.Tick+=delegate{UpdateAnimation();Invalidate();};
         }
         bool Reduced {get{return DeviceSettings.Current.ReducedMotion||!SystemInformation.IsMenuAnimationEnabled||theme.HighContrast;}}
@@ -556,6 +609,8 @@ namespace AtkBatteryTray {
         void UpdateAnimation(){if(indeterminate&&Visible&&IsHandleCreated&&!Reduced)animation.Start();else animation.Stop();}
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);UpdateAnimation();}
         protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);UpdateAnimation();}
+        protected override void OnParentChanged(EventArgs e){base.OnParentChanged(e);if(!theme.HighContrast)DialogPaint.InheritBackground(this);}
+        protected override void OnParentBackColorChanged(EventArgs e){base.OnParentBackColorChanged(e);if(!theme.HighContrast)DialogPaint.InheritBackground(this);}
         protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}if(Width<=0||Height<=0)return;UpdateAnimation();

@@ -143,7 +143,7 @@ static class FeedbackFormTests {
     static void BrowserFallback(){
         string copied=null,opened=null;var http=new FakeHttp();
         using(var form=Form(http,"",delegate(string value){copied=value;},delegate(string value){opened=value;})){
-            Show(form);Find<TextBox>(form,"Description").Text=" 中文说明 & #\r\n连接失败 ";Find<RadioButton>(form,"Category-battery").Checked=true;
+            Show(form);Find<TextBox>(form,"Description").Text=" 中文说明 & #\r\n连接失败 ";Find<ThemedSegments>(form,"Categories").GetOption("Category-battery").DoDefaultAction();
             Find<Button>(form,"SubmitFeedback").PerformClick();Check(http.Calls==0&&copied.StartsWith("类型：电量或 DPI 不对\r\n描述：\r\n中文说明 & #\r\n连接失败"),"empty relay copies category and trimmed description first");
             Check(copied.Contains(Report().FullText)&&Decode(opened).Contains("中文说明 & #\r\n连接失败")&&opened.Length<=6000,"full diagnostics copied and description prefilled");
             Find<CheckBox>(form,"IncludeDiagnostics").Checked=false;Find<Button>(form,"SubmitFeedback").PerformClick();Check(!copied.Contains("diagnostic-mouse")&&!Decode(opened).Contains("diagnostic-mouse"),"unchecking diagnostics also respected by browser workflow");

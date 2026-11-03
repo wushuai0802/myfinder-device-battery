@@ -60,6 +60,10 @@ internal static class CaptureDialogs {
         for(Control parent=control.Parent;parent!=null;parent=parent.Parent)rect=Rectangle.Intersect(rect,parent.RectangleToScreen(parent.ClientRectangle));
         rect.Offset(-form.Left,-form.Top);return rect;
     }
+    static Rectangle SegmentRegion(Form form,ThemedSegments group,int index){
+        var rect=group.RectangleToScreen(group.SegmentBounds(index));rect.Offset(-form.Left,-form.Top);
+        return Rectangle.Intersect(rect,Region(form,group));
+    }
     static void Reveal(Control control){
         for(Control parent=control.Parent;parent!=null;parent=parent.Parent){var scroll=parent as ScrollableControl;if(scroll!=null&&scroll.AutoScroll)scroll.ScrollControlIntoView(control);}
         Pump();
@@ -123,8 +127,9 @@ internal static class CaptureDialogs {
         Require(Near(pixels.At(client.Left+2,client.Top+2),themed.Theme.Background,8),"Desktop capture is blank, obscured, or not the fixture");
         var feedback=form as FeedbackForm;
         if(feedback!=null){
-            foreach(string category in new[]{"device","battery","ui","other"}){
-                var segment=Find<ThemedSegment>(form,"Category-"+category);if(!segment.Checked)SegmentPixels(pixels,Region(form,segment),themed.Theme);
+            var group=Find<ThemedSegments>(form,"Categories");
+            for(int i=0;i<group.OptionCount;i++){
+                if(i!=group.SelectedIndex)SegmentPixels(pixels,SegmentRegion(form,group,i),themed.Theme);
             }
             SwitchPixels(pixels,Region(form,Find<ThemedSwitch>(form,"IncludeDiagnostics")),themed.Theme,DialogDpi.Scale(form));
             var count=Find<Label>(form,"FeedbackRemaining");var allowed=Region(form,count);
@@ -178,6 +183,16 @@ internal static class CaptureDialogs {
         SendMessage(control.Handle,0x02A3,IntPtr.Zero,IntPtr.Zero);
         Require(!(bool)control.GetType().GetField("hovered",Members).GetValue(control),"Native mouse-leave did not clear the hovered state");Capture(form,name+"-leave");
     }
+    static IntPtr SegmentPoint(ThemedSegments group,int index,int offset=0){
+        var bounds=group.SegmentBounds(index);return new IntPtr(((bounds.Top+bounds.Height/2)<<16)|((bounds.Left+bounds.Width/2+offset)&0xffff));
+    }
+    static void HoverSegment(ThemedDialog form,ThemedSegments group,int index,string name){
+        Reveal(group);SendMessage(group.Handle,0x0200,IntPtr.Zero,SegmentPoint(group,index));
+        Require((int)group.GetType().GetField("hovered",Members).GetValue(group)==index,"Native mouse move did not hover the segment");Capture(form,name+"-enter");
+        SendMessage(group.Handle,0x0200,IntPtr.Zero,SegmentPoint(group,index,-2));Capture(form,name+"-move");
+        SendMessage(group.Handle,0x02A3,IntPtr.Zero,IntPtr.Zero);
+        Require((int)group.GetType().GetField("hovered",Members).GetValue(group)==-1,"Native mouse leave did not clear the segment hover");Capture(form,name+"-leave");
+    }
     static void ExerciseFeedback(string suffix,bool dark){
         prompt=null;
         using(var form=new FeedbackForm(Report(),true,dark,delegate{},delegate{},"",null,new FeedbackSession())){
@@ -185,15 +200,15 @@ internal static class CaptureDialogs {
             var remaining=Find<Label>(form,"FeedbackRemaining");Reveal(remaining);Capture(form,"feedback-"+suffix+"-prompt");
             if(!checksOnly)Require(prompt!=null,"Character-count glyph template must be captured");
             string[] categories={"device","battery","ui","other"};
+            var group=Find<ThemedSegments>(form,"Categories");
             for(int i=0;i<categories.Length;i++){
                 string category=categories[i];
-                var segment=Find<ThemedSegment>(form,"Category-"+category);Reveal(segment);
-                SendMessage(segment.Handle,0x00F5,IntPtr.Zero,IntPtr.Zero); // BM_CLICK: real radio selection/accessibility path.
-                Require(segment.Checked&&form.SelectedCategory==category,"Native segment click failed");
-                Capture(form,"feedback-"+suffix+"-"+category+"-select");Hover(form,segment,"feedback-"+suffix+"-"+category);
-                var other=Find<ThemedSegment>(form,"Category-"+categories[(i+1)%categories.Length]);
-                Hover(form,other,"feedback-"+suffix+"-"+category+"-unselected");
-                Require(segment.Checked&&!other.Checked,"Hover must not change any segment's selected value");
+                Reveal(group);var point=SegmentPoint(group,i);
+                SendMessage(group.Handle,0x0201,new IntPtr(1),point);SendMessage(group.Handle,0x0202,IntPtr.Zero,point);
+                Require(group.SelectedIndex==i&&form.SelectedCategory==category&&(group.GetOption("Category-"+category).State&AccessibleStates.Checked)!=0,"Native segment click and accessible selection failed");
+                Capture(form,"feedback-"+suffix+"-"+category+"-select");HoverSegment(form,group,i,"feedback-"+suffix+"-"+category);
+                HoverSegment(form,group,(i+1)%categories.Length,"feedback-"+suffix+"-"+category+"-unselected");
+                Require(group.SelectedIndex==i,"Hover must not change any segment's selected value");
             }
             var input=Find<TextBox>(form,"Description");Reveal(input);input.Focus();
             foreach(char ch in "连接设备后电量没有刷新，请检查。")SendMessage(input.Handle,0x0102,(IntPtr)ch,IntPtr.Zero);

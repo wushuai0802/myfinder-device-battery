@@ -39,6 +39,11 @@ static class ThemedDialogTests {
     static object Field(object instance,string name){return instance.GetType().GetField(name,Members).GetValue(instance);}
     static object Call(object instance,string method,params object[] args){return instance.GetType().GetMethod(method,Members).Invoke(instance,args);}
     static T Find<T>(Control control,string name) where T:Control {var matches=control.Controls.Find(name,true);Check(matches.Length==1,"one "+name);return (T)matches[0];}
+    static ThemedSegments Segments(DialogTheme theme){
+        var group=new ThemedSegments(theme);
+        for(int i=0;i<4;i++){string category=FeedbackInput.CategoryAt(i);group.AddOption("Category-"+category,FeedbackInput.CategoryLabel(category),category);}
+        return group;
+    }
     static UpdateRelease Release(){return new UpdateRelease {Tag="v9.9.9",Body="更新说明\n- 第一项\n- 第二项\n<script>plain text</script>\u0001"};}
     static FeedbackReport Report(){return new FeedbackReport("fixture","fixture-windows",new WirelessDevice[0],new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0]);}
     static double Luminance(Color color){double[] v={color.R/255.0,color.G/255.0,color.B/255.0};for(int i=0;i<3;i++)v[i]=v[i]<=.04045?v[i]/12.92:Math.Pow((v[i]+.055)/1.055,2.4);return .2126*v[0]+.7152*v[1]+.0722*v[2];}
@@ -194,17 +199,18 @@ static class ThemedDialogTests {
                     button.Font=larger;
                     Check(button.GetPreferredSize(Size.Empty)==preferred,context+": text measurement also uses DPI rather than incoming font size");
                 }
-                using(var segment=new ThemedSegment(theme) {Font=font,Text="Type"})
+                using(var segment=Segments(theme))
                 using(var toggle=new ThemedSwitch(theme) {Font=font,Text="Diagnostics"}){
+                    segment.Font=font;segment.Width=1200;
                     foreach(Control control in new Control[]{segment,toggle}){
                         var preferred=control.GetPreferredSize(Size.Empty);control.Font=larger;
                         Check(preferred.Height==display.Height&&control.GetPreferredSize(Size.Empty)==preferred,control.GetType().Name+": DPI determines height and label size at "+display.Dpi);
                     }
                 }
-                using(var segments=new ThemedSegments(theme) {Font=font,Width=1200}){
-                    for(int i=0;i<4;i++)segments.Controls.Add(new ThemedSegment(theme) {Text="Type"});segments.PerformLayout();
+                using(var segments=Segments(theme)){
+                    segments.Font=font;segments.Width=1200;segments.PerformLayout();
                     Check(segments.Height==display.Height&&segments.GetPreferredSize(new Size(1200,0)).Height==display.Height,"segment row uses DPI at "+display.Dpi);
-                    foreach(Control child in segments.Controls)Check(child.Height==display.Height,"segment child shares the DPI-scaled row height");
+                    for(int i=0;i<segments.OptionCount;i++)Check(segments.SegmentBounds(i).Height==display.Height,"segment shares the DPI-scaled row height");
                 }
             }
         });
@@ -291,10 +297,11 @@ static class ThemedDialogTests {
     static void BackgroundDispatch(){
         using(var form=new FeedbackForm(Report(),true,false,delegate{},delegate{},"")){
             Show(form);
-            foreach(string name in new[]{"Category-device","Category-battery","IncludeDiagnostics"}){
+            foreach(string name in new[]{"Categories","IncludeDiagnostics"}){
                 var control=Find<Control>(form,name);
                 bool opaque=(bool)typeof(Control).GetMethod("GetStyle",Members).Invoke(control,new object[]{ControlStyles.Opaque});
                 Console.WriteLine(name+" ControlStyles.Opaque="+opaque);
+                Check(!opaque,name+": WinForms must dispatch background painting");
                 using(var bitmap=new Bitmap(control.Width,control.Height))using(var graphics=Graphics.FromImage(bitmap)){
                     graphics.Clear(Color.Magenta);
                     // WinForms omits OnPaintBackground for controls carrying Opaque.
@@ -309,15 +316,19 @@ static class ThemedDialogTests {
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
             SelectTheme(style,dark);var theme=new DialogTheme(dark);
             using(var parent=new PaintSpyPanel {BackColor=theme.Card,Size=new Size(400,100)}){
-                Control[] controls={new ThemedButton(theme),new ThemedSection(theme),new ThemedTextBox(theme,new TextBox()),new ThemedSegments(theme),new ThemedSegment(theme),new ThemedSwitch(theme),new ThemedProgress(theme),new ThemedMessageBody(theme,"确认","文字")};
+                Control[] controls={new ThemedButton(theme),new ThemedButton(theme,ThemedButtonKind.Primary),new ThemedButton(theme,ThemedButtonKind.Text),new ThemedSection(theme),new ThemedTextBox(theme,new TextBox()),Segments(theme),new ThemedSwitch(theme),new ThemedProgress(theme),new ThemedMessageBody(theme,"确认","文字")};
                 foreach(var control in controls)using(control){
                     parent.Controls.Add(control);control.AutoSize=false;control.Size=new Size(240,40);control.CreateControl();
                     Check(control.BackColor.A==255,control.GetType().Name+" has an opaque background");
+                    Check(!(bool)typeof(Control).GetMethod("GetStyle",Members).Invoke(control,new object[]{ControlStyles.Opaque}),control.GetType().Name+" permits native background dispatch");
+                    var paintStyles=ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw;
+                    Check((bool)typeof(Control).GetMethod("GetStyle",Members).Invoke(control,new object[]{paintStyles}),control.GetType().Name+" uses buffered user painting");
                     parent.Paints=0;
                     using(var dirty=new Bitmap(control.Width,control.Height))using(var clean=new Bitmap(control.Width,control.Height)){
                         using(var g=Graphics.FromImage(dirty)){g.Clear(Color.Magenta);Call(control,"OnPaintBackground",new PaintEventArgs(g,control.ClientRectangle));Call(control,"OnPaint",new PaintEventArgs(g,control.ClientRectangle));}
                         using(var g=Graphics.FromImage(clean)){g.Clear(theme.Card);Call(control,"OnPaintBackground",new PaintEventArgs(g,control.ClientRectangle));Call(control,"OnPaint",new PaintEventArgs(g,control.ClientRectangle));}
                         Check(SamePixels(dirty,clean),control.GetType().Name+" erases poisoned pixels across the whole client area");
+                        AssertNoMagenta(dirty,control.GetType().Name);
                     }
                     Check(parent.Paints==0,control.GetType().Name+" does not replay parent paint into its background");
                 }
@@ -325,9 +336,9 @@ static class ThemedDialogTests {
             using(var feedback=new FeedbackForm(Report(),true,dark,delegate{},delegate{},"")){
                 Show(feedback);
                 foreach(string name in new[]{"FeedbackRemaining","FeedbackStatus","ViewDiagnostics"})Check(Find<Control>(feedback,name).BackColor==theme.Card,name+" uses the card background");
-                var segment=Find<ThemedSegment>(feedback,"Category-battery");
+                var segment=Find<ThemedSegments>(feedback,"Categories");var bounds=segment.SegmentBounds(1);
                 using(var initial=new Bitmap(segment.Width,segment.Height))using(var after=new Bitmap(segment.Width,segment.Height)){
-                    segment.DrawToBitmap(initial,segment.ClientRectangle);Call(segment,"OnMouseEnter",EventArgs.Empty);Call(segment,"OnMouseLeave",EventArgs.Empty);segment.DrawToBitmap(after,segment.ClientRectangle);
+                    segment.DrawToBitmap(initial,segment.ClientRectangle);Call(segment,"OnMouseMove",new MouseEventArgs(MouseButtons.None,0,bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2,0));Call(segment,"OnMouseLeave",EventArgs.Empty);segment.DrawToBitmap(after,segment.ClientRectangle);
                     Check(SamePixels(initial,after),"leaving a segment clears its hover without changing selection");
                 }
                 using(var image=new Bitmap(segment.Width+20,segment.Height+20))using(var g=Graphics.FromImage(image)){
@@ -338,6 +349,58 @@ static class ThemedDialogTests {
                 }
             }
         }
+    }
+    static void AssertNoMagenta(Bitmap bitmap,string context){
+        for(int y=0;y<bitmap.Height;y++)for(int x=0;x<bitmap.Width;x++)
+            if(bitmap.GetPixel(x,y).ToArgb()==Color.Magenta.ToArgb())throw new Exception(context+": unpainted pixel at "+x+","+y);
+        Check(true,context+": every client pixel overwrites magenta");
+    }
+    static void FullClientCoverage(){
+        foreach(bool highContrast in new[]{false,true})foreach(int dpi in new[]{96,120,144,192})WithDpi(dpi,delegate{
+            VisualDesign.HighContrastOverride=highContrast;
+            try{
+                SelectTheme("ocean",false);var theme=new DialogTheme(false);float scale=dpi/96f;
+                using(var parent=new PaintSpyPanel {BackColor=theme.Card,Size=new Size(1000,500)}){
+                    var card=new ThemedSection(theme);card.Controls.Add(new Label {Text="child",Bounds=new Rectangle(10,10,40,20)});
+                    Control[] controls={new ThemedButton(theme),new ThemedButton(theme,ThemedButtonKind.Primary),new ThemedButton(theme,ThemedButtonKind.Text),card,new ThemedTextBox(theme,new TextBox()),Segments(theme),new ThemedSwitch(theme) {Text="附带诊断信息（推荐）"},new ThemedProgress(theme),new ThemedMessageBody(theme,"确认","文字")};
+                    foreach(var control in controls)using(control){
+                        parent.Controls.Add(control);control.AutoSize=false;control.CreateControl();
+                        foreach(int width in new[]{180,600}){
+                            control.Size=new Size((int)(width*scale),(int)(40*scale));
+                            foreach(bool enabled in new[]{true,false}){
+                                control.Enabled=enabled;
+                                using(var bitmap=new Bitmap(control.Width,control.Height))using(var g=Graphics.FromImage(bitmap)){
+                                    g.Clear(Color.Magenta);
+                                    Check(!(bool)typeof(Control).GetMethod("GetStyle",Members).Invoke(control,new object[]{ControlStyles.Opaque}),control.GetType().Name+": Opaque remains off after handle creation and resizing");
+                                    Call(control,"OnPaintBackground",new PaintEventArgs(g,control.ClientRectangle));Call(control,"OnPaint",new PaintEventArgs(g,control.ClientRectangle));
+                                    AssertNoMagenta(bitmap,control.GetType().Name+" DPI="+dpi+" highContrast="+highContrast+" enabled="+enabled+" width="+width);
+                                }
+                            }
+                        }
+                    }
+                    Check(parent.Paints==0,"coverage painting never replays the parent's content");
+                }
+            }finally{VisualDesign.HighContrastOverride=false;}
+        });
+    }
+    static void SegmentTextClipping(){
+        foreach(int dpi in new[]{96,120,144,192})WithDpi(dpi,delegate{
+            SelectTheme("ocean",false);var theme=new DialogTheme(false);
+            for(int changed=0;changed<4;changed++)using(var original=Segments(theme))using(var longer=new ThemedSegments(theme)){
+                for(int i=0;i<4;i++){string category=FeedbackInput.CategoryAt(i);longer.AddOption("Category-"+category,i==changed?new String('W',200):FeedbackInput.CategoryLabel(category),category);}
+                original.Width=longer.Width=240*dpi/96;
+                Check(original.Size==longer.Size,"clipping fixture retains the same two-row geometry");
+                using(var before=new Bitmap(original.Width,original.Height))using(var after=new Bitmap(longer.Width,longer.Height)){
+                    using(var g=Graphics.FromImage(before)){Call(original,"OnPaintBackground",new PaintEventArgs(g,original.ClientRectangle));Call(original,"OnPaint",new PaintEventArgs(g,original.ClientRectangle));}
+                    using(var g=Graphics.FromImage(after)){Call(longer,"OnPaintBackground",new PaintEventArgs(g,longer.ClientRectangle));Call(longer,"OnPaint",new PaintEventArgs(g,longer.ClientRectangle));}
+                    var bounds=original.SegmentBounds(changed);bool changedInside=false;
+                    for(int y=0;y<before.Height;y++)for(int x=0;x<before.Width;x++)if(before.GetPixel(x,y)!=after.GetPixel(x,y)){
+                        Check(bounds.Contains(x,y),"segment text must not alter neighboring segments, gaps or track corners");changedInside=true;
+                    }
+                    Check(changedInside,"long text exercises the segment clip");
+                }
+            }
+        });
     }
     static void InitialReadOnlyFocus(){
         using(var update=new UpdateDialog(Release(),true)){
@@ -396,24 +459,39 @@ static class ThemedDialogTests {
     }
     static void SegmentsAndSwitch(){
         using(var form=new FeedbackForm(Report(),true,false,delegate{},delegate{},"")){
-            Show(form);var first=Find<RadioButton>(form,"Category-device");var second=Find<RadioButton>(form,"Category-battery");
-            Check(first.GetType()!=typeof(RadioButton)&&second.GetType()==first.GetType(),"feedback types use panel segments");
-            Check(first.Height==VisualDesign.StageRect(0,4).Height&&first.Top==Find<RadioButton>(form,"Category-ui").Top,"wide feedback uses one row of panel-height segments");
-            foreach(string category in new[]{"device","battery","ui","other"}){
-                var option=Find<RadioButton>(form,"Category-"+category);Check(option.AccessibilityObject.Name==option.Text&&option.AccessibilityObject.Role==AccessibleRole.RadioButton,"segment accessible name and radio role");
+            Show(form);var group=Find<ThemedSegments>(form,"Categories");var first=group.GetOption("Category-device");var second=group.GetOption("Category-battery");
+            var accessible=group.AccessibilityObject;
+            Check(group.Controls.Count==0&&accessible.GetChildCount()==4,"one segment HWND exposes four accessible children");
+            Check(first.Bounds.Height==VisualDesign.StageRect(0,4).Height&&first.Bounds.Top==group.GetOption("Category-ui").Bounds.Top,"wide feedback uses one row of panel-height segments");
+            for(int i=0;i<4;i++){
+                string category=FeedbackInput.CategoryAt(i);var option=group.GetOption("Category-"+category);
+                Check(option==accessible.GetChild(i)&&option.Parent==accessible&&option.Name==FeedbackInput.CategoryLabel(category)&&option.Role==AccessibleRole.RadioButton,"stable segment identifier, accessible name, parent and radio role");
+                Check(accessible.HitTest(option.Bounds.Left+option.Bounds.Width/2,option.Bounds.Top+option.Bounds.Height/2)==option,"accessible hit testing finds each option");
             }
-            first.Focus();first.GetType().GetMethod("ProcessDialogKey",Members).Invoke(first,new object[]{Keys.Right});Application.DoEvents();
-            Check(second.Focused&&second.Checked&&form.SelectedCategory=="battery"&&!first.Checked,"Right changes focus and the original selected value");
-            second.GetType().GetMethod("ProcessDialogKey",Members).Invoke(second,new object[]{Keys.Left});Check(first.Checked&&form.SelectedCategory=="device","Left selects the preceding segment");
-            Key(form,Keys.Tab);Check(!first.ContainsFocus&&!second.ContainsFocus,"Tab leaves the radio group");
+            group.Focus();Call(group,"ProcessDialogKey",Keys.Right);Application.DoEvents();
+            Check(group.Focused&&accessible.GetFocused()==second&&accessible.GetSelected()==second&&(second.State&AccessibleStates.Checked)!=0&&form.SelectedCategory=="battery"&&(first.State&AccessibleStates.Checked)==0,"Right changes accessible focus and the original selected value");
+            Call(group,"ProcessDialogKey",Keys.Left);Check(form.SelectedCategory=="device","Left selects the preceding segment");
+            Key(form,Keys.Tab);Check(!group.ContainsFocus,"Tab leaves the radio group");
+            Key(form,Keys.Shift|Keys.Tab);Check(group.ContainsFocus&&accessible.GetFocused()==first,"Shift-Tab restores the selected segment focus");
+            second.DoDefaultAction();Check(form.SelectedCategory=="battery","accessible default action selects an option");
+            first.Select(AccessibleSelection.TakeFocus|AccessibleSelection.TakeSelection);Check(form.SelectedCategory=="device"&&group.Focused,"accessible selection focuses its group");
+            group.Enabled=false;second.DoDefaultAction();Check(form.SelectedCategory=="device"&&(second.State&AccessibleStates.Unavailable)!=0,"disabled options cannot be activated");group.Enabled=true;
             var toggle=Find<CheckBox>(form,"IncludeDiagnostics");Check(toggle.GetType()!=typeof(CheckBox)&&toggle.Checked,"diagnostics uses a checked switch");
             Check(toggle.AccessibilityObject.Name==toggle.Text&&toggle.AccessibilityObject.Role==AccessibleRole.CheckButton&&(toggle.AccessibilityObject.State&AccessibleStates.Checked)!=0,"switch retains accessible checked state");
             toggle.AccessibilityObject.DoDefaultAction();Check(!toggle.Checked,"accessible switch action updates the original checkbox value");
             toggle.GetType().GetMethod("OnClick",Members).Invoke(toggle,new object[]{EventArgs.Empty});Check(toggle.Checked,"whole switch row toggles");
             toggle.Focus();SendMessage(toggle.Handle,0x0100,(IntPtr)Keys.Space,IntPtr.Zero);SendMessage(toggle.Handle,0x0101,(IntPtr)Keys.Space,IntPtr.Zero);Application.DoEvents();
             Check(!toggle.Checked&&(toggle.AccessibilityObject.State&AccessibleStates.Checked)==0,"native Space key toggles checked and accessible state");
-            form.ClientSize=new Size(360,form.ClientSize.Height);Application.DoEvents();var third=Find<RadioButton>(form,"Category-ui");
-            Check(first.Top==second.Top&&third.Top>first.Top,"four feedback segments wrap into two rows");
+            form.ClientSize=new Size(360,form.ClientSize.Height);Application.DoEvents();var third=group.GetOption("Category-ui");
+            Check(first.Bounds.Top==second.Bounds.Top&&third.Bounds.Top>first.Bounds.Top,"four feedback segments wrap into two rows");
+            group.Focus();Call(group,"ProcessDialogKey",Keys.Down);Check(form.SelectedCategory=="ui","Down follows the two-column layout");
+            Call(group,"ProcessDialogKey",Keys.Up);Check(form.SelectedCategory=="device","Up follows the two-column layout");
+            Call(group,"ProcessDialogKey",Keys.Left);Check(form.SelectedCategory=="other","arrows wrap at group edges");
+            var target=group.SegmentBounds(1);var point=new Point(target.Left+target.Width/2,target.Top+target.Height/2);
+            Call(group,"OnMouseDown",new MouseEventArgs(MouseButtons.Left,1,point.X,point.Y,0));Call(group,"OnMouseUp",new MouseEventArgs(MouseButtons.Left,1,point.X,point.Y,0));
+            Check(form.SelectedCategory=="battery","whole segment rectangle selects on click");
+            Call(group,"OnMouseDown",new MouseEventArgs(MouseButtons.Left,1,point.X,point.Y,0));Call(group,"OnMouseUp",new MouseEventArgs(MouseButtons.Left,1,-1,-1,0));
+            Check(form.SelectedCategory=="battery","release outside does not change selection");
         }
     }
     static void AdaptiveReleaseNotes(){
@@ -484,8 +562,15 @@ static class ThemedDialogTests {
                     var geometry=PopupPages.ToggleBounds(new RectangleF(0,0,240,30));Check(geometry.Size==new SizeF(VisualDesign.ToggleWidth,VisualDesign.ToggleHeight),"switch uses the secondary page's exact bounds");
                     ComparePaint(toggle,theme.Card,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.DrawLabel(g,toggle.Text,new RectangleF(6,0,rect.Width-51,rect.Height),VisualDesign.DeviceNameFontSize,false,theme.Foreground,StringAlignment.Near);PopupPages.DrawToggle(g,rect,on,true,dark);});
                 }
-                foreach(bool selected in new[]{true,false})using(var segment=new ThemedSegment(theme) {Font=font,Text="类型",Checked=selected,Size=new Size((int)(120*scale),(int)Math.Round(VisualDesign.SelectionHeight*scale))}){
-                    ComparePaint(segment,theme.Track,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.Fill(g,rect,theme.Track,VisualDesign.SelectionRadius);CompactRenderer.Selection(g,rect,segment.Text,null,selected,true,false,false,false,dark);});
+                using(var segments=Segments(theme)){
+                    segments.Font=font;segments.Width=(int)(600*scale);segments.SelectedIndex=1;
+                    ComparePaint(segments,theme.Card,scale,delegate(Graphics g,RectangleF rect){
+                        CompactRenderer.Fill(g,rect,theme.Track,VisualDesign.SelectionRadius);
+                        for(int i=0;i<4;i++){
+                            var bounds=segments.SegmentBounds(i);var part=new RectangleF(bounds.X/scale,bounds.Y/scale,bounds.Width/scale,bounds.Height/scale);var saved=g.Save();g.SetClip(part,System.Drawing.Drawing2D.CombineMode.Intersect);
+                            CompactRenderer.Selection(g,part,FeedbackInput.CategoryLabel(FeedbackInput.CategoryAt(i)),null,i==1,true,false,false,false,dark);g.Restore(saved);
+                        }
+                    });
                 }
                 using(var section=new ThemedSection(theme) {Font=font,Size=new Size((int)(200*scale),(int)(80*scale))}){
                     ComparePaint(section,theme.Background,scale,delegate(Graphics g,RectangleF rect){CompactRenderer.DrawSurface(g,new RectangleF(.5f,.5f,rect.Width-1,rect.Height-1),dark);});
@@ -514,6 +599,9 @@ static class ThemedDialogTests {
         VisualDesign.HighContrastOverride=true;
         try{using(var update=new UpdateDialog(Release(),true))using(var feedback=new FeedbackForm(Report(),false,true,delegate{},delegate{},"")){
             foreach(var root in new Control[]{update,feedback})SystemControlTree(root);
+            Show(feedback);var group=Find<ThemedSegments>(feedback,"Categories");
+            group.GetOption("Category-battery").DoDefaultAction();Call(group,"ProcessDialogKey",Keys.Right);
+            Check(feedback.SelectedCategory=="ui"&&(group.GetOption("Category-ui").State&AccessibleStates.Checked)!=0,"system-painted radio glyphs retain accessible and keyboard selection");
         }}finally{VisualDesign.HighContrastOverride=false;}
     }
     static void SystemControlTree(Control control){
@@ -979,14 +1067,17 @@ static class Host {
         NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
         var previousArea=ThemedDialog.WorkingAreaProvider;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
         try{if(args.Length==2&&args[0]=="--render"){Render(args[1]);return 0;}SelectTheme("ocean",false);
-            if(args.Length==1&&args[0]=="--paint2-only"){
+            bool regular=args.Length==0||args.Length==1&&!args[0].StartsWith("--",StringComparison.Ordinal);
+            if(regular||args.Length==1&&(args[0]=="--paint2-only"||args[0]=="--paint3-only")){
                 foreach(string kind in new[]{"feedback","update","alias","message","diagnostic"})Run("control overlap: "+kind,delegate{DialogControlLayout(kind);});
                 Run("single segment client pixels",SegmentClientPixels);Run("native background dispatch",BackgroundDispatch);
-                Console.WriteLine(checks+" paint2 checks, "+failures+" failed groups");return failures==0?0:1;
+                if(args.Length==1&&args[0]=="--paint2-only"){Console.WriteLine(checks+" paint2 checks, "+failures+" failed groups");return failures==0?0:1;}
             }
-            if(args.Length==0||args.Length==1&&args[0]=="--paint-only"){
+            if(regular||args.Length==1&&(args[0]=="--paint-only"||args[0]=="--paint3-only")){
                 Run("opaque dialog paint",OpaqueDialogPainting);Run("initial read-only focus",InitialReadOnlyFocus);Run("compact update size",CompactUpdateSize);
-                Console.WriteLine(checks+" paint/focus/size checks, "+failures+" failed groups");if(args.Length==1)return failures==0?0:1;
+                Run("full client coverage at every DPI",FullClientCoverage);Run("segment text clipping",SegmentTextClipping);
+                Run("single-control keyboard, pointer and accessibility",SegmentsAndSwitch);Run("high contrast painting and selection",SystemControlsInHighContrast);
+                Console.WriteLine(checks+" paint/focus/size checks, "+failures+" failed groups");if(!regular)return failures==0?0:1;
             }
             if(args.Length==2&&args[0]=="--hidden-host")return HiddenHost(args[1]);
             if(args.Length==2&&args[0]=="--exception-host")return ExceptionHost(args[1]);

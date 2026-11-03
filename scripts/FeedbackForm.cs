@@ -137,14 +137,14 @@ namespace AtkBatteryTray {
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,view;
         CancellationTokenSource pending;FeedbackResult receipt;bool busy;
-        internal string SelectedCategory {get{foreach(RadioButton radio in categories.Controls)if(radio.Checked)return (string)radio.Tag;return "other";}}
+        internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
         internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null):base(dark){
             report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;
             copy=copyText??Clipboard.SetText;open=openLink??delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});};
             confirm=confirmation??delegate(string question){return ThemedMessage.Show(this,"反馈问题",question,MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)==DialogResult.Yes;};
             client=new FeedbackClient(relay,transport??new FeedbackHttp(),session);
             Text="反馈问题";ShowInTaskbar=false;StartPosition=FormStartPosition.CenterParent;FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
-            ClientSize=new Size(540,568);categories=new ThemedSegments(Theme);diagnostics=new ThemedSwitch(Theme);
+            ClientSize=new Size(540,568);categories=new ThemedSegments(Theme) {Name="Categories",AccessibleName="类型"};diagnostics=new ThemedSwitch(Theme);
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
@@ -152,8 +152,8 @@ namespace AtkBatteryTray {
             var typeTitle=Caption("类型",false,false,true);typeTitle.Dock=DockStyle.Top;
             categories.Dock=DockStyle.Bottom;categories.Margin=Padding.Empty;
             for(int i=0;i<4;i++){
-                string category=FeedbackInput.CategoryAt(i);var radio=new ThemedSegment(Theme) {Name="Category-"+category,Text=FeedbackInput.CategoryLabel(category),AccessibleName=FeedbackInput.CategoryLabel(category),Tag=category,TabIndex=i};
-                categories.Controls.Add(radio);radio.Checked=category==FeedbackInput.DefaultCategory(deviceMissing);
+                string category=FeedbackInput.CategoryAt(i);categories.AddOption("Category-"+category,FeedbackInput.CategoryLabel(category),category);
+                if(category==FeedbackInput.DefaultCategory(deviceMissing))categories.SelectedIndex=i;
             }
             categories.SizeChanged+=delegate{typeCard.Height=typeCard.Padding.Vertical+typeTitle.PreferredHeight+4+categories.Height;};
             typeCard.Controls.Add(categories);typeCard.Controls.Add(typeTitle);layout.Controls.Add(typeCard,0,0);
