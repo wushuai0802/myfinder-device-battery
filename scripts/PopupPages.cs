@@ -375,7 +375,7 @@ namespace AtkBatteryTray {
                         var audio=owner.Audio;bool enabled=audio!=null&&(id==100?audio.SpeakerAvailable:id==101?audio.HeadsetAvailable:audio.MicrophoneAvailable&&audio.MicrophoneMuted.HasValue);
                         rows.Add(new PopupControl {Id=id,Text=id==100?"输出到扬声器":id==101?"输出到耳机":"Windows麦克风静音",Rect=hit,Enabled=enabled,DeviceKey=card.Id});
                     }
-                    if(card.AudioOnly)QualifyAudioCard(rows,UiState.AudioCard(owner.Audio,DeviceSettings.Current));
+                    if(card.AudioOnly)QualifyAudioCard(rows,UiState.AudioCard(owner.Audio,DeviceSettings.Current,owner.Headset,owner.WirelessDevices));
                 }else {
                     int index=layout.All.IndexOf(card);
                     rows.Add(new PopupControl {Id=1000+index,Text=card.Name,Rect=new RectangleF(10,card.Top+6,150,44),DeviceKey=card.Id,Enabled=card.Id!="empty"});

@@ -35,7 +35,7 @@ namespace AtkBatteryTray {
             }
             if(VisualDesign.ShouldShowHeadset(owner.Headset))layout.All.Add(new WirelessCard {Id="native:headset",Name=pref.HeadsetAlias,Kind="headset",Battery=UiState.Headset(owner.Headset,now),NativeHeadset=true});
             else {
-                var audio=UiState.AudioCard(owner.Audio,pref);
+                var audio=UiState.AudioCard(owner.Audio,pref,owner.Headset,owner.WirelessDevices);
                 if(audio!=null)layout.All.Add(new WirelessCard {Id="native:audio",Name="耳机",Kind="headset",Subtitle=audio.Subtitle,AudioOnly=true});
             }
             var hidden=new HashSet<string>(pref.HiddenDeviceIds,StringComparer.Ordinal);

@@ -27,7 +27,7 @@ namespace AtkBatteryTray {
             return headset!=null&&headset.Connected&&(headset.ConnectionVerified||(headset.ReceiverPresent&&headset.ConnectionTimestampUtc!=DateTime.MinValue));
         }
         internal static AudioCardView AudioCardFor(HeadsetReading headset,AudioReading audio) {
-            return ShouldShowHeadset(headset)||DeviceSettings.Current.HiddenDeviceIds.Contains("native:audio")?null:UiState.AudioCard(audio,DeviceSettings.Current);
+            return ShouldShowHeadset(headset)||DeviceSettings.Current.HiddenDeviceIds.Contains("native:audio")?null:UiState.AudioCard(audio,DeviceSettings.Current,headset);
         }
         internal static bool HasAudioCard(HeadsetReading headset,AudioReading audio){return ShouldShowHeadset(headset)||AudioCardFor(headset,audio)!=null;}
         public static Size PanelSizeFor(HeadsetReading headset){return PanelSizeFor(headset,null);}

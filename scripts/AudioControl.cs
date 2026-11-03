@@ -74,6 +74,13 @@ namespace AtkBattery {
         internal static bool IsHeadphone(int? formFactor){return formFactor==3||formFactor==5;}
         const string SpeakerInterface = "Realtek(R) Audio";
         const string HeadsetInterface = "HyperX Cloud Alpha Wireless";
+        internal static bool IsHyperXEndpoint(string interfaceName,string name,int flow) {
+            if(Exact(interfaceName,HeadsetInterface))return true;
+            if(!String.IsNullOrEmpty(interfaceName))return false;
+            return flow==0?
+                Exact(name,"耳机 (HyperX Cloud Alpha Wireless)")||Exact(name,"Headphones (HyperX Cloud Alpha Wireless)"):
+                Exact(name,"麦克风 (HyperX Cloud Alpha Wireless)")||Exact(name,"Microphone (HyperX Cloud Alpha Wireless)");
+        }
         static readonly object OperationLock = new object();
         static readonly SpeakerEndpointMemory SpeakerMemory = new SpeakerEndpointMemory();
         static readonly Guid VolumeInterfaceId = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
@@ -375,13 +382,7 @@ namespace AtkBattery {
                     matching = endpoint.Flow == 0 && identity && speakerType;
                 } else if (target == "headset" || target == "microphone") {
                     int flow = target == "headset" ? 0 : 1;
-                    bool identity = Exact(endpoint.InterfaceName, HeadsetInterface);
-                    if (String.IsNullOrEmpty(endpoint.InterfaceName)) {
-                        identity = target == "headset" ?
-                            Exact(endpoint.Name, "耳机 (HyperX Cloud Alpha Wireless)") || Exact(endpoint.Name, "Headphones (HyperX Cloud Alpha Wireless)") :
-                            Exact(endpoint.Name, "麦克风 (HyperX Cloud Alpha Wireless)") || Exact(endpoint.Name, "Microphone (HyperX Cloud Alpha Wireless)");
-                    }
-                    matching = endpoint.Flow == flow && identity;
+                    matching = endpoint.Flow == flow && IsHyperXEndpoint(endpoint.InterfaceName,endpoint.Name,flow);
                 } else return null;
                 if (!matching) continue;
                 if (match != null) { ambiguous = true; return null; }

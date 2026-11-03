@@ -39,14 +39,26 @@ namespace AtkBatteryTray {
         public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction+"|"+VolumePreview;}}
     }
     public static class UiState {
-        internal static AudioCardView AudioCard(AudioReading audio,AudioBindings preferences) {
+        // Receiver audio endpoints can remain active after the wireless headset disconnects.
+        // Use existing readings only, and restrict this exclusion to card visibility.
+        internal static bool IsDisconnectedWirelessHeadset(AudioDeviceChoice endpoint,HeadsetReading headset,IEnumerable<WirelessDevice> wirelessDevices) {
+            if(endpoint==null||endpoint.Flow!=0)return false;
+            if(headset!=null&&headset.ReceiverPresent&&!VisualDesign.ShouldShowHeadset(headset)&&AudioControl.IsHyperXEndpoint(endpoint.InterfaceName,endpoint.Name,0))return true;
+            if(wirelessDevices!=null&&!String.IsNullOrWhiteSpace(endpoint.InterfaceName))foreach(var device in wirelessDevices)
+                if(device!=null&&device.Kind=="headset"&&(!device.Online||device.ConnectionState=="disconnected"||device.ConnectionState=="unconfirmed")&&
+                    String.Equals(endpoint.InterfaceName.Trim(),(device.Name??"").Trim(),StringComparison.OrdinalIgnoreCase))return true;
+            return false;
+        }
+        internal static AudioCardView AudioCard(AudioReading audio,AudioBindings preferences,HeadsetReading headset=null,IEnumerable<WirelessDevice> wirelessDevices=null) {
             if(audio==null||audio.Devices==null)return null;
             string bound=preferences.HeadsetEndpointId;
             if(!String.IsNullOrEmpty(bound))foreach(var endpoint in audio.Devices)
-                if(endpoint!=null&&endpoint.Flow==0&&AudioControl.SameId(endpoint.Id,bound))
+                if(endpoint!=null&&endpoint.Flow==0&&AudioControl.SameId(endpoint.Id,bound)) {
+                    if(IsDisconnectedWirelessHeadset(endpoint,headset,wirelessDevices))return null;
                     return new AudioCardView {EndpointId=endpoint.Id,Subtitle=endpoint.Name??"耳机端点"};
+                }
             AudioDeviceChoice single=null;int count=0;
-            foreach(var endpoint in audio.Devices)if(endpoint!=null&&endpoint.Flow==0&&AudioControl.IsHeadphone(endpoint.FormFactor)){single=endpoint;count++;}
+            foreach(var endpoint in audio.Devices)if(endpoint!=null&&endpoint.Flow==0&&AudioControl.IsHeadphone(endpoint.FormFactor)&&!IsDisconnectedWirelessHeadset(endpoint,headset,wirelessDevices)){single=endpoint;count++;}
             if(count==0)return null;
             if(count>1)return new AudioCardView {Subtitle="多个耳机端点，请在音频设置中绑定"};
             return new AudioCardView {EndpointId=String.IsNullOrEmpty(bound)?single.Id:null,Subtitle=String.IsNullOrEmpty(bound)?single.Name??"耳机端点":"已绑定耳机未连接，请在音频设置中绑定"};
