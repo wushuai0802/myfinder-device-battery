@@ -54,6 +54,28 @@ static class UiMenusTests {
         }
         internal PopupControl ById(int id){var row=Controls().Find(delegate(PopupControl item){return item.Id==id;});Check(row!=null,"visible action "+id);return row;}
         internal void Activate(PopupControl row){Call(Popup,"PerformAction",row);}
+        internal void Feedback(PopupControl row,string category){
+            Exception failure=null;bool shown=false;string beforeCopy=Copied,beforeOpen=Opened;
+            using(var timer=new System.Windows.Forms.Timer {Interval=10}){
+                timer.Tick+=delegate{
+                    foreach(Form window in Application.OpenForms){
+                        var form=window as FeedbackForm;if(form==null)continue;timer.Stop();
+                        try{
+                            shown=true;Check(form.SelectedCategory==category,"entry selects the correct feedback type");
+                            Check((bool)Field(Popup,"ignoreDeactivate"),"the panel keeps its modal deactivation guard");
+                            Check(Copied==beforeCopy&&Opened==beforeOpen,"opening feedback does not copy or open a browser");
+                            ((TextBox)form.Controls.Find("Description",true)[0]).Text="设备连接以后没有显示";
+                            ((Button)form.Controls.Find("SubmitFeedback",true)[0]).PerformClick();
+                            Check(Copied.StartsWith("类型："+FeedbackInput.CategoryLabel(category))&&Copied.Contains(Owner.CreateFeedbackReport().FullText),"browser fallback retains category and full sanitized diagnostics");
+                            Check(Opened.Length<=6000&&Uri.UnescapeDataString(Opened).Contains("设备连接以后没有显示"),"browser prefill includes the entered description");
+                        }catch(Exception error){failure=error;}finally{form.Close();}
+                        break;
+                    }
+                };
+                timer.Start();Activate(row);
+            }
+            if(failure!=null)throw failure;Check(shown,"entry opens the modal feedback form");Check(!(bool)Field(Popup,"ignoreDeactivate"),"modal deactivation guard is released");
+        }
         internal void Key(Keys key){Call(Popup,"ProcessCmdKey",Message.Create(IntPtr.Zero,0,IntPtr.Zero,IntPtr.Zero),key);}
         internal void Click(PopupControl row){
             float scale=(float)Field(Popup,"dpiScale");var point=new MouseEventArgs(MouseButtons.Left,1,(int)((row.Rect.X+row.Rect.Width/2)*scale),(int)((row.Rect.Y+row.Rect.Height/2)*scale),0);
@@ -87,18 +109,18 @@ static class UiMenusTests {
             Check(f.Navigation.Page==page&&PopupPages.Title(f.Navigation)=="设备没显示？","keyboard entry opens the titled help page");
             var rows=Rows(f.Owner,page);
             Check(!rows.Exists(delegate(PopupControl row){return row.Text=="当前状态";}),"more-options help omits an empty-state reason when devices are visible");
-            Check(Texts(rows)=="请确认接收器已插好，设备已开机并唤醒|重新识别设备|查看支持清单|复制诊断摘要|反馈到 GitHub|反馈不代表一定能适配","help rows use the exact copy and order");
-            var feedback=rows.Find(delegate(PopupControl row){return row.Text=="反馈到 GitHub";});
-            Check(feedback.Id==258&&feedback.Detail=="提交前可检查内容\n提交需要 GitHub 账号","help shares feedback action 258 and its review/account description");
+            Check(Texts(rows)=="请确认接收器已插好，设备已开机并唤醒|重新识别设备|查看支持清单|复制诊断摘要|反馈问题|反馈不代表一定能适配","help rows use the exact copy and order");
+            var feedback=rows.Find(delegate(PopupControl row){return row.Text=="反馈问题";});
+            Check(feedback.Id==258&&feedback.Detail=="提交需要 GitHub 账号","help shares feedback action 258 and the empty-relay account description");
             Check(rows[1].Information&&rows[6].Information,"help explanations are static text");
             int reads=f.Reads;f.Activate(f.Find("重新识别设备"));Pump(delegate{return !f.Owner.IsRefreshing;});
             Check(f.Reads>reads&&f.Find("重新识别设备").Id==0,"help rediscovery routes through the existing sync-all action");
             f.Activate(f.Find("复制诊断摘要"));Check(f.Copied==f.Owner.DiagnosticSummary()&&f.Find("复制诊断摘要").Id==250,"help copy routes to the same diagnostic summary");
             f.Activate(f.Find("查看支持清单"));Check(f.Opened==SupportUrl,"support action opens only the fixed compatibility URL");
-            f.Activate(feedback);Check(f.Opened==f.Owner.CreateFeedbackReport().IssueUrl&&f.Copied==f.Owner.CreateFeedbackReport().FullText,"help feedback uses the existing sanitized report and browser workflow");
+            f.Feedback(feedback,"device");
             f.Key(Keys.Escape);Check(f.Navigation.Page==PopupPage.More&&(string)Field(f.Popup,"keyboardFocusKey")==entry.StableKey,"Escape returns focus to the originating more-options row");
             f.Page(PopupPage.Diagnostics);f.Activate(f.Find("复制诊断摘要"));Check(f.Copied==f.Owner.DiagnosticSummary(),"original diagnostic copy remains reachable");
-            f.Activate(f.Find("反馈到 GitHub"));Check(f.Opened==f.Owner.CreateFeedbackReport().IssueUrl,"original diagnostic feedback remains reachable");
+            f.Feedback(f.Find("反馈问题"),"other");
             f.Page(PopupPage.Devices);rows=Rows(f.Owner,PopupPage.Devices);Check(rows[rows.Count-1].Text=="设备没显示？","help entry is the last management row");
             f.Activate(f.Find("设备没显示？"));Check(f.Navigation.Page==page,"device management routes to the same help page");f.Activate(f.ById(6));Check(f.Navigation.Page==PopupPage.Devices,"help back returns to management");
         }

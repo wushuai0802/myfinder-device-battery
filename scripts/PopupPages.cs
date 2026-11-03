@@ -176,13 +176,13 @@ namespace AtkBatteryTray {
                 rows.Add(Info("许可证","AGPL-3.0-only"));rows.Add(Info("无担保","按现状提供"));
                 var source=Info("源码",null);source.Detail="https://github.com/\nwushuai0802/\nmyfinder-device-battery";rows.Add(source);
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));
-                var feedbackRow=Row(258,"反馈到 GitHub",null,"info");feedbackRow.Detail="提交前可检查内容\n提交需要 GitHub 账号";rows.Add(feedbackRow);
+                var feedbackRow=Row(258,"反馈问题",null,"info");feedbackRow.Detail=String.IsNullOrEmpty(FeedbackRelay.Url)?"提交需要 GitHub 账号":"在程序内提交，不需要 GitHub 账号";rows.Add(feedbackRow);
             }else if(nav.Page==PopupPage.DeviceMissing) {
                 var layout=WirelessLayout.Build(owner,0,100000);
                 if(layout.All[0].Id=="empty"){var status=Info("当前状态",WirelessLayout.EmptyReason(owner,layout.AllHidden));status.WrapText=true;rows.Add(status);}
                 var explanation=Info("请确认接收器已插好，设备已开机并唤醒",null);explanation.WrapText=true;rows.Add(explanation);
                 rows.Add(Row(0,"重新识别设备",null,"refresh"));rows.Add(Row(259,"查看支持清单",null,"info"));rows.Add(Row(250,"复制诊断摘要",null,"info"));
-                var feedbackRow=Row(258,"反馈到 GitHub",null,"info");feedbackRow.Detail="提交前可检查内容\n提交需要 GitHub 账号";rows.Add(feedbackRow);
+                var feedbackRow=Row(258,"反馈问题",null,"info");feedbackRow.Detail=String.IsNullOrEmpty(FeedbackRelay.Url)?"提交需要 GitHub 账号":"在程序内提交，不需要 GitHub 账号";rows.Add(feedbackRow);
                 rows.Add(Info("反馈不代表一定能适配",null));
             }else if(nav.Page==PopupPage.Devices) {
                 var devices=WirelessLayout.Build(owner,0,100000,true).All;

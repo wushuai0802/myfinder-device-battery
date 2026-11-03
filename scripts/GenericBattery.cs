@@ -68,6 +68,30 @@ namespace AtkBattery {
                 else throw new InvalidOperationException("Feedback header exceeds URL budget.");
             }
         }}
+        internal FeedbackBrowserSubmission BrowserSubmission(string category,string description,bool includeDiagnostics){
+            if(!FeedbackInput.Valid(category,description))throw new ArgumentException("Invalid feedback input.");
+            description=description.Trim();string prefix="类型："+FeedbackInput.CategoryLabel(category)+"\r\n描述：\r\n";
+            string full=prefix+description+(includeDiagnostics?"\r\n\r\n"+FullText:"");
+            int dc=devices.Count,sc=suppressed.Count,uc=unadapted.Count,hc=health.Count;bool truncated=false;
+            while(true){
+                string tail=includeDiagnostics?"\r\n\r\n"+Render(dc,sc,uc,hc,truncated):"";
+                string marker=truncated?"\r\n[已截断；完整内容已复制]":"";
+                string url=EncodeUrl(Title,prefix+description+tail+marker);
+                if(url.Length<=UrlLimit)return new FeedbackBrowserSubmission(full,url);
+                truncated=true;
+                if(includeDiagnostics&&(hc>0||uc>0||sc>0||dc>0)){
+                    if(hc>0)hc=0;else if(uc>0)uc--;else if(sc>0)sc--;else dc--;
+                }else{
+                    // The full text is already retained for the clipboard. Bound only the prefill,
+                    // preserving UTF-16 pairs and the existing diagnostic reduction order.
+                    tail=includeDiagnostics?"\r\n\r\n"+Render(dc,sc,uc,hc,true):"";
+                    marker="\r\n[已截断；完整内容已复制]";
+                    int low=0,high=description.Length;
+                    while(low<high){int mid=(low+high+1)/2;if(EncodeUrl(Title,prefix+FeedbackInput.Prefix(description,mid)+tail+marker).Length<=UrlLimit)low=mid;else high=mid-1;}
+                    return new FeedbackBrowserSubmission(full,EncodeUrl(Title,prefix+FeedbackInput.Prefix(description,low)+tail+marker));
+                }
+            }
+        }
     }
 
     [DataContract] public sealed class WirelessDpi {

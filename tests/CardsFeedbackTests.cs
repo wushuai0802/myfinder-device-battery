@@ -40,7 +40,7 @@ static class CardsFeedbackTests {
             Check(alerts==1&&!policy.IsLatched(B),"only visible current card alerts once");
             var rows=PopupPages.Build(owner,new PopupNavigation {Page=PopupPage.Diagnostics,VisibleChoices=100},false);
             int copy=rows.FindIndex(delegate(PopupControl row){return row.Id==250;});
-            Check(copy>=0&&rows[copy+1].Text=="反馈到 GitHub","feedback immediately follows copy diagnostics");
+            Check(copy>=0&&rows[copy+1].Text=="反馈问题","feedback form immediately follows copy diagnostics");
             var page=new PopupNavigation {Page=PopupPage.Diagnostics,Offset=100};rows=PopupPages.Build(owner,page,false);
             Check(rows.Exists(delegate(PopupControl row){return row.Id==258;}),"feedback is reachable on final diagnostics page");
             if(args.Length>0){var size=PopupPages.SizeFor(rows);using(var bitmap=new Bitmap(size.Width,size.Height))using(var graphics=Graphics.FromImage(bitmap)){PopupPages.Paint(graphics,owner,page,rows,false,-1,-1,-1);bitmap.Save(Path.Combine(Path.GetFullPath(args[0]),"feedback-page.png"));}}

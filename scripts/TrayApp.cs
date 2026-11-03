@@ -80,6 +80,7 @@ namespace AtkBatteryTray {
         int presentationEpoch;
         int presentationDepth;
         bool ignoreDeactivate;
+        bool feedbackModal;
         readonly System.Windows.Forms.Timer deactivateRelease=new System.Windows.Forms.Timer();
         bool deferredDeactivation;
         int deactivationEpoch;
@@ -287,7 +288,7 @@ namespace AtkBatteryTray {
                 else if(id==7||id==8){navigation.Offset=control.PageOffset>=0?control.PageOffset:Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
                 else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
                 else if(id==250){copyText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
-                else if(id==258){navigation.Notice=owner.OpenFeedback(copyText,openLink);Invalidate();return;}
+                else if(id==258){ShowFeedback();return;}
                 else if(id==259){openLink("https://github.com/wushuai0802/myfinder-device-battery/blob/main/docs/compatibility.md");return;}
                 else return;
                 owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
@@ -295,6 +296,12 @@ namespace AtkBatteryTray {
         }
         void SchedulePendingHint(){feedbackTimer.Stop();feedbackTimer.Start();}
         internal void Notice(string text){navigation.Notice=text;Invalidate();}
+        void ShowFeedback(){
+            using(var dialog=new FeedbackForm(owner.CreateFeedbackReport(),navigation.Page==PopupPage.DeviceMissing,Style.Dark,copyText,openLink)){
+                feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
+                try{dialog.ShowDialog(this);}finally{feedbackModal=false;ignoreDeactivate=false;}
+            }
+        }
         void EditAlias(bool mouse,string deviceKey=null) {
             bool dark=Style.Dark;var pref=DeviceSettings.Current;
             using(var dialog=new Form {Text=deviceKey!=null?"设备显示名称":mouse?"鼠标显示名称":"耳机显示名称",ShowInTaskbar=false,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false,StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(280,106),BackColor=dark?Color.FromArgb(41,45,52):Color.FromArgb(250,251,253),ForeColor=PopupPages.Foreground(dark),Font=new Font("Microsoft YaHei UI",9)})
@@ -401,7 +408,7 @@ namespace AtkBatteryTray {
         int BeginPresentation(){presentationEpoch++;ignoreDeactivate=true;CancelDeferredDeactivation();return presentationEpoch;}
         void QueueOpeningGuardRelease(int epoch) {
             if(presentationDepth!=0||!LivePopupHandle||epoch!=presentationEpoch)return;IntPtr handle=Handle;
-            BeginInvoke((MethodInvoker)delegate {if(LivePopupHandle&&epoch==presentationEpoch&&Handle==handle)ignoreDeactivate=false;});
+            BeginInvoke((MethodInvoker)delegate {if(LivePopupHandle&&epoch==presentationEpoch&&Handle==handle&&!feedbackModal)ignoreDeactivate=false;});
         }
         protected override void OnHandleDestroyed(EventArgs e) {
             presentationEpoch++;CancelDeferredDeactivation();base.OnHandleDestroyed(e);
@@ -1205,13 +1212,8 @@ namespace AtkBatteryTray {
             return new FeedbackReport(AppRuntime.Version,Environment.OSVersion.Version.ToString(),cards,suppressedDevices,unadaptedDevices,GenericHealth,privateValues);
         }
         internal string OpenFeedback(Action<string> copy=null,Action<string> open=null){
-            const string review="提交前可检查内容；提交需要 GitHub 账号。";
-            var report=CreateFeedbackReport();bool copied=false;
-            try{(copy??Clipboard.SetText)(report.FullText);copied=true;}catch(Exception){}
-            try{
-                if(open!=null)open(report.IssueUrl);else Process.Start(new ProcessStartInfo(report.IssueUrl) {UseShellExecute=true});
-                return (copied?"完整报告已复制。":"剪贴板不可用，请检查浏览器预填内容。")+review;
-            }catch(Exception){return (copied?"无法打开浏览器，完整报告已复制。":"无法打开浏览器或复制报告，请稍后重试。")+review;}
+            var report=CreateFeedbackReport();
+            return new FeedbackBrowserSubmission(report.FullText,report.IssueUrl).Open(copy??Clipboard.SetText,open??delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});});
         }
         internal static bool ShowHeadset(HeadsetReading headset,AudioReading audio) {
             return VisualDesign.ShouldShowHeadset(headset);
