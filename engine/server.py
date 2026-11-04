@@ -7,6 +7,7 @@ Verified Logitech DPI controls share the same bounded, identity-scoped readers.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib
 import json
@@ -18,6 +19,8 @@ import time
 from collections import Counter
 from dataclasses import asdict, replace
 from datetime import datetime, timezone, timedelta
+
+from device_pack import EMPTY_PACK, load_pack, parse_pack
 
 PROVIDERS = (
     ("razer", "RazerProvider"), ("audeze", "AudezeProvider"),
@@ -249,6 +252,11 @@ def normalise(status, previous, now, cached=False):
     quality = "cached" if not acquired else "system_property" if system else "device_reply"
     from catalog import verification_for
     verification_level, verification_label = verification_for(status.source)
+    pack_model = status.model_source == "pack"
+    if pack_model:
+        from catalog import load_catalog
+        verification_level = status.verification_level or "C"
+        verification_label = load_catalog()["levels"].get(verification_level, "")
     return {
         "id": public_id(status.key), "legacyId": public_id(status.legacy_key) if status.legacy_key else None,
         "physicalId": public_id(status.physical_id) if status.physical_id else None,
@@ -268,7 +276,9 @@ def normalise(status, previous, now, cached=False):
         "refreshScope": (status.refresh_scope if status.refresh_scope in ("device", "provider")
                          else "provider" if system or status.source in ("logitech", "standard_hid")
                          else "device" if status.physical_id else "provider"),
-        "dpi": normalise_dpi(getattr(status, "dpi", None) or old.get("dpi"),
+        **({"modelSource": "pack", "packVersion": status.pack_version,
+            "modelReference": status.model_reference} if pack_model else {}),
+        "dpi": None if pack_model else normalise_dpi(getattr(status, "dpi", None) or old.get("dpi"),
                              usable=bool(getattr(status, "dpi", None)) and online and not cached
                              and status.source == "logitech" and kind_of(status) == "mouse"),
     }
@@ -288,12 +298,15 @@ def provider_class(name):
     return getattr(importlib.import_module("providers." + name), dict(PROVIDERS)[name])
 
 
-def scoped_poll(provider, inventory, physical_id):
+def scoped_poll(provider, inventory, physical_id, device_pack=EMPTY_PACK):
     """Restrict the existing protocol to one physical receiver; retain slots."""
     from providers import hidlist
     original, paths = hidlist.enumerate, hidlist.interface_paths
     selected = [d for d in inventory if d.get("physical_id") == physical_id
                 and (d.get("vendor_id"), d.get("product_id")) not in NATIVE]
+    selected = device_pack.select_inventory(getattr(provider, "name", ""), selected)
+    if device_pack.loaded and not selected:
+        return []
     hidlist.enumerate = lambda vid=0: [d for d in selected if not vid or d.get("vendor_id") == vid]
     hidlist.interface_paths = lambda: frozenset((d["path"].decode("utf-8", "replace") if isinstance(d["path"], bytes) else d["path"]).lower() for d in selected)
     try:
@@ -318,6 +331,7 @@ def reader_child():
     topology_paths = object()
     topology_at = -1e20
     inventory = []
+    device_pack = EMPTY_PACK
     for line in sys.stdin.buffer:
         if len(line) > MAX_LINE:
             break
@@ -326,6 +340,13 @@ def reader_child():
             command = json.loads(line, object_hook=wire_decode)
             sequence = command.get("sequence")
             action = command.get("action")
+            document = command.get("devicePack", "")
+            if document != device_pack.document:
+                candidate_pack = parse_pack(document) if document else EMPTY_PACK
+                if document and not candidate_pack.loaded:
+                    raise ValueError("invalid child pack")
+                device_pack = candidate_pack
+                instances.clear()
             if action == "smoke":
                 from catalog import validate_catalog
                 validate_catalog()
@@ -361,17 +382,18 @@ def reader_child():
                 if key not in instances:
                     if len(instances) >= 128:
                         instances.clear()
-                    instances[key] = provider_class(name)()
+                    instances[key] = (provider_class(name)(device_pack=device_pack) if name == "razer"
+                                      else provider_class(name)())
                 provider = instances[key]
                 if name == "bluetooth":
                     statuses = provider.poll()
                     misses = getattr(provider, "_misses", {})
                     statuses = [replace(s, cached=s.cached or bool(misses.get(s.key, 0))) for s in statuses]
                 else:
-                    statuses = scoped_poll(provider, command.get("inventory", []), physical)
+                    statuses = scoped_poll(provider, command.get("inventory", []), physical, device_pack)
                 candidates = getattr(provider, "candidate_count", None)
                 if candidates is None:
-                    candidates = recognized_candidate_count(name, command.get("inventory", []))
+                    candidates = recognized_candidate_count(name, command.get("inventory", []), device_pack)
                 response = {"statuses": [asdict(s) for s in statuses[:MAX_DEVICES]], "checkedAtUtc": utcnow(),
                             "candidateCount": candidates}
             elif action == "set_dpi":
@@ -384,6 +406,11 @@ def reader_child():
                 selected = [d for d in command.get("inventory", [])
                             if d.get("physical_id") == command.get("physicalId")
                             and d.get("vendor_id") == 0x046D]
+                selected = device_pack.select_inventory("logitech", selected)
+                if device_pack.loaded and (not selected or any(
+                        e.provider == "logitech" and any(e.match.matches(d) for d in selected)
+                        for e in device_pack.entries)):
+                    raise ValueError("pack writes forbidden")
                 response = set_device_dpi(selected, command.get("target"), command.get("dpi"),
                                           command.get("expectedDpi"), command.get("targetToken"))
             else:
@@ -394,7 +421,7 @@ def reader_child():
         print(json.dumps(response, ensure_ascii=True, default=wire_encode), flush=True)
 
 
-def recognized_candidate_count(name, inventory):
+def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     """Only explicit existing maps are evidence of a supported candidate.
 
     Unknown PID within a brand is not a broken supported device. This affects
@@ -403,6 +430,7 @@ def recognized_candidate_count(name, inventory):
     if name in ("bluetooth", "standard_hid"):
         return 0
     module = importlib.import_module("providers." + name)
+    inventory = device_pack.select_inventory(name, inventory)
     pids = set()
     for field in ("PIDS", "KNOWN", "DONGLES", "RECEIVERS", "HEADSETS", "WIRED", "BRAGI_PIDS", "MOUSE_MODELS", "MODELS", "CLASSIC_MODELS"):
         value = getattr(module, field, ())
@@ -415,17 +443,24 @@ def recognized_candidate_count(name, inventory):
         value = getattr(module, field, None)
         if type(value) is int:
             pids.add(value)
+    pids.update(e.match.product_id for e in device_pack.entries if e.provider == name)
     return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory if d.get("product_id") in pids})
 
 
 class BatteryEngine:
-    def __init__(self, providers=None, include_native=False, package_smoke=False, process_factory=None):
+    def __init__(self, providers=None, include_native=False, package_smoke=False, process_factory=None,
+                 device_pack=None):
         from providers import hidlist
         from isolation import ReaderProcess
         self._hidlist = hidlist
         self._direct = providers is not None
         self.providers = providers if providers is not None else [name for name, _ in PROVIDERS] + ["standard_hid"]
         self.package_smoke = package_smoke
+        self.device_pack = device_pack or EMPTY_PACK
+        if self._direct and self.device_pack.loaded:
+            for provider in self.providers:
+                if provider.name == "razer":
+                    provider.configure_pack(self.device_pack)
         self.previous = {}
         self.unadapted = []
         self._inventory_groups = {}
@@ -454,6 +489,10 @@ class BatteryEngine:
         self._bluetooth_slot = None
         for child in self.children:
             child.close()
+
+    def _reader_command(self, command):
+        # Carry the immutable startup snapshot, including after child restarts.
+        return dict(command, devicePack=self.device_pack.document) if self.device_pack.loaded else command
 
     def _snapshot(self, request_id=0, generation=0, complete=True, unadapted_inventory=None):
         live = {}
@@ -514,6 +553,7 @@ class BatteryEngine:
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
         return {"schema": 2, "requestId": request_id, "generation": generation, "complete": complete,
+                "ready": True, "devicePack": self.device_pack.diagnostic(),
                 "devices": devices, "nativeMousePresent": self.native_mouse,
                 "unadapted": self.unadapted,
                 "suppressed": suppressed,
@@ -576,7 +616,7 @@ class BatteryEngine:
         from isolation import IsolationError
         child = self.children[slot]
         try:
-            child.start(command, budget)
+            child.start(self._reader_command(command), budget)
             while True:
                 result = child.result()
                 if result is not None:
@@ -644,6 +684,7 @@ class BatteryEngine:
         target = self.dpi_targets.get(device_id)
         physical = self.physical_by_id.get(device_id)
         if (self._direct or self.package_smoke or self.provider_by_id.get(device_id) != "logitech"
+                or device.get("modelSource") == "pack"
                 or not physical or not target or not device.get("online")
                 or dpi.get("canSet") is not True or dpi.get("targetToken") != target_token):
             return finish("stale_target")
@@ -666,6 +707,7 @@ class BatteryEngine:
                 return finish("invalid_topology")
             selected = [d for d in inventory if d.get("physical_id") == physical
                         and d.get("vendor_id") == 0x046D]
+            selected = self.device_pack.select_inventory("logitech", selected)
             if not selected:
                 return finish("disconnected")
         except Exception:
@@ -706,7 +748,13 @@ class BatteryEngine:
                     continue
                 key = provider.name
                 try:
-                    statuses = provider.poll()
+                    original = self._hidlist.enumerate
+                    if self.device_pack.loaded:
+                        self._hidlist.enumerate = lambda vid=0: self.device_pack.select_inventory(provider.name, original(vid))
+                    try:
+                        statuses = provider.poll()
+                    finally:
+                        self._hidlist.enumerate = original
                     misses = getattr(provider, "_misses", {})
                     self._accept(key, provider.name, [replace(s, cached=s.cached or bool(misses.get(s.key, 0))) for s in statuses], utcnow())
                 except Exception:
@@ -827,7 +875,7 @@ class BatteryEngine:
                         break
                     self._deferred.discard(reader_key)
                     try:
-                        child.start(command, budget if action == "query" else min(budget, max(0.01, deadline - time.monotonic())))
+                        child.start(self._reader_command(command), budget if action == "query" else min(budget, max(0.01, deadline - time.monotonic())))
                         self._affinity[reader_key] = slot
                         if name == "bluetooth":
                             self._bluetooth_slot = slot
@@ -886,6 +934,9 @@ class BatteryEngine:
                             matches = []
                             for group_id, infos in groups.items():
                                 if target_physical and group_id != target_physical:
+                                    continue
+                                infos = self.device_pack.select_inventory(provider_name, infos)
+                                if not infos:
                                     continue
                                 vids = {d.get("vendor_id") for d in infos}
                                 if provider_name != "standard_hid" and not vids.intersection(PROVIDER_VIDS.get(provider_name, ())):
@@ -981,12 +1032,18 @@ def main():
     # legacy code page. utf-8-sig also accepts a host's optional initial BOM.
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8-sig")
-    if "--reader-child" in sys.argv:
+    parser = argparse.ArgumentParser(description="Private battery reader")
+    parser.add_argument("--device-pack")
+    parser.add_argument("--reader-child", action="store_true")
+    parser.add_argument("--package-smoke", action="store_true")
+    parser.add_argument("--once", action="store_true")
+    args = parser.parse_args()
+    if args.reader_child:
         reader_child()
         return
-    engine = BatteryEngine(package_smoke="--package-smoke" in sys.argv)
+    engine = BatteryEngine(package_smoke=args.package_smoke, device_pack=load_pack(args.device_pack))
     try:
-        if "--once" in sys.argv:
+        if args.once:
             print(json.dumps(engine.poll(wait_bluetooth=True), ensure_ascii=True), flush=True)
             return
         for line in sys.stdin:
@@ -999,7 +1056,7 @@ def main():
                 if command.get("command") == "exit":
                     break
                 action = command.get("command")
-                if action not in ("poll", "set_dpi"):
+                if action not in ("poll", "set_dpi", "ready"):
                     continue
                 request_id, generation = command.get("requestId", 0), command.get("generation", 0)
                 if type(request_id) is not int or type(generation) is not int or min(request_id, generation) < 0:
@@ -1011,7 +1068,10 @@ def main():
                         or "physicalId" in command and (physical is None or "deviceId" in command or action != "poll")):
                     continue
                 emit = lambda result: print(json.dumps(result, ensure_ascii=True), flush=True)
-                if action == "set_dpi":
+                if action == "ready":
+                    # Explicit startup probe; does not enumerate/open hardware.
+                    result = engine._snapshot(request_id, generation)
+                elif action == "set_dpi":
                     result = engine.set_dpi(target, command.get("dpi"), command.get("targetToken"),
                                             command.get("expectedDpi"), request_id, generation)
                 else:
@@ -1022,6 +1082,7 @@ def main():
                 emit(result)
             except Exception:
                 print(json.dumps({"schema": 2, "requestId": 0, "generation": 0, "complete": True,
+                                  "ready": True, "devicePack": engine.device_pack.diagnostic(),
                                   "error": "Battery query did not complete", "devices": [],
                                   "errors": ["manager: invalid_request"]}), flush=True)
     finally:

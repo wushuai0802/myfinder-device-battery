@@ -40,6 +40,10 @@ class DeviceStatus:
     refresh_scope: str = ""      # device only when this reader queries one unit
     dpi: Optional[dict] = None   # independently timestamped public DPI evidence
     dpi_target: Optional[dict] = None  # internal exact identity; never public JSON
+    model_source: str = "builtin"  # definition provenance; source stays the provider
+    pack_version: Optional[int] = None
+    verification_level: str = ""   # pack row's evidence level, defaults to C
+    model_reference: str = ""      # pack's issue/evidence reference, not a command
 
 
 class Provider:

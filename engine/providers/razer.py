@@ -18,6 +18,7 @@ OpenRazer use.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 import hid
@@ -25,119 +26,8 @@ import hid
 from . import blackshark, blackshark2020, hidlist
 from .base import DeviceStatus, Provider, hexdump, log
 
-RAZER_VID = 0x1532
-
-# PID -> (name, preferred transaction id)
-#
-# The mice come from OpenRazer's razer_attr_read_charge_level() (driver/razermouse_driver.c,
-# commit 6820f9da16): every PID there that is a wireless mouse, its receiver or the same
-# mouse on its cable, with the transaction id OpenRazer uses for it. Left out on purpose:
-# 0x00CB Basilisk V3 35K (a wired-only mouse) and 0x0095 Orochi V2 over Bluetooth
-# (Windows' own Bluetooth battery value already covers it). tests/test_razer.py holds a
-# copy of that OpenRazer list and checks this table against it.
-KNOWN = {
-    0x0528: ("Razer BlackShark V2 Pro (2020)", 0x3F),
-    0x0555: ("Razer BlackShark V2 Pro (2023)", 0x3F),
-    0x0556: ("Razer BlackShark V2 Pro (2023)", 0x3F),
-    0x0557: ("Razer BlackShark V2 Pro (2023)", 0x3F),
-    0x00A4: ("Razer Mouse Dock Pro", 0x1F),
-    # ---- keyboards with a battery, from OpenRazer's keyboard driver (razerkbd_driver.c:
-    # razer_attr_read_charge_level). The wireless id is the HyperSpeed receiver, the
-    # wired id the keyboard on its cable (charging).
-    0x0290: ("Razer DeathStalker V2 Pro", 0x9F),
-    0x0292: ("Razer DeathStalker V2 Pro", 0x1F),
-    0x0296: ("Razer DeathStalker V2 Pro TKL", 0x9F),
-    0x0298: ("Razer DeathStalker V2 Pro TKL", 0x1F),
-    0x0271: ("Razer BlackWidow V3 Mini HyperSpeed", 0x9F),
-    0x0258: ("Razer BlackWidow V3 Mini HyperSpeed", 0x1F),
-    0x02BA: ("Razer BlackWidow V4 Mini HyperSpeed", 0x9F),
-    0x02B9: ("Razer BlackWidow V4 Mini HyperSpeed", 0x1F),
-    0x02D5: ("Razer BlackWidow V4 Tenkeyless HyperSpeed", 0x9F),
-    0x02D7: ("Razer BlackWidow V4 Tenkeyless HyperSpeed", 0x1F),
-    # ---- mice, from OpenRazer (wired / wireless PIDs of one mouse share a name)
-    0x001F: ("Razer Naga Epic", 0xFF),
-    0x0024: ("Razer Mamba (2012)", 0xFF),
-    0x0025: ("Razer Mamba (2012)", 0xFF),
-    0x0032: ("Razer Ouroboros", 0xFF),
-    0x003E: ("Razer Naga Epic Chroma", 0xFF),
-    0x003F: ("Razer Naga Epic Chroma", 0xFF),      # its dock
-    0x0044: ("Razer Mamba", 0xFF),
-    0x0045: ("Razer Mamba", 0xFF),
-    0x0059: ("Razer Lancehead", 0x3F),
-    0x005A: ("Razer Lancehead", 0x3F),
-    0x0062: ("Razer Atheris", 0x1F),
-    0x006F: ("Razer Lancehead Wireless", 0x1F),
-    0x0070: ("Razer Lancehead Wireless", 0x1F),
-    0x0072: ("Razer Mamba Wireless", 0x3F),
-    0x0073: ("Razer Mamba Wireless", 0x3F),
-    0x0077: ("Razer Pro Click", 0x1F),
-    0x0080: ("Razer Pro Click", 0x1F),
-    0x007A: ("Razer Viper Ultimate", 0xFF),
-    0x007B: ("Razer Viper Ultimate", 0xFF),
-    0x007C: ("Razer DeathAdder V2 Pro", 0x3F),
-    0x007D: ("Razer DeathAdder V2 Pro", 0x3F),
-    0x0083: ("Razer Basilisk X HyperSpeed", 0xFF),
-    0x0086: ("Razer Basilisk Ultimate", 0x1F),
-    0x0088: ("Razer Basilisk Ultimate", 0x1F),
-    0x008F: ("Razer Naga Pro", 0x1F),
-    0x0090: ("Razer Naga Pro", 0x1F),
-    0x0094: ("Razer Orochi V2", 0x1F),
-    0x009A: ("Razer Pro Click Mini", 0x1F),
-    0x009C: ("Razer DeathAdder V2 X HyperSpeed", 0x1F),
-    0x009E: ("Razer Viper Mini SE", 0x1F),
-    0x009F: ("Razer Viper Mini SE", 0x1F),
-    0x00A5: ("Razer Viper V2 Pro", 0x1F),
-    0x00A6: ("Razer Viper V2 Pro", 0x1F),
-    0x00A7: ("Razer Naga V2 Pro", 0x1F),
-    0x00A8: ("Razer Naga V2 Pro", 0x1F),
-    0x00AA: ("Razer Basilisk V3 Pro", 0x1F),
-    0x00AB: ("Razer Basilisk V3 Pro", 0x1F),
-    0x00AF: ("Razer Cobra Pro", 0x1F),
-    0x00B0: ("Razer Cobra Pro", 0x1F),
-    0x00B3: ("Razer HyperPolling Dongle", 0x1F),
-    0x00B4: ("Razer Naga V2 HyperSpeed", 0x1F),
-    0x00B6: ("Razer DeathAdder V3 Pro", 0x1F),
-    0x00B7: ("Razer DeathAdder V3 Pro", 0x1F),
-    0x00B8: ("Razer Viper V3 HyperSpeed", 0x1F),
-    0x00B9: ("Razer Basilisk V3 X HyperSpeed", 0x1F),
-    0x00BE: ("Razer DeathAdder V4 Pro", 0x1F),
-    0x00BF: ("Razer DeathAdder V4 Pro", 0x1F),
-    0x00C0: ("Razer Viper V3 Pro", 0x1F),
-    0x00C1: ("Razer Viper V3 Pro", 0x1F),
-    0x00C2: ("Razer DeathAdder V3 Pro", 0x1F),
-    0x00C3: ("Razer DeathAdder V3 Pro", 0x1F),
-    0x00C4: ("Razer DeathAdder V3 HyperSpeed", 0x1F),
-    0x00C5: ("Razer DeathAdder V3 HyperSpeed", 0x1F),
-    0x00C7: ("Razer Pro Click V2 Vertical Edition", 0x1F),
-    0x00C8: ("Razer Pro Click V2 Vertical Edition", 0x1F),
-    0x00CC: ("Razer Basilisk V3 Pro 35K", 0x1F),
-    0x00CD: ("Razer Basilisk V3 Pro 35K", 0x1F),
-    0x00D0: ("Razer Pro Click V2", 0x1F),
-    0x00D1: ("Razer Pro Click V2", 0x1F),
-    0x00D3: ("Razer Basilisk Mobile", 0x1F),
-    0x00D4: ("Razer Basilisk Mobile", 0x1F),
-    0x00D6: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
-    0x00D7: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
-
-    # Keyboards with a battery. OpenRazer's RazerBlackWidowV3ProWired (0x025A) lists
-    # get_battery/is_charging, and the wireless model (0x025C) inherits that class.
-    # razer_attr_read_charge_level() reads both with razer_chroma_misc_get_battery_level()
-    # - the same 0x07:0x80 / 0x07:0x84 commands this provider already sends - and sets
-    # the transaction id to 0x9f for the wireless keyboards of this generation and 0x3f
-    # for their wired twins. 0x3f is not a value this keyboard answers on: the wired id
-    # goes only to 0x025A.
-    0x025A: ("Razer BlackWidow V3 Pro", 0x3F),
-    0x025C: ("Razer BlackWidow V3 Pro", 0x9F),
-}
-
-# The keyboards above take the commands on one USB interface: OpenRazer sends them with
-# wIndex = report_index to the interface (USB_RECIP_INTERFACE), in
-# razer_get_report_params(). That interface is asked first; the others stay a fallback.
-KEYBOARD_INTERFACE = {
-    0x0290: 2, 0x0296: 2, 0x02D5: 2,
-    0x0292: 3, 0x0298: 3, 0x02D7: 3,
-    0x0271: 3, 0x0258: 3, 0x02BA: 3, 0x02B9: 3,
-}
+from .razer_profiles import RAZER_VID, KNOWN, KEYBOARD_INTERFACE
+from .profiles import builtins, profiles
 
 TRANSACTION_IDS = (0x1F, 0x3F, 0xFF, 0x9F, 0x08)
 
@@ -215,12 +105,30 @@ class _Cand:
 class RazerProvider(Provider):
     name = "razer"
 
-    def __init__(self):
+    def __init__(self, device_pack=None):
         self._cache: Dict[Tuple[int, str], _Cand] = {}
         self._dead: Dict[bytes, float] = {}   # interfaces known not to respond
         self._diag: List[str] = []
         self._failing: Dict[str, str] = {}    # key -> reason of the ongoing failure
         self._last: Dict[str, Tuple[int, bool, float]] = {}   # last good level per device
+        self.configure_pack(device_pack)
+
+    def configure_pack(self, device_pack):
+        from device_pack import EMPTY_PACK
+        self.device_pack = device_pack or EMPTY_PACK
+        self._pack_entries = {e.match.product_id: e for e in self.device_pack.entries
+                              if e.provider == self.name}
+        self._profiles = {(p.name, p.revision): p for p in profiles() if p.provider == self.name}
+        self._known = {d.product_id: (d.name, dict(self._profiles[d.profile, d.profile_rev].parameters)["transaction_id"])
+                       for d in builtins() if d.provider == self.name}
+        for pid, entry in self._pack_entries.items():
+            self._known[pid] = (entry.name, dict(self._profiles[entry.profile, entry.profile_rev].parameters)["transaction_id"])
+        self._known = {pid: row for pid, row in self._known.items()
+                       if not self.device_pack.is_disabled(self.name, RAZER_VID, pid)}
+        self._cache.clear()
+        self._dead.clear()
+        self._last.clear()
+        self._failing.clear()
 
     # ---- low level -------------------------------------------------------
     def _send(self, dev, req: bytes, tid: int) -> bool:
@@ -316,7 +224,7 @@ class RazerProvider(Provider):
         another PID of the same model answers in the same poll. Two live icons stay: that
         is two mice of the same model, one on the receiver and one on the cable."""
         out = self._poll_devices()
-        models = {name for name, _tid in KNOWN.values()}
+        models = {name for name, _tid in self._known.values()}
         live: Dict[str, set] = {}       # model name -> PIDs that answered (key "razer:<pid>:...")
         for s in out:
             if s.online and s.name in models:
@@ -336,6 +244,12 @@ class RazerProvider(Provider):
         groups: Dict[Tuple[int, str], List[dict]] = {}
         for d in infos:
             pid = d["product_id"]
+            if self.device_pack.is_disabled(self.name, RAZER_VID, pid):
+                self._diag.append(f"  disabled: razer {RAZER_VID:04x}:{pid:04x}")
+                continue
+            pack_entry = self._pack_entries.get(pid)
+            if pack_entry and not pack_entry.match.matches(dict(d, vendor_id=RAZER_VID)):
+                continue
             serial = d.get("serial_number") or ""
             groups.setdefault((pid, serial), []).append(d)
 
@@ -356,17 +270,18 @@ class RazerProvider(Provider):
 
         out: List[DeviceStatus] = []
         for (pid, serial), ifaces in groups.items():
-            name, pref_tid = KNOWN.get(pid, (None, None))
+            pack_entry = self._pack_entries.get(pid)
+            name, pref_tid = self._known.get(pid, (None, None))
             if not name:
                 name = (ifaces[0].get("product_string") or f"Razer {pid:04x}").strip()
             key = f"razer:{pid:04x}:{serial}"
-            kind = "keyboard" if pid in KEYBOARD_INTERFACE else ""
+            kind = pack_entry.kind if pack_entry else "keyboard" if pid in KEYBOARD_INTERFACE else ""
             diag_from = len(self._diag)
             self._diag.append(f"[Razer] {name} pid={pid:04x}, interfaces: {len(ifaces)}")
             if pid == blackshark2020.CABLE_PID:
                 self._diag.append("  skipped: 2020 charging cable; battery is read from receiver 0528")
                 continue
-            if not maybe_wireless(pid, name):
+            if not pack_entry and not maybe_wireless(pid, name):
                 self._diag.append("  skipped: not a known wireless device")
                 continue
             if pid == 0x053A:
@@ -375,8 +290,12 @@ class RazerProvider(Provider):
                 # providers/barracuda.py reads.
                 self._diag.append("  skipped: read by the barracuda provider (own PA protocol)")
                 continue
-            is_headset = pid in blackshark.PA_PIDS or "blackshark" in name.lower()
-            if pid == blackshark2020.PID:
+            is_headset = (pack_entry.kind == "headset" if pack_entry
+                          else pid in blackshark.PA_PIDS or "blackshark" in name.lower())
+            if pack_entry:
+                # Pack metadata cannot activate PA remote mode or another TID.
+                st = self._poll_group((pid, serial), ifaces, pref_tid, profile_only=True)
+            elif pid == blackshark2020.PID:
                 # Deliberately no generic/PA fallback: the 0528 hardware rejects
                 # their reads/writes. A missing fresh feature reply means no reading.
                 st = self._poll_2020(ifaces)
@@ -432,9 +351,13 @@ class RazerProvider(Provider):
                     approx = (approx or f"{level}%") + ", charging state unknown"
                 out.append(DeviceStatus(key, name, level, bool(charging), True, "razer",
                                         approx=approx, kind=kind))
-        return out
+        return [replace(status, model_source="pack", pack_version=self.device_pack.version,
+                        verification_level=entry.level, model_reference=entry.source,
+                        dpi=None, dpi_target=None)
+                if (entry := self._pack_entries.get(int(status.key.split(":")[1], 16))) else status
+                for status in out]
 
-    def _poll_group(self, gkey, ifaces, pref_tid):
+    def _poll_group(self, gkey, ifaces, pref_tid, profile_only=False):
         cached = self._cache.get(gkey)
         if cached:
             status, level, charging = self._read(cached.path, cached.tid)
@@ -454,7 +377,8 @@ class RazerProvider(Provider):
             return (0 if iface == want else 1, 0 if up in (0x0001, 0xFF00) else 1, iface)
 
         tids = [pref_tid] if pref_tid else []
-        tids += [t for t in TRANSACTION_IDS if t not in tids]
+        if not profile_only:
+            tids += [t for t in TRANSACTION_IDS if t not in tids]
         now = time.time()
         timeout_hit = None
         for d in sorted(ifaces, key=rank):
