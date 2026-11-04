@@ -20,6 +20,18 @@ class ValidationTests(unittest.TestCase):
         self.result["reply"] += " https://github.com/test/repo/issues/1"
         helper.validate(self.result)
 
+    def test_device_feedback_and_colons(self):
+        # Device/usage ID fragments from the failed issue #10 draft in the brief.
+        self.result["reply"] += "\n设备 ID：1D57:FA60，Usage Page/Usage：0001:0002。"
+        self.result["reply"] += "\n提示：请在 12:30 重试。Note: x；VVVV:PPPP、UUUU:UUUU。"
+        helper.validate(self.result)
+        for text in ("ABCD:EF01", "abcd:ef01", "Note:x", "提示: x", "Profile: x", "Metadata: x", "https://github.com/test/repo",
+                     "[说明](https://github.com/test/repo)", '<a href="https://github.com/test/repo">说明</a>'):
+            candidate = copy.deepcopy(self.result)
+            candidate["reply"] += "\n" + text
+            with self.subTest(text=text):
+                helper.validate(candidate)
+
     def test_json_syntax(self):
         for text in ('{"a":1,"a":2}', '{"a":NaN}', '{} trailing', '```json\n{}\n```', '{"a":1,}'):
             with self.subTest(text=text), self.assertRaises(ValueError):
@@ -46,7 +58,15 @@ class ValidationTests(unittest.TestCase):
         for link in ("@someone", "&#64;someone", "https://evil.test", "https://github.com.evil.test/x",
                      "[x](//evil.test)", "[x](www.evil.test)", "[x](https&#58;//evil.test)",
                      "[x](javascript:alert)", '<a href="https://evil.test">x</a>',
-                     "[x]: https://evil.test", "www.evil.test", "ftp://github.com/file"):
+                     "[x]: https://evil.test", "www.evil.test", "ftp://github.com/file",
+                     "//evil.test/x", "custom://evil.test/x", "HTTPS://GITHUB.COM.evil.test/x",
+                     "https://github.com:123/x", "https://github.com@evil.test/x", "www.github.com.evil.test",
+                     "[x](relative)", "[x](github.com)", '[x](https%3A%2F%2Fgithub.com)',
+                     '<img src="relative.png">', "[x]: /relative", "http:evil.test",
+                     "JavaScript:alert(1)", "DATA:text/html,x", "file:C:/temp/x", "MaIlTo:someone",
+                     "VbScRiPt:msgbox(1)", "javascript&#58;alert(1)", "&#100;ata&colon;text/html,x",
+                     "f&#105;le:C:/temp/x", "mailt&#111;&#58;someone", "vbscript&colon;msgbox(1)",
+                     "https&#58;&#47;&#47;evil.test", "&#47;&#47;evil.test", "www&#46;evil.test", "链接：javascript:alert(1)"):
             candidate = copy.deepcopy(self.result)
             candidate["reply"] += "\n" + link
             with self.subTest(link=link), self.assertRaises(ValueError):

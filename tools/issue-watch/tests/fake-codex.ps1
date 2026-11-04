@@ -9,8 +9,13 @@ $record = @{ arguments = @($args); directory = [Environment]::CurrentDirectory;
 if ($args -contains '--help') {
     $record.kind = 'help'
     [IO.File]::AppendAllText((Join-Path $root 'codex.log'), (($record | ConvertTo-Json -Depth 20 -Compress) + "`n"), $utf8)
+    if ($mode.Trim() -eq 'fail-help') {
+        [Console]::Error.Write([IO.File]::ReadAllText((Join-Path $root 'stderr.txt'), $utf8))
+        exit 21
+    }
     switch ($mode.Trim()) {
         'modern' { '--output-schema <FILE>'; '--output-last-message <FILE>' }
+        'fail-model' { '--output-schema <FILE>'; '--output-last-message <FILE>' }
         'short' { '-o <FILE>' }
         default { 'Usage: codex exec [OPTIONS] [PROMPT]' }
     }
@@ -20,6 +25,7 @@ $record.kind = 'model'
 $record.prompt = [Console]::In.ReadToEnd()
 [IO.File]::AppendAllText((Join-Path $root 'codex.log'), (($record | ConvertTo-Json -Depth 20 -Compress) + "`n"), $utf8)
 if ($mode.Trim() -eq 'timeout') {
+    [Console]::Error.WriteLine('timeout diagnostic')
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = (Get-Process -Id $PID).Path
     $start.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 20"'
@@ -36,4 +42,8 @@ if ($outputIndex -ge 0) {
     [IO.File]::WriteAllText($args[$outputIndex + 1], $result, $utf8)
     'Ignored progress output, not final JSON.'
 } else { [Console]::Write($result) }
+if ($mode.Trim() -in @('fail-model', 'fail-legacy')) {
+    [Console]::Error.Write([IO.File]::ReadAllText((Join-Path $root 'stderr.txt'), $utf8))
+    exit 23
+}
 exit 0

@@ -58,26 +58,42 @@ try {
         $entry = [ordered]@{ sourceHash = $revision.sourceHash; issueUpdatedAt = $revision.issueUpdatedAt;
             commentUpdates = @($revision.commentUpdates); status = 'error'; failures = 0;
             sha256 = $null; fileSha256 = $null; lastAttempt = [DateTime]::UtcNow.ToString('o'); error = $null }
+        $resultFile = Join-Path $attempt 'result.json'
+        $step = 'help'
+        $exitCode = 'unavailable'
         try {
             if ($null -eq $help) {
                 $help = Invoke-WatchCommand -Command $CodexPath -Arguments @('exec', '--help') -Directory $cwd -CleanEnvironment -TimeoutSeconds 30
+                $exitCode = 0
                 $schemaFlag = $help -match '(?m)(?<!\S)--output-schema(?=[\s,=]|$)'
                 $outputFlag = if ($help -match '(?m)(?<!\S)--output-last-message(?=[\s,=]|$)') { '--output-last-message' }
                               elseif ($help -match '(?m)(?<!\S)-o(?=[\s,]|$)') { '-o' } else { $null }
                 Write-Output ('Codex help capabilities: output-schema={0}; final-output={1}' -f $schemaFlag, $outputFlag)
+            }
+            if (-not (Test-Path -LiteralPath $knownFile)) {
+                $step = 'index'
+                $exitCode = 'unavailable'
                 Write-Utf8 $knownFile (Invoke-WatchCommand $python @('-I', '-B', (Join-Path $script:ProjectRoot 'engine\known_ids.py'), '--json'))
             }
+            $step = 'prepare'
+            $exitCode = 'unavailable'
             $prompt = Invoke-DraftHelper $python @('prepare', '--issue', $issueFile, '--known', $knownFile, '--template', (Join-Path $PSScriptRoot 'prompt.md'))
-            $resultFile = Join-Path $attempt 'result.json'
+            $exitCode = 0
+            $step = 'model'
             $arguments = @('exec', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=max', '--sandbox', 'read-only', '--skip-git-repo-check', '-C', $cwd)
             if ($schemaFlag) { $arguments += @('--output-schema', (Join-Path $PSScriptRoot 'response.schema.json')) }
             if ($outputFlag) { $arguments += @($outputFlag, $resultFile) }
             $arguments += '-'
-            $raw = Invoke-WatchCommand -Command $CodexPath -Arguments $arguments -Directory $cwd -InputText $prompt -CleanEnvironment -TimeoutSeconds $ModelTimeoutSeconds
-            if (-not $outputFlag) { Write-Utf8 $resultFile $raw }
+            $stdoutPath = if (-not $outputFlag) { $resultFile } else { $null }
+            $exitCode = 'unavailable'
+            [void](Invoke-WatchCommand -Command $CodexPath -Arguments $arguments -Directory $cwd -InputText $prompt -CleanEnvironment -TimeoutSeconds $ModelTimeoutSeconds -OutputPath $stdoutPath)
+            $exitCode = 0
             if (-not (Test-Path -LiteralPath $resultFile)) { throw 'Model final output missing.' }
+            $step = 'render'
+            $exitCode = 'unavailable'
             $stagedDraft = Join-Path $attempt 'draft.md'
             $metadata = Invoke-DraftHelper $python @('render', '--issue', $issueFile, '--result', $resultFile, '--draft', $stagedDraft) | ConvertFrom-Json
+            $exitCode = 0
             $target = Join-Path $DraftDirectory ($key + '.md')
             if (Test-Path -LiteralPath $target) { [IO.File]::Replace($stagedDraft, $target, [NullString]::Value) }
             else { [IO.File]::Move($stagedDraft, $target) }
@@ -89,12 +105,20 @@ try {
             Write-Output ('Issue #{0}: draft ready; SHA-256 {1}' -f $number, $entry.sha256)
             if (-not $NoNotification) { Show-DraftNotification $number }
         } catch {
+            $failure = $_.Exception
+            if ($failure.Data.Contains('WatchExitCode')) { $exitCode = $failure.Data['WatchExitCode'] }
+            $reason = if ($failure.Data.Contains('WatchReason')) { $failure.Data['WatchReason'] } else { $failure.Message }
+            $reason = (Protect-WatchDiagnostic $reason) -replace '[\r\n]+', ' '
             $entry.failures = if ($previous) { [int]$previous.failures + 1 } else { 1 }
             $entry.status = if ($entry.failures -ge 3) { 'manual' } else { 'error' }
-            $entry.error = 'Drafting/validation failed; inspect locally and retry.'
+            $entry.error = $step + ': ' + $reason.Substring(0, [Math]::Min(200, $reason.Length))
             $state.issues[$key] = [pscustomobject]$entry
             Save-WatchState $state $DraftDirectory
-            Write-Warning ('Issue #{0}: {1}; consecutive failures={2}' -f $number, $entry.status, $entry.failures)
+            Write-Warning ('Issue #{0}: step={1}; exit={2}; reason={3}; {4}; consecutive failures={5}' -f $number, $step, $exitCode, $reason, $entry.status, $entry.failures)
+            $stderrTail = if ($failure.Data.Contains('WatchStderr')) { $failure.Data['WatchStderr'] } else { '' }
+            Write-Warning ("stderr (last 2000 characters, redacted):`n" + $stderrTail)
+            try { Save-FailedWatchResult $resultFile $DraftDirectory $number }
+            catch { Write-Warning ('Failed result could not be retained: ' + (Protect-WatchDiagnostic $_.Exception.Message)) }
         } finally { Remove-WatchTemp $attempt $DraftDirectory }
     }
     Write-Output ('Attempted {0} issues (maximum 5).' -f $processed)

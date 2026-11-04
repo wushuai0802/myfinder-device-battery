@@ -26,9 +26,25 @@ function Quote-NativeArgument([string]$Value) {
     return '"' + ([regex]::Replace([regex]::Replace($Value, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1')) + '"'
 }
 
+function Protect-WatchDiagnostic([string]$Text, [int]$TailLength = 0) {
+    $pattern = '(?i)(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_+/-]+={0,2}|[A-Za-z0-9+/_-]{32,}={0,2}|[A-Za-z0-9+/_-]{31}=|[A-Za-z0-9+/_-]{30}=='
+    if ($TailLength -gt 0 -and $Text.Length -gt $TailLength) {
+        $offset = $Text.Length - $TailLength
+        # Include a whole token crossing the boundary so no suffix can leak.
+        foreach ($match in [regex]::Matches($Text, $pattern)) {
+            if ($match.Index -lt $offset -and $match.Index + $match.Length -gt $offset) { $offset = $match.Index; break }
+        }
+        $Text = $Text.Substring($offset)
+    }
+    $safe = [regex]::Replace($Text, $pattern, '[redacted]')
+    if ($TailLength -gt 0 -and $safe.Length -gt $TailLength) { return $safe.Substring($safe.Length - $TailLength) }
+    return $safe
+}
+
 function Invoke-WatchCommand {
     param([string]$Command, [string[]]$Arguments, [string]$Directory = $script:ProjectRoot,
-          [string]$InputText = '', [switch]$CleanEnvironment, [int]$TimeoutSeconds = 60)
+          [string]$InputText = '', [switch]$CleanEnvironment, [int]$TimeoutSeconds = 60,
+          [string]$OutputPath)
     $resolved = Resolve-WatchCommand $Command
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.UseShellExecute = $false
@@ -46,9 +62,9 @@ function Invoke-WatchCommand {
         # with interpolated issue text or cmd.exe command concatenation.
         $literalArgs = @($Arguments | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
         $literalPath = "'" + $resolved.Replace("'", "''") + "'"
-        $wrapper = '[Console]::InputEncoding = [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false); $OutputEncoding = [Console]::OutputEncoding; & ' + $literalPath + ' ' + $literalArgs + '; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }'
+        $wrapper = '$ProgressPreference = ''SilentlyContinue''; [Console]::InputEncoding = [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false); $OutputEncoding = [Console]::OutputEncoding; & ' + $literalPath + ' ' + $literalArgs + '; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }'
         $start.FileName = (Get-Process -Id $PID).Path
-        $start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
+        $start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
     } else {
         $start.FileName = $resolved
         $start.Arguments = (@($Arguments | ForEach-Object { Quote-NativeArgument $_ }) -join ' ')
@@ -85,8 +101,32 @@ function Invoke-WatchCommand {
         $remaining = [Math]::Max(1, ($TimeoutSeconds * 1000) - [int]$timer.ElapsedMilliseconds)
         if (-not $process.WaitForExit($remaining)) { throw 'Command timed out.' }
         if (-not $stdout.Wait(5000) -or -not $stderr.Wait(5000)) { throw 'Command output did not close.' }
+        if ($OutputPath) { Write-Utf8 $OutputPath $stdout.Result }
         if ($process.ExitCode -ne 0) { throw ('Command failed (exit {0}).' -f $process.ExitCode) }
         return $stdout.Result
+    } catch {
+        $failure = $_.Exception
+        # Close the job first so timeout diagnostics also include flushed stderr.
+        $job.Dispose()
+        if (-not $process.HasExited) { [void]$process.WaitForExit(5000) }
+        $failure.Data['WatchExitCode'] = if ($process.HasExited) { $process.ExitCode } else { 'unavailable' }
+        $diagnostic = ''
+        $stderrText = ''
+        try {
+            if ($stderr.Wait(5000)) {
+                $stderrText = $stderr.Result
+                $diagnostic = Protect-WatchDiagnostic $stderrText
+            }
+            if ($OutputPath -and $stdout.Wait(5000)) { Write-Utf8 $OutputPath $stdout.Result }
+        } catch { } # Keep the original error if a pipe or output file also failed.
+        if ($diagnostic -match '(?m)^Draft validation/helper failed: \w+: ([^\r\n]+)') {
+            $failure.Data['WatchReason'] = $Matches[1]
+        } elseif ($failure.Message -like 'Command failed*' -and $diagnostic.Trim()) {
+            $lastLine = ([regex]::Split($diagnostic.Trim(), '\r?\n'))[-1]
+            $failure.Data['WatchReason'] = $lastLine.Substring(0, [Math]::Min(200, $lastLine.Length))
+        }
+        $failure.Data['WatchStderr'] = Protect-WatchDiagnostic $stderrText 2000
+        throw
     } finally {
         $job.Dispose()
         if (-not $process.HasExited) { [void]$process.WaitForExit(5000) }
@@ -123,6 +163,19 @@ function Save-WatchState($State, [string]$Directory) {
         if (Test-Path -LiteralPath $target) { [IO.File]::Replace($staging, $target, [NullString]::Value) }
         else { [IO.File]::Move($staging, $target) }
     } finally { if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Force } }
+}
+
+function Save-FailedWatchResult([string]$Path, [string]$Directory, [int]$Issue) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    $failed = Join-Path ([IO.Path]::GetFullPath($Directory)) 'failed'
+    [void][IO.Directory]::CreateDirectory($failed)
+    $name = '{0}-{1}.json' -f $Issue, [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmssfffffff')
+    [IO.File]::Copy($Path, (Join-Path $failed $name))
+    # Prune only this helper's named artifacts, never unrelated local files.
+    Get-ChildItem -LiteralPath $failed -File -Filter '*.json' |
+        Where-Object { $_.Name -match '^\d+-\d{8}-\d{13}\.json$' } |
+        Sort-Object LastWriteTimeUtc, Name -Descending | Select-Object -Skip 20 |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 }
 
 function New-WatchTemp([string]$Directory) {

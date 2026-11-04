@@ -69,8 +69,12 @@ def validate(value):
     rendered = html.unescape(reply)
     if "@" in rendered:
         raise ValueError("mention in reply")
-    # Reject every URI scheme except http(s); allow only the exact github.com host.
-    for match in re.finditer(r"(?i)([a-z][a-z0-9+.-]*):(?://)?[^\s<>\[\]{}\"']*", rendered):
+    # A colon alone is ordinary prose (Note: x), a time or a VID:PID pair.
+    # Recognise explicit URLs and active/local schemes even without //.
+    for match in re.finditer(
+            r"(?i)(?:[a-z][a-z0-9+.-]*://|(?<![a-z0-9+.-])(?:https?|javascript|vbscript|data|file|mailto|"
+            r"jscript|livescript|blob|filesystem|about|shell|mshta|powershell|tel|sms):)"
+            r"[^\s<>\[\]{}\"']*", rendered):
         target = match.group(0).rstrip(".,;!?)，。；！）")
         parsed = urlsplit(target)
         if parsed.scheme.lower() not in ("http", "https") or parsed.hostname != "github.com" or parsed.username or parsed.port not in (None, 80, 443):
@@ -230,6 +234,7 @@ if __name__ == "__main__":
     try:
         main()
     except (ValueError, TypeError, KeyError, OSError, UnicodeError) as error:
-        # Do not echo model output, issue text or credentials in error logs.
-        print("Draft validation/helper failed: " + type(error).__name__, file=sys.stderr)
+        # Preserve validation reasons for the caller's redacted diagnostics.
+        detail = ": " + str(error) if isinstance(error, ValueError) else ""
+        print("Draft validation/helper failed: " + type(error).__name__ + detail, file=sys.stderr)
         sys.exit(1)

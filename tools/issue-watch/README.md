@@ -29,6 +29,10 @@ Windows PowerShell 5.1 / PowerShell 7。所有入口都在本目录；不会修�
 
 严格校验拒绝重复键、非标准 JSON、缺失/额外字段、错误类型/分类、超长回复或理由、@ 提及及非 github.com 链接。`packEntry` 只接受 provider/profile/match 结构；只是待人工核查的建议，静态索引不能证明协议档案正确或实机可用。
 
+设备 ID（如 `1D57:FA60`、`0001:0002`）、时间及普通冒号句式允许出现在回复中；显式 URL、危险协议（含 HTML 实体编码）、`www.` 地址和 Markdown/HTML 链接目标仍接受检查。
+
+起草失败时，日志记录步骤（`help`、`index` 索引、`prepare`、`model` 模型、`render`）、退出码和 stderr 最后 2000 字符；超时记录终止后的退出码，未启动进程时记为 `unavailable`。令牌前缀和长度至少 32 的十六进制/Base64 串在写日志前替换为 `[redacted]`。校验器的 ValueError 原因保留，`state.json` 的 `error` 例如 `render: non-GitHub URL`。若本次已产生 `result.json`，原始内容保存在草稿目录 `failed/<编号>-<UTC时间>.json`，只保留最近 20 份；尚未产生结果的步骤不创建占位文件。这些失败结果仅供本机排查，不上传。
+
 `state.json` 中的状态：
 
 | 状态 | 含义 |
@@ -59,6 +63,6 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\tools\
 pwsh.exe -NoProfile -NonInteractive -File .\tools\issue-watch\Test-IssueWatch.ps1
 ```
 
-测试仅注入本目录的假 `gh` / `codex`，所有产物在当前 worktree 的 `tmp/` 中，结束后清理；不调用真实 GitHub/Codex，不注册计划任务，不弹真实通知。覆盖无待处理项、筛选、正常起草、不合法 JSON、提示注入、子进程环境过滤、摘要拒绝、实际草稿编辑拒绝、发送与标记重试、Dismiss、评论变化与未变化跳过、三次失败、批次上限、超时清理和三种帮助输出能力。
+测试仅注入本目录的假 `gh` / `codex`，所有产物在当前 worktree 的 `tmp/` 中，结束后清理；不调用真实 GitHub/Codex，不注册计划任务，不弹真实通知。覆盖无待处理项、筛选、正常起草、不合法 JSON、提示注入、子进程环境过滤、摘要拒绝、实际草稿编辑拒绝、发送与标记重试、Dismiss、评论变化与未变化跳过、三次失败、批次上限、超时清理和三种帮助输出能力。另覆盖设备 ID 回归、链接拒绝、五个失败步骤、日志脱敏与截断、非零退出的结果留存及 20 份上限；假 Python 包装器仅为索引/prepare 注入离线错误，其余调用转发给本机 Python。
 
 官方 [CLI 参数文档](https://learn.chatgpt.com/docs/developer-commands?surface=cli)列有 `--output-schema` 和 `--output-last-message` / `-o`。本任务禁止运行真实 Codex，因此本机 npm CLI 实际支持哪些参数仍未现场验证；假命令已验证三种能力分支，实际运行时的探测结果会写入日志。真实通知显示、计划任务补跑、模型质量及 GitHub 端到端发送也需维护者另行验收。
