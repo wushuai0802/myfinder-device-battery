@@ -92,7 +92,7 @@ static class UpdateBadgeTests {
                 ToolStripMenuItem item=null;foreach(ToolStripItem candidate in menu.Items)if(candidate.Text=="查看新版本 99.0.1…")item=(ToolStripMenuItem)candidate;
                 Check(item!=null,"context menu names available version");item.PerformClick();
             }
-            if(source=="balloon"){Set(f.Owner,"updateBalloon",true);Call(Field(f.Owner,"tray"),"OnBalloonTipClicked");}
+            if(source=="balloon"){((TrayBalloonRoute)Field(f.Owner,"balloonRoute")).Set(TrayBalloonKind.Update);Call(Field(f.Owner,"tray"),"OnBalloonTipClicked");}
             f.Seen();
         }
         using(var f=new Fixture()){

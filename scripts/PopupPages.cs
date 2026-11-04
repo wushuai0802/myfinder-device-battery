@@ -129,6 +129,7 @@ namespace AtkBatteryTray {
                 var clear=Row(217,"清除历史读数",null,"refresh");clear.Detail="关闭保留不删除历史，清除需单独操作";rows.Add(clear);
                 rows.Add(Section("更新"));rows.Add(Toggle(219,"自动检查更新",pref.AutoCheckUpdates));
                 rows.Add(Toggle(225,"托盘图标显示更新角标",pref.ShowUpdateBadge));
+                rows.Add(Toggle(226,"自动检查反馈回复",pref.CheckFeedbackReplies));
             }else if(nav.Page==PopupPage.TrayIcons){
                 var firstGroup=GroupRow("group",TrayConfiguration.FirstName,TrayConfiguration.FirstId,TrayRule(owner,pref.TraySource,pref.TrayDeviceId));firstGroup.Id=600;rows.Add(firstGroup);
                 foreach(var group in pref.TrayGroups){var row=GroupRow("group",group.Name,group.Id,TrayRule(owner,group.Source,group.DeviceId));row.Id=600+rows.Count;rows.Add(row);}
@@ -219,6 +220,7 @@ namespace AtkBatteryTray {
                 var source=Info("源码",null);source.Detail="https://github.com/\nwushuai0802/\nmyfinder-device-battery";rows.Add(source);
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));
                 var feedbackRow=Row(258,"反馈问题",null,"info");feedbackRow.Detail=String.IsNullOrEmpty(FeedbackRelay.Url)?"提交需要 GitHub 账号":"在程序内提交，不需要 GitHub 账号";rows.Add(feedbackRow);
+                rows.Add(Row(262,owner.FeedbackReplies.Store.MenuText,null,"info"));
                 var pack=Info("型号数据包",owner.DevicePackDiagnostic);pack.WrapText=true;rows.Add(pack);
             }else if(nav.Page==PopupPage.DeviceMissing) {
                 var layout=WirelessLayout.Build(owner,0,100000);
@@ -226,6 +228,7 @@ namespace AtkBatteryTray {
                 var explanation=Info("请确认接收器已插好，设备已开机并唤醒",null);explanation.WrapText=true;rows.Add(explanation);
                 rows.Add(Row(0,"重新识别设备",null,"refresh"));rows.Add(Row(259,"查看支持清单",null,"info"));rows.Add(Row(250,"复制诊断摘要",null,"info"));
                 var feedbackRow=Row(258,"反馈问题",null,"info");feedbackRow.Detail=String.IsNullOrEmpty(FeedbackRelay.Url)?"提交需要 GitHub 账号":"在程序内提交，不需要 GitHub 账号";rows.Add(feedbackRow);
+                rows.Add(Row(262,owner.FeedbackReplies.Store.MenuText,null,"info"));
                 rows.Add(Info("反馈不代表一定能适配",null));
             }else if(nav.Page==PopupPage.Devices) {
                 var devices=WirelessLayout.Build(owner,0,100000,true).All;

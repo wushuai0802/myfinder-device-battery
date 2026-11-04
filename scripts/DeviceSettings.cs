@@ -67,8 +67,9 @@ namespace AtkBattery {
         [DataMember(Order=24, EmitDefaultValue=false)] public bool TrayGroupHintShown;
         [DataMember(Order=25, EmitDefaultValue=false)] public TrayIconPosition LastTrayIconPosition;
         [DataMember(Order=26)] public bool ShowUpdateBadge = true;
+        [DataMember(Order=27)] public bool CheckFeedbackReplies = true;
         [OnDeserializing] void Defaults(StreamingContext context) {
-            Theme="auto";ThemeStyle="ocean";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;
+            Theme="auto";ThemeStyle="ocean";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
@@ -79,7 +80,7 @@ namespace AtkBattery {
             var copy=new AudioBindings { SchemaVersion=SchemaVersion,
                 SpeakerEndpointId=SpeakerEndpointId, HeadsetEndpointId=HeadsetEndpointId,
                 MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,TrayDeviceId=TrayDeviceId,
-                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ThemeStyle=ThemeStyle,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,ShowUpdateBadge=ShowUpdateBadge,
+                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ThemeStyle=ThemeStyle,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,ShowUpdateBadge=ShowUpdateBadge,CheckFeedbackReplies=CheckFeedbackReplies,
                 RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
                 HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases),
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };

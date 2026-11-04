@@ -103,7 +103,11 @@ static class UiMenusTests {
         }
     }
     static void PreferenceOrder(){
-        using(var f=new Fixture())Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标","preferences include theme style and the requested noninteractive groups");
+        using(var f=new Fixture()){
+            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|自动检查反馈回复","preferences include theme style and the requested noninteractive groups");
+            f.Page(PopupPage.Preferences);var toggle=f.Find("自动检查反馈回复");Check(toggle.Id==226&&toggle.Checked,"feedback checking defaults on in the settings page");f.Activate(toggle);
+            Check(!DeviceSettings.Current.CheckFeedbackReplies&&f.Saves==1,"feedback checking toggle uses the existing configuration writer");
+        }
     }
     static void HelpActions(){
         using(var f=new Fixture()){
@@ -112,10 +116,11 @@ static class UiMenusTests {
             Check(f.Navigation.Page==page&&PopupPages.Title(f.Navigation)=="设备没显示？","keyboard entry opens the titled help page");
             var rows=Rows(f.Owner,page);
             Check(!rows.Exists(delegate(PopupControl row){return row.Text=="当前状态";}),"more-options help omits an empty-state reason when devices are visible");
-            Check(Texts(rows)=="请确认接收器已插好，设备已开机并唤醒|重新识别设备|查看支持清单|复制诊断摘要|反馈问题|反馈不代表一定能适配","help rows use the exact copy and order");
+            Check(Texts(rows)=="请确认接收器已插好，设备已开机并唤醒|重新识别设备|查看支持清单|复制诊断摘要|反馈问题|我的反馈|反馈不代表一定能适配","help rows use the exact copy and order");
             var feedback=rows.Find(delegate(PopupControl row){return row.Text=="反馈问题";});
             Check(feedback.Id==258&&feedback.Detail=="在程序内提交，不需要 GitHub 账号","help shares feedback action 258 and the configured-relay description");
-            Check(rows[1].Information&&rows[6].Information,"help explanations are static text");
+            Check(rows[1].Information&&rows[7].Information,"help explanations are static text");
+            Check(rows[6].Id==262&&!rows[6].Information&&Rows(f.Owner,PopupPage.Diagnostics).Exists(delegate(PopupControl row){return row.Id==262&&row.Text=="我的反馈";}),"both feedback pages expose the same history action");
             int reads=f.Reads;f.Activate(f.Find("重新识别设备"));Pump(delegate{return !f.Owner.IsRefreshing;});
             Check(f.Reads>reads&&f.Find("重新识别设备").Id==0,"help rediscovery routes through the existing sync-all action");
             f.Activate(f.Find("复制诊断摘要"));Check(f.Copied==f.Owner.DiagnosticSummary()&&f.Find("复制诊断摘要").Id==250,"help copy routes to the same diagnostic summary");
@@ -324,8 +329,8 @@ static class UiMenusTests {
             }
             f.Key(Keys.Tab);Check((int)Field(f.Popup,"keyboardFocus")==6,"help keyboard navigation starts with the shared back control");f.Key(Keys.Tab);Check((int)Field(f.Popup,"keyboardFocus")==0,"Tab skips explanatory text and reaches rediscovery");
             var nav=new PopupNavigation {Page=page,VisibleChoices=2};var seen=new HashSet<string>();
-            for(int offset=0;offset<=4;offset+=2){nav.Offset=offset;var rows=PopupPages.Build(f.Owner,nav,false);foreach(var row in rows)if(row.Id!=6&&row.Id!=7&&row.Id!=8)seen.Add(row.Text);Check(PopupPages.SizeFor(rows).Width==260&&PopupPages.SizeFor(rows).Height<280,"help uses existing bounded pagination");}
-            Check(seen.Count==6,"all help content is reachable through existing pagination");
+            for(int offset=0;offset<=6;offset+=2){nav.Offset=offset;var rows=PopupPages.Build(f.Owner,nav,false);foreach(var row in rows)if(row.Id!=6&&row.Id!=7&&row.Id!=8)seen.Add(row.Text);Check(PopupPages.SizeFor(rows).Width==260&&PopupPages.SizeFor(rows).Height<280,"help uses existing bounded pagination");}
+            Check(seen.Count==7,"all help content including history is reachable through existing pagination");
             foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true}){
                 VisualDesign.HighContrastOverride=contrast;var rows=Rows(f.Owner,page);var size=UiState.ScaleSize(PopupPages.SizeFor(rows),scale);
                 using(var bitmap=new Bitmap(size.Width,size.Height))using(var graphics=Graphics.FromImage(bitmap)){

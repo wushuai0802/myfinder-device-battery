@@ -33,11 +33,15 @@ namespace AtkBattery {
         [DataMember(Name="description")] public string Description;
         [DataMember(Name="diagnostics")] public string Diagnostics;
         [DataMember(Name="appVersion")] public string AppVersion;
-        internal static byte[] Create(string category,string description,string diagnostics){
-            if(!FeedbackInput.Valid(category,description))throw new ArgumentException("Invalid feedback input.");
+        [DataMember(Name="replyKey",EmitDefaultValue=false)] public string ReplyKey;
+        internal static string LimitDiagnostics(string diagnostics){
             const string marker="[已截断]";
-            if(diagnostics!=null&&diagnostics.Length>20000)diagnostics=FeedbackInput.Prefix(diagnostics,20000-marker.Length)+marker;
-            var payload=new FeedbackPayload {Category=category,Description=description.Trim(),Diagnostics=diagnostics,AppVersion=AppRuntime.Version};
+            return diagnostics!=null&&diagnostics.Length>20000?FeedbackInput.Prefix(diagnostics,20000-marker.Length)+marker:diagnostics;
+        }
+        internal static byte[] Create(string category,string description,string diagnostics,string replyKey=null){
+            if(!FeedbackInput.Valid(category,description))throw new ArgumentException("Invalid feedback input.");
+            if(replyKey!=null&&!FeedbackProtocol.ValidKey(replyKey))throw new ArgumentException("Invalid feedback key.");
+            var payload=new FeedbackPayload {Schema=replyKey==null?1:2,ReplyKey=replyKey,Category=category,Description=description.Trim(),Diagnostics=LimitDiagnostics(diagnostics),AppVersion=AppRuntime.Version};
             using(var stream=new MemoryStream()){new DataContractJsonSerializer(typeof(FeedbackPayload)).WriteObject(stream,payload);return stream.ToArray();}
         }
     }
@@ -61,7 +65,7 @@ namespace AtkBattery {
                 token.ThrowIfCancellationRequested();using(var stream=request.GetRequestStream()){stream.Write(body,0,body.Length);}
                 token.ThrowIfCancellationRequested();HttpWebResponse response;
                 try{response=(HttpWebResponse)request.GetResponse();}catch(WebException error){response=error.Response as HttpWebResponse;if(response==null)throw;}
-                return new UpdateResponse((int)response.StatusCode,response.GetResponseStream(),response.ContentLength,null,null,delegate{response.Dispose();registration.Dispose();});
+                return new UpdateResponse((int)response.StatusCode,response.GetResponseStream(),response.ContentLength,null,response.Headers["Retry-After"],delegate{response.Dispose();registration.Dispose();});
             }catch{registration.Dispose();throw;}
         }
     }
@@ -75,44 +79,45 @@ namespace AtkBattery {
     internal enum FeedbackResultKind {Success,RateLimited,Unavailable,Browser}
     internal sealed class FeedbackResult {
         internal readonly FeedbackResultKind Kind;internal readonly long Number;internal readonly string Url;
-        internal FeedbackResult(FeedbackResultKind kind,long number=0,string url=null){Kind=kind;Number=number;Url=url;}
+        internal readonly bool ReplyAccess,Saved;
+        internal FeedbackResult(FeedbackResultKind kind,long number=0,string url=null,bool replyAccess=false,bool saved=true){Kind=kind;Number=number;Url=url;ReplyAccess=replyAccess;Saved=saved;}
     }
     [DataContract] internal sealed class FeedbackReceipt {
         [DataMember(Name="number",IsRequired=true)] public long Number {get;set;}
         [DataMember(Name="url",IsRequired=true)] public string Url {get;set;}
+        [DataMember(Name="replyAccess")] public bool ReplyAccess {get;set;}
     }
     internal sealed class FeedbackClient {
-        readonly string relay;readonly IFeedbackTransport http;readonly FeedbackSession session;readonly int timeoutMilliseconds;
-        internal FeedbackClient(string address,IFeedbackTransport transport,FeedbackSession history,int timeout=20000){relay=address;http=transport;session=history;timeoutMilliseconds=timeout;}
-        internal static bool IsIssueUrl(long number,string url){return number>0&&String.Equals(url,"https://github.com/wushuai0802/myfinder-device-battery/issues/"+number.ToString(CultureInfo.InvariantCulture),StringComparison.Ordinal);}
+        readonly string relay;readonly IFeedbackTransport http;readonly FeedbackSession session;readonly int timeoutMilliseconds;readonly FeedbackStore store;readonly Func<DateTime> clock;
+        internal FeedbackClient(string address,IFeedbackTransport transport,FeedbackSession history,int timeout=20000,FeedbackStore records=null,Func<DateTime> now=null){relay=address;http=transport;session=history;timeoutMilliseconds=timeout;store=records??new FeedbackStore(null);clock=now??delegate{return DateTime.UtcNow;};}
+        internal static string IssueUrl(long number){if(number<=0||number>9007199254740991L)throw new ArgumentException("Invalid issue number.");return "https://github.com/wushuai0802/myfinder-device-battery/issues/"+number.ToString(CultureInfo.InvariantCulture);}
+        internal static bool IsIssueUrl(long number,string url){return number>0&&number<=9007199254740991L&&String.Equals(url,IssueUrl(number),StringComparison.Ordinal);}
         internal FeedbackResult Submit(string category,string description,string diagnostics,CancellationToken token){
             token.ThrowIfCancellationRequested();
             if(!FeedbackInput.Valid(category,description))return new FeedbackResult(FeedbackResultKind.Unavailable);
             if(String.IsNullOrEmpty(relay))return new FeedbackResult(FeedbackResultKind.Browser);
             try{
-                var endpoint=FeedbackRelay.Endpoint(relay);byte[] body=FeedbackPayload.Create(category,description,diagnostics);
+                var endpoint=FeedbackRelay.Endpoint(relay);string key=FeedbackProtocol.NewKey();
+                string creation=store.BeginCreation(category,description,key,clock());
                 using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
                     timeout.CancelAfter(timeoutMilliseconds);var cancel=timeout.Token;
-                    using(var response=http.Post(endpoint,body,cancel)){
+                    for(int attempt=0;attempt<2;attempt++)using(var response=http.Post(endpoint,FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null),cancel)){
                         cancel.ThrowIfCancellationRequested();
                         if(response.Status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
-                        if(response.Status!=201||response.Length>16384||response.Body==null)return new FeedbackResult(FeedbackResultKind.Unavailable);
-                        using(var output=new MemoryStream()){
-                            byte[] buffer=new byte[4096];int total=0;
-                            while(true){
-                                // An unknown-length body that fills the budget fails closed;
-                                // do not probe beyond 16 KB even to detect a larger response.
-                                if(total==16384){if(response.Length!=16384)throw new InvalidDataException("Feedback response is too large.");break;}
-                                cancel.ThrowIfCancellationRequested();int read=response.Body.Read(buffer,0,Math.Min(buffer.Length,16384-total));cancel.ThrowIfCancellationRequested();
-                                if(read==0)break;total+=read;output.Write(buffer,0,read);
-                            }
-                            if(response.Length>=0&&response.Length!=total)throw new InvalidDataException("Truncated feedback response.");
-                            var receipt=UpdateJson.Read<FeedbackReceipt>(output.ToArray());
-                            if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
-                            cancel.ThrowIfCancellationRequested();session.MarkSuccess();return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url);
+                        if(response.Status==400&&attempt==0){
+                            var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
+                            if(error!=null&&error.Error=="invalid")continue;
                         }
+                        if(response.Status!=201)return new FeedbackResult(FeedbackResultKind.Unavailable);
+                        var receipt=UpdateJson.Read<FeedbackReceipt>(FeedbackProtocol.Read(response,16384,cancel));
+                        if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
+                        cancel.ThrowIfCancellationRequested();session.MarkSuccess();
+                        var result=new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,attempt==0&&receipt.ReplyAccess);
+                        try{store.CompleteCreation(creation,result,clock());}catch(Exception){return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,result.ReplyAccess,false);}
+                        return result;
                     }
                 }
+                return new FeedbackResult(FeedbackResultKind.Unavailable);
             }catch(Exception){token.ThrowIfCancellationRequested();return new FeedbackResult(FeedbackResultKind.Unavailable);}
         }
     }
@@ -130,22 +135,25 @@ namespace AtkBattery {
 
 namespace AtkBatteryTray {
     internal sealed class FeedbackForm:ThemedDialog {
-        readonly FeedbackReport report;readonly FeedbackClient client;readonly FeedbackSession session;readonly string relay;
+        readonly FeedbackReport report;readonly FeedbackClient client;readonly FeedbackSession session;readonly string relay;readonly FeedbackReplies replies;
         readonly Action<string> copy,open;readonly Func<string,bool> confirm;
         readonly ThemedSegments categories;
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
         readonly Label remaining=new Label(),status=new Label();
-        readonly ThemedButton submit,cancel,fallback,view;
+        readonly ThemedButton submit,cancel,fallback,view,mine;
         CancellationTokenSource pending;FeedbackResult receipt;bool busy;
         internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
-        internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null):base(dark){
+        internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null):base(dark){
             report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;
             copy=copyText??Clipboard.SetText;open=openLink??delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});};
             confirm=confirmation??delegate(string question){return ThemedMessage.Show(this,"反馈问题",question,MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)==DialogResult.Yes;};
-            client=new FeedbackClient(relay,transport??new FeedbackHttp(),session);
+            replies=feedbackReplies??new FeedbackReplies(new FeedbackStore(null),transport??new FeedbackHttp(),relay);
+            client=new FeedbackClient(relay,transport??new FeedbackHttp(),session,20000,replies.Store);
             Text="反馈问题";ShowInTaskbar=false;StartPosition=FormStartPosition.CenterParent;FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
             ClientSize=new Size(540,568);categories=new ThemedSegments(Theme) {Name="Categories",AccessibleName="类型"};diagnostics=new ThemedSwitch(Theme);
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
+            mine=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="MyFeedback",Text=replies.Store.MenuText,AutoSize=true};
+            mine.Click+=delegate{using(var dialog=new MyFeedbackDialog(replies,report,Theme.Dark,open))dialog.ShowDialog(this);mine.Text=replies.Store.MenuText;};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
             var typeCard=new ThemedSection(Theme) {Name="FeedbackTypeCard",Dock=DockStyle.Fill,Height=54};
@@ -184,7 +192,7 @@ namespace AtkBatteryTray {
             fallback.Name="BrowserFallback";fallback.Text="改用浏览器提交";fallback.AutoSize=true;fallback.MinimumSize=new Size(132,30);fallback.Visible=false;fallback.Click+=delegate{if(ConfirmRepeat())OpenBrowser();};
             view.Name="ViewIssue";view.Text="在浏览器中查看";view.AutoSize=true;view.MinimumSize=new Size(132,30);view.Visible=false;
             view.Click+=delegate{if(receipt!=null&&FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url))try{open(receipt.Url);}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}};
-            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback});layout.Controls.Add(buttons,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
+            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback,mine});layout.Controls.Add(buttons,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
             ConfigureLayout(layout,buttons,delegate(int width){
                 int textWidth=Math.Max(1,width-descriptionCard.Padding.Horizontal);
                 int minimum=descriptionCard.Padding.Vertical;
@@ -222,15 +230,16 @@ namespace AtkBatteryTray {
         }
         void Complete(FeedbackResult result){
             pending=null;busy=false;
-            if(result.Kind==FeedbackResultKind.Success){receipt=result;status.Text="已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture);submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;}
+            if(result.Kind==FeedbackResultKind.Success){receipt=result;status.Text="已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。");submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;}
             else{EnableInputs(true);status.Text=result.Kind==FeedbackResultKind.RateLimited?"提交太频繁，请稍后再试":"暂时无法提交";fallback.Visible=result.Kind!=FeedbackResultKind.RateLimited;}
             UpdateValidation();
         }
         void OpenBrowser(){if(busy||!FeedbackInput.Valid(SelectedCategory,description.Text))return;status.Text=report.BrowserSubmission(SelectedCategory,description.Text,diagnostics.Checked).Open(copy,open);}
-        internal ThemedDialog CreateDiagnosticsDialog(){
-            var dialog=new ThemedDialog(Theme.Dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};
+        internal ThemedDialog CreateDiagnosticsDialog(){return CreateDiagnosticsDialog(Theme.Dark,report.FullText);}
+        internal static ThemedDialog CreateDiagnosticsDialog(bool dark,string contents){
+            var dialog=new ThemedDialog(dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var text=new TextBox {Name="DiagnosticText",AccessibleName="诊断信息",Text=report.FullText,ReadOnly=true,Multiline=true,WordWrap=false,HideSelection=true,SelectionLength=0,TabStop=true};
+            var text=new TextBox {Name="DiagnosticText",AccessibleName="诊断信息",Text=contents,ReadOnly=true,Multiline=true,WordWrap=false,HideSelection=true,SelectionLength=0,TabStop=true};
             new DialogCaret(text);
             var card=new ThemedTextBox(dialog.Theme,text) {Name="DiagnosticsCard",Dock=DockStyle.Fill};layout.Controls.Add(card,0,0);
             var close=new ThemedButton(dialog.Theme,ThemedButtonKind.Primary) {Text="关闭",DialogResult=DialogResult.Cancel,AutoSize=true,Anchor=AnchorStyles.Right,Margin=Padding.Empty};layout.Controls.Add(close,0,1);

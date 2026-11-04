@@ -285,6 +285,7 @@ namespace AtkBatteryTray {
                 else if(id==215)pref.ReducedMotion=!pref.ReducedMotion;
                 else if(id==219)pref.AutoCheckUpdates=!pref.AutoCheckUpdates;
                 else if(id==225)pref.ShowUpdateBadge=!pref.ShowUpdateBadge;
+                else if(id==226)pref.CheckFeedbackReplies=!pref.CheckFeedbackReplies;
                 else if(id==217){owner.ClearReadingHistory();navigation.Notice="正在清除历史读数…";Invalidate();return;}
                 else if(id==218){pref.TrayDeviceId=pref.TrayDeviceId==control.DeviceKey?null:control.DeviceKey;}
                 else if(id>=252&&id<=255) {
@@ -302,6 +303,7 @@ namespace AtkBatteryTray {
                 else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
                 else if(id==250){copyText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
                 else if(id==258){ShowFeedback();return;}
+                else if(id==262){ShowMyFeedback();return;}
                 else if(id==259){openLink("https://github.com/wushuai0802/myfinder-device-battery/blob/main/docs/compatibility.md");return;}
                 else return;
                 owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
@@ -335,9 +337,15 @@ namespace AtkBatteryTray {
         internal void Notice(string text){navigation.Notice=text;Invalidate();}
         internal void NoticeUpdated(){updatedNotice="已更新到 "+AppRuntime.Version;updatedNoticeTimer.Stop();updatedNoticeTimer.Start();Invalidate();}
         void ShowFeedback(){
-            using(var dialog=new FeedbackForm(owner.CreateFeedbackReport(),navigation.Page==PopupPage.DeviceMissing,Style.Dark,copyText,openLink)){
+            using(var dialog=new FeedbackForm(owner.CreateFeedbackReport(),navigation.Page==PopupPage.DeviceMissing,Style.Dark,copyText,openLink,feedbackReplies:owner.FeedbackReplies)){
                 feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
                 try{dialog.ShowDialog(this);}finally{feedbackModal=false;ignoreDeactivate=false;}
+            }
+        }
+        void ShowMyFeedback(){
+            using(var dialog=new MyFeedbackDialog(owner.FeedbackReplies,owner.CreateFeedbackReport(),Style.Dark,openLink)){
+                feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
+                try{dialog.ShowDialog(this);}finally{feedbackModal=false;ignoreDeactivate=false;Invalidate();}
             }
         }
         void EditAlias(bool mouse,string deviceKey=null,string groupKey=null) {
@@ -595,7 +603,7 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(navigation.AudioDeviceKey).Append('|').Append(navigation.AudioDeviceName);
             visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.ThemeStyle).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.TrayDeviceId).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
             visible.Append('|').Append(preferences.VolumeCollapsed);
-            visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb());
+            visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb()).Append('|').Append(preferences.CheckFeedbackReplies).Append('|').Append(owner.FeedbackReplies.Store.Unread);
             visible.Append('|').Append(preferences.TrayIconStyle).Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint);
             foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId);foreach(string id in group.Members)visible.Append('|').Append(id);}
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
@@ -664,7 +672,13 @@ namespace AtkBatteryTray {
         DevicePackManager devicePacks;
         DevicePackController devicePackChecks;
         internal string DevicePackDiagnostic {get{return devicePacks==null?"未使用型号数据包":devicePacks.Diagnostic;}}
-        bool updateBalloon;
+        readonly TrayBalloonRoute balloonRoute=new TrayBalloonRoute();
+        internal FeedbackReplies FeedbackReplies=new FeedbackReplies(new FeedbackStore(null),new FeedbackHttp());
+        FeedbackReplyController feedbackChecks;MyFeedbackDialog feedbackDialog;
+        internal void OpenMyFeedback(long number=0){
+            if(feedbackDialog!=null&&!feedbackDialog.IsDisposed){feedbackDialog.Reload(number);DialogVisibility.RestoreAndActivate(feedbackDialog);return;}
+            feedbackDialog=new MyFeedbackDialog(FeedbackReplies,CreateFeedbackReport(),Style.Dark,selected:number);feedbackDialog.Show();
+        }
         internal string UpdateStatus {get{return updates==null?"尚未检查":updates.Status;}}
         internal string UpdateFailure {get{return updates==null?null:updates.LastFailure;}}
         internal bool UpdateAvailable {get{return updates!=null&&updates.Available;}}
@@ -803,7 +817,10 @@ namespace AtkBatteryTray {
             return result;
         }
         public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute,null,null,MouseBattery.SetActiveDpiStage,null,true) {
-            updates=new UpdateController(dispatch,UpdateIcon,delegate(string title,string message,bool update){updateBalloon=update;tray.ShowBalloonTip(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
+            updates=new UpdateController(dispatch,UpdateIcon,delegate(string title,string message,bool update){balloonRoute.Set(update?TrayBalloonKind.Update:TrayBalloonKind.LowBattery);tray.ShowBalloonTip(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
+            // Program.Main already holds Local\ATK-A9-Air-Battery-Tray for this lifetime.
+            FeedbackReplies=new FeedbackReplies(FeedbackStore.Current,new FeedbackHttp());
+            feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);tray.ShowBalloonTip(5000,balloon.Title,balloon.Text,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
             deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();});
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
@@ -837,6 +854,8 @@ namespace AtkBatteryTray {
             var settingsItem=new ToolStripMenuItem("设置…");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
             var checkUpdates=new ToolStripMenuItem("检查更新…");checkUpdates.Click+=delegate{if(UpdateAvailable)OpenUpdate();else CheckUpdates();};menu.Items.Add(checkUpdates);
             menu.Opening+=delegate{checkUpdates.Text=UpdateAvailable?"查看新版本 "+updates.Version+"…":"检查更新…";};
+            var myFeedback=new ToolStripMenuItem("我的反馈");myFeedback.Click+=delegate{OpenMyFeedback();};menu.Items.Add(myFeedback);
+            menu.Opening+=delegate{myFeedback.Text=FeedbackReplies.Store.MenuText;};
             menu.Items.Add(new ToolStripSeparator());
             var exit=new ToolStripMenuItem("\u9000\u51fa");exit.Click+=delegate {ExitThread();};menu.Items.Add(exit);
             ConfigureTrayIcon(tray,menu);
@@ -854,7 +873,7 @@ namespace AtkBatteryTray {
                 RequestHeadsetRead(false);RequestAudioRead(false);
                 RequestWirelessRead(false);
             };
-            tray.BalloonTipClicked+=delegate {if(updateBalloon){updateBalloon=false;OpenUpdate();}else ShowDetails(true);};
+            tray.BalloonTipClicked+=delegate {balloonRoute.Click(OpenUpdate,delegate{ShowDetails(true);},delegate(long number){OpenMyFeedback(number);});};
             RefreshBattery(false);
             if(showPanel)dispatch.BeginInvoke((MethodInvoker)delegate {ShowDetails(true);});
         }
@@ -919,6 +938,7 @@ namespace AtkBatteryTray {
         }
         public void ConfigurationChanged(bool refreshAudio=true){
             if(updates!=null)updates.ConfigurationChanged();
+            if(feedbackChecks!=null)feedbackChecks.ConfigurationChanged();
             refresh.Interval=sessionLocked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;
             if(refreshAudio){
                 Interlocked.Increment(ref audioGeneration);ClearPendingAudioCommands();audioNeedsReconcile=true;
@@ -1006,7 +1026,7 @@ namespace AtkBatteryTray {
                 foreach(var device in WirelessDevices)if(lowBattery.IsLatched(device.Id))saved.Append('\n').Append(device.Id).Append("=1");
                 fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt"),saved.ToString());
             }catch(IOException){}catch(UnauthorizedAccessException){}
-            if(messages.Count>0){string text=String.Join(" · ",messages.ToArray());if(text.Length>240)text=text.Substring(0,237)+"…";updateBalloon=false;tray.ShowBalloonTip(5000,"外设电量较低",text,ToolTipIcon.Warning);}
+            if(messages.Count>0){string text=String.Join(" · ",messages.ToArray());if(text.Length>240)text=text.Substring(0,237)+"…";balloonRoute.Set(TrayBalloonKind.LowBattery);tray.ShowBalloonTip(5000,"外设电量较低",text,ToolTipIcon.Warning);}
         }
         void SaveStatus() {
             if(!persistStatus)return;
@@ -1488,6 +1508,7 @@ namespace AtkBatteryTray {
         }
         protected override void ExitThreadCore() {
             if(updates!=null)updates.Dispose();
+            if(feedbackChecks!=null)feedbackChecks.Dispose();if(feedbackDialog!=null&&!feedbackDialog.IsDisposed)feedbackDialog.Close();
             if(devicePackChecks!=null)devicePackChecks.Dispose();
             if(updatedPanelRequest!=null)updatedPanelRequest.Dispose();
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;

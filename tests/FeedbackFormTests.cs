@@ -15,6 +15,7 @@ using AtkBatteryTray;
 static class FeedbackFormTests {
     const string Relay="https://feedback.invalid/service";
     const string Issue="https://github.com/wushuai0802/myfinder-device-battery/issues/42";
+    const string Submitted="已提交，编号 #42。可在「我的反馈」查看回复和补充资料。";
     static int checks,failures;
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window,IntPtr insertAfter,int x,int y,int width,int height,uint flags);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
@@ -45,7 +46,7 @@ static class FeedbackFormTests {
         var http=new FakeHttp();using(var form=Form(http,null)){
             Show(form);var submit=Find<Button>(form,"SubmitFeedback");
             Check(submit.Text=="提交"&&Find<Label>(form,"FeedbackNotice").Text.Contains("公开显示在 GitHub"),"default form offers in-app submission with the public issue notice");
-            submit.PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="已提交，编号 #42";});
+            submit.PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==Submitted;});
             Check(http.Calls==1&&http.Uri.AbsoluteUri==FeedbackRelay.Url+"/feedback","default form sends once to the shipped endpoint through fake HTTP");form.Close();
         }
     }
@@ -70,8 +71,8 @@ static class FeedbackFormTests {
         var http=new FakeHttp();Check(Submit(http).Kind==FeedbackResultKind.Success,"valid response");
         Check(http.Calls==1&&http.Uri.AbsoluteUri==Relay+"/feedback","one POST to the configured endpoint");
         var fields=UpdateJson.Read<Dictionary<string,object>>(http.Body,true);var keys=new List<string>(fields.Keys);keys.Sort(StringComparer.Ordinal);
-        Check(String.Join(",",keys.ToArray())=="appVersion,category,description,diagnostics,schema","exact request field set");
-        Check(Convert.ToInt32(fields["schema"])==1&&(string)fields["category"]=="other"&&(string)fields["description"]=="valid description","schema, category and trimmed description");
+        Check(String.Join(",",keys.ToArray())=="appVersion,category,description,diagnostics,replyKey,schema","exact request field set");
+        Check(Convert.ToInt32(fields["schema"])==2&&FeedbackProtocol.ValidKey((string)fields["replyKey"])&&(string)fields["category"]=="other"&&(string)fields["description"]=="valid description","schema, key, category and trimmed description");
         Check((string)fields["diagnostics"]==Report().FullText&&(string)fields["appVersion"]==AppRuntime.Version,"whitelisted diagnostics and runtime version only");
         fields=UpdateJson.Read<Dictionary<string,object>>(FeedbackPayload.Create("ui","中文 & \"描述\"\n第二行",null),true);
         Check(fields.ContainsKey("diagnostics")&&fields["diagnostics"]==null&&(string)fields["description"]=="中文 & \"描述\"\n第二行","null diagnostics and JSON escaping");
@@ -171,14 +172,14 @@ static class FeedbackFormTests {
     static void SuccessAndRepeat(){
         DateTime now=new DateTime(2026,11,3,0,0,0,DateTimeKind.Utc);var session=new FeedbackSession(delegate{return now;});var http=new FakeHttp();string opened=null;
         using(var form=Form(http,Relay,null,delegate(string url){opened=url;},session)){
-            Show(form);Find<CheckBox>(form,"IncludeDiagnostics").Checked=false;Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="已提交，编号 #42";});
+            Show(form);Find<CheckBox>(form,"IncludeDiagnostics").Checked=false;Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==Submitted;});
             Check(UpdateJson.Read<Dictionary<string,object>>(http.Body,true)["diagnostics"]==null,"unchecked diagnostics are null in the actual POST body");
             Check(opened==null&&!Find<TextBox>(form,"Description").Enabled&&Find<Button>(form,"SubmitFeedback").Text=="关闭","success state shows the number without opening automatically");
             Find<Button>(form,"ViewIssue").PerformClick();Check(opened==Issue,"only the exact validated issue is opened");Check(session.NeedsConfirmation,"successful submission remembered in this process");Find<Button>(form,"SubmitFeedback").PerformClick();Check(form.IsDisposed||!form.Visible,"success submit button closes");
         }
         bool allow=false;int confirmations=0;http=new FakeHttp();using(var form=Form(http,Relay,null,null,session,delegate(string question){confirmations++;Check(question=="刚刚已提交过一次，确定还要再提交吗？","exact repeat question");return allow;})){
             Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Check(http.Calls==0&&confirmations==1,"declining repeat leaves request unsent");allow=true;
-            Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="已提交，编号 #42";});Check(http.Calls==1&&confirmations==2,"confirmed repeat submitted once");form.Close();
+            Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==Submitted;});Check(http.Calls==1&&confirmations==2,"confirmed repeat submitted once");form.Close();
         }
         now=now.AddMinutes(10).AddTicks(-1);Check(session.NeedsConfirmation,"just inside ten minutes");now=now.AddTicks(1);Check(!session.NeedsConfirmation,"ten-minute boundary");Check(!new FeedbackSession().NeedsConfirmation,"separate process session starts clean");
         http=new FakeHttp {Reply=delegate{return Response(201,"{\"number\":42,\"url\":\"https://evil.invalid/\"}");}};int opens=0;using(var form=Form(http,Relay,null,delegate{opens++;})){
@@ -197,7 +198,7 @@ static class FeedbackFormTests {
                 form.Scale(new SizeF(2,2));form.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);Show(form);
                 if(state!="browser"){
                     Find<Button>(form,"SubmitFeedback").PerformClick();
-                    Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?"暂时无法提交":"已提交，编号 #42");});
+                    Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?"暂时无法提交":Submitted);});
                 }
                 Check(area.Contains(form.Bounds),state+": entire feedback window fits (window="+form.Bounds+", client="+form.ClientSize+", work area="+area+")");
                 foreach(string name in new[]{"SubmitFeedback","CancelFeedback","BrowserFallback","ViewIssue"}){
@@ -226,7 +227,7 @@ static class FeedbackFormTests {
             Check(SetWindowPos(form.Handle,IntPtr.Zero,initial.Left+17,initial.Top+23,form.Width,form.Height,0x0004|0x0010),"native move delivered");
             Check(area.Contains(form.Bounds),state+": late same-monitor move remains inside work area ("+form.Bounds+")");
             Find<Button>(form,"SubmitFeedback").PerformClick();
-            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?"暂时无法提交":"已提交，编号 #42");});
+            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?"暂时无法提交":Submitted);});
             Check(area.Contains(form.Bounds),state+": result-state layout retains the native bounds constraint");
             Check(SetWindowPos(form.Handle,IntPtr.Zero,area.Left-11,area.Top-13,form.Width+40,form.Height+32,0x0004|0x0010),"result-state native bounds delivered");
             Check(area.Contains(form.Bounds),state+": result-state native move and size remain inside work area ("+form.Bounds+")");
