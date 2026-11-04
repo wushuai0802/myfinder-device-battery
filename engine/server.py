@@ -26,6 +26,8 @@ PROVIDERS = (
     ("razer", "RazerProvider"), ("audeze", "AudezeProvider"),
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
     ("mchose_headset", "MchoseHeadsetProvider"),
+    ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
+    ("flydigi", "FlydigiProvider"),
     ("mchose_qhw_keyboard", "MchoseQhwKeyboardProvider"),
     ("mchose_glw_keyboard", "MchoseGlwKeyboardProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
@@ -45,6 +47,7 @@ PROVIDER_VIDS = {
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D,),
+    "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
@@ -214,7 +217,7 @@ def physical_topology(paths, physical_id):
 
 
 def kind_of(status):
-    if status.kind in ("mouse", "headset", "keyboard"):
+    if status.kind in ("mouse", "headset", "keyboard", "gamepad"):
         return status.kind
     name = status.name.lower()
     if any(s in name for s in ("keyboard", "blackwidow", "deathstalker", "lofree")):
@@ -614,7 +617,9 @@ class BatteryEngine:
         for key in self.by_provider.get(reader_key, {}):
             self.dpi_targets.pop(key, None)
         for status in statuses:
-            if status.kind == "gamepad":
+            # Only the exact APEX5 reader is enabled; legacy controller paths
+            # (including mode switches) remain outside the selected providers.
+            if status.kind == "gamepad" and (name != "flydigi" or status.source != "flydigi"):
                 continue
             status = replace(status, name=inventory_safe_name(status.name, self._inventory_groups.get(physical, [])))
             key = public_id(status.key)

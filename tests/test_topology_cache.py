@@ -213,6 +213,100 @@ class DescriptorCacheTests(unittest.TestCase):
         self.scan([PATH_A, PATH_B])
         self.assertEqual([call.args[0] for call in self.kernel.CreateFileW.call_args_list], [PATH_A, PATH_B])
 
+    def batch3_descriptor(self, identity, collection, inp, out):
+        self.identities[PATH_A] = identity
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.input, value.output = max(inp.values()), max(out.values())
+            value.iv, value.ov = len(inp), len(out)
+            return 0x00110000
+
+        def fields(report_type, values, length, data):
+            for value, (report_id, size) in zip(values, (inp if report_type == 0 else out).items()):
+                value.report, value.bits, value.count = report_id, 8, size - 1
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetValueCaps.side_effect = fields
+
+    def test_batch3_report_sizes_are_per_id_cached_and_descriptor_only(self):
+        cases = (((0x320F, 0x706E), (0xFF1C, 0x92), {4: 64}, {4: 64}),
+                 ((0x089D, 0x062F), (0xFF01, 0x10), {0: 33}, {0: 33}),
+                 ((0x37D7, 0x2501), (0xFFA0, 1), {4: 32}, {3: 32, 8: 13}))
+        for identity, collection, inp, out in cases:
+            with self.subTest(identity=identity):
+                self.cache.clear()
+                self.batch3_descriptor(identity, collection, inp, out)
+                first, = self.scan([PATH_A])
+                self.kernel.CreateFileW.reset_mock()
+                second, = self.scan([PATH_A])
+                self.assertEqual(first, second)
+                self.assertEqual(first["input_report_sizes"], {str(k): v for k, v in inp.items()})
+                self.assertEqual(first["output_report_sizes"], {str(k): v for k, v in out.items()})
+                self.kernel.CreateFileW.assert_not_called()
+                self.hid.HidD_GetFeature.assert_not_called()
+                self.hid.HidD_SetFeature.assert_not_called()
+                self.kernel.ReadFile.assert_not_called()
+                self.kernel.WriteFile.assert_not_called()
+
+    def test_batch3_size_discovery_refuses_partial_alias_split_or_non_byte_caps(self):
+        for defect in ("failure", "partial", "alias", "bits", "count", "split", "padding", "buttons"):
+            with self.subTest(defect=defect):
+                self.cache.clear()
+                self.batch3_descriptor((0x37D7, 0x2501), (0xFFA0, 1), {4: 32}, {3: 32, 8: 13})
+                original = self.hid.HidP_GetValueCaps.side_effect
+                original_caps = self.hid.HidP_GetCaps.side_effect
+
+                def caps(data, pointer):
+                    result = original_caps(data, pointer)
+                    value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                    if defect == "padding":
+                        value.output += 1
+                    elif defect == "buttons":
+                        value.ob = 1
+                    return result
+
+                def fields(report_type, values, length, data):
+                    result = original(report_type, values, length, data)
+                    if report_type == 1:
+                        if defect == "failure":
+                            return 0
+                        if defect == "partial":
+                            ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 1
+                        elif defect == "alias":
+                            values[0].alias = 1
+                        elif defect == "bits":
+                            values[0].bits = 16
+                        elif defect == "count":
+                            values[0].count = 0
+                        elif defect == "split":
+                            values[1].report = values[0].report
+                    return result
+
+                self.hid.HidP_GetCaps.side_effect = caps
+                self.hid.HidP_GetValueCaps.side_effect = fields
+                info, = self.scan([PATH_A])
+                self.assertIsNone(info["output_report_sizes"])
+                self.assertNotIn(PATH_A, self.cache)
+                self.batch3_descriptor((0x37D7, 0x2501), (0xFFA0, 1), {4: 32}, {3: 32, 8: 13})
+                recovered, = self.scan([PATH_A])
+                self.assertEqual(recovered["output_report_sizes"], {"3": 32, "8": 13})
+
+    def test_batch3_size_discovery_does_not_expand_to_nearby_devices(self):
+        for identity, collection in (((0x320F, 0x5088), (0xFF1C, 0x92)),
+                                     ((0x089D, 0x062F), (0xFF00, 0)),
+                                     ((0x37D7, 0x2501), (0xFFEE, 1)),
+                                     ((0x37D7, 0x6001), (0xFFA0, 1))):
+            with self.subTest(identity=identity, collection=collection):
+                self.cache.clear()
+                self.hid.HidP_GetValueCaps.reset_mock()
+                self.batch3_descriptor(identity, collection, {4: 32}, {3: 32})
+                info, = self.scan([PATH_A])
+                self.assertNotIn("input_report_sizes", info)
+                self.hid.HidP_GetValueCaps.assert_not_called()
+
     def test_reordered_full_path_set_uses_cache(self):
         first = self.scan([PATH_A, PATH_B])
         self.kernel.CreateFileW.reset_mock()

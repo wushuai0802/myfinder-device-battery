@@ -210,6 +210,14 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(keyboard_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_ids", "output_report_ids"))
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x320F, 0x706E, 0xFF1C, 0x0092),
+                    (0x089D, 0x062F, 0xFF01, 0x0010),
+                    (0x37D7, 0x2501, 0xFFA0, 0x0001)):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
             inventory.append(info)

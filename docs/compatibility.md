@@ -24,7 +24,7 @@
 | Windows蓝牙电量 | 鼠标、耳机、键盘及其他设备 | 已在Windows连接，系统能提供电量属性；不会自动配对设备 |
 | 标准HID电量字段 | 鼠标、键盘及其他HID设备 | HID描述符明确声明电量字段；只用GetFeature读取，不写入或抢占键鼠输入 |
 
-更细的上游型号与“上游实机验证/未经实机验证”区分见[上游清单](https://github.com/HeyOkay/HaloBattery/blob/2251f0534a8e886c9692ead42056059b4f69d8c0/docs/devices.md)。本项目未启用其手柄模式切换及手柄专用读取器，因此不要直接把上游整张表视为本项目承诺。
+更细的上游型号与“上游实机验证/未经实机验证”区分见[上游清单](https://github.com/HeyOkay/HaloBattery/blob/2251f0534a8e886c9692ead42056059b4f69d8c0/docs/devices.md)。本项目未启用其手柄模式切换及手柄专用读取器；本批仅新增独立的 APEX5 GET_INFO 只读读取器（C，分档电量），不要直接把上游整张表视为本项目承诺。
 
 本机INFI75的有线与2.4G接口已分别检查，但均未取得可用电量，仍不宣称兼容。2.4G接收器为`2.4G Wireless Keyboard / FFB5:0001`，Input/Output各8字节，Feature为0；本地官方驱动的`INFI75-1.1 / 65字节Feature`路径不能直接套用。即使其他HFD键盘共享VID/PID，也不向INFI75发送未经该型号证实的命令。用户无需刷固件、改键位或修改接收器设置。
 
@@ -61,6 +61,9 @@ V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前�
 | Razer 已列明鼠标、耳机与键盘 | mouse, headset, keyboard | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Audeze Maxwell 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | WLmouse 已列明型号 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| HECATE G3M PRO | mouse | C | 协议已接入，待本项目实机验证；仅320F:706E / FF1C:0092，输入/输出ID 04各64字节且描述符确认字节数组；只读1A 06百分比，充电未知；不含Rainy75 320F:5088；未知长度或集合不唯一不发送 |
+| 前行者 EWEADN S9 | mouse | C | 协议已接入，待本项目实机验证；仅089D:062F / FF01:0010；未编号输出32字节payload（hidapi含占位共33）；输入长度须由描述符确认，读取15–33字节；回复身份必须M156；充电未知、休眠不显示0%；实际输入caps待实机确认 |
+| 飞智 Flydigi APEX5 | gamepad | C | 协议已接入，待本项目实机验证；仅37D7:2501 / FFA0:0001，输出03/输入04各32字节，逐ID核对描述符容量；只读GET_INFO单片型号80回复；0–5档用approx显示约略电量，充电隐藏百分比；不含FFEE集合或底座 |
 | MCHOSE 已列明协议与型号 | mouse | C | 协议已接入，待本项目实机验证；既有型号及A7 V3 Pro：V3仅3837:1018 / FF01:0001，输入与输出均为64字节（含ID 4D）；只读0900电量，长度未知或不符不发送，不回退V2；Pro待实机验证 |
 | MCHOSE V9 PRO | headset | C | 协议已接入，待本项目实机验证；仅291D:385D / FF90:0001，输入与输出均为64字节；接电隐藏百分比，不区分充电中与满电；不含Turbo/Turbo+ |
 | MCHOSE G98 V3 | keyboard | C | 协议已接入，待本项目实机验证；仅3837:1015，产品全名 MCHOSE G98 V3 2.4G / FF80:0001；描述符须唯一确认输入/输出ID 4D及容量，未知或多ID拒绝；回复校验算法、补零及休眠缓存待实机确认 |
@@ -89,5 +92,5 @@ V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前�
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 
-通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO、G98 V3、G87 V2 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。
+通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO、G98 V3、G87 V2、G3M PRO、EWEADN S9、Flydigi APEX5 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。
 <!-- END GENERATED COMPATIBILITY CATALOG -->

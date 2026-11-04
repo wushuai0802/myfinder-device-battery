@@ -299,25 +299,18 @@ class TriageTests(unittest.TestCase):
 
     def test_real_issue_fixtures_ignore_cards_and_noise(self):
         known = known_ids.build_index()
-        for number, candidate_ids, ignored_ids, card_ids in (
-            (29, ("25A7:FA70", "291D:385D"), ("00FF:BACC", "06CB:CE7D"), ("A8A5:2255",)),
-            (30, ("19F5:3247", "37D7:2501"), ("04F3:31C0",), ("373B:1031", "046D:C547")),
+        for number, supported_model, ignored_ids, card_ids in (
+            (29, "MCHOSE V9 PRO", ("00FF:BACC", "06CB:CE7D"), ("A8A5:2255",)),
+            (30, "Flydigi APEX5", ("04F3:31C0",), ("373B:1031", "046D:C547")),
         ):
             with self.subTest(issue=number):
                 body = (ROOT / f"tests/fixtures/issue{number}-body.txt").read_text(encoding="utf-8")
                 result = triage.decide(issue(body, labels=("triage:supported", "in-app-feedback")), known)
-                if number == 29:  # V9 PRO is now indexed; existing supported precedence applies.
-                    self.assertEqual(result["label"], "triage:supported")
-                    self.assertIn("MCHOSE V9 PRO", result["reply"])
-                    self.assertEqual(result["remove_labels"], [])
-                else:
-                    self.assertEqual(result["label"], "triage:new-vendor")
-                    self.assertIsNone(result["reply"])
-                    self.assertEqual(result["remove_labels"], ["triage:supported"])
+                # V9 PRO and APEX5 are now indexed; supported precedence applies.
+                self.assertEqual(result["label"], "triage:supported")
+                self.assertIn(supported_model, result["reply"])
+                self.assertEqual(result["remove_labels"], [])
                 classification, ignored = result["reason"].split(" 已忽略", 1)
-                if number != 29:
-                    for device_id in candidate_ids:
-                        self.assertIn(device_id, classification)
                 for device_id in ignored_ids:
                     self.assertNotIn(device_id, classification)
                     self.assertIn(device_id, ignored)

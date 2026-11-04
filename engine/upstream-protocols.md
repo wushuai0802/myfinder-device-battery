@@ -166,6 +166,79 @@ The same `b0` exchange as the other Nova headsets, asked for with report id `06`
 
 ## Mice
 
+### HECATE G3M PRO (320F:706E)
+
+**C — pending this project's hardware validation.** `providers/g3m.py` is an
+independent battery-only implementation of [batch-3 research §4.1](research/batch3-protocols.md#41-g3m-pro-320f706e).
+Only `320F:706E / FF1C:0092` qualifies. Descriptor byte-array caps must prove
+input/output report `04` are 64 bytes including the ID; unknown caps or more
+than one eligible collection per physical receiver send nothing. Rainy75
+`320F:5088` is excluded even though it shares the collection.
+
+The only query is `04 20 00 1A 06` plus 59 zeroes; `20 00` is the little-endian
+sum of request bytes 3..63. Replies must be exactly 64 bytes, report `04`, command
+`1A`, without error `FE/FF` at byte 7, and byte 8 must be 0..100. An exact request
+echo is rejected, including an indistinguishable all-zero battery payload.
+Response checksum rules are unconfirmed and are not inferred from the request.
+Charging remains unknown (`charging_known=False`). No configuration session,
+commit, DPI, lighting, online-probe or keyboard-collection fallback is used.
+
+Sources G1/G2: BoBppy/g3mpro-macos, commit
+`6271ac2bfc482168d88e95480a8bcc5c05a16ff5`,
+[CHIDBridge.c](https://github.com/BoBppy/g3mpro-macos/blob/6271ac2bfc482168d88e95480a8bcc5c05a16ff5/Sources/CHIDBridge/CHIDBridge.c)
+(`build_packet`, `transact`, battery part of `read_snapshot_open`) and
+[README](https://github.com/BoBppy/g3mpro-macos/blob/6271ac2bfc482168d88e95480a8bcc5c05a16ff5/README.md),
+[MIT](https://github.com/BoBppy/g3mpro-macos/blob/6271ac2bfc482168d88e95480a8bcc5c05a16ff5/LICENSE),
+copyright 2026 BoBppy. Source G3: BlueEve04/G3M-PRO-Controller,
+commit `38a11b1bfcb32506f1c2951a33a9e6aaa1723033`,
+[Windows README](https://github.com/BlueEve04/G3M-PRO-Controller/blob/38a11b1bfcb32506f1c2951a33a9e6aaa1723033/README.md)
+declares MIT and independent battery polling; used only as corroborating
+documentation, not copied implementation. Sources checked 2026-11-04.
+Both licensing choices are compatible with this project's AGPL-3.0-only.
+
+Still needs hardware comparison at multiple levels, including a genuine 0%,
+sleep/wake, receiver removal, cold-start polling with the official driver closed,
+actual Windows caps and firmware variants. Charging requires separate evidence.
+
+### EWEADN S9 (089D:062F)
+
+**C — pending this project's hardware validation.** `providers/eweadn.py` follows
+[batch-3 research §4.2](research/batch3-protocols.md#42-前行者-s9-089d062f33).
+Only `089D:062F / FF01:0010` qualifies; no `FF00:0000`, wired `088D:062E`, M302
+or product-name fallback. A physical receiver must have one eligible collection.
+Descriptor byte-array caps must identify unnumbered input/output reports.
+Output is exactly 33 bytes to hidapi: `00 30` plus 31 zeroes (32-byte payload).
+The request checksum at byte 32 sums bytes 5..31, so is zero.
+
+**Input length is learned, not guessed.** The upstream `read(33)` specifies a
+buffer limit, not a descriptor. This reader requires actual input caps of
+16..34 bytes including Windows' ID slot, and reads exactly caps minus one
+(15..33 unnumbered bytes). Unknown caps, contradictory per-ID sizes, numbered
+input or insufficient capacity cause no query. These bounds describe the
+parser's supported capacity, not a claim that every such length exists in S9
+hardware. Exact hardware input caps remain to be supplied at acceptance.
+
+A reply must fill that descriptor-backed read, begin `30 00`, declare enough
+payload for bytes 4..14 without exceeding the frame, contain literal ASCII
+`M156` at 4..7, percentage 0..100 at 13 and the observed connected value `01`
+at 14. `30 02`, other model identities and invalid frames produce no reading,
+never 0%. Charging stays unknown; passive `D1` reports and unverified response
+checksums are not used. Existing engine history handles silence as unconfirmed.
+
+Sources E1/E2: [HaloBattery PR #352](https://github.com/HeyOkay/HaloBattery/pull/352),
+open when checked 2026-11-04; Rum-right/HaloBattery commit
+`c9c75371e00e42d5714416718b40992e4a6ac7e7`,
+[eweadn.py](https://github.com/Rum-right/HaloBattery/blob/c9c75371e00e42d5714416718b40992e4a6ac7e7/providers/eweadn.py),
+[MIT](https://github.com/Rum-right/HaloBattery/blob/c9c75371e00e42d5714416718b40992e4a6ac7e7/LICENSE),
+copyright 2026 Halo Battery contributors (AGPL-compatible).
+This is an independent implementation of the packet facts, with stricter
+identity, descriptor and response checks than the PR; the PR's broad matching,
+brand-wide key and charging inference are not imported.
+
+Still needs actual input caps/full frames, 70%/69% or other multi-level comparison,
+sleep/wake, removal/reconnect, independent polling and a charging/unplugged
+comparison. Other connection-state values are intentionally unaccepted.
+
 ### AM Infinity 8K (Angry Miao)
 
 **Connection:** 2.4 GHz receiver (3151:5007)
@@ -531,6 +604,44 @@ The standard Razer commands (class `0x07` id `0x80` for the level, 0-255 shown a
 The same exchange as the DeathStalker V2 Pro TKL above, with the ids and interfaces from OpenRazer's keyboard driver: DeathStalker V2 Pro 1532:0290 (receiver, `0x9F`, interface 2) and 1532:0292 (cable, `0x1F`, interface 3); BlackWidow V3 Mini HyperSpeed 1532:0271 / 0258 and BlackWidow V4 Mini HyperSpeed 1532:02BA / 02B9 (`0x9F` / `0x1F`, both on interface 3); BlackWidow V4 Tenkeyless HyperSpeed 1532:02D5 (receiver, `0x9F`, interface 2) and 1532:02D7 (cable, `0x1F`, interface 3). **Unverified** - only the DeathStalker V2 Pro TKL has been tested on hardware so far
 
 ## Controllers
+
+### Flydigi APEX5 (37D7:2501)
+
+**C — pending this project's hardware validation.** `providers/flydigi.py` follows
+[batch-3 research §4.3](research/batch3-protocols.md#43-apex5-37d72501).
+Only `37D7:2501 / FFA0:0001` qualifies, with one eligible collection per physical
+device. Input report `04` and output report `03` must each be proven 32-byte
+byte arrays by Windows caps, including the report ID. APEX5's additional output
+`08` (13 bytes including ID) is allowed but never written; its capacity cannot
+substitute for report `03`. `FFEE:0001`, charging docks and other PIDs are excluded.
+
+The only request is GET_INFO: `03 5A A5 01 02 03` plus 26 zeroes, with the request
+sum `03` at byte 5. No IMU/third-party-control enable, rumble, trigger, lighting
+or mode-setting commands are sent. Replies must be exactly 32 bytes, start
+`04 5A A5 01 01 00 80` (observed single-fragment APEX5 model) and identify wired
+`01` or dongle `02` at byte 7. Other models/fragments remain unknown.
+
+Byte 12's low nibble is a tier 0..5, mapped to 0/20/40/60/80/100 with a nonempty
+`approx` label and `kind="gamepad"`. It is never advertised as 1% precision.
+High nibble `01` is the vendor charging sentinel: report charging and explicitly
+clear the percentage, including any historical value. High nibble `00` is the
+non-charging case and requires tier <=5; other states are rejected, without
+clamping bad tiers to charging. No response checksum algorithm is assumed.
+
+Sources F1/F2/F3: mkaliaha/openflydigi commit
+`11653507bbe4dc77f3c479c2a7aaebf25bbda995`,
+[PROTOCOL.md §2/§7](https://github.com/mkaliaha/openflydigi/blob/11653507bbe4dc77f3c479c2a7aaebf25bbda995/PROTOCOL.md)
+(CC0-1.0),
+[device.py](https://github.com/mkaliaha/openflydigi/blob/11653507bbe4dc77f3c479c2a7aaebf25bbda995/flydigi/device.py)
+and [motion.py](https://github.com/mkaliaha/openflydigi/blob/11653507bbe4dc77f3c479c2a7aaebf25bbda995/flydigi/motion.py)
+(MIT, copyright 2026 Mikalai Kaliaha), checked 2026-11-04.
+The [per-file licence index](https://github.com/mkaliaha/openflydigi/blob/11653507bbe4dc77f3c479c2a7aaebf25bbda995/LICENSE)
+distinguishes MIT protocol code from the GPL GUI. Only protocol facts were
+independently implemented; MIT/CC0 are compatible with this project's AGPL.
+
+Still needs Windows wired/dongle caps, all six tiers, charging/unplugging,
+sleep/wake, removal/reconnect, official-software coexistence and cross-firmware
+comparison. Source-reported wired/dongle success is not this project's acceptance.
 
 ### 8BitDo Pro 2, Pro 3, SN30 Pro, SF30 Pro in D-input mode
 
