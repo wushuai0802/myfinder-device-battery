@@ -62,7 +62,7 @@
     {"provider":"hyperx_cloud3","name":"HyperX Cloud III 与已列明Core变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3.py"},
     {"provider":"hyperx","name":"HyperX Cloud II 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx.py"},
     {"provider":"keychron","name":"Keychron M5 / Ultra-Link 8K","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/keychron.py"},
-    {"provider":"pulsar","name":"Pulsar / ATK / VXE / Hitscan 已列明型号及 ATK FF02 协议族","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/pulsar.py","matchScope":"既有匹配表不变；表外373B仅FF02:0002且输出恰好17字节；协议族匹配，未实测；排除原生373B:1278，不开放DPI"},
+    {"provider":"pulsar","name":"Pulsar / ATK / VXE / VGN / Scyrox / Hitscan 已列明型号及 ATK FF02 协议族","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/pulsar.py","matchScope":"新增VGN F2 Master+ 3554:FB56、VXE R1 SE 1K 3554:F58E，与Scyrox 3554:F517均仅FF02:0002且输出恰好17字节；待实机验证；不含3554:F505；其余既有表项规则不变，表外373B也须FF02:0002及17字节；排除原生373B:1278，不开放DPI","reference":"engine/upstream-protocols.md#compx-receiver-batch-fb56-f58e-and-deferred-f505--k99-v3"},
     {"provider":"jbl","name":"JBL Quantum 910 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/jbl.py"},
     {"provider":"logitech","name":"Logitech HID++ 与已列明G系列耳机","kinds":["mouse","keyboard","headset"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/logitech.py"},
     {"provider":"steelseries","name":"SteelSeries 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/steelseries.py"},
@@ -97,6 +97,28 @@
         {"connection":"2.4G","productName":"2.4G Wireless Keyboard","usagePage":"FFB5","usage":"0001","inputBytes":8,"outputBytes":8,"featureBytes":0,"standardBatteryCandidates":0,"checkedOn":"2026-10-18"}
       ],
       "notes": "2.4G缺少现有标准电量字段，官方驱动产品匹配和65字节Feature通道也不适用。共享VID/PID不是其他键盘命令可用的证据；不发送未经验证的私有命令，不刷固件或屏幕Flash。"
+    },
+    {
+      "id": "vgn_f505_observed",
+      "name": "VGN Dragonfly 4K Receiver (3554:F505)",
+      "kind": "mouse",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"3554","productId":"F505","productName":"VGN Dragonfly 4K Receiver"},
+      "capabilities": [],
+      "reference": "engine/upstream-protocols.md#compx-receiver-batch-fb56-f58e-and-deferred-f505--k99-v3",
+      "notes": "#49仅有枚举；现有本地参考及调研未把F505明确对应到CompX电量协议，暂不接入。待精确ID的协议证据、描述符及实机验证，不按相邻PID或FF02集合推断。"
+    },
+    {
+      "id": "mchose_k99_v3_observed",
+      "name": "MCHOSE K99 V3 2.4G (3837:3033)",
+      "kind": "keyboard",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"3837","productId":"3033","productName":"MCHOSE K99 V3 2.4G"},
+      "capabilities": [],
+      "reference": "engine/research/batch2-protocols.md#1-g87-v2可实现使用-glw-键盘协议",
+      "notes": "#43仅有枚举；K99记录的03命令/回复byte8与G87的05配置D[32]不同，缺少该型号固件复用GLW电量字段的证据，暂不扩展产品名；待描述符、协议字段确认及实机验证。"
     }
   ]
 }

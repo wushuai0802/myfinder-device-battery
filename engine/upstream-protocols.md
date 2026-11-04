@@ -353,6 +353,47 @@ Sources above were read on **2026-11-04**. OpenMouse mouse-protocol commit
 vendor driver code or protocol is imported in this batch; Scyrox reuses the
 existing battery exchange.
 
+### CompX receiver batch: FB56, F58E and deferred F505 / K99 V3
+
+Reviewed on **2026-11-04**. The original reports #55, #47, #49 and #43 are
+preserved in `engine/tests/fixtures/feedback/issue*-body.txt`. They establish
+USB IDs, product strings and collections only; they contain no report lengths
+or battery responses. All caps, replies, paths and interface placeholders used
+by `test_compx_batch.py` are synthetic, not captures from these devices.
+
+| Device | Decision and exact-ID evidence |
+| --- | --- |
+| VGN Dragonfly F2 Master+ `3554:FB56` (#55) | Added, **C / 待实机验证**. [Batch 3 §5.6](research/batch3-protocols.md#56-dragonfly-3-se-391d1a01) explicitly records that OpenMouse's VGN transport accepts `3554:FB56/FB57`, `FF02`, report `08` with 16 payload bytes, and its VGN codec defines battery command `04` and `sum=55`. Only the requested `FB56` is added. |
+| VXE R1 SE 1K receiver `3554:F58E` (#47) | Added, **C / 待实机验证**. The supplied [OpenMouse ATK client](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/atk/hid.ts) explicitly defines `VXE_R1_COMPX_RECEIVER_PID = 0xf58e`; its CompX transport uses `FF02:0002`, report `08` plus 16 payload bytes. `readBattery()` uses `04`, with percentage/charging at payload offsets 5/6 (raw offsets 6/7), followed by big-endian millivolts. |
+| VGN Dragonfly 4K Receiver `3554:F505` (#49; reporter calls the mouse ATK F1 Pro Max) | **Not added; D / observed, unsupported.** No exact-ID battery-protocol evidence was found in the supplied OpenMouse reference files or local research. The product name and `FF02:0002` enumeration alone do not prove CompX command `04` or its reply layout. |
+| MCHOSE K99 V3 `3837:3033`, product `MCHOSE K99 V3 2.4G` (#43) | **Not added; D / observed, unsupported.** [Batch 2 §1](research/batch2-protocols.md#1-g87-v2可实现使用-glw-键盘协议) records the shared PID but warns that the community K99 trace uses `55 03 ...` and reply byte 8, whereas the official G87 GLW path uses `05` and configuration `D[32]`. That does not establish that K99 can reuse the G87 battery field. G87's exact product-name match remains unchanged. |
+
+The two added IDs use the existing `pulsar` battery exchange, sharing Scyrox's
+strict selection: exact VID/PID, `FF02:0002`, and a known output report length
+of **exactly 17 bytes** before opening for IO. Unknown or other lengths and all
+sibling collections receive no query. Only `08 04` plus zero arguments and the
+existing checksum is sent. Existing reply header/command/checksum/percentage
+validation remains in force; silence or invalid replies never trigger another
+collection or protocol. Other pre-existing IDs retain their matching rules.
+
+For FB56/F58E, still needed: each receiver's actual descriptor, successful
+standalone reads compared with the vendor display, charging transitions and
+sleep/wake behavior. For F505, first obtain a driver implementation or capture
+explicitly mapping that ID to the battery command, response fields and checksum,
+then confirm its report lengths. For K99, obtain exact product/firmware evidence
+for the GLW configuration offset and charging bit (or a separately documented
+protocol), plus report IDs/lengths and correlated battery/charging captures.
+No speculative `03` query or alternate K99 reader is introduced in this batch.
+
+Source boundary: F58E's local OpenMouse ATK source is supplied at commit
+`30d6ad37d0ecc9fff53f86d5058d67a88e07150d`, **AGPL-3.0-or-later**. FB56 relies
+on the existing research's V2/V3 findings and AGPL-3.0 attribution; those
+[VGN transport](https://github.com/OpenMouse-Project/mouse-protocol/blob/main/src/drivers/vgn/hid.ts)
+and [VGN codec](https://github.com/OpenMouse-Project/mouse-protocol/blob/main/src/vgn/index.ts)
+links are mutable `main` references, not the supplied pinned ATK snapshot.
+The K99 community source has no confirmed reuse licence in the research and
+is not copied. No vendor driver code, settings writes or DPI commands are added.
+
 ### MCHOSE A7 V3 Pro (3837:1018)
 
 **C / 待本项目实机验证.** Implemented on 2026-11-04 in `providers/mchose.py`,

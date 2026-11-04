@@ -12,7 +12,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "feedback"
 
 def feedback_inventory(issue):
     body = (FIXTURES / f"issue{issue}-body.txt").read_text(encoding="utf-8")
-    section = body.split("未取得电量的设备\n", 1)[1].split("```", 1)[0]
+    # Some reports append reader health in the same fenced block after a blank
+    # line. Parse only the device section, never health rows or existing cards.
+    section = body.split("未取得电量的设备\n", 1)[1].split("```", 1)[0].split("\n\n", 1)[0]
     inventory = []
     for row, line in enumerate(section.splitlines()):
         match = re.fullmatch(r'([0-9A-F]{4}):([0-9A-F]{4}) "(.*)" (.+)', line)
