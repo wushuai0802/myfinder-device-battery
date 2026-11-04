@@ -2,6 +2,7 @@ param()
 $ErrorActionPreference='Stop'
 $project=Split-Path -Parent $PSScriptRoot
 $fixture=Join-Path $env:TEMP ('device-pack-tests-'+[Guid]::NewGuid().ToString('N'))
+$publisherTemp=Join-Path $fixture 'temp'
 $oldPath=$env:PATH
 $utf8=New-Object Text.UTF8Encoding($false)
 $global:checks=0
@@ -59,12 +60,21 @@ function Invoke-WebRequest {
     }
     if($global:tamper -and $Uri -like '*deno.net*' -and $name.EndsWith($global:tamper)){[IO.File]::WriteAllText($OutFile,'corrupt',$utf8)}
 }
-function Publish([switch]$DryRun){& $publisher -PrivateKeyPath $key -Repository test-owner/test-repo -DryRun:$DryRun}
+function Publish([switch]$DryRun){
+    $oldTemp=$env:TEMP;$oldTmp=$env:TMP
+    try{
+        $env:TEMP=$publisherTemp;$env:TMP=$publisherTemp
+        & $publisher -PrivateKeyPath $key -Repository test-owner/test-repo -DryRun:$DryRun
+    }finally{
+        $env:TEMP=$oldTemp;$env:TMP=$oldTmp
+        Assert (@(Get-ChildItem -LiteralPath $publisherTemp -Directory -Filter 'device-pack-publish-*').Count -eq 0) 'publisher cleans temporary files after each invocation'
+    }
+}
 function Must-Fail([scriptblock]$Action,[string]$Message){$failed=$false;try{& $Action | Out-Null}catch{$failed=$true};Assert $failed $Message}
 function Uploads {return @($global:calls | Where-Object {$_[0] -eq 'release' -and $_[1] -eq 'upload'})}
 function Mutations {return @($global:calls | Where-Object {$_[0] -eq 'release'})}
 try {
-    New-Item -ItemType Directory -Path $fixture,(Join-Path $fixture 'scripts/device-pack'),(Join-Path $fixture 'engine/providers'),(Join-Path $fixture 'devices/pack'),(Join-Path $fixture 'remote') -Force | Out-Null
+    New-Item -ItemType Directory -Path $fixture,$publisherTemp,(Join-Path $fixture 'scripts/device-pack'),(Join-Path $fixture 'engine/providers'),(Join-Path $fixture 'devices/pack'),(Join-Path $fixture 'remote') -Force | Out-Null
     $global:remoteRoot=Join-Path $fixture 'remote';$source=Join-Path $fixture 'devices/pack/source.json'
     $publisher=Join-Path $fixture 'scripts/Publish-DevicePack.ps1';$key=Join-Path $fixture 'test-private.xml'
     foreach($name in @('Publish-DevicePack.ps1','Sign-DevicePack.ps1','validate_device_pack.py','DevicePackTrust.cs','DevicePackValidation.cs','DevicePackUnicode.cs','device-pack/PublishCheck.cs')){
@@ -128,7 +138,7 @@ try {
     Reset-Remote;$global:tamper='.sig';Must-Fail {Publish} 'downloaded mirror signature is checked'
     Reset-Remote;$global:tamper='.json';Must-Fail {Publish} 'downloaded mirror digest is checked'
     Assert ((Get-FileHash -LiteralPath $key).Hash -eq $keyHash) 'private key remains unchanged'
-    Assert (@(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'device-pack-publish-*').Count -eq 0) 'publisher cleans temporary files on success and failure'
+    Assert (@(Get-ChildItem -LiteralPath $publisherTemp -Directory -Filter 'device-pack-publish-*').Count -eq 0) 'publisher cleans temporary files on success and failure'
     Write-Output ("PASS $global:checks device-pack publication checks; fake gh/HTTP and ephemeral key only.")
 } finally {
     $env:PATH=$oldPath
