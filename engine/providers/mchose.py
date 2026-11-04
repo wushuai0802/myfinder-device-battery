@@ -50,6 +50,9 @@ than by model list, which is what this provider does as well. The diagnostics in
 (a MCHOSE A7 V2 Ultra, 3837:100b, RealTek strings, collections 0xFF0B:0x104 and
 0xFF01:0x01 on interface 2) have exactly that shape, and the reference documents the status
 read on the *short* 0x11 report, so both report ids are tried before a poll gives up.
+Exception: A7 V3's 3837:1018 receiver shares the configuration collection but uses
+output report 0x4D and a different command set (OpenMouse's V3 codec). It is excluded
+from this legacy reader; see the 2026-11-04 feedback notes in upstream-protocols.md.
 
 The first-generation A5 Pro Max (0x2023 - the 1K receiver F013, the 4K receiver F015 and the
 wired mouse F019; issue #149) speaks a third exchange, taken from the community web driver
@@ -391,6 +394,12 @@ class MchoseProvider(Provider):
 
         found: Dict[str, List[Tuple[int, bool, int, int]]] = {}   # key -> readings
         for (vid, pid), ifaces in groups.items():
+            if (vid, pid) == (0x3837, 0x1018):
+                # Feedback #24: A7 V3 shares FF01:0001 with V2 but uses output
+                # report 0x4D, not the inverted 0x11/0x12 feature protocol.
+                # A new protocol is outside this reuse-only batch; do not probe V2.
+                self._diag.append("[MCHOSE] 3837:1018: V3 protocol not implemented; skipped")
+                continue
             key = device_key(vid, pid)
             product = (ifaces[0].get("product_string") or "").strip()
             if product:

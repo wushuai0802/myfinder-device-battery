@@ -319,7 +319,10 @@ class PulsarTest(unittest.TestCase):
             for pid in pids:
                 with self.subTest(vid=vid, pid=pid):
                     bus = FakeBus(vid, pid, [reply(33)])
-                    P.output_length = lambda path: None
+                    # Scyrox requires descriptor evidence; legacy models still
+                    # exercise the established unknown-length allowance here.
+                    length = P.PAYLOAD_LEN if (vid, pid) == (0x3554, 0xF517) else None
+                    P.output_length = lambda path: length
                     P.hidlist = types.SimpleNamespace(enumerate=bus.enumerate)
                     P.hid = types.SimpleNamespace(device=bus.device_class())
                     found = P.PulsarProvider().poll()

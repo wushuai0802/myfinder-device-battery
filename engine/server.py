@@ -119,6 +119,18 @@ def inventory_safe_name(name, inventory):
     return name
 
 
+# Exact devices observed in feedback, not whole vendors (ASUS/ITE also make peripherals).
+UNADAPTED_NOISE_IDS = frozenset({
+    (0xFFAA, 0xAAFF),  # Tecent Virtual Hid Device
+    (0xDEED, 0xFEED),  # UMDF Virtual vhidev device
+    (0xBACD, 0x001F),  # Virtual Multitouch Device
+    (0x048D, 0xC100),  # ITE Device(8910), lighting controller
+    (0x0B05, 0x19AF),  # AURA LED Controller
+    (0x0CF2, 0x7750),  # MS-ARGB
+})
+UNADAPTED_NOISE_NAME = re.compile(r"\b(?:virtual|argb|led\s+controller|aura)\b", re.I)
+
+
 def unadapted_devices(inventory, previous):
     """Allowlisted model metadata from existing inventory only; never probe HID."""
     from topology import physical_groups
@@ -127,6 +139,11 @@ def unadapted_devices(inventory, previous):
     for physical, infos in physical_groups(inventory).items():
         if public_id(physical) in known or any((d.get("vendor_id"), d.get("product_id")) in NATIVE for d in infos):
             continue
+        # Filter only diagnostic rows, leaving discovery and provider routing intact.
+        # A lighting function must not hide a different peripheral in the same group.
+        infos = [d for d in infos
+                 if (d.get("vendor_id"), d.get("product_id")) not in UNADAPTED_NOISE_IDS
+                 and not UNADAPTED_NOISE_NAME.search(str(d.get("product_string") or ""))]
         if not any(d.get("usage_page", 0) >= 0xFF00 or
                    (d.get("usage_page"), d.get("usage")) == (1, 2) for d in infos):
             continue

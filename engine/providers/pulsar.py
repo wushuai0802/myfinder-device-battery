@@ -4,7 +4,9 @@ MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matchi
 (协议族匹配，未实测; level C). Only FF02:0002 with a known output length of exactly
 17 bytes receives the existing power query. FF04/FF05 alone and unknown lengths
 are not sufficient. No model catalog or DPI commands are added; the server keeps
-native 373B:1278 excluded. Listed models retain their original selection rules.
+native 373B:1278 excluded. Scyrox 3554:F517 also requires FF02:0002 and exactly
+17 output bytes; it is pending hardware verification in this project. Other listed
+models retain their original selection rules.
 
 Protocol from andrewrabert/python-pulsar-mouse-tool, which also backs the
 "HID: pulsar" driver in review for the Linux kernel and lists these ids:
@@ -165,6 +167,7 @@ PIDS: Dict[int, Dict[int, str]] = {
         0xF58F: "ATK VXE R1 SE+ (wired)",
         0xF58A: "VXE R1 Pro Max (2.4 GHz)",
         0xF58C: "VXE R1 Pro Max (wired)",
+        0xF517: "Scyrox 8K 接收器",  # 待实机验证; OpenMouse Scyrox report-8 family
     },
     0x373B: {
         0x1085: "ATK VXE R1 SE+ (2.4 GHz)",
@@ -310,7 +313,19 @@ class PulsarProvider(Provider):
                 if not mine:
                     continue
                 key = f"pulsar:{vid:04x}{pid:04x}"
-                if pid in pids:
+                if (vid, pid) == (0x3554, 0xF517):
+                    # Feedback #19 has the right collections but omits report sizes.
+                    # Require descriptor evidence before sending the one known protocol;
+                    # unknown length and sibling collections are never fallbacks.
+                    d = next((d for d in mine if (d.get("usage_page"), d.get("usage")) == CONTROL_USAGE
+                              and output_length(d["path"]) == PAYLOAD_LEN), None)
+                    if d is not None:
+                        present.add(key)
+                    name = next((str(info.get("product_string") or "").strip()
+                                 for info in ([d] if d is not None else []) + mine
+                                 if str(info.get("product_string") or "").strip()), pids[pid])
+                    self._diag.append("  Scyrox 3554:f517: 待实机验证; requires FF02:0002 / output=17")
+                elif pid in pids:
                     present.add(key)
                     d = self._pick(mine)
                     name = pids[pid]

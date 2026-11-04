@@ -6,6 +6,7 @@ from unittest.mock import patch
 from test_engine_reliability import FakePool, DeviceStatus, hidlist, poll_fixture, server
 from isolation import IsolationError
 from providers import pulsar
+from _feedback import feedback_inventory
 
 
 def collection(group, vid=0x373B, pid=0x120A, page=0xFF02, usage=2, **extra):
@@ -120,6 +121,59 @@ class UnadaptedTests(unittest.TestCase):
         result = engine.poll(force=True)["unadapted"]
         self.assertEqual(len(result), 2)
         self.assertEqual(sorted(len(item["collections"]) for item in result), [1, 2])
+
+    def test_feedback_filters_noise_but_keeps_unadapted_peripherals(self):
+        expected = {
+            19: {(0x3554, 0xF517), (0x372E, 0x105C)},
+            22: {(0x3554, 0xFA09)},
+            24: {(0x093A, 0x0255), (0x3837, 0x1018), (0x3837, 0x3033),
+                 (0x39A5, 0x3FF1), (0x8087, 0x0A1E)},
+            25: {(0x1D57, 0xFA60), (0x3554, 0xFA07), (0x3554, 0xFA09)},
+        }
+        for issue, identities in expected.items():
+            with self.subTest(issue=issue):
+                pool, engine = self.engine(feedback_inventory(issue))
+                with patch.object(pulsar, "output_length", side_effect=AssertionError("no diagnostic probes")):
+                    result = engine.poll(force=True)
+                self.assertEqual({(d["vendorId"], d["productId"]) for d in result["unadapted"]}, identities)
+                self.assertTrue(all(name in ("topology", "bluetooth") for name, _ in pool.calls))
+
+    def test_exact_noise_ids_are_hidden_even_without_names(self):
+        for vid, pid in ((0xFFAA, 0xAAFF), (0xDEED, 0xFEED), (0xBACD, 0x001F),
+                         (0x048D, 0xC100), (0x0B05, 0x19AF), (0x0CF2, 0x7750)):
+            with self.subTest(vid=vid, pid=pid):
+                info = collection("noise", vid=vid, pid=pid)
+                info["product_string"] = ""
+                self.assertEqual(server.unadapted_devices([info], {}), [])
+                # The next PID of the same vendor is not suppressed.
+                info["product_id"] = pid + 1
+                self.assertEqual(len(server.unadapted_devices([info], {})), 1)
+
+    def test_noise_keywords_are_case_insensitive_words_not_vendor_or_substring_filters(self):
+        names = ("Other VIRTUAL HID device", "MS-aRgB", "USB LED  Controller", "ASUS aUrA")
+        for name in names:
+            with self.subTest(name=name):
+                info = collection("noise", vid=0x1234, pid=0x5678)
+                info["product_string"] = name
+                self.assertEqual(server.unadapted_devices([info], {}), [])
+        for name in ("Aurora 75 PRO", "Auralis Wireless Mouse", "Virtuality Keyboard", "RGB Gaming Mouse",
+                     "CHARGBoard", "ROG Gladius III Aimpoint", "ITE Wireless Keyboard", "", None):
+            with self.subTest(name=name):
+                info = collection("peripheral", vid=0x0B05, pid=0x1A72)
+                info["product_string"] = name
+                self.assertEqual(len(server.unadapted_devices([info], {})), 1)
+
+    def test_lighting_function_does_not_hide_another_model_in_same_physical_group(self):
+        noise = collection("shared", vid=0x0B05, pid=0x19AF)
+        noise["product_string"] = "AURA LED Controller"
+        peripheral = collection("shared", vid=0x0B05, pid=0x1A72)
+        peripheral["product_string"] = "ROG Gladius III Aimpoint"
+        inventory = [noise, peripheral]
+        saved = [dict(d) for d in inventory]
+        result = server.unadapted_devices(inventory, {})
+        self.assertEqual([(d["vendorId"], d["productId"], d["product"]) for d in result],
+                         [(0x0B05, 0x1A72, "ROG Gladius III Aimpoint")])
+        self.assertEqual(inventory, saved)
 
 
 if __name__ == "__main__":

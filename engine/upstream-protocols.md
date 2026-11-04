@@ -180,6 +180,70 @@ The same feature report exchange as the WLmouse and G-Wolves mice (`00 00 02 02 
 
 A third MCHOSE exchange, on a third vendor id: 64-byte feature reports on the vendor collection (usage page `0xFFFF`, report id 0), from the community web driver [z750sasr/mchose-a5-pro-max-web-driver](https://github.com/z750sasr/mchose-a5-pro-max-web-driver) - the same route/length/page/command framing for every command, battery on page `0x00` command `0x83`, whose reply carries the `0xA1` marker, echoes page and command, and holds the charging state in byte 6 and the level in byte 7 (clamped to 100, as the reference clamps it). The transport is corroborated by [Klegus/mchose-macos](https://github.com/Klegus/mchose-macos), an independent reverse-engineering of the same vendor id's driver. **Confirmed on hardware** (@Pekish992, [#149](https://github.com/HeyOkay/HaloBattery/issues/149)): his 1K receiver answered 22 % and then 25 % while charging, matching the MCHOSE software and its charging animation; the 4K receiver and cable ids are still untried
 
+### Feedback batch 1: Scyrox and deferred MCHOSE / CompX keyboards (2026-11-04)
+
+The original issue bodies #19, #22, #24 and #25 are preserved under
+`engine/tests/fixtures/feedback/`. They supply USB IDs, product strings and
+usage-page/usage pairs, **not** manufacturer strings or report lengths. Test
+paths, interface placeholders, descriptor lengths and replies are synthetic;
+passing these tests does not establish a reading on the reporter's hardware.
+
+**Scyrox Turbo 8k dongle, `3554:F517`: added, 待实机验证 (level C).** #19 has
+`FF02:0002`, `FF03:0000` and `FF04:0002`. OpenMouse's
+[Scyrox catalog](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/scyrox/index.ts)
+and [V8S hardware notes](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/docs/scyrox-v8s-testing.md)
+explicitly identify this PID and product string and record command `0x04`
+returning 60% / 3931 mV discharging on the receiver. Its
+[Scyrox client](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/scyrox/hid.ts)
+inherits the Atlantis report-8 transport. The
+[shared constants and checksum](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/pulsar/index.ts)
+use report ID 8 plus 16 payload bytes, the existing provider's 17-byte frame;
+the [battery decoder](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/lamzu/atlantis.ts)
+agrees on percentage, charging and big-endian millivolt offsets.
+
+Only this PID is added to `pulsar.PIDS`. Before opening it for IO, the reader
+requires `FF02:0002` and an actual `OutputReportByteLength` of exactly 17.
+Missing/other lengths or wrong collections produce no query; silence never
+falls through to another collection or protocol. Only the existing battery
+query is sent, with no DPI/settings writes. The name comes from the receiver's
+product string (including a sibling collection if necessary), falling back to
+`Scyrox 8K 接收器`. The reader's existing C verification level is retained.
+Still needed: the #19 device's descriptor and a live reading/charging comparison;
+the upstream notes warn that the official UI smooths a voltage-derived value,
+which can differ from the device's raw percentage. No other Scyrox IDs are added.
+
+**MCHOSE A7 V3 Pro, `3837:1018`: not added.** Matching `FF01:0001` does not
+establish the V2 protocol, and #24 has neither RealTek strings nor feature report
+lengths. More decisively, OpenMouse's
+[V3 codec](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/mchose/v3.ts)
+assigns `1018` to the V3 8K receiver: 64-byte **output** frames with report ID
+`0x4D`, plain payload with an XOR checksum, and command `0x0900` for identity
+and power. This cannot reuse V2's inverted `0x11`/`0x12` feature reports or
+command `0x06`. The old vendor-wide MCHOSE matcher now skips this exact ID before
+opening it, and the offline supported-ID index does not claim it. A new V3
+reader belongs in a separately scoped batch, with descriptors and battery /
+charging captures from the exact Pro model; the upstream hardware evidence
+describes an Ultra+ sibling. Existing V2 behavior is preserved.
+
+**CompX keyboard receivers `3554:FA09` (#22, #25) and `3554:FA07` (#25): not
+added.** `FF02:0002` is transport shape, not evidence that a keyboard answers a
+mouse battery command. The reviewed OpenMouse mouse package `0.49.0` and
+[keyboard package `1.6.1`](https://www.npmjs.com/package/@openmouse/keyboard-protocol/v/1.6.1)
+contain no matching keyboard IDs / CompX keyboard battery implementation. The
+repository's existing `pulsar.py`, `gwolves.py` and G-Wolves Compx notes describe
+mouse framing and mouse battery reads only. They do not justify a keyboard
+command or reply offsets. Both IDs remain unclaimed and receive no mouse query.
+Needed: an official-driver USB capture with the exact receiver ID, collection,
+report IDs/lengths, battery command/reply, and corresponding level/charging state,
+or an independently documented compatible implementation. Any future entries
+must use `kind=keyboard` and remain pending hardware verification.
+
+Sources above were read on **2026-11-04**. OpenMouse mouse-protocol commit
+`30d6ad37d0ecc9fff53f86d5058d67a88e07150d` and the two published packages use
+**AGPL-3.0-or-later**, compatible with this project's AGPL-3.0 license. No new
+vendor driver code or protocol is imported in this batch; Scyrox reuses the
+existing battery exchange.
+
 ### MCHOSE A7 V2 Ultra
 
 **Connection:** 2.4 GHz receiver (3837:100B, RealTek strings)
