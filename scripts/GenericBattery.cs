@@ -223,6 +223,7 @@ namespace AtkBattery {
         [DataMember(Name="suppressed",EmitDefaultValue=false)] public SuppressedDevice[] Suppressed;
         [DataMember(Name="nativeMousePresent")] public bool? NativeMousePresent;
         [DataMember(Name="providerCount")] public int ProviderCount;
+        [DataMember(Name="importedProviderCount")] public int ImportedProviderCount;
         [DataMember(Name="health")] public ReaderHealth[] Health;
         [DataMember(Name="errors")] public string[] Errors;
         [DataMember(Name="error")] public string Error;

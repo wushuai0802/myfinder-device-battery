@@ -51,6 +51,8 @@ foreach($document in @('compatibility.md','verification.md')) {
         Copy-Item -LiteralPath (Join-Path $root ('docs\'+$document)) -Destination (Join-Path $stage ('docs\'+$document))
     }
 }
+Write-DeviceBatteryProviderCount $stage
+# Hash release.json only after adding the engine-derived count.
 $manifest=New-DeviceBatteryPackageManifest $stage
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression

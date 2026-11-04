@@ -50,6 +50,21 @@ function Resolve-DeviceBatteryPayloadPath([string]$Root,[string]$Relative) {
     return $full
 }
 
+function Write-DeviceBatteryProviderCount([string]$Root) {
+    # Use the staged runtime and staged engine. This path imports/constructs
+    # every reader in an isolated child without enumerating or querying devices.
+    $result=& (Join-Path $Root 'engine\runtime\python.exe') -I -B -u (Join-Path $Root 'engine\server.py') --package-smoke --once
+    if($LASTEXITCODE -ne 0){throw 'Packaged engine self-test failed.'}
+    $snapshot=$result | ConvertFrom-Json
+    if($snapshot.schema -ne 2 -or $snapshot.complete -ne $true -or $snapshot.packageSmoke -ne $true -or
+        "$($snapshot.providerCount)" -notmatch '^\d+$' -or [int]$snapshot.providerCount -le 0 -or
+        $snapshot.importedProviderCount -ne $snapshot.providerCount -or $snapshot.error -or
+        @($snapshot.errors).Count -ne 0 -or @($snapshot.devices).Count -ne 0){throw 'Packaged readers did not all import successfully.'}
+    $release=Read-DeviceBatteryRelease $Root
+    $release | Add-Member -MemberType NoteProperty -Name providerCount -Value $snapshot.providerCount -Force
+    [IO.File]::WriteAllText((Join-Path $Root 'release.json'),($release | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))
+}
+
 function Get-DeviceBatteryEngineFiles([string]$EngineDirectory) {
     $pending=New-Object 'System.Collections.Generic.Stack[string]'
     $pending.Push([IO.Path]::GetFullPath($EngineDirectory))

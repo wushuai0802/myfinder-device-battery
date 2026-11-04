@@ -27,6 +27,9 @@ function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShor
     $script:iconRefreshPaths=@($Executable,$StartupShortcut,$ManualShortcut)
 }
 $manifest=Read-DeviceBatteryPackageManifest $extracted
+$release=Read-DeviceBatteryRelease $extracted
+if("$($release.providerCount)" -notmatch '^\d+$' -or [int]$release.providerCount -le 0){throw 'The package has no valid reader count.'}
+$expectedProviderCount=[int]$release.providerCount
 # Extract and validate the actual unsigned CI archive using the offline updater validator.
 # A release signature is created locally after CI; this never needs the private key.
 function Assert-SmokeArchiveValidation([string]$Archive,[string]$Destination,[int]$ExpectedExitCode) {
@@ -117,7 +120,7 @@ function Assert-SmokeChildrenExited($Children) {
     }
 }
 
-function Read-SmokeResult($Process) {
+function Read-SmokeResult($Process,[int]$ExpectedCount=$expectedProviderCount) {
     # .NET Framework may inherit a BOM-emitting Console.InputEncoding from
     # PowerShell 7. JSON Lines must begin with a JSON token, not a UTF-8 BOM.
     $command=[Text.Encoding]::ASCII.GetBytes('{"command":"poll","requestId":1,"generation":1,"force":true}'+[char]10)
@@ -129,11 +132,77 @@ function Read-SmokeResult($Process) {
         $result=$line.Result | ConvertFrom-Json
         if($result.complete) {
             if($result.schema -ne 2 -or $result.packageSmoke -ne $true -or $result.requestId -ne 1 -or $result.generation -ne 1 -or
-                $result.providerCount -ne 26 -or @($result.devices).Count -ne 0 -or @($result.errors).Count -ne 0){throw ('The installed portable engine failed its no-hardware self-test: '+($result | ConvertTo-Json -Compress -Depth 6))}
+                $result.providerCount -ne $ExpectedCount -or $result.importedProviderCount -ne $ExpectedCount -or $result.error -or
+                @($result.devices).Count -ne 0 -or @($result.errors).Count -ne 0){throw ('The installed portable engine failed its no-hardware self-test: '+($result | ConvertTo-Json -Compress -Depth 6))}
             return $result
         }
     }
     throw 'Too many portable worker progress frames.'
+}
+
+function Assert-CountRegressionApp([string]$Root,[int]$ExpectedCount,[int]$ExpectedExit) {
+    $process=Start-InstalledSmoke (Join-Path $Root 'outputs\AtkMouseBattery.exe') '--package-smoke'
+    try {
+        $read=$process.StandardOutput.ReadToEndAsync()
+        if(-not $process.WaitForExit(20000) -or -not $read.Wait(2000) -or $process.ExitCode -ne $ExpectedExit){throw 'Reader-count regression returned an unexpected application exit code.'}
+        $value=$read.Result.Trim() | ConvertFrom-Json
+        if($ExpectedExit -eq 0 -and ($value.providerCount -ne $ExpectedCount -or $value.importedProviderCount -ne $ExpectedCount -or $value.error)){throw 'Application did not accept the added reader.'}
+        if($ExpectedExit -ne 0 -and -not $value.error){throw 'Application failed without reporting a smoke error.'}
+    } finally {
+        if(-not $process.HasExited){$process.Kill();$null=$process.WaitForExit(5000)}
+        $process.Dispose()
+    }
+}
+
+function Test-ProviderCountGrowth {
+    # Exercise the same metadata writer used by Package.ps1 against a disposable
+    # copy of the real payload, with one additional inert reader and catalog row.
+    $fixture=Join-Path $testRoot 'additional reader package'
+    Copy-Item -LiteralPath $extracted -Destination $fixture -Recurse
+    $utf8=New-Object Text.UTF8Encoding($false)
+    $serverPath=Join-Path $fixture 'engine\server.py'
+    $server=[IO.File]::ReadAllText($serverPath)
+    $server=$server.Replace('PROVIDERS = (',('PROVIDERS = ('+[char]10+'    ("package_count_fixture", "PackageCountFixtureProvider"),'))
+    [IO.File]::WriteAllText($serverPath,$server,$utf8)
+    $providerPath=Join-Path $fixture 'engine\providers\package_count_fixture.py'
+    [IO.File]::WriteAllText($providerPath,"class PackageCountFixtureProvider:`n    pass`n",$utf8)
+    $catalogPath=Join-Path $fixture 'engine\compatibility.json'
+    $catalog=Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $entry=$catalog.readers[0] | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $entry.provider='package_count_fixture';$entry.name='Package count fixture'
+    $catalog.readers=@($catalog.readers)+@($entry)
+    [IO.File]::WriteAllText($catalogPath,($catalog | ConvertTo-Json -Depth 20),$utf8)
+    $null=& (Join-Path $fixture 'engine\runtime\python.exe') -I -B (Join-Path $fixture 'engine\catalog.py') --sync-docs
+    if($LASTEXITCODE -ne 0){throw 'Additional reader catalog fixture is invalid.'}
+    Write-DeviceBatteryProviderCount $fixture
+    $grown=Read-DeviceBatteryRelease $fixture
+    if($grown.providerCount -ne ($expectedProviderCount+1)){throw 'Packaging did not derive the additional reader count.'}
+    $null=New-DeviceBatteryPackageManifest $fixture
+    Assert-CountRegressionApp $fixture $grown.providerCount 0
+    $releasePath=Join-Path $fixture 'release.json'
+    $saved=[IO.File]::ReadAllText($releasePath)
+    # Missing, malformed, absent and mismatched metadata must all fail closed.
+    Move-Item -LiteralPath $releasePath -Destination ($releasePath+'.saved')
+    try {Assert-CountRegressionApp $fixture 0 1}
+    finally {Move-Item -LiteralPath ($releasePath+'.saved') -Destination $releasePath}
+    $absent=$saved | ConvertFrom-Json;$absent.PSObject.Properties.Remove('providerCount')
+    $grown.providerCount++
+    try {
+        foreach($invalid in @('{',($absent | ConvertTo-Json -Depth 6),($grown | ConvertTo-Json -Depth 6))) {
+            [IO.File]::WriteAllText($releasePath,$invalid,$utf8)
+            Assert-CountRegressionApp $fixture 0 1
+        }
+        $rejected=$false
+        try {$null=Read-DeviceBatteryPackageManifest $fixture}catch{$rejected=$true}
+        if(-not $rejected){throw 'The manifest accepted changed reader-count metadata.'}
+    } finally {[IO.File]::WriteAllText($releasePath,$saved,$utf8)}
+    # Keep the declaration/count intact but break the new reader's import.
+    [IO.File]::WriteAllText($providerPath,"raise ImportError('fixture import failure')`n",$utf8)
+    $rejected=$false
+    try {Write-DeviceBatteryProviderCount $fixture}catch{$rejected=$true}
+    if(-not $rejected){throw 'Packaging accepted a reader that failed to import.'}
+    Assert-CountRegressionApp $fixture 0 1
+    Write-Output 'PASS reader-count growth, manifest protection, missing/invalid metadata and failed import regressions'
 }
 
 $main=$null;$worker=$null;$children=@()
@@ -144,7 +213,8 @@ try {
     $read=$main.StandardOutput.ReadToEndAsync()
     if(-not $main.WaitForExit(20000) -or -not $read.Wait(2000) -or $main.ExitCode -ne 0){throw 'The installed application/reader smoke harness failed.'}
     $appResult=$read.Result.Trim() | ConvertFrom-Json
-    if($appResult.schema -ne 1 -or $appResult.packageSmoke -ne $true -or $appResult.version -cne $manifest.version -or $appResult.providerCount -ne 26 -or $appResult.error){throw 'The installed application smoke result is invalid.'}
+    if($appResult.schema -ne 1 -or $appResult.packageSmoke -ne $true -or $appResult.version -cne $manifest.version -or
+        $appResult.providerCount -ne $expectedProviderCount -or $appResult.importedProviderCount -ne $expectedProviderCount -or $appResult.error){throw 'The installed application smoke result is invalid.'}
     $main.Dispose();$main=$null
     $worker=Start-InstalledSmoke (Join-Path $target 'engine\runtime\python.exe') ('-I -B -u "'+(Join-Path $target 'engine\server.py')+'" --package-smoke')
     $result=Read-SmokeResult $worker
@@ -164,10 +234,12 @@ try {
     $worker.Dispose();$worker=$null
     $leftovers=@(Get-Process -Name AtkMouseBattery,python,pythonw -ErrorAction SilentlyContinue | Where-Object {$_.Path -and $_.Path.StartsWith($target+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)})
     if($leftovers.Count -gt 0){throw 'Installed package smoke left running child processes.'}
+    Test-ProviderCountGrowth
     Uninstall-DeviceBatteryStartup -SourceRoot $extracted -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs -RemoveProgram -RemoveData|Out-Null
     $report=[ordered]@{schema=1;version=$manifest.version;zipSha256=$actualHash;packageFiles=@($manifest.files).Count;
         archiveValidation=$true;backslashArchiveRejected=$true;invalidArchiveRejected=$true;existingExtractionRejected=$true;
         isolatedInstall=$true;actualAppSmoke=$true;portableReaderImports=$true;providerCount=$result.providerCount;
+        importedProviderCount=$result.importedProviderCount;providerCountGrowth=$true;invalidProviderCountRejected=$true;failedImportRejected=$true;
         gracefulEofCleanup=$true;abruptParentCleanup=$true;hardwareAccess=$false;realStartupChanged=$false}
     [IO.File]::WriteAllText((Join-Path $testRoot 'package-smoke-result.json'),($report | ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
     Write-Output ('PASS complete final ZIP smoke: '+$manifest.version+'; actual app + portable worker; no hardware or real startup changes')

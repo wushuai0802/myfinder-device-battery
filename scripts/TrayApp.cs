@@ -1483,6 +1483,12 @@ namespace AtkBatteryTray {
         }
     }
     static class Program {
+        [System.Runtime.Serialization.DataContract] sealed class PackageSmokeRelease {
+            [System.Runtime.Serialization.DataMember(Name="schema")] public int Schema;
+            [System.Runtime.Serialization.DataMember(Name="appId")] public string AppId;
+            [System.Runtime.Serialization.DataMember(Name="version")] public string Version;
+            [System.Runtime.Serialization.DataMember(Name="providerCount")] public int ProviderCount;
+        }
         [STAThread] static void Main(string[] args) {
             // Offline entry points run before single-instance, UI, settings or hardware initialization.
             if(args.Length==6&&args[0]=="--verify-update-package"){
@@ -1504,7 +1510,17 @@ namespace AtkBatteryTray {
             if(args.Length==1&&args[0]=="--audio-broker"){AudioBrokerClient.RunServer();return;}
             if(args.Length==1&&args[0]=="--exit"){using(var stop=new ShowPanelSignal("Local\\MyFinderDeviceBattery.Exit"))stop.Request();return;}
             if(args.Length==1&&args[0]=="--package-smoke"){
-                using(var output=new StreamWriter(Console.OpenStandardOutput(),new UTF8Encoding(false)) {AutoFlush=true})try{using(var worker=new GenericBatteryWorker(null,true)){var snapshot=worker.Poll(true);bool ok=String.IsNullOrEmpty(snapshot.Error)&&snapshot.ProviderCount==26;output.WriteLine("{\"schema\":1,\"packageSmoke\":true,\"version\":\""+AppRuntime.Version+"\",\"providerCount\":"+snapshot.ProviderCount+",\"error\":\""+(ok?"":"package_reader_failed")+"\"}");Environment.ExitCode=ok?0:1;}}catch(Exception){output.WriteLine("{\"schema\":1,\"packageSmoke\":true,\"error\":\"package_smoke_failed\"}");Environment.ExitCode=1;}return;
+                using(var output=new StreamWriter(Console.OpenStandardOutput(),new UTF8Encoding(false)) {AutoFlush=true})try{
+                    string root=Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,".."));
+                    var release=UpdateJson.ReadFile<PackageSmokeRelease>(Path.Combine(root,"release.json"),65536);
+                    if(release==null||release.Schema!=1||release.AppId!="myfinder-device-battery"||release.Version!=AppRuntime.Version||release.ProviderCount<=0)throw new InvalidDataException("Invalid package reader count.");
+                    using(var worker=new GenericBatteryWorker(null,true)){
+                        var snapshot=worker.Poll(true);
+                        bool ok=String.IsNullOrEmpty(snapshot.Error)&&snapshot.Errors!=null&&snapshot.Errors.Length==0&&snapshot.Complete&&
+                            snapshot.ProviderCount==release.ProviderCount&&snapshot.ImportedProviderCount==release.ProviderCount;
+                        output.WriteLine("{\"schema\":1,\"packageSmoke\":true,\"version\":\""+AppRuntime.Version+"\",\"providerCount\":"+snapshot.ProviderCount+",\"importedProviderCount\":"+snapshot.ImportedProviderCount+",\"error\":\""+(ok?"":"package_reader_failed")+"\"}");Environment.ExitCode=ok?0:1;
+                    }
+                }catch(Exception){output.WriteLine("{\"schema\":1,\"packageSmoke\":true,\"error\":\"package_smoke_failed\"}");Environment.ExitCode=1;}return;
             }
             NativeDisplay.EnableDpiAwareness();
             if(args.Length==2 && args[0]=="--preview") {

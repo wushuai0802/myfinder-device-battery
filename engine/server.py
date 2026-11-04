@@ -391,10 +391,14 @@ def reader_child():
             if action == "smoke":
                 from catalog import validate_catalog
                 validate_catalog()
+                imported = 0
                 for name, _ in PROVIDERS:
                     provider_class(name)()
+                    imported += 1
                 provider_class("standard_hid")()
-                response = {"providerCount": len(PROVIDERS) + 1, "devices": []}
+                imported += 1
+                response = {"providerCount": len(PROVIDERS) + 1,
+                            "importedProviderCount": imported, "devices": []}
             elif action == "topology":
                 current = command.get("paths")
                 physical = command.get("physicalId")
@@ -410,7 +414,7 @@ def reader_child():
                     response = {"inventory": selected}
                 else:
                     # Retry inaccessible descriptors at a bounded rate. Ordinary
-                    # polls share one topology and do not enumerate 26 times.
+                    # polls share one topology and do not enumerate repeatedly.
                     if current != topology_paths or time.monotonic() - topology_at >= 30:
                         inventory = discover(current, NATIVE, full=True)
                         topology_paths, topology_at = current, time.monotonic()
@@ -499,6 +503,7 @@ class BatteryEngine:
         self._direct = providers is not None
         self.providers = providers if providers is not None else [name for name, _ in PROVIDERS] + ["standard_hid"]
         self.package_smoke = package_smoke
+        self.imported_provider_count = 0
         self.device_pack = device_pack or EMPTY_PACK
         if self._direct and self.device_pack.loaded:
             for provider in self.providers:
@@ -601,6 +606,7 @@ class BatteryEngine:
                 "unadapted": self.unadapted,
                 "suppressed": suppressed,
                 "providerCount": len(self.providers), "errors": (list(self.errors) + errors)[:32],
+                "importedProviderCount": self.imported_provider_count,
                 "health": health, "checkedAtUtc": utcnow(), "packageSmoke": self.package_smoke}
 
     def _accept(self, reader_key, name, statuses, now, physical="", candidate_count=0, diagnostics=()):
@@ -868,6 +874,7 @@ class BatteryEngine:
                                       "checkedAtUtc": utcnow()}
 
         if self.package_smoke:
+            self.imported_provider_count = 0
             pending.append(("smoke", "package", "", {"action": "smoke"}, 5))
         else:
             if not device_id or target_name != "bluetooth":
@@ -1029,6 +1036,11 @@ class BatteryEngine:
                                 state.pop(key, None)
                         self._deferred.difference_update(removed)
                     elif action == "smoke":
+                        count = result.get("importedProviderCount")
+                        if (type(count) is not int or count != len(self.providers)
+                                or result.get("providerCount") != count):
+                            raise IsolationError("invalid_response")
+                        self.imported_provider_count = count
                         self.health["package"] = {"provider": "package", "state": "ok", "scope": "provider", "deviceCount": 0}
                     else:
                         raw = result.get("statuses", [])
