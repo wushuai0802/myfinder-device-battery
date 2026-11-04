@@ -17,14 +17,14 @@ namespace AtkBattery {
         public void Dispose(){try{if(Body!=null)Body.Dispose();}finally{if(close!=null)close();}}
     }
     internal sealed class UpdateHttp:IUpdateTransport {
-        readonly string userAgent;
-        internal UpdateHttp(string version){userAgent="MyFinderDeviceBattery/"+UpdateVersion.Parse(version);}
+        readonly string userAgent;readonly int timeout;
+        internal UpdateHttp(string version,int timeoutMilliseconds=30000){userAgent="MyFinderDeviceBattery/"+UpdateVersion.Parse(version);timeout=timeoutMilliseconds;}
         public UpdateResponse Get(Uri uri,CancellationToken token){
             // Framework 4.7.2 is the application's existing minimum. Restrict this client to TLS 1.2.
             ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
             ServicePointManager.CheckCertificateRevocationList=true;
             var request=(HttpWebRequest)WebRequest.Create(uri);request.Method="GET";request.UserAgent=userAgent;
-            request.AllowAutoRedirect=false;request.Timeout=30000;request.ReadWriteTimeout=30000;request.UseDefaultCredentials=false;request.Credentials=null;
+            request.AllowAutoRedirect=false;request.Timeout=timeout;request.ReadWriteTimeout=timeout;request.UseDefaultCredentials=false;request.Credentials=null;
             request.AutomaticDecompression=DecompressionMethods.None;
             var registration=token.Register(request.Abort);
             try {

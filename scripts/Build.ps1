@@ -31,6 +31,7 @@ using System.Reflection;
 [IO.File]::WriteAllText($assembly,$metadata.Replace('{ASSEMBLY}',$release.assemblyVersion).Replace('{VERSION}',$release.version),(New-Object Text.UTF8Encoding($false)))
 $uiSources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
 $uiSources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
+$uiSources+=('/resource:'+(Join-Path $projectRoot 'engine\device_pack_schema.json')+',DevicePackSchema')
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/win32icon:$iconPath" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $uiSources $assembly
 if ($LASTEXITCODE -ne 0) { throw 'Tray build failed.' }
 & (Join-Path $buildOutput 'AtkBatteryProbe.exe') --self-test
@@ -41,5 +42,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Appearance preview failed.' }
 if(-not $?){throw 'Regression checks failed.'}
 $buildInfo=[ordered]@{schema=2;version=$release.version;releaseSha256=(Get-FileHash -LiteralPath (Join-Path $projectRoot 'release.json') -Algorithm SHA256).Hash.ToLowerInvariant();
     files=@('AtkMouseBattery.exe','AtkBatteryProbe.exe' | ForEach-Object {[pscustomobject]@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $buildOutput $_) -Algorithm SHA256).Hash.ToLowerInvariant()}});
-    sources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Sort-Object Name | ForEach-Object {[pscustomobject]@{path=('scripts/'+$_.Name);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})+@([pscustomobject]@{path=$iconRelative;sha256=(Get-FileHash -LiteralPath $iconPath -Algorithm SHA256).Hash.ToLowerInvariant()})}
+    sources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Sort-Object Name | ForEach-Object {[pscustomobject]@{path=('scripts/'+$_.Name);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})+@([pscustomobject]@{path=$iconRelative;sha256=(Get-FileHash -LiteralPath $iconPath -Algorithm SHA256).Hash.ToLowerInvariant()},[pscustomobject]@{path='engine/device_pack_schema.json';sha256=(Get-FileHash -LiteralPath (Join-Path $projectRoot 'engine\device_pack_schema.json') -Algorithm SHA256).Hash.ToLowerInvariant()})}
 [IO.File]::WriteAllText((Join-Path $buildOutput 'build-info.json'),($buildInfo | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))

@@ -129,13 +129,19 @@ namespace AtkBatteryTray {
             var rect=TextRect(input);bool hadVertical=(input.ScrollBars&ScrollBars.Vertical)!=0,hadHorizontal=(input.ScrollBars&ScrollBars.Horizontal)!=0;
             int width=Math.Max(1,rect.Right-rect.Left+(hadVertical?SystemInformation.VerticalScrollBarWidth:0));
             int height=Math.Max(1,rect.Bottom-rect.Top+(hadHorizontal?SystemInformation.HorizontalScrollBarHeight:0));
+            int nativeLines=SendMessage(input.Handle,0x00BA,IntPtr.Zero,IntPtr.Zero).ToInt32();
             bool vertical=false,horizontal=false;var flags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.TextBoxControl|TextFormatFlags.ExpandTabs;
             // Start with the full viewport, then account for either scrollbar taking space.
             for(int pass=0;pass<3;pass++){
                 int availableWidth=Math.Max(1,width-(vertical?SystemInformation.VerticalScrollBarWidth:0));
                 var size=TextRenderer.MeasureText(input.Text+"\u200b",input.Font,new Size(input.WordWrap?availableWidth:Int32.MaxValue,Int32.MaxValue),flags|(input.WordWrap?TextFormatFlags.WordBreak:0));
                 horizontal=!input.WordWrap&&size.Width>availableWidth;
-                vertical=size.Height>height-(horizontal?SystemInformation.HorizontalScrollBarHeight:0);
+                // Unwrapped diagnostic lines do not depend on scrollbar width.
+                // Use EDIT's line metrics before recreating its handle: a GDI
+                // estimate can disagree by one line at a short-window boundary,
+                // then the native correction below would undo it on every turn.
+                long textHeight=input.WordWrap?size.Height:(long)nativeLines*input.Font.Height;
+                vertical=textHeight>height-(horizontal?SystemInformation.HorizontalScrollBarHeight:0);
             }
             var wanted=(vertical?ScrollBars.Vertical:ScrollBars.None)|(horizontal?ScrollBars.Horizontal:ScrollBars.None);
             if(input.ScrollBars!=wanted)input.ScrollBars=wanted;

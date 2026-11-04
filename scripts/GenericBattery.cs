@@ -19,19 +19,19 @@ namespace AtkBattery {
         const int UrlLimit=6000;
         readonly List<string> devices=new List<string>(),suppressed=new List<string>(),unadapted=new List<string>(),health=new List<string>();
         readonly string header;
-        internal FeedbackReport(string version,string windows,IEnumerable<WirelessDevice> cards,IEnumerable<SuppressedDevice> hidden,IEnumerable<UnadaptedDevice> unknown,IEnumerable<ReaderHealth> readers,IEnumerable<string> privateValues){
+        internal FeedbackReport(string version,string windows,IEnumerable<WirelessDevice> cards,IEnumerable<SuppressedDevice> hidden,IEnumerable<UnadaptedDevice> unknown,IEnumerable<ReaderHealth> readers,IEnumerable<string> privateValues,string devicePack="未使用型号数据包"){
             var secrets=new List<string>();foreach(string value in privateValues)if(!String.IsNullOrEmpty(value))secrets.Add(value);
             secrets.Sort(delegate(string a,string b){return b.Length.CompareTo(a.Length);});
             Func<string,string> clean=delegate(string value){
                 foreach(string secret in secrets)value=Regex.Replace(value??"",Regex.Escape(secret),"[redacted]",RegexOptions.IgnoreCase);
                 return CleanField(value);
             };
-            header="MyFinder Device Battery "+CleanField(version)+"\r\nWindows "+CleanField(windows);
+            header="MyFinder Device Battery "+CleanField(version)+"\r\nWindows "+CleanField(windows)+"\r\n"+devicePack;
             foreach(var d in cards){
                 // The worker permits 64 cards, plus the two native readers.
                 if(d==null||devices.Count>=66)continue;
                 string model=d.VendorId.HasValue&&d.ProductId.HasValue&&UnadaptedDevice.Word(d.VendorId.Value)&&UnadaptedDevice.Word(d.ProductId.Value)?" | "+d.VendorId.Value.ToString("X4")+":"+d.ProductId.Value.ToString("X4"):"";
-                devices.Add(clean(d.Name)+" | "+clean(d.Kind)+" | "+clean(d.Provider)+" | "+(d.Percent.HasValue?(d.Approximate?"约":"")+d.Percent+"%":"未知")+" | 当前读数："+(d.MeasurementState=="current"?"是":"否")+model);
+                devices.Add(clean(d.Name)+" | "+clean(d.Kind)+" | "+clean(d.Provider)+" | "+(d.Percent.HasValue?(d.Approximate?"约":"")+d.Percent+"%":"未知")+" | 当前读数："+(d.MeasurementState=="current"?"是":"否")+model+(d.ModelSource=="pack"?" | 来自数据包，待验证":""));
             }
             foreach(var d in hidden)if(d!=null&&suppressed.Count<16)suppressed.Add(clean(d.Name)+" | "+clean(d.Kind));
             foreach(var d in unknown)if(d!=null&&unadapted.Count<16&&UnadaptedDevice.Word(d.VendorId)&&UnadaptedDevice.Word(d.ProductId)){
@@ -149,6 +149,7 @@ namespace AtkBattery {
         [DataMember(Name="approximate")] public bool Approximate;
         [DataMember(Name="provider")] public string Provider;
         [DataMember(Name="transport")] public string Transport;
+        [DataMember(Name="modelSource",EmitDefaultValue=false)] public string ModelSource;
         [DataMember(Name="confirmedAtUtc")] public string ConfirmedAtUtc;
         [DataMember(Name="measuredAtUtc")] public string MeasuredAtUtc;
         [DataMember(Name="connectionCheckedAtUtc")] public string ConnectionCheckedAtUtc;
@@ -205,11 +206,18 @@ namespace AtkBattery {
         [DataMember(Name="name")] public string Name;
         [DataMember(Name="kind")] public string Kind;
     }
+    [DataContract] public sealed class WirelessDevicePack {
+        [DataMember(Name="version")] public long? Version;
+        [DataMember(Name="loaded")] public bool Loaded;
+        [DataMember(Name="disabled")] public object[] Disabled;
+    }
     [DataContract] public sealed class WirelessSnapshot {
         [DataMember(Name="schema")] public int Schema;
         [DataMember(Name="requestId")] public long RequestId;
         [DataMember(Name="generation")] public int Generation;
         [DataMember(Name="complete")] public bool Complete;
+        [DataMember(Name="ready")] public bool Ready;
+        [DataMember(Name="devicePack",EmitDefaultValue=false)] public WirelessDevicePack DevicePack;
         [DataMember(Name="devices")] public WirelessDevice[] Devices;
         [DataMember(Name="unadapted",EmitDefaultValue=false)] public UnadaptedDevice[] Unadapted;
         [DataMember(Name="suppressed",EmitDefaultValue=false)] public SuppressedDevice[] Suppressed;
@@ -232,9 +240,13 @@ namespace AtkBattery {
         Process process;
         IntPtr job;
         bool disposed,quarantined;
+        DevicePackManager packManager;
+        readonly string explicitPackPath;readonly long explicitPackVersion;
+        long loadedPackVersion;int failedPackGeneration=-1;
         sealed class DpiLease {internal string Token;internal int Current;internal int[] Stages;internal DateTime Checked;internal int Generation;}
         readonly Dictionary<string,DpiLease> dpiLeases=new Dictionary<string,DpiLease>(StringComparer.Ordinal);
-        internal GenericBatteryWorker(string engineRoot=null,bool packageSmoke=false,int timeoutMilliseconds=45000,Func<Process,bool> terminateProcess=null){root=engineRoot??Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","engine"));smoke=packageSmoke;queryBudget=Math.Max(100,Math.Min(45000,timeoutMilliseconds));terminate=terminateProcess??TryTerminate;}
+        internal GenericBatteryWorker(string engineRoot=null,bool packageSmoke=false,int timeoutMilliseconds=45000,Func<Process,bool> terminateProcess=null,string devicePackPath=null,long devicePackVersion=0){root=engineRoot??Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","engine"));smoke=packageSmoke;queryBudget=Math.Max(100,Math.Min(45000,timeoutMilliseconds));terminate=terminateProcess??TryTerminate;explicitPackPath=devicePackPath;explicitPackVersion=devicePackVersion;}
+        internal void UseDevicePacks(DevicePackManager manager){lock(query){if(process!=null)throw new InvalidOperationException("Attach device packs before starting the worker.");packManager=manager;}}
         internal bool Available {get{return File.Exists(Path.Combine(root,"runtime","python.exe"))&&File.Exists(Path.Combine(root,"server.py"));}}
         [StructLayout(LayoutKind.Sequential)] struct BasicLimits {
             public long PerProcess,PerJob;public uint Flags;public UIntPtr MinWorking,MaxWorking;public uint ActiveLimit;public UIntPtr Affinity;public uint Priority,Scheduling;
@@ -249,9 +261,13 @@ namespace AtkBattery {
             if(disposed)throw new ObjectDisposedException("GenericBatteryWorker");
             if(quarantined&&!Stop())throw new IOException("上次设备读取进程仍未退出，控制暂时停用。");
             if(process!=null&&!process.HasExited)return process;
+            if(process!=null)ReportPackFailure();
             if(!Stop())throw new IOException("上次设备读取进程仍未退出，控制暂时停用。");
             if(!Available)throw new IOException("请使用带设备读取组件的完整发行包。");
-            var info=new ProcessStartInfo(Path.Combine(root,"runtime","python.exe"),"-I -B -u \""+Path.Combine(root,"server.py")+"\""+(smoke?" --package-smoke":"")) {
+            for(int attempt=0;attempt<3;attempt++)using(var lease=packManager==null?null:packManager.OpenForStart()){
+            string packPath=lease==null?explicitPackPath:lease.Path;
+            loadedPackVersion=lease==null?explicitPackVersion:lease.Record.Version;
+            var info=new ProcessStartInfo(Path.Combine(root,"runtime","python.exe"),"-I -B -u \""+Path.Combine(root,"server.py")+"\""+(smoke?" --package-smoke":"")+(packPath==null?"":" --device-pack "+UpdateProcess.Quote(packPath))) {
                 WorkingDirectory=root,UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,
                 RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8
             };
@@ -261,15 +277,40 @@ namespace AtkBattery {
                 if(!SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(ExtendedLimits)))||!AssignProcessToJobObject(job,process.Handle)){Stop();throw new IOException("Reader process lifetime protection failed.");}}
             else{Stop();throw new IOException("Reader process lifetime protection failed.");}
             generation++;
+            if(lease!=null){
+                try{var ready=ReadyCore(process,loadedPackVersion,20000,CancellationToken.None);packManager.SetLoaded(loadedPackVersion,ready.DevicePack.Disabled==null?0:ready.DevicePack.Disabled.Length);}
+                catch(Exception){long rejected=loadedPackVersion;if(!Stop())throw new IOException("pack_engine_stop_failed");packManager.StartupRejected(rejected);continue;}
+            }
             return process;
+            }
+            throw new IOException("pack_startup_failed");
         }}
+        internal WirelessSnapshot Ready(long version,int timeoutMilliseconds,CancellationToken token){lock(query){try{return ReadyCore(Start(),version,Math.Min(20000,timeoutMilliseconds),token);}catch{Stop();throw;}}}
+        WirelessSnapshot ReadyCore(Process child,long version,int timeoutMilliseconds,CancellationToken token){
+            token.ThrowIfCancellationRequested();long request=Interlocked.Increment(ref sequence);int currentGeneration=generation;
+            child.StandardInput.WriteLine("{\"command\":\"ready\",\"requestId\":"+request+",\"generation\":"+currentGeneration+"}");child.StandardInput.Flush();
+            var result=Receive(child,request,currentGeneration,null,null,timeoutMilliseconds,token);
+            if(!String.IsNullOrEmpty(result.Error)||!result.Ready||result.Schema!=2||result.DevicePack==null||!result.DevicePack.Loaded||result.DevicePack.Version!=version)throw new InvalidDataException("pack_ready_rejected");
+            return result;
+        }
+        internal bool ActivatePack(string staging,long version,Func<string> promote,CancellationToken token){lock(query){
+            token.ThrowIfCancellationRequested();if(disposed)throw new ObjectDisposedException("GenericBatteryWorker");
+            using(var lease=packManager==null?null:packManager.LockTrial(staging))
+            using(var trial=new GenericBatteryWorker(root,smoke,20000,null,staging,version)){
+                trial.Ready(version,20000,token);if(!trial.Stop())throw new IOException("pack_trial_stop_failed");
+                token.ThrowIfCancellationRequested();promote();
+            }
+            if(!Stop())throw new IOException("pack_engine_stop_failed");
+            Start();return loadedPackVersion==version;
+        }}
+        void ReportPackFailure(){if(!disposed&&packManager!=null&&loadedPackVersion>0&&failedPackGeneration!=generation){failedPackGeneration=generation;packManager.EngineFailed(loadedPackVersion,DateTime.UtcNow);}}
         internal WirelessSnapshot Poll(bool force=false,string deviceId=null,Action<WirelessSnapshot> progress=null,bool parkEmptyReaders=false,string physicalId=null) {lock(query){
             try {
                 if(deviceId!=null&&physicalId!=null||deviceId!=null&&!Regex.IsMatch(deviceId,@"^device-[a-f0-9]{24}$")||physicalId!=null&&!Regex.IsMatch(physicalId,@"^device-[a-f0-9]{24}$"))return new WirelessSnapshot {Error="无效或冲突的设备刷新目标。"};
                 var child=Start();int currentGeneration=generation;long request=Interlocked.Increment(ref sequence);
                 child.StandardInput.WriteLine("{\"command\":\"poll\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"force\":"+(force?"true":"false")+",\"parkEmptyReaders\":"+(parkEmptyReaders?"true":"false")+(deviceId==null?"":",\"deviceId\":\""+deviceId+"\"")+(physicalId==null?"":",\"physicalId\":\""+physicalId+"\"")+"}");child.StandardInput.Flush();
-                return Receive(child,request,currentGeneration,progress,null);
-            }catch(Exception){Stop();return new WirelessSnapshot {Error="设备读取组件暂不可用，保留最近数据。"};}
+                var result=Receive(child,request,currentGeneration,progress,null);if(!String.IsNullOrEmpty(result.Error))ReportPackFailure();return result;
+            }catch(Exception){Stop();ReportPackFailure();return new WirelessSnapshot {Error="设备读取组件暂不可用，保留最近数据。"};}
         }}
         internal WirelessSnapshot SetDpi(string deviceId,string targetToken,int dpi,int expectedDpi) {
             int submittedGeneration;lock(lifecycle)submittedGeneration=generation;
@@ -286,14 +327,15 @@ namespace AtkBattery {
                 long request=Interlocked.Increment(ref sequence);
                 attempted=true;
                 child.StandardInput.WriteLine("{\"command\":\"set_dpi\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"deviceId\":\""+deviceId+"\",\"dpi\":"+dpi+",\"targetToken\":\""+targetToken+"\",\"expectedDpi\":"+expectedDpi+"}");child.StandardInput.Flush();
-                return Receive(child,request,currentGeneration,null,write);
-            }catch(Exception){Stop();return DpiFailure(write,attempted?"DPI操作结果未确认，请先同步；未自动重试。":"DPI控制暂不可用，请先同步。",attempted);}
+                var result=Receive(child,request,currentGeneration,null,write);if(!String.IsNullOrEmpty(result.Error))ReportPackFailure();return result;
+            }catch(Exception){Stop();if(attempted)ReportPackFailure();return DpiFailure(write,attempted?"DPI操作结果未确认，请先同步；未自动重试。":"DPI控制暂不可用，请先同步。",attempted);}
         }}
-        WirelessSnapshot Receive(Process child,long request,int currentGeneration,Action<WirelessSnapshot> progress,WirelessDpiResult write){
+        WirelessSnapshot Receive(Process child,long request,int currentGeneration,Action<WirelessSnapshot> progress,WirelessDpiResult write,int timeoutMilliseconds=0,CancellationToken token=default(CancellationToken)){
+            int budget=timeoutMilliseconds>0?timeoutMilliseconds:queryBudget;
             var clock=Stopwatch.StartNew();var reader=child.StandardOutput;
             for(int frames=0;frames<128;frames++){
                 var line=Task.Factory.StartNew(delegate{return AppRuntime.ReadLineBounded(reader,524288);});
-                if(!line.Wait(Math.Max(1,queryBudget-(int)clock.ElapsedMilliseconds))){Stop();return write==null?new WirelessSnapshot {Error="设备读取超时，保留最近数据。"}:DpiFailure(write,"DPI响应超时，结果未确认；未自动重试。",true);}
+                if(!line.Wait(Math.Max(1,budget-(int)clock.ElapsedMilliseconds),token)){Stop();return write==null?new WirelessSnapshot {Error="设备读取超时，保留最近数据。"}:DpiFailure(write,"DPI响应超时，结果未确认；未自动重试。",true);}
                 var snapshot=Parse(line.Result);
                 if(!String.IsNullOrEmpty(snapshot.Error)){Stop();return write==null?snapshot:DpiFailure(write,"DPI返回结果无效，结果未确认。",true);}
                 if(snapshot.Schema==1){if(write!=null){Stop();return DpiFailure(write,"DPI返回结果不能核对，结果未确认。",true);}snapshot.Complete=true;RememberDpi(snapshot,child,currentGeneration);return snapshot;}
@@ -313,7 +355,7 @@ namespace AtkBattery {
                     RememberDpi(snapshot,child,currentGeneration);return snapshot;
                 }
                 if(write==null&&progress!=null)progress(snapshot);
-                if(clock.ElapsedMilliseconds>=queryBudget)break;
+                if(clock.ElapsedMilliseconds>=budget)break;
             }
             Stop();return write==null?new WirelessSnapshot {Error="设备读取未能在预算内完成。"}:DpiFailure(write,"DPI操作未能在预算内确认；未自动重试。",true);
         }
@@ -327,7 +369,7 @@ namespace AtkBattery {
         internal static WirelessSnapshot Parse(string json) {
             if(String.IsNullOrEmpty(json)||json.Length>524288)return new WirelessSnapshot {Error="无效的设备读取结果。"};
             WirelessSnapshot snapshot;
-            try {using(var stream=new MemoryStream(Encoding.UTF8.GetBytes(json)))snapshot=(WirelessSnapshot)new DataContractJsonSerializer(typeof(WirelessSnapshot),new DataContractJsonSerializerSettings {MaxItemsInObjectGraph=4096}).ReadObject(stream);}
+            try {using(var stream=new MemoryStream(Encoding.UTF8.GetBytes(json)))snapshot=(WirelessSnapshot)new DataContractJsonSerializer(typeof(WirelessSnapshot),new DataContractJsonSerializerSettings {MaxItemsInObjectGraph=32768}).ReadObject(stream);}
             catch(SerializationException){return new WirelessSnapshot {Error="设备读取结果格式无效。"};}
             if(snapshot==null||(snapshot.Schema!=1&&snapshot.Schema!=2)||!String.IsNullOrEmpty(snapshot.Error))return new WirelessSnapshot {Error="设备读取尚未完成。"};
             var devices=new List<WirelessDevice>();var seen=new HashSet<string>(StringComparer.Ordinal);
@@ -337,6 +379,7 @@ namespace AtkBattery {
                 if(!Regex.IsMatch(value.LegacyId??"",@"^device-[a-f0-9]{24}$"))value.LegacyId=null;
                 if(!Regex.IsMatch(value.PhysicalId??"",@"^device-[a-f0-9]{24}$"))value.PhysicalId=null;
                 value.Name=Clean(value.Name,80,"无线设备");value.Provider=Clean(value.Provider,48,"");value.Transport=Clean(value.Transport,32,"");
+                value.ModelSource=value.ModelSource=="pack"?"pack":null;
                 if(!value.VendorId.HasValue||!value.ProductId.HasValue||!UnadaptedDevice.Word(value.VendorId.Value)||!UnadaptedDevice.Word(value.ProductId.Value)){value.VendorId=null;value.ProductId=null;}
                 if(value.Kind!="mouse"&&value.Kind!="headset"&&value.Kind!="keyboard")value.Kind="device";
                 if(value.Percent<0||value.Percent>100)value.Percent=null;
@@ -351,7 +394,7 @@ namespace AtkBattery {
                     foreach(int stage in dpi.Stages??new int[0]){if(!WirelessDpi.ValidValue(stage)||stages.Contains(stage)){validStages=false;continue;}if(stages.Count<8)stages.Add(stage);}
                     dpi.Stages=stages.ToArray();if(dpi.Current.HasValue&&!WirelessDpi.ValidValue(dpi.Current.Value))dpi.Current=null;
                     dpi.Error=Clean(dpi.Error,160,"");if(dpi.StageSource!="onboard"&&dpi.StageSource!="quick")dpi.StageSource=null;
-                    if(snapshot.Schema!=2||value.Kind!="mouse")dpi.Supported=false;
+                    if(snapshot.Schema!=2||value.Kind!="mouse"||value.ModelSource=="pack")dpi.Supported=false;
                     dpi.CanSet=dpi.CanSet&&snapshot.RequestId>0&&snapshot.Generation>0&&validStages&&dpi.CanWrite(value,dpi.TargetToken);
                     if(!dpi.CanSet)DisableDpi(dpi);
                 }
@@ -391,7 +434,7 @@ namespace AtkBattery {
             snapshot.Devices=devices.ToArray();return snapshot;
         }
         static string Clean(string value,int max,string fallback){var result=new StringBuilder();foreach(char c in value??"")if(!Char.IsControl(c)&&result.Length<max)result.Append(c);return result.Length==0?fallback:result.ToString();}
-        internal void Reset(){Stop();}
+        internal void Reset(){lock(lifecycle){failedPackGeneration=generation;Stop();}}
         static bool TryTerminate(Process value){
             try{if(value.HasExited)return true;value.Kill();return value.WaitForExit(2000)||value.HasExited;}
             catch(InvalidOperationException){try{return value.HasExited;}catch(InvalidOperationException){return false;}catch(System.ComponentModel.Win32Exception){return false;}}

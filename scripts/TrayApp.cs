@@ -653,12 +653,15 @@ namespace AtkBatteryTray {
     }
     public sealed class TrayContext:ApplicationContext {
         UpdateController updates;
+        DevicePackManager devicePacks;
+        DevicePackController devicePackChecks;
+        internal string DevicePackDiagnostic {get{return devicePacks==null?"未使用型号数据包":devicePacks.Diagnostic;}}
         bool updateBalloon;
         internal string UpdateStatus {get{return updates==null?"尚未检查":updates.Status;}}
         internal string UpdateFailure {get{return updates==null?null:updates.LastFailure;}}
         internal bool UpdateAvailable {get{return updates!=null&&updates.Available;}}
         internal void OpenUpdate(){if(updates!=null)updates.Open();}
-        internal void CheckUpdates(){if(updates!=null)updates.Check(false);}
+        internal void CheckUpdates(){if(devicePackChecks!=null)devicePackChecks.Check(false);if(updates!=null)updates.Check(false);}
         readonly NotifyIcon tray=new NotifyIcon();
         readonly TrayIconSet trayIcons;
         readonly Dictionary<string,string> groupDeviceKeys=new Dictionary<string,string>(StringComparer.Ordinal);
@@ -790,7 +793,7 @@ namespace AtkBatteryTray {
             }
             return result;
         }
-        public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute,null,null,MouseBattery.SetActiveDpiStage) {
+        public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute,null,null,MouseBattery.SetActiveDpiStage,null,true) {
             updates=new UpdateController(dispatch,delegate{if(details!=null&&!details.IsDisposed)details.Invalidate();},delegate(string title,string message,bool update){updateBalloon=update;tray.ShowBalloonTip(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
             deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();});
@@ -800,7 +803,7 @@ namespace AtkBatteryTray {
             try {string path=Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt");if(File.Exists(path)&&new FileInfo(path).Length<65536){string text=File.ReadAllText(path);lowBattery.Restore("mouse",text.Contains("mouse=1"));lowBattery.Restore("headset",text.Contains("headset=1"));foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text,@"(?m)^(device-[a-f0-9]{24})=1\r?$"))lowBattery.Restore(match.Groups[1].Value,true);}}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select) : this(showPanel,read,select,null,null) {}
-        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null,Func<NativeDpiRequest,DpiConfig> nativeDpiWriter=null,Action<AudioBindings> configurationWriter=null) {
+        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null,Func<NativeDpiRequest,DpiConfig> nativeDpiWriter=null,Action<AudioBindings> configurationWriter=null,bool enableDevicePacks=false) {
             persistStatus=diagnostics;
             readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;writeVolume=volumeWriter;
             writeAudioCommand=audioCommandRunner;
@@ -810,7 +813,13 @@ namespace AtkBatteryTray {
             saveConfiguration=configurationWriter??DeviceSettings.SaveConfiguration;
             activityTimer.Tick+=delegate{activityTimer.Stop();DrainActivityRefresh();};
             readLeftButton=leftButtonReader??new Func<bool>(NativeDisplay.IsLeftButtonPressed);
-            if(diagnostics){if(genericWorker==null)genericWorker=new GenericBatteryWorker();try{NativeMousePresent=MouseBattery.Enumerate().Count>0;}catch{NativeMousePresent=false;}}
+            if(diagnostics){if(genericWorker==null){
+                genericWorker=new GenericBatteryWorker();
+                if(enableDevicePacks){
+                devicePacks=new DevicePackManager(Path.Combine(DeviceSettings.DataDirectory,"device-pack"),new UpdateHttp(AppRuntime.Version,15000),genericWorker.ActivatePack,DateTime.UtcNow);
+                genericWorker.UseDevicePacks(devicePacks);devicePackChecks=new DevicePackController(devicePacks);
+                }
+            }try{NativeMousePresent=MouseBattery.Enumerate().Count>0;}catch{NativeMousePresent=false;}}
             var unused=dispatch.Handle;
             var menu=new ContextMenuStrip();
             var detail=new ToolStripMenuItem("设备电量与音频");detail.Click+=delegate {ShowDetails();};menu.Items.Add(detail);
@@ -1227,9 +1236,10 @@ namespace AtkBatteryTray {
                 "\r\n耳机无线："+(ShowHeadset(Headset,Audio)?"已确认连接":"未确认连接")+"\r\n音源："+(Audio==null?"未确认":Audio.ActiveOutput)+
                 "\r\n后台间隔："+DeviceSettings.Current.BackgroundSeconds+"秒\r\n自启："+PopupPages.StartupState();
             text+="\r\n软件更新："+UpdateStatus;if(!String.IsNullOrEmpty(UpdateFailure))text+="\r\n上次更新失败："+UpdateFailure;
+            text+="\r\n"+DevicePackDiagnostic;
             if(!String.IsNullOrEmpty(ErrorMessage))text+="\r\n鼠标读取："+SafeDiagnostic.Clean(ErrorMessage);
             if(!String.IsNullOrEmpty(DpiError))text+="\r\nDPI读取："+SafeDiagnostic.Clean(DpiError);
-            foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip;
+            foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip+(device.ModelSource=="pack"?" | 来自数据包，待验证":"");
             text+="\r\n通用读取："+(GenericReady?"已就绪":GenericScanning?"识别中":"尚未就绪")+"\r\n读取健康："+(GenericError??GenericHealthSummary??"正常");foreach(var item in GenericHealth)if(item.State!="ok"&&item.State!="no_devices")text+="\r\n"+item.Provider+"："+item.State+" / "+item.ErrorCode;
             text+="\r\n未取得电量的设备（可能未适配，也可能正在休眠）";
             if(unadaptedDevices.Length==0)text+="\r\n无记录";
@@ -1253,7 +1263,7 @@ namespace AtkBatteryTray {
                 privateValues.AddRange(new[]{Audio.SpeakerName,Audio.HeadsetName,Audio.MicrophoneName,Audio.SpeakerId,Audio.HeadsetId,Audio.MicrophoneId,Audio.ConsoleOutputId,Audio.MultimediaOutputId,Audio.CommunicationsOutputId,Audio.VolumeEndpointId});
                 foreach(var device in Audio.Devices??new AudioDeviceChoice[0])if(device!=null){privateValues.Add(device.Name);privateValues.Add(device.Id);}
             }
-            return new FeedbackReport(AppRuntime.Version,WindowsVersion.Read(),cards,suppressedDevices,unadaptedDevices,GenericHealth,privateValues);
+            return new FeedbackReport(AppRuntime.Version,WindowsVersion.Read(),cards,suppressedDevices,unadaptedDevices,GenericHealth,privateValues,DevicePackDiagnostic);
         }
         internal string OpenFeedback(Action<string> copy=null,Action<string> open=null){
             var report=CreateFeedbackReport();
@@ -1464,6 +1474,7 @@ namespace AtkBatteryTray {
         }
         protected override void ExitThreadCore() {
             if(updates!=null)updates.Dispose();
+            if(devicePackChecks!=null)devicePackChecks.Dispose();
             if(updatedPanelRequest!=null)updatedPanelRequest.Dispose();
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
             if(genericWorker!=null)genericWorker.Dispose();

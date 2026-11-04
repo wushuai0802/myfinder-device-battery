@@ -11,6 +11,12 @@ $testMetadata=Join-Path $OutputDirectory 'AssemblyInfo.tests.cs'
 $appSources=@(Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
 $appSources+=$testMetadata
 $appSources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
+$appSources+=('/resource:'+(Join-Path $root 'engine\device_pack_schema.json')+',DevicePackSchema')
+$packTest=Join-Path $OutputDirectory 'DevicePackTests.exe'
+& $compiler /nologo /target:exe /platform:x64 /optimize+ /define:DEVICE_PACK_TESTS /main:DevicePackTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll "/out:$packTest" $appSources (Join-Path $PSScriptRoot 'DevicePackTests.cs')
+if($LASTEXITCODE -ne 0){throw 'Device pack test build failed.'}
+& $packTest $OutputDirectory $root
+if($LASTEXITCODE -ne 0){throw 'Device pack tests failed.'}
 $updateTest=Join-Path $OutputDirectory 'UpdateTests.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /define:UPDATE_TESTS /main:UpdateTests /reference:System.Runtime.Serialization.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll "/out:$updateTest" $appSources (Join-Path $PSScriptRoot 'UpdateTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Update test build failed.'}

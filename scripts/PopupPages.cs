@@ -218,6 +218,7 @@ namespace AtkBatteryTray {
                 var source=Info("源码",null);source.Detail="https://github.com/\nwushuai0802/\nmyfinder-device-battery";rows.Add(source);
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));
                 var feedbackRow=Row(258,"反馈问题",null,"info");feedbackRow.Detail=String.IsNullOrEmpty(FeedbackRelay.Url)?"提交需要 GitHub 账号":"在程序内提交，不需要 GitHub 账号";rows.Add(feedbackRow);
+                var pack=Info("型号数据包",owner.DevicePackDiagnostic);pack.WrapText=true;rows.Add(pack);
             }else if(nav.Page==PopupPage.DeviceMissing) {
                 var layout=WirelessLayout.Build(owner,0,100000);
                 if(layout.All[0].Id=="empty"){var status=Info("当前状态",WirelessLayout.EmptyReason(owner,layout.AllHidden));status.WrapText=true;rows.Add(status);}
