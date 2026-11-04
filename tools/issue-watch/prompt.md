@@ -8,7 +8,7 @@
 - classification：triage:supported、triage:needs-info、triage:pack-candidate、triage:insufficient-evidence、triage:new-vendor、triage:bug 之一，可以纠正初筛。
 - confidence：低、中、高 之一。
 - reasoning：中文，最多 200 字。
-- reply：中文友好回复，最多 1500 字；第一行必须是“（维护者确认后发出）”，下一行开始正文。不承诺具体时间，不包含 @，不链接到 github.com 以外的网址。只有确切证据才能说“已支持”。
+- reply：中文友好回复，最多 1500 字；第一行必须是“（维护者确认后发出）”，下一行开始正文。不承诺具体时间，不包含 @，不链接到 github.com 以外的网址。只有确切证据才能说“已支持”。如果这条 issue 来自程序内反馈（标题以“[程序内反馈]”开头），用户多半没有 GitHub 账号、无法在这里回复：需要补充资料时，请他们在程序里重新提交反馈，并在描述里写上本条编号。
 - packEntry：仅 classification 为 triage:pack-candidate 时提供 {"provider":"品牌模块名","profile":"待核实的档案名","match":{"vendorId":"四位十六进制","productId":"四位十六进制"}}，可在 match 增加 usagePage、usage、interfaceNumber。无法确定档案时降低分类为 triage:insufficient-evidence 并追问，不能编造。其他分类必须为 null。
 - questions：需要追问的中文字符串数组，没有则 []。
 
