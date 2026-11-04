@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["classification", "confidence", "reasoning", "reply", "packEntry", "questions"],
+  "properties": {
+    "classification": {"type": "string", "enum": ["triage:supported", "triage:needs-info", "triage:pack-candidate", "triage:insufficient-evidence", "triage:new-vendor", "triage:bug"]},
+    "confidence": {"type": "string", "enum": ["低", "中", "高"]},
+    "reasoning": {"type": "string", "minLength": 1, "maxLength": 200},
+    "reply": {"type": "string", "minLength": 1, "maxLength": 1500},
+    "packEntry": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["provider", "profile", "match"],
+          "properties": {
+            "provider": {"type": "string", "minLength": 1},
+            "profile": {"type": "string", "minLength": 1},
+            "match": {
+              "type": "object", "additionalProperties": false,
+              "required": ["vendorId", "productId", "usagePage", "usage", "interfaceNumber"],
+              "properties": {
+                "vendorId": {"type": "string", "pattern": "^[0-9A-Fa-f]{4}$"},
+                "productId": {"type": "string", "pattern": "^[0-9A-Fa-f]{4}$"},
+                "usagePage": {"type": ["string", "null"], "pattern": "^[0-9A-Fa-f]{4}$"},
+                "usage": {"type": ["string", "null"], "pattern": "^[0-9A-Fa-f]{4}$"},
+                "interfaceNumber": {"type": ["integer", "null"], "minimum": 0, "maximum": 255}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "questions": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}
