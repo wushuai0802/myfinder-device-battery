@@ -129,6 +129,25 @@ class RazerProvider(Provider):
         self._dead.clear()
         self._last.clear()
         self._failing.clear()
+        self._read_errors = set()
+        self._public_errors = set()
+
+    def failure_code(self) -> str:
+        """One bounded, identity-free cause for the existing reader-health UI.
+
+        Prefer evidence from a reply over failures opening unrelated collections.
+        This reports an observation, not a diagnosis of Synapse or device sleep.
+        Legacy diagnostics include raw OS errors and must remain local.
+        """
+        priorities = {"no_reply": 0, "no_usable_interface": 1,
+                      "interfaces_cooling_down": 2, "enumerate_failed": 3,
+                      "open_failed": 4, "send_failed": 5, "get_failed": 6,
+                      "short_reply": 7, "busy_timeout": 9, "device_timeout_04": 10,
+                      "foreign_reply": 11}
+        if not self._public_errors:
+            return ""
+        cause = max(self._public_errors, key=lambda c: (priorities.get(c, 8), c))
+        return "razer_" + cause
 
     # ---- low level -------------------------------------------------------
     def _send(self, dev, req: bytes, tid: int) -> bool:
@@ -136,6 +155,7 @@ class RazerProvider(Provider):
             dev.send_feature_report(b"\x00" + req)
         except (OSError, ValueError) as e:
             self._diag.append(f"    send tid={tid:02x}: {e}")
+            self._read_errors.add("send_failed")
             return False
         return True
 
@@ -152,10 +172,12 @@ class RazerProvider(Provider):
                 resp = dev.get_feature_report(0x00, 91)
             except (OSError, ValueError) as e:
                 self._diag.append(f"    get tid={tid:02x}: {e}")
+                self._read_errors.add("get_failed")
                 return None, None
             data = normalize_reply(resp)
             if data is None:
                 self._diag.append(f"    short reply: {hexdump(resp)}")
+                self._read_errors.add("short_reply")
                 return None, None
             status, value = parse_reply(data, cmd_class, cmd_id)
             self._diag.append(
@@ -199,10 +221,17 @@ class RazerProvider(Provider):
             dev.open_path(path)
         except (OSError, IOError) as e:
             self._diag.append(f"    open: {e}")
+            self._read_errors.add("open_failed")
             return None, None, None
         try:
             status, raw = self._query(dev, tid, 0x07, 0x80)
             if status != STATUS_OK or raw is None:
+                if status is not None:
+                    self._read_errors.add(
+                        "foreign_reply" if status == STATUS_FOREIGN else
+                        "busy_timeout" if status == STATUS_BUSY else
+                        "device_timeout_04" if status == STATUS_TIMEOUT else
+                        f"reply_status_{status:02x}")
                 return status, None, None
             level = round(raw / 255 * 100)
             cst, craw = self._query(dev, tid, 0x07, 0x84)
@@ -234,10 +263,12 @@ class RazerProvider(Provider):
 
     def _poll_devices(self) -> List[DeviceStatus]:
         self._diag = []
+        self._public_errors = set()
         try:
             infos = hidlist.enumerate(RAZER_VID)
         except Exception as e:  # pragma: no cover
             log.warning("hid.enumerate(razer): %s", e)
+            self._public_errors.add("enumerate_failed")
             return []
 
         # group interfaces by device (PID + serial / location)
@@ -292,6 +323,7 @@ class RazerProvider(Provider):
                 continue
             is_headset = (pack_entry.kind == "headset" if pack_entry
                           else pid in blackshark.PA_PIDS or "blackshark" in name.lower())
+            self._read_errors = set()
             if pack_entry:
                 # Pack metadata cannot activate PA remote mode or another TID.
                 st = self._poll_group((pid, serial), ifaces, pref_tid, profile_only=True)
@@ -311,6 +343,7 @@ class RazerProvider(Provider):
                     if pa is not None and (st is None or pa[0] == STATUS_OK):
                         st = pa
             if st is None or st[0] != STATUS_OK:
+                self._public_errors.update(self._read_errors or {"no_reply"})
                 # failed poll: the details go to the log once, when the device stops
                 # answering (or the reason changes), not on every poll while it is off
                 reason = ("no reply" if st is None else
@@ -381,10 +414,12 @@ class RazerProvider(Provider):
             tids += [t for t in TRANSACTION_IDS if t not in tids]
         now = time.time()
         timeout_hit = None
+        attempted = False
         for d in sorted(ifaces, key=rank):
             path = d["path"]
             if self._dead.get(path, 0) > now:
                 continue
+            attempted = True
             self._diag.append(
                 f"  iface={d.get('interface_number')} usage={d.get('usage_page', 0):04x}:"
                 f"{d.get('usage', 0):04x}")
@@ -409,6 +444,8 @@ class RazerProvider(Provider):
                     return status, None, None
             if not answered:
                 self._dead[path] = now + 300   # leave this interface alone for 5 minutes
+        if not attempted:
+            self._read_errors.add("interfaces_cooling_down" if ifaces else "no_usable_interface")
         return timeout_hit
 
     def _poll_2020(self, ifaces):

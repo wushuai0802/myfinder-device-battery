@@ -444,6 +444,8 @@ def reader_child():
                     candidates = recognized_candidate_count(name, command.get("inventory", []), device_pack)
                 response = {"statuses": [asdict(s) for s in statuses[:MAX_DEVICES]], "checkedAtUtc": utcnow(),
                             "candidateCount": candidates}
+                if name == "razer":
+                    response["failureCode"] = provider.failure_code()
                 if name in KEYBOARD_DIAGNOSTICS:
                     response["diagnostics"] = keyboard_diagnostics(provider)
             elif action == "set_dpi":
@@ -612,7 +614,7 @@ class BatteryEngine:
                 "importedProviderCount": self.imported_provider_count,
                 "health": health, "checkedAtUtc": utcnow(), "packageSmoke": self.package_smoke}
 
-    def _accept(self, reader_key, name, statuses, now, physical="", candidate_count=0, diagnostics=()):
+    def _accept(self, reader_key, name, statuses, now, physical="", candidate_count=0, diagnostics=(), failure_code=""):
         group = {}
         for key in self.by_provider.get(reader_key, {}):
             self.dpi_targets.pop(key, None)
@@ -646,6 +648,14 @@ class BatteryEngine:
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in KEYBOARD_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:200] for line in diagnostics[-16:]]
+        # The feedback UI already displays errorCode (up to 48 characters).
+        # Never export the provider's legacy log, raw exceptions or HID identity.
+        if (name == "razer" and not any(s.online for s in statuses)
+                and isinstance(failure_code, str)
+                and re.fullmatch(r"razer_(?:no_reply|no_usable_interface|interfaces_cooling_down|"
+                                 r"enumerate_failed|open_failed|send_failed|get_failed|short_reply|"
+                                 r"busy_timeout|device_timeout_04|foreign_reply|reply_status_[0-9a-f]{2})", failure_code)):
+            self.health[reader_key]["errorCode"] = failure_code
 
     def _failure(self, reader_key, name, code):
         for key, value in self.by_provider.get(reader_key, {}).items():
@@ -813,7 +823,8 @@ class BatteryEngine:
                         self._hidlist.enumerate = original
                     misses = getattr(provider, "_misses", {})
                     self._accept(key, provider.name, [replace(s, cached=s.cached or bool(misses.get(s.key, 0))) for s in statuses], utcnow(),
-                                 diagnostics=keyboard_diagnostics(provider))
+                                 diagnostics=keyboard_diagnostics(provider),
+                                 failure_code=provider.failure_code() if provider.name == "razer" else "")
                 except Exception:
                     self._failure(key, provider.name, "read_failed")
                 if progress:
@@ -1058,7 +1069,8 @@ class BatteryEngine:
                             statuses = [replace(status, legacy_key="") for status in statuses]
                         self._accept(reader_key, name, statuses, valid_time(result.get("checkedAtUtc")) or utcnow(), physical,
                                      candidate_count=max(0, min(512, int(result.get("candidateCount", 0)))),
-                                     diagnostics=result.get("diagnostics", ()))
+                                     diagnostics=result.get("diagnostics", ()),
+                                     failure_code=result.get("failureCode", ""))
                     if progress and partial_count < MAX_PARTIALS:
                         partial_count += 1
                         progress(self._snapshot(request_id, generation, False))
