@@ -17,12 +17,12 @@ namespace AtkBatteryTray {
             bool close=HueDistance(accent,background)<30||Math.Abs(accent.R-background.R)+Math.Abs(accent.G-background.G)+Math.Abs(accent.B-background.B)<100;
             return red||close||Contrast(accent,Outline(taskbarDark))<3?Blue:accent;
         }
-        internal static Rectangle Bounds(int size){int diameter=(int)Math.Round(size/4.0,MidpointRounding.AwayFromZero);return new Rectangle(size-diameter,0,diameter,diameter);}
+        internal static Rectangle Bounds(int size){int diameter=Math.Max(4,(int)Math.Round(size*.2,MidpointRounding.AwayFromZero));return new Rectangle(size-diameter,0,diameter,diameter);}
         // Rasterize concentric circles at native pixel centers: no fractional DPI
-        // coordinates or resampling of the one-pixel separator at 16px.
+        // coordinates or resampling of the one-pixel separator at any size.
         internal static void Paint(Bitmap bitmap,Color color,bool taskbarDark){
             var bounds=Bounds(bitmap.Width);double radius=bounds.Width/2.0;
-            int stroke=Math.Max(1,(int)Math.Round(bitmap.Width/16.0,MidpointRounding.AwayFromZero));
+            const int stroke=1;
             for(int y=0;y<bounds.Height;y++)for(int x=0;x<bounds.Width;x++){
                 double dx=x+.5-radius,dy=y+.5-radius,distance=dx*dx+dy*dy;
                 if(distance<=radius*radius)bitmap.SetPixel(bounds.X+x,y,distance<=(radius-stroke)*(radius-stroke)?color:Outline(taskbarDark));

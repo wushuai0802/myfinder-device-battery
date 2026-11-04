@@ -112,15 +112,38 @@ static class UpdateBadgeTests {
             f.Updates.Check(false);f.Seen();Check(f.Transport.Requests==2,"manual check still fetches while automatic checks are disabled");
         }
     }
+    static Rectangle PixelBounds(Bitmap bitmap,Color? color){
+        int left=bitmap.Width,top=bitmap.Height,right=-1,bottom=-1;
+        for(int y=0;y<bitmap.Height;y++)for(int x=0;x<bitmap.Width;x++){
+            var pixel=bitmap.GetPixel(x,y);if(pixel.A==0||color.HasValue&&pixel.ToArgb()!=color.Value.ToArgb())continue;
+            left=Math.Min(left,x);top=Math.Min(top,y);right=Math.Max(right,x);bottom=Math.Max(bottom,y);
+        }
+        return right<left?Rectangle.Empty:Rectangle.FromLTRB(left,top,right+1,bottom+1);
+    }
+    static void BadgeSizes(){
+        foreach(bool dark in new[]{false,true}){
+            int previous=0;
+            for(int size=16;size<=64;size++)using(var bitmap=new Bitmap(size,size,PixelFormat.Format32bppPArgb)){
+                UpdateBadge.Paint(bitmap,UpdateBadge.Blue,dark);
+                var actual=PixelBounds(bitmap,null);int expected=Math.Max(4,(size+2)/5);
+                Check(actual==new Rectangle(size-expected,0,expected,expected),"painted badge uses rounded 20% diameter at top right: "+size+"px dark="+dark);
+                Check(actual.Width>=previous,"painted badge diameter is monotonically nondecreasing: "+size+"px dark="+dark);
+                Check(PixelBounds(bitmap,UpdateBadge.Blue)==new Rectangle(actual.X+1,1,expected-2,expected-2),"painted badge keeps a one-pixel outline: "+size+"px dark="+dark);
+                Check(bitmap.GetPixel(actual.X+expected/2,0).ToArgb()==UpdateBadge.Outline(dark).ToArgb(),"painted badge uses taskbar outline color: "+size+"px dark="+dark);
+                previous=actual.Width;
+            }
+        }
+    }
     static void Drawings(){
+        BadgeSizes();int[] sizes={16,20,24,28,32,40,48};
         string raw=Path.Combine(output,"icons");Directory.CreateDirectory(raw);
         foreach(string theme in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
             var palette=ThemePalette.For(theme,dark);
-            using(var sheet=new Bitmap(720,1060,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(sheet)){
+            using(var sheet=new Bitmap(720,60+5*sizes.Length*50,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(sheet)){
                 Color backdrop=UpdateBadge.Outline(dark);g.Clear(backdrop);
                 CompactRenderer.DrawLabel(g,theme+" / "+(dark?"dark":"light")+"   80% off/on   |   10% off/on",new RectangleF(12,4,696,30),16,true,palette.Foreground,StringAlignment.Near);
                 int row=0;
-                foreach(string kind in new[]{"number","mouse","keyboard","headset","device"})foreach(int size in new[]{16,20,24,32}){
+                foreach(string kind in new[]{"number","mouse","keyboard","headset","device"})foreach(int size in sizes){
                     int y=40+row++*50;CompactRenderer.DrawLabel(g,kind+" "+size+"px",new RectangleF(8,y,120,50),12,false,palette.Foreground,StringAlignment.Near);
                     int column=0;foreach(int percent in new[]{80,10})foreach(bool badge in new[]{false,true}){
                         Color background=kind=="number"?TrayGlyph.NumberFill(percent,false):TrayGlyph.LevelColor(percent,dark);
@@ -131,7 +154,7 @@ static class UpdateBadgeTests {
                             string name=theme+"-"+(dark?"dark":"light")+"-"+kind+"-"+size+"-"+percent+"-"+(badge?"on":"off")+".png";
                             bitmap.Save(Path.Combine(raw,name),ImageFormat.Png);images++;
                             int x=130+column++*145;g.DrawImageUnscaled(bitmap,x,y+(50-size)/2);
-                            var state=g.Save();g.InterpolationMode=InterpolationMode.NearestNeighbor;g.PixelOffsetMode=PixelOffsetMode.Half;g.DrawImage(bitmap,new Rectangle(x+40,y+2,44,44));g.Restore(state);
+                            var state=g.Save();g.InterpolationMode=InterpolationMode.NearestNeighbor;g.PixelOffsetMode=PixelOffsetMode.Half;g.DrawImage(bitmap,new Rectangle(x+60,y+2,44,44));g.Restore(state);
                             if(badge){var bounds=UpdateBadge.Bounds(size);Check(bitmap.GetPixel(bounds.X+bounds.Width/2,bounds.Height/2).ToArgb()==color.ToArgb(),"native badge center uses exact solid color");}
                         }
                     }
@@ -139,7 +162,7 @@ static class UpdateBadgeTests {
                 sheet.Save(Path.Combine(output,theme+"-"+(dark?"dark":"light")+".png"),ImageFormat.Png);
             }
         }
-        foreach(int size in new[]{16,20,24,32})foreach(bool approximate in new[]{false,true})for(int percent=0;percent<=100;percent++){
+        foreach(int size in sizes)foreach(bool approximate in new[]{false,true})for(int percent=0;percent<=100;percent++){
             using(var before=TrayGlyph.Render(percent,false,true,false,size,approximate))using(var after=TrayGlyph.Render(percent,false,true,false,size,approximate,UpdateBadge.Blue)){
                 for(int y=0;y<size;y++)for(int x=0;x<size;x++){
                     var pixel=before.GetPixel(x,y);if(pixel.A>200&&pixel.R<30&&pixel.G<30&&pixel.B<30){
