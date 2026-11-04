@@ -139,11 +139,33 @@ internal static class DevicePackTests {
         File.AppendAllText(Path.Combine(root,"starts.txt"),(pack??"builtin")+"\n");
         string mode=File.Exists(Path.Combine(root,"mode"))?File.ReadAllText(Path.Combine(root,"mode")):"";
         long version=pack==null?0:PackJson.Integer(PackJson.Object(PackJson.Parse(File.ReadAllBytes(pack)))["packVersion"]);
-        string line;while((line=Console.ReadLine())!=null){var request=PackJson.Object(PackJson.Parse(Bytes(line)));string command=(string)request["command"];
+        // Match server.py's UTF-8 input with an optional initial BOM, independently
+        // of the console code page. The signed pack parser remains strict.
+        using(var input=new StreamReader(Console.OpenStandardInput(),Encoding.UTF8))using(var output=new StreamWriter(Console.OpenStandardOutput(),new UTF8Encoding(false)){AutoFlush=true}){
+        string line;while((line=input.ReadLine())!=null){var request=PackJson.Object(PackJson.Parse(Bytes(line)));string command=(string)request["command"];
             if((mode=="hang"&&command=="ready")||(mode=="hang-poll"&&command=="poll")){Thread.Sleep(30000);return 0;}if(mode=="crash"&&command=="poll")return 0;
             bool loaded=pack!=null&&mode!="false"&&!(mode=="formal-false"&&version==4&&pack.Contains(Path.DirectorySeparatorChar+"current"+Path.DirectorySeparatorChar));
-            Console.WriteLine("{\"schema\":2,\"requestId\":"+PackJson.Integer(request["requestId"])+",\"generation\":"+PackJson.Integer(request["generation"])+",\"complete\":true,\"ready\":true,\"devices\":[],\"devicePack\":{\"loaded\":"+(loaded?"true":"false")+",\"version\":"+(pack==null?"null":version.ToString())+",\"disabled\":[]}}");Console.Out.Flush();
-        }return 0;
+            output.WriteLine("{\"schema\":2,\"requestId\":"+PackJson.Integer(request["requestId"])+",\"generation\":"+PackJson.Integer(request["generation"])+",\"complete\":true,\"ready\":true,\"devices\":[],\"devicePack\":{\"loaded\":"+(loaded?"true":"false")+",\"version\":"+(pack==null?"null":version.ToString())+",\"disabled\":[]}}");
+        }}return 0;
+    }
+    static void WorkerInputEncodings(string root,RSACryptoServiceProvider key,IDictionary<string,string> keys){
+        var previous=Console.InputEncoding;
+        try{
+            foreach(bool bom in new[]{false,true}){
+                // Framework Process.Start inherits this encoding for the child's stdin.
+                // Both forms must match the real server's utf-8-sig input contract.
+                Console.InputEncoding=new UTF8Encoding(bom);
+                string engine=MakeWorker(root,"encoding-"+bom);var http=new Http();
+                using(var worker=new GenericBatteryWorker(engine,false,2000)){
+                    var manager=DevicePackManager.ForTests(Path.Combine(root,"encoding-packs-"+bom),http,worker.ActivatePack,DateTime.UtcNow,keys);worker.UseDevicePacks(manager);
+                    var before=worker.Poll();Check(before.Error==null&&before.Complete&&!before.DevicePack.Loaded,"builtin worker accepts UTF-8 input, BOM="+bom);
+                    File.WriteAllText(Path.Combine(engine,"mode"),"false");Feed(http,key,1);manager.Check(false,DateTime.UtcNow,CancellationToken.None);
+                    Check(manager.StateForTests.Current==null&&manager.StateForTests.HighestAcceptedVersion==0&&manager.StateForTests.Quarantine.Any(x=>x.Version==1),"rejected trial never publishes a pack, BOM="+bom);
+                    var after=worker.Poll();Check(after.Error==null&&after.Complete&&!after.DevicePack.Loaded&&after.Generation==before.Generation,"rejected trial keeps the same builtin engine responsive, BOM="+bom);
+                    var starts=File.ReadAllLines(Path.Combine(engine,"starts.txt"));Check(starts.Length==2&&starts[0]=="builtin"&&starts[1].Contains(Path.DirectorySeparatorChar+"staging"+Path.DirectorySeparatorChar),"rejected trial neither stops nor replaces builtin engine, BOM="+bom);
+                }
+            }
+        }finally{Console.InputEncoding=previous;}
     }
     static void Workers(string root,string source,RSACryptoServiceProvider key,IDictionary<string,string> keys){
         string engine=MakeWorker(root,"engine");var http=new Http();string directory=Path.Combine(root,"worker-packs");
@@ -156,8 +178,9 @@ internal static class DevicePackTests {
             for(int i=0;i<3;i++)Check(worker.Poll().Error!=null,"count real exited worker "+i);
             Check(manager.StateForTests.Current.Version==1&&manager.StateForTests.HighestAcceptedVersion==2,"real worker crash triggers rollback");
             File.WriteAllText(Path.Combine(engine,"mode"),"");Check(worker.Poll().DevicePack.Version==1,"worker restarts using previous pack");
+            var beforeTrial=worker.Poll();int beforeTrialStarts=File.ReadAllLines(Path.Combine(engine,"starts.txt")).Length;
             File.WriteAllText(Path.Combine(engine,"mode"),"false");Feed(http,key,3);manager.Check(false,DateTime.UtcNow,CancellationToken.None);
-            Check(manager.StateForTests.Current.Version==1&&worker.Poll().DevicePack.Version==1,"loaded=false trial keeps existing engine");
+            var afterTrial=worker.Poll();Check(manager.StateForTests.Current.Version==1&&manager.StateForTests.Quarantine.Any(x=>x.Version==3)&&afterTrial.Error==null&&afterTrial.DevicePack.Version==1&&afterTrial.Generation==beforeTrial.Generation&&File.ReadAllLines(Path.Combine(engine,"starts.txt")).Length==beforeTrialStarts+1,"loaded=false trial keeps existing engine without restart");
             File.WriteAllText(Path.Combine(engine,"mode"),"formal-false");Feed(http,key,4);manager.Check(false,DateTime.UtcNow,CancellationToken.None);
             Check(manager.StateForTests.Quarantine.Any(x=>x.Version==4)&&!manager.StateForTests.Quarantine.Any(x=>x.Version==1),"formal startup failure does not quarantine healthy previous");
         }
@@ -179,7 +202,9 @@ internal static class DevicePackTests {
         http=new Http();directory=Path.Combine(root,"timed-trial");
         using(var worker=new GenericBatteryWorker(engine,false,2000)){
             var manager=DevicePackManager.ForTests(directory,http,worker.ActivatePack,DateTime.UtcNow,keys);worker.UseDevicePacks(manager);Feed(http,key,1);
+            var beforeTrial=worker.Poll();Check(beforeTrial.Error==null&&!beforeTrial.DevicePack.Loaded,"builtin engine alive before timed-out trial");int beforeTrialStarts=File.ReadAllLines(Path.Combine(engine,"starts.txt")).Length;
             var watch=Stopwatch.StartNew();manager.Check(false,DateTime.UtcNow,CancellationToken.None);Check(watch.Elapsed.TotalSeconds>=19&&watch.Elapsed.TotalSeconds<24&&manager.StateForTests.Current==null&&manager.StateForTests.Quarantine.Count==1,"production trial stops at 20 seconds and quarantines");
+            var afterTrial=worker.Poll();Check(afterTrial.Error==null&&!afterTrial.DevicePack.Loaded&&afterTrial.Generation==beforeTrial.Generation&&File.ReadAllLines(Path.Combine(engine,"starts.txt")).Length==beforeTrialStarts+1,"timed-out trial keeps the same builtin engine responsive without restart");
         }
         if(File.Exists(Path.Combine(source,"engine","runtime","python.exe"))){
             string realPack=Path.Combine(root,"real-ready.json");File.WriteAllText(realPack,Pack(1).Replace("\"disabled\":[]","\"disabled\":[{\"provider\":\"razer\",\"vendorId\":\"1532\",\"productId\":\"FE01\",\"reason\":\"fixture\"}]"),new UTF8Encoding(false));
@@ -236,7 +261,7 @@ internal static class DevicePackTests {
                 Reject(()=>DevicePackTrust.Verify(raw,Bytes(Convert.ToBase64String(key.SignData(raw,CryptoConfig.MapNameToOID("SHA256")))),keys),"unprefixed signature rejected");
                 Reject(()=>DevicePackTrust.Verify(raw,Bytes(" "+Encoding.UTF8.GetString(sig)),keys),"signature is exactly one base64 line");
                 Reject(()=>DevicePackSigning.Verify(raw,sig),"production keyring cannot use injected test key");
-                SecurityAndLifecycle(root,key,keys);SingleFlight(root,key,keys);Workers(root,args[1],key,keys);LinkedPaths(root,key,keys);Signer(root,args[1],key);
+                SecurityAndLifecycle(root,key,keys);SingleFlight(root,key,keys);WorkerInputEncodings(root,key,keys);Workers(root,args[1],key,keys);LinkedPaths(root,key,keys);Signer(root,args[1],key);
             }
             var card=new WirelessDevice {Name="Pack mouse",Kind="mouse",Provider="razer",ModelSource="pack"};var report=new FeedbackReport("1.3.6","Windows",new[]{card},new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0],"型号数据包：1 | 来源：镜像");
             Check(report.FullText.Contains("型号数据包：1")&&report.FullText.Contains("来自数据包，待验证"),"feedback includes pack and card provenance");
