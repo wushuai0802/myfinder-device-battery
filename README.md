@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.3.6-beta.3**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.3.6-beta.4**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.3.6-beta.4 新增迈从 V9 Turbo+ 耳机的电量读取；修复任务栏自动隐藏时面板底部被遮挡。
 
 1.3.6-beta.3 新增 VGN 蜻蜓 F2 Master+、VXE R1 SE 接收器的电量读取（待实机验证）；雷蛇读不到电量时，诊断信息会写明失败在哪一步。
 
