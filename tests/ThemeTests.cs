@@ -109,7 +109,7 @@ static class ThemeTests {
         using(var f=new Fixture()){
             var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=100},false);
             string actual=String.Join("|",rows.FindAll(delegate(PopupControl row){return row.Id!=6;}).ConvertAll(delegate(PopupControl row){return row.Text;}).ToArray());
-            Check(actual=="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新","preference sections and order");
+            Check(actual=="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标","preference sections and order");
             foreach(string name in new[]{"显示","提醒","数据","更新"}){
                 var row=rows.Find(delegate(PopupControl c){return c.Text==name;});Check(row.Information&&row.Id<0&&row.Rect.Height>=23&&row.Rect.Height<=25,"section is 24px information");Check(PopupPages.Hit(rows,new PointF(row.Rect.X+10,row.Rect.Y+10))==null&&PopupPages.FindStable(rows,row.StableKey)==null,"section cannot be hit or focused");
             }
@@ -119,7 +119,7 @@ static class ThemeTests {
                     rows=PopupPages.Build(f.Owner,nav,false);var size=PopupPages.SizeFor(rows);float bottom=0;foreach(var row in rows){Check(row.Rect.Bottom<=size.Height&&row.Rect.Top>=bottom,"paged rows fit without overlap");bottom=row.Rect.Bottom;if(row.Id!=6&&row.Id!=7&&row.Id!=8)seen.Add(row.Text);}
                     var next=rows.Find(delegate(PopupControl c){return c.Id==8;});if(next==null)break;nav.Offset+=count;
                 }
-                Check(seen.Count==14,"every grouped preference remains reachable at "+count);
+                Check(seen.Count==15,"every grouped preference remains reachable at "+count);
             }
         }
     }
@@ -133,7 +133,7 @@ static class ThemeTests {
         int count=0;for(int y=(int)(area.Top*scale);y<(int)(area.Bottom*scale);y++)for(int x=(int)(area.Left*scale);x<(int)(area.Right*scale);x++)if(match(image.GetPixel(x,y)))count++;return count;
     }
     static void PreferencePages(){
-        const string first="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值",second="数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新";
+        const string first="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值",second="数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标";
         using(var f=new Fixture()){
             var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=7};var rows=PopupPages.Build(f.Owner,nav,false);
             Check(PageTexts(rows)==first,"first preferences page keeps all six display/reminder settings together");
@@ -142,7 +142,7 @@ static class ThemeTests {
                 var footer=new RectangleF(13,image.Height/2-25,234,20);Check(Pixels(image,footer,2,delegate(Color c){return c.ToArgb()!=ThemePalette.Current(false).Card.ToArgb();})==0,"first page footer does not repeat the data notice");
             }
             int firstHeight=PopupPages.SizeFor(rows).Height;nav.Offset=PageOffset(rows,8,7);rows=PopupPages.Build(f.Owner,nav,false);
-            Check(PageTexts(rows)==second&&rows.FindAll(delegate(PopupControl row){return row.Id>=200;}).Count==4,"second page has all four data/update settings");
+            Check(PageTexts(rows)==second&&rows.FindAll(delegate(PopupControl row){return row.Id>=200;}).Count==5,"second page has all five data/update settings");
             var clear=rows.Find(delegate(PopupControl row){return row.Id==217;});var update=rows.Find(delegate(PopupControl row){return row.Section&&row.Text=="更新";});
             Check(clear.Detail==HistoryNotice&&clear.Rect.Bottom+2==update.Rect.Top,"the only history notice is directly below the data action");
             nav.Offset=PageOffset(rows,7,0);Check(PageTexts(PopupPages.Build(f.Owner,nav,false))==first,"previous page returns to the entire first group pair");
@@ -156,7 +156,7 @@ static class ThemeTests {
                     foreach(float scale in new[]{1f,1.25f,1.5f,2f})Check(UiState.ScaleSize(size,scale).Height<=Math.Ceiling(limit*scale),"preferences also fit after DPI scaling");
                     var next=rows.Find(delegate(PopupControl row){return row.Id==8;});if(next==null)break;nav.Offset=PageOffset(rows,8,nav.Offset+nav.VisibleChoices);Check(pages<20,"bounded preferences finish");
                 }
-                Check(seen.Count==10,"all ten settings remain reachable with height "+limit);Check(limit>=firstHeight?pages==2:pages>2,"group paging is used only when both full pages fit");
+                Check(seen.Count==11,"all eleven settings remain reachable with height "+limit);Check(limit>=firstHeight?pages==2:pages>2,"group paging is used only when both full pages fit");
                 while(nav.Offset>0){rows=PopupPages.Build(f.Owner,nav,false);int before=nav.Offset;nav.Offset=PageOffset(rows,7,Math.Max(0,before-nav.VisibleChoices));Check(nav.Offset<before,"bounded previous page always moves backwards");}
             }
             f.Nav.Page=PopupPage.Preferences;rows=f.Rows();if(PageTexts(rows)==first){f.Activate(rows.Find(delegate(PopupControl row){return row.Id==8;}));Check(PageTexts(f.Rows())==second,"real popup action follows the group page boundary");f.Activate(f.Rows().Find(delegate(PopupControl row){return row.Id==7;}));Check(PageTexts(f.Rows())==first,"real popup previous action restores first groups");}

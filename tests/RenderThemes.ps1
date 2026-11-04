@@ -1,20 +1,23 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly)
+param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly,[switch]$UpdateBadgesOnly)
 $ErrorActionPreference='Stop'
 if($InteractionsOnly -and $DialogsOnly){throw 'InteractionsOnly and DialogsOnly cannot be combined.'}
+if($UpdateBadgesOnly -and ($InteractionsOnly -or $DialogsOnly)){throw 'UpdateBadgesOnly cannot be combined with other modes.'}
 $root=Split-Path -Parent $PSScriptRoot
 $previewOutput=[IO.Path]::GetFullPath($OutputDirectory)
 $temporaryRoot=[IO.Path]::GetFullPath($env:TEMP).TrimEnd('\','/')
+if($UpdateBadgesOnly){$temporaryRoot=[IO.Path]::GetFullPath((Join-Path $root 'tmp')).TrimEnd('\','/')}
 if(-not $previewOutput.StartsWith($temporaryRoot+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Preview images must be written under TEMP.'
+    throw 'Preview images must be written under TEMP (update badges: worktree/tmp).'
 }
 $rootPath=[IO.Path]::GetFullPath($root).TrimEnd('\','/')
-if($previewOutput.TrimEnd('\','/') -eq $rootPath -or $previewOutput.StartsWith($rootPath+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) {
+if(-not $UpdateBadgesOnly -and ($previewOutput.TrimEnd('\','/') -eq $rootPath -or $previewOutput.StartsWith($rootPath+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase))) {
     throw 'Preview images must be written outside the worktree (use a directory under TEMP).'
 }
 $compiler=Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if(-not (Test-Path -LiteralPath $compiler)){throw 'Windows .NET Framework compiler is unavailable.'}
 $compileDirectory=Join-Path $env:TEMP ('myfinder-render-themes-'+[Guid]::NewGuid().ToString('N'))
+if($UpdateBadgesOnly){$compileDirectory=Join-Path $previewOutput '.build'}
 New-Item -ItemType Directory -Path $compileDirectory -Force | Out-Null
 $sources=@(Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
 . (Join-Path $root 'scripts\Manifest.Common.ps1')
@@ -22,6 +25,14 @@ $previewRelease=Read-DeviceBatteryRelease $root
 $previewMetadata=Join-Path $compileDirectory 'AssemblyInfo.preview.cs'
 [IO.File]::WriteAllText($previewMetadata,('[assembly:System.Reflection.AssemblyInformationalVersion("'+$previewRelease.version+'")]'),(New-Object Text.UTF8Encoding($false)))
 $sources+=$previewMetadata
+if($UpdateBadgesOnly){
+    $badgeExecutable=Join-Path $compileDirectory 'UpdateBadgeTests.exe'
+    & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:UpdateBadgeTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$badgeExecutable" $sources (Join-Path $PSScriptRoot 'UpdateBadgeTests.cs')
+    if($LASTEXITCODE -ne 0){throw 'Update badge preview compilation failed.'}
+    & $badgeExecutable --render $previewOutput
+    if($LASTEXITCODE -ne 0){throw 'Update badge pixel verification failed.'}
+    return
+}
 if(-not $DialogsOnly){
 $interactionExecutable=Join-Path $compileDirectory 'RenderInteractions.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:HoverTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$interactionExecutable" $sources (Join-Path $PSScriptRoot 'HoverTests.cs')

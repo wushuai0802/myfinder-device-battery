@@ -15,7 +15,8 @@ namespace AtkBatteryTray {
             if(percent.Value<50)return dark?Color.FromArgb(228,201,103):Color.FromArgb(213,180,63);
             return dark?Color.FromArgb(61,212,135):Color.FromArgb(34,155,90);
         }
-        public static Bitmap Render(int? percent,bool charge,bool dark,bool stale,int size,bool approximate=false) {
+        internal static Color NumberFill(int? percent,bool stale){return VisualDesign.HighContrast?SystemColors.Window:percent.HasValue?LevelColor(stale?(int?)null:percent,true):Color.FromArgb(83,94,108);}
+        public static Bitmap Render(int? percent,bool charge,bool dark,bool stale,int size,bool approximate=false,Color? updateBadge=null,bool? taskbarDark=null) {
             size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
             using(var large=new Bitmap(canvas,canvas,PixelFormat.Format32bppPArgb)) {
                 using(var g=Graphics.FromImage(large)) {
@@ -23,15 +24,18 @@ namespace AtkBatteryTray {
                     g.ScaleTransform(canvas/32f,canvas/32f);
                     // The level color occupies the entire badge so it remains
                     // visible at 16px. Dark digits contrast with all three bands.
-                    Color level=LevelColor(percent,true);
-                    Color fill=VisualDesign.HighContrast?SystemColors.Window:percent.HasValue?(stale?LevelColor(null,true):level):Color.FromArgb(83,94,108);
+                    Color fill=NumberFill(percent,stale);
                     Color fg=VisualDesign.HighContrast?SystemColors.WindowText:percent.HasValue?Color.FromArgb(12,17,21):Color.White;
                     Color halo=Color.Transparent;
                     var badgeRect=new RectangleF(.8f,.8f,30.4f,30.4f);
                     using(var badge=new SolidBrush(fill))g.FillEllipse(badge,badgeRect);
                     using(var edge=new Pen(VisualDesign.HighContrast?SystemColors.WindowText:Color.FromArgb(65,Color.White),.8f))g.DrawEllipse(edge,badgeRect);
+                    // Leave a full native pixel between the digit tops and the dot.
+                    if(updateBadge.HasValue)g.TranslateTransform(0,32f/size);
                     DrawDigits(g,percent.HasValue?(approximate?"~":"")+percent.Value.ToString():"--",charge,fg,halo);
+                    if(updateBadge.HasValue)g.TranslateTransform(0,-32f/size);
                     if(charge) {
+                        if(updateBadge.HasValue)g.TranslateTransform(-24,0);
                         using(var marker=new SolidBrush(Color.FromArgb(12,17,21)))g.FillEllipse(marker,25f,1.2f,6.4f,9.6f);
                         PointF[] bolt={new PointF(29.1f,2.2f),new PointF(26.2f,6.2f),new PointF(28.1f,6.2f),new PointF(27.2f,9.6f),new PointF(30.2f,5.2f),new PointF(28.4f,5.2f)};
                         using(var brush=new SolidBrush(Color.White))g.FillPolygon(brush,bolt);
@@ -44,23 +48,27 @@ namespace AtkBatteryTray {
                 }
                 result.SetPixel(0,0,Color.Transparent);result.SetPixel(size-1,0,Color.Transparent);
                 result.SetPixel(0,size-1,Color.Transparent);result.SetPixel(size-1,size-1,Color.Transparent);
+                if(updateBadge.HasValue)UpdateBadge.Paint(result,updateBadge.Value,taskbarDark??dark);
                 return result;
             }
         }
-        public static Bitmap RenderDevice(int? percent,bool charge,bool dark,bool stale,int size,string kind){
+        public static Bitmap RenderDevice(int? percent,bool charge,bool dark,bool stale,int size,string kind,Color? updateBadge=null,bool? taskbarDark=null){
             size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
             using(var large=new Bitmap(canvas,canvas,PixelFormat.Format32bppPArgb)){
                 using(var g=Graphics.FromImage(large)){
                     g.Clear(Color.Transparent);g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.ScaleTransform(canvas/32f,canvas/32f);
                     Color gray=LevelColor(null,dark),foreground=VisualDesign.HighContrast?SystemColors.WindowText:dark?Color.FromArgb(244,246,248):Color.FromArgb(27,36,48);
                     Color symbol=percent.HasValue&&!stale?foreground:gray;
+                    if(updateBadge.HasValue)g.TranslateTransform(-4,0);
                     if(kind=="mouse"||kind=="keyboard"||kind=="headset")CompactRenderer.DrawSymbol(g,kind,new RectangleF(4,1,24,19),symbol);
                     else {
                         using(var pen=new Pen(symbol,1.9f))using(var shape=VisualDesign.RoundRect(7,2,18,17,3)){
                             g.DrawPath(pen,shape);g.DrawLine(pen,12,6,20,6);g.DrawLine(pen,12,10,20,10);g.DrawEllipse(pen,14.5f,13,3,3);
                         }
                     }
+                    if(updateBadge.HasValue)g.TranslateTransform(4,0);
                     if(charge){
+                        if(updateBadge.HasValue)g.TranslateTransform(-24,0);
                         using(var marker=new SolidBrush(Color.FromArgb(12,17,21)))g.FillEllipse(marker,25f,1.2f,6.4f,9.6f);
                         PointF[] bolt={new PointF(29.1f,2.2f),new PointF(26.2f,6.2f),new PointF(28.1f,6.2f),new PointF(27.2f,9.6f),new PointF(30.2f,5.2f),new PointF(28.4f,5.2f)};
                         using(var brush=new SolidBrush(percent.HasValue&&!stale?Color.White:gray))g.FillPolygon(brush,bolt);
@@ -85,6 +93,7 @@ namespace AtkBatteryTray {
                 }
                 // Keep the native margin transparent after bicubic downsampling.
                 for(int pixel=0;pixel<size;pixel++){result.SetPixel(pixel,0,Color.Transparent);result.SetPixel(pixel,size-1,Color.Transparent);result.SetPixel(0,pixel,Color.Transparent);result.SetPixel(size-1,pixel,Color.Transparent);}
+                if(updateBadge.HasValue)UpdateBadge.Paint(result,updateBadge.Value,taskbarDark??dark);
                 return result;
             }
         }

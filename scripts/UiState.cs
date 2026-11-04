@@ -23,6 +23,8 @@ namespace AtkBatteryTray {
         public BatteryView Battery;
         public string Tooltip;
         public string DeviceKind;
+        public bool UpdateBadge;
+        public Color UpdateColor;
     }
     internal sealed class AudioCardView {
         internal string Subtitle,EndpointId;

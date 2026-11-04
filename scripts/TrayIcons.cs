@@ -57,9 +57,11 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
         internal NativeTrayIcon(NotifyIcon tray,bool visible){this.tray=tray;this.visible=visible;}
         public bool Update(TrayView view,string style,bool dark,int size){
-            var battery=view.Battery;string key=battery.Key+"|"+style+"|"+view.DeviceKind+"|"+dark+"|"+size;bool changed=key!=lastKey;
+            var battery=view.Battery;bool taskbarDark=Style.TaskbarDark;
+            string key=battery.Key+"|"+style+"|"+view.DeviceKind+"|"+dark+"|"+size+"|"+view.UpdateBadge+"|"+(view.UpdateBadge?view.UpdateColor.ToArgb():0)+"|"+taskbarDark;bool changed=key!=lastKey;
             if(changed){
-                using(var bitmap=style=="device"?TrayGlyph.RenderDevice(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,view.DeviceKind):TrayGlyph.Render(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,battery.Approximate)){
+                Color? badge=view.UpdateBadge?(Color?)view.UpdateColor:null;
+                using(var bitmap=style=="device"?TrayGlyph.RenderDevice(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,view.DeviceKind,badge,taskbarDark):TrayGlyph.Render(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,battery.Approximate,badge,taskbarDark)){
                     IntPtr handle=bitmap.GetHicon();Icon next;try{next=(Icon)Icon.FromHandle(handle).Clone();}finally{DestroyIcon(handle);}
                     var old=icon;icon=next;tray.Icon=icon;if(old!=null)old.Dispose();
                 }

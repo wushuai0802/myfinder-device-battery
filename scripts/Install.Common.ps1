@@ -212,10 +212,27 @@ function Assert-DeviceBatteryStopped([string]$InstallDirectory,[object[]]$Change
     if(@(Get-DeviceBatteryOwnedProcesses $InstallDirectory).Count -gt 0) {
         throw 'Exit Device Battery and its portable reader before updating any installed payload file.'
     }
+    # A reader can briefly retain a file after process exit or a scan. Bound the
+    # entire preflight, and retry only Windows sharing/locking conflicts. Never
+    # turn permission failures or a still-running installation into success.
+    $retryWindow=[Diagnostics.Stopwatch]::StartNew()
     foreach($path in @($ChangedPaths)) {
         if(-not (Test-Path -LiteralPath $path -PathType Leaf)){continue}
-        try {$handle=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read);$handle.Dispose()}
-        catch {throw 'An installed payload file is in use or not writable. Close the application before updating.'}
+        while($true) {
+            $handle=$null
+            try {$handle=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read);break}
+            catch {
+                $failure=$_.Exception.GetBaseException()
+                if($failure -is [IO.IOException] -and ($failure.HResult -band 0xffff) -in @(32,33) -and $retryWindow.ElapsedMilliseconds -lt 1000) {
+                    Start-Sleep -Milliseconds 50
+                    if(@(Get-DeviceBatteryOwnedProcesses $InstallDirectory).Count -gt 0) {
+                        throw 'Exit Device Battery and its portable reader before updating any installed payload file.'
+                    }
+                    continue
+                }
+                throw [IO.IOException]::new(('An installed payload file is in use or not writable. Close the application before updating. File: {0}. Windows error: 0x{1:X8}. {2}' -f $path,$failure.HResult,$failure.Message),$failure)
+            } finally {if($handle){$handle.Dispose()}}
+        }
     }
 }
 

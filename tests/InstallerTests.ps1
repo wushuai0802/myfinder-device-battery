@@ -112,8 +112,39 @@ try {
     Assert-Rejected {Install-DeviceBattery @arguments} 'orphan portable worker blocks an engine-only update before copying'
     Assert ((Get-FileHash -LiteralPath (Join-Path $target 'engine\providers\base.py')).Hash -eq $oldEngineHash) 'worker rejection preserves installed bytes'
     Stop-Fixture $pythonProcess;$pythonProcess=$null
+    # Model a short-lived independent reader, without changing the installer's
+    # process discovery or its file-open probe. The original one-shot check fails.
+    if(-not ('InstallerTests.TimedPayloadReader' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Threading;
+namespace InstallerTests {
+    public sealed class TimedPayloadReader : IDisposable {
+        readonly FileStream stream;
+        readonly Thread worker;
+        public TimedPayloadReader(string path) {
+            stream=File.Open(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+            worker=new Thread(delegate(){Thread.Sleep(500);stream.Dispose();});worker.Start();
+        }
+        public void Dispose(){worker.Join();stream.Dispose();}
+    }
+}
+'@
+    }
+    $probePath=Join-Path $target 'engine\providers\base.py'
+    $transientReader=New-Object InstallerTests.TimedPayloadReader $probePath
+    try {Assert-DeviceBatteryStopped $target @($probePath)}finally{$transientReader.Dispose()}
+    Assert ((Get-FileHash -LiteralPath $probePath).Hash -eq $oldEngineHash) 'transient reader releases within bounded preflight without changing payload bytes'
     $held=[IO.File]::Open((Join-Path $target 'engine\providers\base.py'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     try {Assert-Rejected {Install-DeviceBattery @arguments} 'a locked changed engine file is rejected before target mutation'}finally{$held.Dispose()}
+    $originalAttributes=[IO.File]::GetAttributes($probePath)
+    try {
+        [IO.File]::SetAttributes($probePath,($originalAttributes -bor [IO.FileAttributes]::ReadOnly))
+        $denied=$null
+        try {Assert-DeviceBatteryStopped $target @($probePath)}catch{$denied=$_.Exception}
+        Assert ($null -ne $denied -and ($denied.GetBaseException().HResult -band 0xffff) -eq 5 -and $denied.Message.Contains($probePath)) 'read-only payload still fails with its exact path and original access-denied cause'
+    }finally{[IO.File]::SetAttributes($probePath,$originalAttributes)}
     $settings=Join-Path $data 'audio-settings.json'
     [IO.File]::WriteAllText($settings,'{"keep":"user audio settings"}')
     $oldExeHash=(Get-FileHash -LiteralPath $installed.InstalledExecutable).Hash

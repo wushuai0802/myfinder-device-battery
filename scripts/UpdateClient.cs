@@ -86,6 +86,8 @@ namespace AtkBattery {
         [DataMember] public DateTime NotBeforeUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);
         [DataMember] public string SkippedVersion;
         [DataMember] public string NotifiedVersion;
+        [DataMember(EmitDefaultValue=false)] public string SeenVersion;
+        [DataMember(EmitDefaultValue=false)] public UpdateRelease AvailableRelease;
         [OnDeserializing] void Defaults(StreamingContext context){LastCheckUtc=NotBeforeUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);}
     }
     internal static class UpdateSchedule {
@@ -106,13 +108,32 @@ namespace AtkBattery {
             }else state=new UpdateState();
         }
         void Save(){UpdatePaths.NoLinks(path);AtomicText.Write(path,UpdateJson.Text(state));}
+        internal UpdateRelease CachedRelease {get{lock(gate){
+            try{
+                var release=UpdateCatalog.Select(new[]{state.AvailableRelease},current,state.SkippedVersion);
+                if(release!=null)UpdateCatalog.ValidateAssets(release,release.Version);return release;
+            }catch(Exception){return null;}
+        }}}
+        internal bool BadgeVisible(bool enabled,bool automatic){lock(gate){
+            var release=CachedRelease;if(!enabled||!automatic||release==null)return false;
+            UpdateVersion seen;return !UpdateVersion.TryParse(state.SeenVersion,out seen)||UpdateVersion.Parse(release.Version).CompareTo(seen)>0;
+        }}
+        internal void MarkSeen(string version,bool userInitiated){
+            if(!userInitiated)return;var next=UpdateVersion.Parse(version);
+            lock(gate){UpdateVersion seen;if(UpdateVersion.TryParse(state.SeenVersion,out seen)&&next.CompareTo(seen)<=0)return;string previous=state.SeenVersion;state.SeenVersion=version;try{Save();}catch{state.SeenVersion=previous;throw;}}
+        }
         internal UpdateRelease Check(bool automatic,bool enabled,DateTime now,CancellationToken token=default(CancellationToken)){
             lock(gate){if(!UpdateSchedule.CanCheck(state,now,started,automatic,enabled))return null;state.LastCheckUtc=now;try{Save();}catch(Exception){ErrorCode="update_state_write_failed";return null;}}
             try {
                 var bytes=UpdateNetwork.Fetch(transport,new Uri(UpdateTrust.ApiUrl+"?per_page=100"),2097152,token,null);
                 var releases=UpdateJson.Read<UpdateRelease[]>(bytes);UpdateRelease candidate;
                 lock(gate)candidate=UpdateCatalog.Select(releases,current,state.SkippedVersion);
-                if(candidate!=null)UpdateCatalog.ValidateAssets(candidate,candidate.Version);ErrorCode=null;return candidate;
+                if(candidate!=null){
+                    var assets=UpdateCatalog.ValidateAssets(candidate,candidate.Version);
+                    // Bound the cached metadata just like the dialog notes; retain only required assets.
+                    candidate=new UpdateRelease {Tag=candidate.Tag,Prerelease=candidate.Prerelease,Body=UpdateText.Notes(candidate.Body),Assets=new List<UpdateAsset>(assets.Values).ToArray()};
+                }
+                lock(gate){state.AvailableRelease=candidate;Save();}ErrorCode=null;return candidate;
             }catch(UpdateHttpFailure error){
                 ErrorCode="update_http_"+error.Status;
                 if(error.Status==403||error.Status==429)lock(gate){state.NotBeforeUtc=RetryTime(now,error.RetryAfter);try{Save();}catch(Exception){}}

@@ -16,12 +16,15 @@ namespace AtkBatteryTray {
     public static class Style {
         static bool? systemDark;
         public static void InvalidateTheme(){systemDark=null;}
+        public static bool TaskbarDark {get{
+            if(!systemDark.HasValue)using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))systemDark=key!=null&&Convert.ToInt32(key.GetValue("SystemUsesLightTheme",1))==0;
+            return systemDark.Value;
+        }}
         public static bool Dark {
             get {
                 var appearance=DeviceSettings.Current.Theme;
                 if(appearance=="dark")return true;if(appearance=="light")return false;
-                if(!systemDark.HasValue)using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))systemDark=key!=null&&Convert.ToInt32(key.GetValue("SystemUsesLightTheme",1))==0;
-                return systemDark.Value;
+                return TaskbarDark;
             }
         }
         public static GraphicsPath Round(RectangleF rect,float radius) {
@@ -280,6 +283,7 @@ namespace AtkBatteryTray {
                 else if(id==214)pref.RememberReadings=!pref.RememberReadings;
                 else if(id==215)pref.ReducedMotion=!pref.ReducedMotion;
                 else if(id==219)pref.AutoCheckUpdates=!pref.AutoCheckUpdates;
+                else if(id==225)pref.ShowUpdateBadge=!pref.ShowUpdateBadge;
                 else if(id==217){owner.ClearReadingHistory();navigation.Notice="正在清除历史读数…";Invalidate();return;}
                 else if(id==218){pref.TrayDeviceId=pref.TrayDeviceId==control.DeviceKey?null:control.DeviceKey;}
                 else if(id>=252&&id<=255) {
@@ -588,6 +592,7 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(navigation.AudioDeviceKey).Append('|').Append(navigation.AudioDeviceName);
             visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.ThemeStyle).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.TrayDeviceId).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
             visible.Append('|').Append(preferences.VolumeCollapsed);
+            visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb());
             visible.Append('|').Append(preferences.TrayIconStyle).Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint);
             foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId);foreach(string id in group.Members)visible.Append('|').Append(id);}
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
@@ -660,6 +665,7 @@ namespace AtkBatteryTray {
         internal string UpdateStatus {get{return updates==null?"尚未检查":updates.Status;}}
         internal string UpdateFailure {get{return updates==null?null:updates.LastFailure;}}
         internal bool UpdateAvailable {get{return updates!=null&&updates.Available;}}
+        internal Color UpdateDotColor {get;private set;}
         internal void OpenUpdate(){if(updates!=null)updates.Open();}
         internal void CheckUpdates(){if(devicePackChecks!=null)devicePackChecks.Check(false);if(updates!=null)updates.Check(false);}
         readonly NotifyIcon tray=new NotifyIcon();
@@ -794,7 +800,7 @@ namespace AtkBatteryTray {
             return result;
         }
         public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute,null,null,MouseBattery.SetActiveDpiStage,null,true) {
-            updates=new UpdateController(dispatch,delegate{if(details!=null&&!details.IsDisposed)details.Invalidate();},delegate(string title,string message,bool update){updateBalloon=update;tray.ShowBalloonTip(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
+            updates=new UpdateController(dispatch,UpdateIcon,delegate(string title,string message,bool update){updateBalloon=update;tray.ShowBalloonTip(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
             deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();});
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
@@ -826,7 +832,8 @@ namespace AtkBatteryTray {
             var update=new ToolStripMenuItem("\u5237\u65b0");update.Click+=delegate {RefreshBattery();};menu.Items.Add(update);
             menu.Items.Add(audioSettingsMenu);menu.Opening+=delegate {BuildAudioSettingsMenu();};
             var settingsItem=new ToolStripMenuItem("设置…");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
-            var checkUpdates=new ToolStripMenuItem("检查更新…");checkUpdates.Click+=delegate{CheckUpdates();};menu.Items.Add(checkUpdates);
+            var checkUpdates=new ToolStripMenuItem("检查更新…");checkUpdates.Click+=delegate{if(UpdateAvailable)OpenUpdate();else CheckUpdates();};menu.Items.Add(checkUpdates);
+            menu.Opening+=delegate{checkUpdates.Text=UpdateAvailable?"查看新版本 "+updates.Version+"…":"检查更新…";};
             menu.Items.Add(new ToolStripSeparator());
             var exit=new ToolStripMenuItem("\u9000\u51fa");exit.Click+=delegate {ExitThread();};menu.Items.Add(exit);
             ConfigureTrayIcon(tray,menu);
@@ -946,6 +953,10 @@ namespace AtkBatteryTray {
             var presentation=UiState.Tray(preferences.TraySource,mouse,headset);var shown=presentation.Battery;
             if(UseWirelessLayout||preferences.TrayGroups.Count>0||preferences.TraySource=="active"||!String.IsNullOrEmpty(preferences.TrayDeviceId)){presentation=WirelessTray(preferences.TraySource);shown=presentation.Battery;}
             bool dark=Style.Dark;int size=SystemInformation.SmallIconSize.Width;
+            Color background=preferences.TrayIconStyle=="number"?TrayGlyph.NumberFill(shown.Percent,shown.Percent.HasValue&&!shown.Fresh):TrayGlyph.LevelColor(shown.Percent,dark);
+            UpdateDotColor=UpdateBadge.ColorFor(ThemePalette.Current(dark).Accent,background,Style.TaskbarDark);
+            presentation.UpdateColor=UpdateDotColor;presentation.UpdateBadge=updates!=null&&updates.BadgeVisible;
+            presentation.Tooltip=UpdateBadge.Tooltip(presentation.Tooltip,updates==null?null:updates.Version);
             if(trayIcons.First.Update(presentation,preferences.TrayIconStyle,dark,size))iconUpdates++;
             trayIcons.Sync(preferences.TrayGroups);
             foreach(string id in new List<string>(groupDeviceKeys.Keys))if(TrayConfiguration.Find(preferences,id)==null)groupDeviceKeys.Remove(id);

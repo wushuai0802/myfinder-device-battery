@@ -1143,7 +1143,7 @@ static class Host {
             Check(state=="minimized"?IsIconic(form.Handle):!IsWindowVisible(form.Handle),"fixture begins "+state);
             // Bypass the constructor's live update timer; exercise the actual existing-window branch.
             var controller=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));
-            typeof(UpdateController).GetField("dialog",Members).SetValue(controller,form);Call(controller,"ShowAvailable");Application.DoEvents();
+            typeof(UpdateController).GetField("dialog",Members).SetValue(controller,form);Call(controller,"ShowAvailable",false);Application.DoEvents();
             Check(IsWindowVisible(form.Handle)&&!IsIconic(form.Handle),"ShowAvailable restores "+state+" window");
             Check(Object.ReferenceEquals(Field(controller,"dialog"),form),"ShowAvailable reuses the same dialog");
         }

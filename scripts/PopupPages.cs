@@ -103,7 +103,7 @@ namespace AtkBatteryTray {
                 return WithIdentity(rows,nav,owner);
             }
             if(nav.Page==PopupPage.More) {
-                if(owner.UpdateAvailable)rows.Add(Row(260,owner.UpdateStatus,null,"info"));
+                if(owner.UpdateAvailable)rows.Add(Row(260,owner.UpdateStatus,null,"update"));
                 rows.Add(Row(200,"音源与麦克风",null,"speaker"));rows.Add(Row(201,"显示与提醒",null,"settings"));
                 rows.Add(Row(206,"设备管理",null,"keyboard"));rows.Add(Row(207,"设备没显示？",null,"info"));
                 rows.Add(Row(202,"状态与诊断",null,"info"));rows.Add(Row(204,"退出",null,"power"));
@@ -128,6 +128,7 @@ namespace AtkBatteryTray {
                 rows.Add(Toggle(214,"跨重启保留读数",pref.RememberReadings));
                 var clear=Row(217,"清除历史读数",null,"refresh");clear.Detail="关闭保留不删除历史，清除需单独操作";rows.Add(clear);
                 rows.Add(Section("更新"));rows.Add(Toggle(219,"自动检查更新",pref.AutoCheckUpdates));
+                rows.Add(Toggle(225,"托盘图标显示更新角标",pref.ShowUpdateBadge));
             }else if(nav.Page==PopupPage.TrayIcons){
                 var firstGroup=GroupRow("group",TrayConfiguration.FirstName,TrayConfiguration.FirstId,TrayRule(owner,pref.TraySource,pref.TrayDeviceId));firstGroup.Id=600;rows.Add(firstGroup);
                 foreach(var group in pref.TrayGroups){var row=GroupRow("group",group.Name,group.Id,TrayRule(owner,group.Source,group.DeviceId));row.Id=600+rows.Count;rows.Add(row);}
@@ -206,7 +207,7 @@ namespace AtkBatteryTray {
             }else if(nav.Page==PopupPage.Diagnostics) {
                 rows.Add(Info("版本",AppRuntime.Version));rows.Add(Info("鼠标读取",UiState.Mouse(owner.Current,owner.LastGood,DateTime.UtcNow).Fresh?"已确认":"历史 / 未知"));
                 rows.Insert(1,Info("软件更新",owner.UpdateStatus));
-                rows.Insert(2,Row(owner.UpdateAvailable?260:261,owner.UpdateAvailable?owner.UpdateStatus:"检查更新",null,"info"));
+                rows.Insert(2,Row(owner.UpdateAvailable?260:261,owner.UpdateAvailable?owner.UpdateStatus:"检查更新",null,owner.UpdateAvailable?"update":"info"));
                 if(!String.IsNullOrEmpty(owner.UpdateFailure))rows.Insert(3,Info("上次更新失败",owner.UpdateFailure));
                 rows.Add(Info("耳机无线",headset?"已确认连接":"未确认连接"));rows.Add(Info("后台同步",pref.BackgroundSeconds+"秒"));
                 rows.Add(Info("配置状态",DeviceSettings.UsingDefaults?"读取失败，使用默认":"正常"));
@@ -443,7 +444,8 @@ namespace AtkBatteryTray {
                 if(!String.IsNullOrEmpty(row.Icon)){
                     bool titleAligned=!String.IsNullOrEmpty(row.Detail)&&!row.Slider&&!row.Toggle&&!row.WrapText&&!themeChoice;
                     float iconY=titleAligned?rect.Y+4:rect.Y+(rect.Height-16)/2;
-                    VisualDesign.DrawSymbol(g,row.Icon,new RectangleF(x,iconY,16,16),detailColor);x+=24;
+                    if(row.Icon=="update"){using(var brush=new SolidBrush(owner.UpdateDotColor))g.FillEllipse(brush,x+4,iconY+4,8,8);}
+                    else VisualDesign.DrawSymbol(g,row.Icon,new RectangleF(x,iconY,16,16),detailColor);x+=24;
                 }
                 if(themeChoice) {
                     if(!VisualDesign.HighContrast) {
