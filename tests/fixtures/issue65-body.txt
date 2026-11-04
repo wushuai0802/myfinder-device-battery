@@ -1,0 +1,56 @@
+### 品牌与完整型号
+
+维伽Lucky65V2 三模键盘
+
+### 本次连接方式
+
+2.4G 接收器
+
+### 官方软件显示的电量
+
+未知，没充电
+
+### 反馈报告
+
+```text
+MyFinder Device Battery 1.3.5
+Windows 10.0.26300.9818
+当前实例：2508 / 2026-11-04T15:06:40.8153168Z
+诊断写入：正常
+鼠标：鼠标 --
+耳机：耳机 --
+耳机无线：未确认连接
+音源：speaker
+后台间隔：60秒
+自启：目标失效
+软件更新：尚未检查
+鼠标读取：Not yet read
+mouse：PRO X Wireless 90% · 充电中
+通用读取：已就绪
+读取健康：部分读取暂不可用（1项）
+logitech：unsupported / 
+asus：unsupported / 
+astro：unsupported / 
+logitech：unavailable / 
+astro：unsupported / 
+astro：unsupported / 
+logitech_centurion：unsupported / 
+logitech_centurion：unsupported / 
+logitech_centurion：unsupported / 
+standard_hid：unsupported / 
+standard_hid：unsupported / 
+standard_hid：unsupported / 
+standard_hid：unsupported / 
+standard_hid：unsupported / 
+standard_hid：unsupported / 
+standard_hid：unsupported / 
+standard_hid：unsupported / 
+未取得电量的设备（可能未适配，也可能正在休眠）
+046D:C547 "USB Receiver" 0001:0002 0001:0006 0001:0080 000C:0001 FF00:0001 FF00:0002
+0B05:18A5 "ROG AURA MOTHERBOARD" FF72:00A1
+342D:E407 "Dongle DFU Interface" 0001:0002 0001:0006 0001:0006 0001:0006 0001:0080 000C:0001 FF00:0001 FF60:0061
+5E2A:71B4 "HID VHF Driver" 0001:0002
+5E2A:71B4 "HID VHF Driver" 0001:0002
+已隐藏的重复连接
+无记录
+```

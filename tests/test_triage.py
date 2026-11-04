@@ -128,10 +128,69 @@ class TriageTests(unittest.TestCase):
             for wrap in (in_app, template):
                 with self.subTest(card_id=card_id, wrap=wrap.__name__):
                     result = self.classify(wrap(report(card=card, unknown='373B:1278 "ATK" FF02:0002')), "supported")
-                    self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.SUPPORTED.format(models="ATK A9 Air+"))
-                    self.assertNotIn("自定义产品名", result["reply"])
+                    self.assertIsNone(result["reply"])
+                    self.assertNotIn("自定义产品名", result["reason"])
                     self.classify(wrap(report(card=card, unknown='373B:EEEE "unknown" 0001:0006')), "insufficient-evidence")
                     self.classify(wrap(report(card=card, unknown='ABCD:1234 "new" FF01:0001')), "new-vendor")
+
+    def test_old_format_percentage_lines_are_cards_anywhere(self):
+        card = (None, None, (), "card", "")
+        for kind in ("mouse", "KEYBOARD", "Headset", "鼠标", "键盘", "耳机"):
+            for colon in ("：", ":"):
+                for level in ("0", "90", "100"):
+                    line = kind + colon + "Product 373B:1278 " + level + "% · 充电中"
+                    for text in (line, report(card=line), report(unknown=line),
+                                 "已隐藏的重复连接\n" + line, "读取器健康\n" + line):
+                        with self.subTest(kind=kind, colon=colon, level=level, text=text):
+                            self.assertEqual(triage.report_devices(text), [card])
+
+    def test_old_format_text_without_a_percentage_is_not_a_card(self):
+        for line in ("鼠标：鼠标 --", "耳机：耳机 --", "耳机无线：未确认连接",
+                     "鼠标读取：Not yet read", "mouse: Mouse --", "keyboard: Keyboard 80",
+                     "headset: Not connected", "mouse: Mouse 1000%", "mouse: 90%",
+                     "mouse wireless: Mouse 80%", "耳机无线：耳机 80%"):
+            with self.subTest(line=line):
+                self.assertEqual(triage.report_devices(line), [])
+
+    def test_card_and_only_support_hits_need_human_review(self):
+        for known, next_known, label in ((KNOWN, None, "supported"),
+                                         ({"vendors": {}, "devices": []}, KNOWN, "in-next-release")):
+            for card in ("Mouse | mouse | provider | 80% | 当前读数：是", "mouse：Mouse 80%"):
+                for unknown in ('373B:1278 "ATK" FF02:0002',
+                                '373B:1278 "ATK" FF02:0002\n0B05:18A5 "ROG AURA MOTHERBOARD" FF72:00A1'):
+                    with self.subTest(label=label, card=card, unknown=unknown):
+                        result = triage.decide(issue(in_app(report(card=card, unknown=unknown))),
+                                               known, known_next=next_known)
+                        self.assertEqual(result["label"], "triage:" + label)
+                        self.assertIsNone(result["reply"])
+                        for word in ("卡片", "接收器", "人工"):
+                            self.assertIn(word, result["reason"])
+
+    def test_card_support_hits_leave_other_rows_to_classify(self):
+        for released in (True, False):
+            for row, label in (('373B:EEEE "candidate" FF02:0002', "pack-candidate"),
+                               ('ABCD:1234 "new" FF00:0001', "new-vendor"),
+                               ('046D:EEEE "standard" 0001:0006', "insufficient-evidence"),
+                               ('373B:EEEE "unknown"', "insufficient-evidence")):
+                for rows in ((row, '373B:1278 "ATK" FF02:0002'),
+                             ('373B:1278 "ATK" FF02:0002', row)):
+                    with self.subTest(released=released, label=label, rows=rows):
+                        known = KNOWN if released else {"vendors": {}, "devices": []}
+                        result = triage.decide(issue(in_app(report(card="mouse：Mouse 80%", unknown="\n".join(rows)))),
+                                               known, known_next=None if released else KNOWN)
+                        self.assertEqual(result["label"], "triage:" + label)
+                        self.assertIsNone(result["reply"])
+
+    def test_no_card_still_replies_to_support_hits(self):
+        for known, next_known, label, reply in (
+                (KNOWN, None, "supported", triage.SUPPORTED),
+                ({"vendors": {}, "devices": []}, KNOWN, "in-next-release", triage.IN_NEXT_RELEASE)):
+            body = "鼠标：鼠标 --\n耳机无线：未确认连接\n鼠标读取：Not yet read\n"
+            body += in_app(report(unknown='373B:1278 "ATK" FF02:0002'))
+            with self.subTest(label=label):
+                result = triage.decide(issue(body), known, known_next=next_known)
+                self.assertEqual(result["label"], "triage:" + label)
+                self.assertEqual(result["reply"], triage.MARKER + "\n" + reply.format(models="ATK A9 Air+"))
 
     def test_card_only_incorrect_reading_is_a_bug(self):
         card = "ATK | mouse | native_atk | 80% | 当前读数：是 | 373B:1278"
@@ -168,7 +227,7 @@ class TriageTests(unittest.TestCase):
         self.classify(in_app(), "needs-info", comments=[comment(card_report, True)])
         result = self.classify(in_app(report(unknown='373B:1278 "ATK" FF02:0002')),
                                "supported", comments=[comment(card_report)])
-        self.assertNotIn("Logitech G733", result["reply"])
+        self.assertIsNone(result["reply"])
 
     def test_supported_without_battery_explains_the_difference(self):
         result = self.classify(in_app(report(unknown='373B:1278 "ATK"')), "supported")
@@ -196,6 +255,8 @@ class TriageTests(unittest.TestCase):
                   'ABCD:1234 Precision Device FF00:0001',
                   'ABCD:1234 "Receiver" 0001:0002',
                   'ABCD:1234 "Receiver" 0001:0002 0001:0002',
+                  '0B05:18A5 "ROG AURA MOTHERBOARD" FF72:00A1',
+                  '0B05:18A5 "ROG AURA motherboard" FF72:00A1',
                   '373B:1278 "ATK" 0001:0002',
                   '373B:EEEE "Precision Device" FF00:0001')
         for noise in noises:
@@ -218,7 +279,7 @@ class TriageTests(unittest.TestCase):
                 self.assertIn("已忽略", result["reason"])
 
     def test_noise_vendor_ids_are_not_blanket_exclusions(self):
-        for device_id in ("04F3:31C0", "06CB:CE7D", "00FF:BACC"):
+        for device_id in ("04F3:31C0", "06CB:CE7D", "00FF:BACC", "0B05:18A5"):
             self.classify(in_app(report(unknown=device_id + ' "Receiver" 0001:0006 FF00:0001')), "new-vendor")
 
     def test_new_vendor_with_vendor_collection(self):
@@ -299,23 +360,36 @@ class TriageTests(unittest.TestCase):
 
     def test_real_issue_fixtures_ignore_cards_and_noise(self):
         known = known_ids.build_index()
-        for number, supported_model, ignored_ids, card_ids in (
-            (29, "MCHOSE V9 PRO", ("00FF:BACC", "06CB:CE7D"), ("A8A5:2255",)),
-            (30, "Flydigi APEX5", ("04F3:31C0",), ("373B:1031", "046D:C547")),
+        for number, unknown_id, ignored_ids, card_ids in (
+            (29, "25A7:FA70", ("00FF:BACC", "06CB:CE7D"), ("A8A5:2255",)),
+            (30, "19F5:3247", ("04F3:31C0",), ("373B:1031", "046D:C547")),
         ):
             with self.subTest(issue=number):
                 body = (ROOT / f"tests/fixtures/issue{number}-body.txt").read_text(encoding="utf-8")
                 result = triage.decide(issue(body, labels=("triage:supported", "in-app-feedback")), known)
-                # V9 PRO and APEX5 are now indexed; supported precedence applies.
-                self.assertEqual(result["label"], "triage:supported")
-                self.assertIn(supported_model, result["reply"])
-                self.assertEqual(result["remove_labels"], [])
+                # A working card makes a support hit ambiguous; classify the other device.
+                self.assertEqual(result["label"], "triage:new-vendor")
+                self.assertIsNone(result["reply"])
+                self.assertIn(unknown_id, result["reason"])
+                self.assertEqual(result["remove_labels"], ["triage:supported"])
                 classification, ignored = result["reason"].split(" 已忽略", 1)
                 for device_id in ignored_ids:
                     self.assertNotIn(device_id, classification)
                     self.assertIn(device_id, ignored)
                 for device_id in card_ids:
                     self.assertNotIn(device_id, result["reason"])
+
+    def test_issue_65_ignores_working_card_receiver_and_motherboard(self):
+        body = (ROOT / "tests/fixtures/issue65-body.txt").read_text(encoding="utf-8")
+        result = triage.decide(issue(body, labels=("triage:supported",)), known_ids.build_index())
+        self.assertEqual(result["label"], "triage:new-vendor")
+        self.assertIsNone(result["reply"])
+        self.assertEqual(result["remove_labels"], ["triage:supported"])
+        classification, ignored = result["reason"].split(" 已忽略", 1)
+        self.assertIn("342D:E407", classification)
+        self.assertNotIn("046D:C547", result["reason"])
+        self.assertNotIn("0B05:18A5", classification)
+        self.assertIn("0B05:18A5", ignored)
 
     def test_malicious_and_long_body_stays_data(self):
         attack = '`$(touch SHOULD_NOT_EXIST)` @someone ${{ secrets.GITHUB_TOKEN }}\n' + triage.MARKER

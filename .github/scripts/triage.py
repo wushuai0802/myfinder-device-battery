@@ -26,7 +26,9 @@ DEVICE_TYPES = {"设备不识别", "电量或 DPI 不对"}
 BUG_TYPES = {"界面或操作", "其他"}
 HEADINGS = {"有卡片的设备": "card", "未取得电量的设备": "unadapted",
             "已隐藏的重复连接": "ignore", "读取器健康": "ignore"}
-NOISE_NAME = re.compile(r"HIDI2C|Touchpad|Multitouch|Precision", re.IGNORECASE)
+LEGACY_CARD = re.compile(r"^(?:mouse|keyboard|headset|鼠标|键盘|耳机)[ \t]*[：:][ \t]*\S(?:.*\S)?[ \t]+\d{1,3}%",
+                         re.IGNORECASE)
+NOISE_NAME = re.compile(r"HIDI2C|Touchpad|Multitouch|Precision|Motherboard", re.IGNORECASE)
 
 
 def comments_list(value):
@@ -63,6 +65,10 @@ def report_devices(text):
     rows, section = [], None
     for raw in text.splitlines():
         line = raw.strip()
+        # Older reports place kind/name/percentage cards outside card sections.
+        if LEGACY_CARD.match(line):
+            rows.append((None, None, (), "card", ""))
+            continue
         heading = line.lstrip("# ")
         matched = next((kind for title, kind in HEADINGS.items()
                         if heading == title or heading.startswith(title + "（")), None)
@@ -123,6 +129,7 @@ def decide(issue, known, comments=None, known_next=None):
     vendors.update(vid for ids in (known_next or {}).get("vendors", {}).values() for vid in ids)
     known_pairs = index.keys() | next_index.keys()
     reported = rows
+    has_card = any(row[3] == "card" for row in reported)
     rows, ignored = [], []
     for row in reported:
         # Cards already have readings. Retain only their presence for needs-info
@@ -136,21 +143,29 @@ def decide(issue, known, comments=None, known_next=None):
     hits = [(row, index[row[:2]]) for row in rows if row[3] == "unadapted" and row[:2] in index]
     next_hits = [(row, next_index[row[:2]]) for row in rows
                  if row[3] == "unadapted" and row[:2] not in index and row[:2] in next_index]
+    if has_card and (hits or next_hits):
+        # A sibling interface of a working card can still appear as unread.
+        # Classify the remaining devices, retaining hits only as a fallback.
+        hit_rows = {row for row, _ in hits + next_hits}
+        rows = [row for row in rows if row not in hit_rows]
     new_vendors = [row for row in rows if row[0] not in vendors]
     reply = None
     if device_request and not reported:
         label, reason, reply = "needs-info", "设备类反馈缺少 VID:PID。", NEEDS_INFO
     elif category == "电量或 DPI 不对" and reported and all(row[3] == "card" for row in reported):
         label, reason = "bug", "只有已取得电量的卡片设备，但反馈电量或 DPI 读数不对，需要人工检查。"
-    elif hits or next_hits:
+    elif (hits or next_hits) and (not has_card or not rows):
         label = "supported" if hits else "in-next-release"
-        reason = ("设备 ID 命中已发布版本的内置支持列表，但本次未取得电量。" if hits
-                  else "设备 ID 仅命中开发版支持列表，尚未包含在最新正式发布中。")
-        # Only repository-owned model names enter the fixed reply, never names
-        # supplied by the issue author. Neutralise mentions in future pack names.
-        names = sorted({d["name"].replace("@", "＠").replace("\n", " ").replace("\r", " ")
-                        for _, devices in (hits or next_hits) for d in devices})
-        reply = (SUPPORTED if hits else IN_NEXT_RELEASE).format(models="、".join(names))
+        if has_card:
+            reason = "报告中已有取得电量的卡片，命中的 ID 可能是该卡片设备的接收器，需要人工检查。"
+        else:
+            reason = ("设备 ID 命中已发布版本的内置支持列表，但本次未取得电量。" if hits
+                      else "设备 ID 仅命中开发版支持列表，尚未包含在最新正式发布中。")
+            # Only repository-owned model names enter the fixed reply, never names
+            # supplied by the issue author. Neutralise mentions in future pack names.
+            names = sorted({d["name"].replace("@", "＠").replace("\n", " ").replace("\r", " ")
+                            for _, devices in (hits or next_hits) for d in devices})
+            reply = (SUPPORTED if hits else IN_NEXT_RELEASE).format(models="、".join(names))
     elif any(row[:2] not in known_pairs and row[0] in vendors and any(page >= 0xFF00 for page, _ in row[2])
              for row in rows):
         label, reason = "pack-candidate", "已支持厂商的未知产品 ID，且同一设备带厂商自定义集合。"
