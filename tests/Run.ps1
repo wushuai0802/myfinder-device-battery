@@ -1,6 +1,12 @@
 param([string]$OutputDirectory)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
+foreach($hostName in @('powershell.exe','pwsh.exe')){
+    if(Get-Command $hostName -ErrorAction SilentlyContinue){
+        & $hostName -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-PublishDevicePack.ps1')
+        if($LASTEXITCODE -ne 0){throw ('Device pack publication tests failed on '+$hostName)}
+    }
+}
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $root 'tmp\tests'}
 New-Item -ItemType Directory -Path $OutputDirectory -Force|Out-Null
 $compiler=Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'

@@ -211,7 +211,11 @@ def build_index(root=None, *, engine_root=None):
         add(profile["provider"], profile["match"]["vendorId"], profile["match"]["productId"],
             profile["name"], profile["kind"])
     disabled = set()
+    # source.json is the human-maintained publication input, not a signed
+    # complete pack and must not enter the triage index.
     for path in sorted((root / "devices/pack").glob("*.json")):
+        if path.name == "source.json":
+            continue
         pack = load_pack(path)
         if pack.rejected:
             unparsed.add(path.relative_to(root).as_posix())
