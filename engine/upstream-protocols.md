@@ -246,18 +246,20 @@ Still needed: the #19 device's descriptor and a live reading/charging comparison
 the upstream notes warn that the official UI smooths a voltage-derived value,
 which can differ from the device's raw percentage. No other Scyrox IDs are added.
 
-**MCHOSE A7 V3 Pro, `3837:1018`: not added.** Matching `FF01:0001` does not
+**MCHOSE A7 V3 Pro, `3837:1018`: deferred in the initial feedback batch;
+now implemented by the [separate V3 battery reader](#mchose-a7-v3-pro-38371018).** Matching `FF01:0001` does not
 establish the V2 protocol, and #24 has neither RealTek strings nor feature report
 lengths. More decisively, OpenMouse's
 [V3 codec](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/mchose/v3.ts)
 assigns `1018` to the V3 8K receiver: 64-byte **output** frames with report ID
 `0x4D`, plain payload with an XOR checksum, and command `0x0900` for identity
 and power. This cannot reuse V2's inverted `0x11`/`0x12` feature reports or
-command `0x06`. The old vendor-wide MCHOSE matcher now skips this exact ID before
-opening it, and the offline supported-ID index does not claim it. A new V3
-reader belongs in a separately scoped batch, with descriptors and battery /
-charging captures from the exact Pro model; the upstream hardware evidence
-describes an Ultra+ sibling. Existing V2 behavior is preserved.
+command `0x06`. The initial batch excluded this ID from the vendor-wide V2
+matcher and offline index. The separate implementation below replaces that
+exclusion with a bounded V3 read and adds the ID to the offline index. Descriptors
+and battery / charging captures from the exact Pro model are still needed;
+the upstream hardware evidence describes an Ultra+ sibling. Existing V2 behavior
+is preserved.
 
 **CompX keyboard receivers `3554:FA09` (#22, #25) and `3554:FA07` (#25): not
 added.** `FF02:0002` is transport shape, not evidence that a keyboard answers a
@@ -277,6 +279,58 @@ Sources above were read on **2026-11-04**. OpenMouse mouse-protocol commit
 **AGPL-3.0-or-later**, compatible with this project's AGPL-3.0 license. No new
 vendor driver code or protocol is imported in this batch; Scyrox reuses the
 existing battery exchange.
+
+### MCHOSE A7 V3 Pro (3837:1018)
+
+**C / 待本项目实机验证.** Implemented on 2026-11-04 in `providers/mchose.py`,
+using the task's read-only OpenMouse source snapshot pinned to
+`30d6ad37d0ecc9fff53f86d5058d67a88e07150d`. Reviewed sources:
+[codec](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/mchose/v3.ts),
+[HID driver](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/mchose/v3-hid.ts),
+[driver fixtures](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/mchose/v3-hid.test.ts),
+[protocol notes](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/docs/mchose-protocol.md),
+[registry](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/registry.ts)
+and [LICENSE](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/LICENSE).
+The supplied LICENSE is GNU AGPL version 3, compatible with this project's AGPL-3.0
+license. Only the battery framing/decoding subset was adapted; no upstream file
+was copied into the tracked tree or executed, and no network fetch was needed.
+
+The match requires **exactly `3837:1018 / FF01:0001`**, with input and output
+caps both **64 bytes including report ID `4D`** (63-byte body). Caps come from
+the existing topology inventory; unknown or different lengths prevent opening
+for I/O and sending. Other collections and legacy protocols are never tried for
+this ID, including after an invalid reply or timeout. Other V3 receiver/wired
+IDs in OpenMouse's broader table are not added by this change.
+
+Only `readDeviceInfo`, command **`0x0900`**, is sent: full frame
+`4d 01 01 00 00 09 00 00 08`, then zeros to 64 bytes. Full-frame offsets are
+report ID 0, version 1, flags 2, payload length 3, little-endian command 4–5,
+business code 6, sequence 7, payload from 8. With flags 1, XOR of offsets
+`2..7+length` must match offset `8+length`; flags 0 has no checksum, as in the
+upstream codec. Unknown flags, wrong ID/version/command, bad lengths or XOR
+are refused. The declared data must contain at least 14 bytes: vendor at 0–1
+must be `3837`, link at 10 must be nonzero, charge at 11 is a nonzero boolean,
+and percentage at 12 must be 0–100. Extra declared data is accepted and covered
+by the checksum. The reply PID is not used to identify the model: the upstream
+Ultra+ returned `4026` (an A5 ID). Use the USB product string, including a sibling
+collection, or the neutral `MCHOSE V3 8K 接收器` fallback.
+
+The local reader sends one battery query per poll, then waits at most 1500 ms
+and 32 input reads, ignoring unrelated or malformed frames. This clears the
+upstream's measured ~1001 ms deferred response. It does not reproduce the full
+driver's multi-command status read or its immediate busy/time-out retries.
+Busy (`ff` payload), refusal (`0000` command), disconnected link and silence
+produce no fresh percentage; any existing reading remains offline within the
+legacy cache lifetime. Loss of the required collection/caps drops the V3 cache.
+No settings, DPI, lighting, firmware or feature-report commands are sent.
+
+Offline tests reconstruct framing around the upstream 87% discharging fixture
+and captured Ultra+ 85% charging payload, and cover invalid replies, input noise,
+I/O failures, time/read limits, caps refusal, V2 isolation, cache freshness and
+public C-level metadata. They are **not Pro hardware captures**. Still needed:
+the exact Pro descriptor/report layout, firmware, live percentage/charging
+comparison, sleep/wake behavior and coexistence with M HUB. Shared receiver PID
+and Ultra+ evidence do not establish successful reads on every Pro variant.
 
 ### MCHOSE A7 V2 Ultra
 

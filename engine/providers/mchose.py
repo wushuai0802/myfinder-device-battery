@@ -51,8 +51,9 @@ than by model list, which is what this provider does as well. The diagnostics in
 0xFF01:0x01 on interface 2) have exactly that shape, and the reference documents the status
 read on the *short* 0x11 report, so both report ids are tried before a poll gives up.
 Exception: A7 V3's 3837:1018 receiver shares the configuration collection but uses
-output report 0x4D and a different command set (OpenMouse's V3 codec). It is excluded
-from this legacy reader; see the 2026-11-04 feedback notes in upstream-protocols.md.
+output report 0x4D and a different command set (OpenMouse's V3 codec). Its separate
+read-only path below requires FF01:0001 and 64-byte input/output caps; it never
+falls back to a legacy exchange. See the V3 source/license notes in upstream-protocols.md.
 
 The first-generation A5 Pro Max (0x2023 - the 1K receiver F013, the 4K receiver F015 and the
 wired mouse F019; issue #149) speaks a third exchange, taken from the community web driver
@@ -87,6 +88,17 @@ from .base import DeviceStatus, Provider, hexdump, log
 # MCHOSE vendor id the reference driver treats identically (issue #4's A7 V2 Ultra).
 MEASURED_VID = 0x5253
 MCHOSE_VIDS = (MEASURED_VID, 0x3837)
+
+# Read-only V3 subset, adapted 2026-11-04 from OpenMouse mouse-protocol
+# 30d6ad37d0ecc9fff53f86d5058d67a88e07150d, src/mchose/v3.ts and
+# src/drivers/mchose/v3-hid.ts (AGPL-3.0; see upstream-protocols.md).
+# The upstream hardware capture is an Ultra+ sibling, not this Pro: level C.
+V3_VID, V3_PID = 0x3837, 0x1018
+V3_USAGE = (0xFF01, 0x0001)
+V3_REPORT_ID, V3_REPORT_LEN = 0x4D, 64  # includes the report ID; body is 63 bytes
+V3_CMD_POWER = 0x0900
+V3_TIMEOUT_MS = 1500                  # upstream observed deferred replies at ~1 s
+V3_MAX_READS = 32
 
 # model ids seen in the 0x06 reply (the receiver's own PID does not identify the mouse:
 # 0x1020 is used by the M7 Ultra and by the L7 Pro)
@@ -241,7 +253,45 @@ def device_key(vid: int, pid: int) -> str:
     G7's 0xA8A5, and the newer 0x3837 receivers (the A7 V2 Ultra in issue #4) - which is
     what keeps two MCHOSE devices on one machine off a single shared icon.
     """
+    if (vid, pid) == (V3_VID, V3_PID):
+        return f"mchose:{vid:04x}:{pid:04x}"
     return "mchose" if vid == MEASURED_VID else f"mchose:{vid:04x}"
+
+
+def make_v3_request() -> bytes:
+    """Only readDeviceInfo: version/flags/length/cmd LE/biz/sequence/XOR."""
+    return bytes([V3_REPORT_ID, 1, 1, 0, 0, 9, 0, 0, 8]).ljust(V3_REPORT_LEN, b"\x00")
+
+
+def parse_v3(resp) -> Optional[Tuple[int, bool]]:
+    """Validate a full hidapi input frame, then return current power only.
+
+    Flags 1 carries XOR over frame[2:8+length]; flags 0 is checksum-free in
+    the upstream codec. Unknown flags are refused here. The payload's PID is
+    not a reliable model ID and is deliberately not used to name the mouse.
+    Link-down, busy, refusal and malformed replies cannot refresh a reading.
+    """
+    if not resp or len(resp) != V3_REPORT_LEN:
+        return None
+    r = bytes(resp)
+    if r[:2] != bytes([V3_REPORT_ID, 1]) or r[2] not in (0, 1):
+        return None
+    if int.from_bytes(r[4:6], "little") != V3_CMD_POWER:
+        return None
+    size = r[3]
+    end = 8 + size
+    if size < 14 or end + (r[2] == 1) > len(r):
+        return None
+    if r[2] == 1:
+        checksum = 0
+        for value in r[2:end]:
+            checksum ^= value
+        if r[end] != checksum:
+            return None
+    data = r[8:end]
+    if int.from_bytes(data[:2], "little") != V3_VID or data[10] == 0 or data[12] > 100:
+        return None
+    return data[12], bool(data[11])
 
 
 class MchoseProvider(Provider):
@@ -374,6 +424,37 @@ class MchoseProvider(Provider):
             except Exception:
                 pass
 
+    def _read_v3(self, path: bytes) -> Optional[Tuple[int, bool]]:
+        """One power query per poll; ignore unrelated input within a bounded wait."""
+        dev = hid.device()
+        try:
+            dev.open_path(path)
+            if dev.write(make_v3_request()) != V3_REPORT_LEN:
+                self._diag.append("    V3 power query write failed or short; no retry")
+                return None
+            deadline = time.monotonic() + V3_TIMEOUT_MS / 1000
+            for _ in range(V3_MAX_READS):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                resp = dev.read(V3_REPORT_LEN, max(1, int(remaining * 1000)))
+                if not resp:
+                    break
+                got = parse_v3(resp)
+                if got is not None:
+                    self._diag.append(f"    V3 power answer: {hexdump(resp, 24)}")
+                    return got
+                self._diag.append(f"    V3 ignored non-power/invalid reply: {hexdump(resp, 8)}")
+            self._diag.append("    no valid V3 power reply; no legacy fallback")
+        except (OSError, ValueError) as e:
+            self._diag.append(f"    V3 power I/O: {e}")
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+        return None
+
     def poll(self) -> List[DeviceStatus]:
         """One icon per device, whether it is on the dongle, on the cable or on radio."""
         self._diag = []
@@ -399,13 +480,23 @@ class MchoseProvider(Provider):
                 # including when the strict keyboard reader rejects their caps.
                 self._diag.append("[MCHOSE] keyboard identity reserved; no mouse commands sent")
                 continue
-            if (vid, pid) == (0x3837, 0x1018):
-                # Feedback #24: A7 V3 shares FF01:0001 with V2 but uses output
-                # report 0x4D, not the inverted 0x11/0x12 feature protocol.
-                # A new protocol is outside this reuse-only batch; do not probe V2.
-                self._diag.append("[MCHOSE] 3837:1018: V3 protocol not implemented; skipped")
-                continue
             key = device_key(vid, pid)
+            if (vid, pid) == (V3_VID, V3_PID):
+                self._diag.append("[MCHOSE] 3837:1018 V3 power reader (C / 待实机验证)")
+                self._names[key] = next(((d.get("product_string") or "").strip()
+                                         for d in ifaces if (d.get("product_string") or "").strip()),
+                                        "MCHOSE V3 8K 接收器")
+                cols = [d for d in ifaces if (d.get("usage_page"), d.get("usage")) == V3_USAGE]
+                eligible = [d for d in cols if (d.get("input_report_length"),
+                                                d.get("output_report_length")) == (64, 64)]
+                if not eligible:
+                    self._diag.append("    V3 requires FF01:0001 and input/output lengths 64/64; nothing sent")
+                    self._last.pop(key, None)
+                    continue
+                got_v3 = self._read_v3(eligible[0]["path"])
+                if got_v3 is not None:
+                    found.setdefault(key, []).append((got_v3[0], got_v3[1], pid, 0))
+                continue  # V3 never scans siblings or calls any legacy protocol.
             product = (ifaces[0].get("product_string") or "").strip()
             if product:
                 self._names[key] = product

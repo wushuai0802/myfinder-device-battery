@@ -100,13 +100,13 @@ class FeedbackProtocolTests(unittest.TestCase):
                  patch.object(P.hid, "device", side_effect=AssertionError("no keyboard probing")):
                 self.assertEqual(P.PulsarProvider().poll(), [])
 
-    def test_a7_v3_is_not_sent_any_of_the_existing_mchose_protocols(self):
+    def test_a7_v3_without_caps_is_not_sent_any_mchose_protocol(self):
         infos = [d for d in feedback_inventory(24) if d["product_id"] == 0x1018]
         with patch.object(M.hidlist, "enumerate", side_effect=lambda vid: infos if vid == 0x3837 else []), \
              patch.object(M.hid, "device", side_effect=AssertionError("V3 is not V2/G7/A5")):
             provider = M.MchoseProvider()
             self.assertEqual(provider.poll(), [])
-            self.assertIn("V3 protocol not implemented", "\n".join(provider.diagnostics()))
+            self.assertIn("input/output lengths 64/64; nothing sent", "\n".join(provider.diagnostics()))
 
     def test_a7_v2_still_selects_its_existing_reader(self):
         infos = [dict(d, product_id=0x100B, product_string="MCHOSE A7 V2 Ultra")
@@ -121,12 +121,14 @@ class FeedbackProtocolTests(unittest.TestCase):
         self.assertEqual((device.name, device.level), ("MCHOSE A7 V2 Ultra", 60))
         read.assert_called_once_with(next(d["path"] for d in infos if d["usage_page"] == 0xFF01))
 
-    def test_only_the_supported_new_id_enters_the_offline_index(self):
+    def test_only_supported_new_ids_enter_the_offline_index(self):
         entries = {(d["vendorId"], d["productId"]): d for d in known_ids.build_index()["devices"]}
         entry = entries[(0x3554, 0xF517)]
         self.assertEqual((entry["provider"], entry["name"], entry["kind"]),
                          ("pulsar", "Scyrox 8K 接收器", "mouse"))
-        for identity in ((0x3837, 0x1018), (0x3554, 0xFA09), (0x3554, 0xFA07)):
+        v3 = entries[(0x3837, 0x1018)]
+        self.assertEqual((v3["provider"], v3["kind"]), ("mchose", "mouse"))
+        for identity in ((0x3554, 0xFA09), (0x3554, 0xFA07)):
             self.assertNotIn(identity, entries)
 
 

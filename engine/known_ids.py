@@ -197,8 +197,11 @@ def build_index(root=None, *, engine_root=None):
                 partial[module] = "已收录耳机和接收器固定 ID，其他 HID++ 设备及配对型号依赖运行时识别。"
             elif module == "mchose":
                 add(module, source.get("G7_VID"), source.get("G7_PID"), "MCHOSE mouse", "mouse")
+                if "V3_VID" in source.values and "V3_PID" in source.values:
+                    add(module, source.get("V3_VID"), source.get("V3_PID"),
+                        "MCHOSE A7 V3 Pro (V3 8K 接收器)", "mouse")
                 # MODEL_NAMES uses reply model codes, NOT USB product IDs.
-                partial[module] = "已收录 A5 和 G7 固定 ID，其他系列按厂商与 HID 集合动态识别，回复型号代码不是 USB 产品 ID。"
+                partial[module] = "已收录固定 ID，其他系列按厂商与 HID 集合动态识别，回复型号代码不是 USB 产品 ID。"
             elif module not in TABLES:
                 unparsed.add(module)  # Includes runtime-only Bluetooth identities.
         except (KeyError, ValueError, TypeError, SyntaxError):
