@@ -38,6 +38,26 @@ namespace AtkBatteryTray {
             return new TrayPanelAnchor(point,workArea,edge);
         }
         static Point Center(Rectangle rect){return new Point(rect.Left+rect.Width/2,rect.Top+rect.Height/2);}
+        // Only reserve the overlapping part of an auto-hidden, full-screen-edge
+        // taskbar. WorkArea may already exclude some/all of it (or an MDF bar).
+        internal static Rectangle Reserved(Rectangle screen,Rectangle workArea,Rectangle? taskbar,TaskbarEdge edge,bool autoHide) {
+            if(!autoHide||!taskbar.HasValue)return workArea;
+            var bar=taskbar.Value;
+            if(bar.Width<=0||bar.Height<=0||!screen.Contains(bar)||!workArea.IntersectsWith(bar))return workArea;
+            int left=workArea.Left,top=workArea.Top,right=workArea.Right,bottom=workArea.Bottom;
+            if((edge==TaskbarEdge.Top||edge==TaskbarEdge.Bottom)&&bar.Left==screen.Left&&bar.Right==screen.Right) {
+                if(edge==TaskbarEdge.Top&&bar.Top==screen.Top)top=Math.Max(top,bar.Bottom);
+                else if(edge==TaskbarEdge.Bottom&&bar.Bottom==screen.Bottom)bottom=Math.Min(bottom,bar.Top);
+            } else if((edge==TaskbarEdge.Left||edge==TaskbarEdge.Right)&&bar.Top==screen.Top&&bar.Bottom==screen.Bottom) {
+                if(edge==TaskbarEdge.Left&&bar.Left==screen.Left)left=Math.Max(left,bar.Right);
+                else if(edge==TaskbarEdge.Right&&bar.Right==screen.Right)right=Math.Min(right,bar.Left);
+            }
+            return right>left&&bottom>top?Rectangle.FromLTRB(left,top,right,bottom):workArea;
+        }
+        internal static Rectangle WorkingArea(Screen screen) {
+            Rectangle taskbar;TaskbarEdge edge;
+            return TryTaskbar(out taskbar,out edge)?Reserved(screen.Bounds,screen.WorkingArea,taskbar,edge,TaskbarAutoHide()):screen.WorkingArea;
+        }
         internal static TrayPanelAnchor ForIcon(Rectangle icon,TaskbarEdge edge,Func<Point,Rectangle> workingArea) {
             return Anchor(icon,workingArea(Center(icon)),edge);
         }
@@ -54,16 +74,16 @@ namespace AtkBatteryTray {
             if(screens.Length!=workAreas.Length)throw new ArgumentException("Screen/work-area mismatch");
             for(int i=0;i<screens.Length;i++)
                 if(lastPoint.HasValue&&lastScreen.HasValue&&lastScreen.Value==screens[i]&&screens[i].Width>0&&screens[i].Height>0&&screens[i].Contains(lastPoint.Value))
-                    return new TrayPanelAnchor(lastPoint.Value,workAreas[i],NearestEdge(lastPoint.Value,screens[i]));
+                    return new TrayPanelAnchor(lastPoint.Value,Reserved(screens[i],workAreas[i],taskbar,edge,autoHide),NearestEdge(lastPoint.Value,screens[i]));
             if(!autoHide&&icon.HasValue&&icon.Value.Width>0&&icon.Value.Height>0)
                 for(int i=0;i<screens.Length;i++)if(screens[i].Contains(icon.Value)){
                     var iconEdge=taskbar.HasValue&&screens[i].Contains(Center(taskbar.Value))?edge:NearestEdge(Center(icon.Value),screens[i]);
-                    return Anchor(icon,workAreas[i],iconEdge);
+                    return Anchor(icon,Reserved(screens[i],workAreas[i],taskbar,edge,autoHide),iconEdge);
                 }
             return null;
         }
-        internal static TrayPanelAnchor Fallback(Rectangle screen,Rectangle workArea,TaskbarEdge edge){
-            return Anchor(null,workArea,workArea.Top>screen.Top?TaskbarEdge.Top:edge);
+        internal static TrayPanelAnchor Fallback(Rectangle screen,Rectangle workArea,TaskbarEdge edge,Rectangle? taskbar=null,bool autoHide=false){
+            return Anchor(null,Reserved(screen,workArea,taskbar,edge,autoHide),workArea.Top>screen.Top?TaskbarEdge.Top:edge);
         }
         // Physical coordinates throughout. The caller caps panel size to the work area.
         internal static Point Position(Point anchor,Rectangle workArea,Size panel,TaskbarEdge edge) {
@@ -112,17 +132,19 @@ namespace AtkBatteryTray {
             var displays=Screen.AllScreens;var screens=new Rectangle[displays.Length];var areas=new Rectangle[displays.Length];
             for(int i=0;i<displays.Length;i++){screens[i]=displays[i].Bounds;areas[i]=displays[i].WorkingArea;}
             Point? point=last==null?(Point?)null:last.Point;Rectangle? bounds=last==null?(Rectangle?)null:last.Bounds;
-            var remembered=FindAnchor(point,bounds,null,true,screens,areas,null,TaskbarEdge.Bottom);
-            if(remembered.HasValue)return remembered;
             Rectangle rect,taskbar;TaskbarEdge edge;
-            Rectangle? iconRect=TryIconRect(icon,out rect)?rect:(Rectangle?)null;
             Rectangle? bar=TryTaskbar(out taskbar,out edge)?taskbar:(Rectangle?)null;
-            return FindAnchor(null,null,iconRect,TaskbarAutoHide(),screens,areas,bar,edge);
+            bool autoHide=TaskbarAutoHide();
+            var remembered=FindAnchor(point,bounds,null,autoHide,screens,areas,bar,edge);
+            if(remembered.HasValue)return remembered;
+            Rectangle? iconRect=TryIconRect(icon,out rect)?rect:(Rectangle?)null;
+            return FindAnchor(null,null,iconRect,autoHide,screens,areas,bar,edge);
         }
         internal static TrayPanelAnchor Fallback() {
             Rectangle taskbar;TaskbarEdge edge;
-            var screen=TryTaskbar(out taskbar,out edge)?Screen.FromRectangle(taskbar):Screen.PrimaryScreen;
-            return Fallback(screen.Bounds,screen.WorkingArea,edge);
+            bool found=TryTaskbar(out taskbar,out edge);
+            var screen=found?Screen.FromRectangle(taskbar):Screen.PrimaryScreen;
+            return Fallback(screen.Bounds,screen.WorkingArea,edge,found?taskbar:(Rectangle?)null,TaskbarAutoHide());
         }
     }
     // UI-thread retries allow Explorer to register a newly-created NotifyIcon

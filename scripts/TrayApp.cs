@@ -211,9 +211,10 @@ namespace AtkBatteryTray {
             if(!audioPage){navigation.AudioDeviceKey=null;navigation.AudioDeviceName=null;}
             owner.SetAudioScope(audioPage?navigation.AudioDeviceKey:null);
         }
-        WirelessLayout MainWireless(){return WirelessLayout.Build(owner,navigation.DeviceScroll,(int)(Screen.FromPoint(anchor).WorkingArea.Height/dpiScale)-24);}
+        Rectangle PanelWorkArea {get{return updatedAnchor.HasValue?updatedAnchor.Value.WorkArea:TrayPanelPlacement.WorkingArea(Screen.FromPoint(anchor));}}
+        WirelessLayout MainWireless(){return WirelessLayout.Build(owner,navigation.DeviceScroll,(int)(PanelWorkArea.Height/dpiScale)-24);}
         List<PopupControl> ControlsForPage(){
-            float workHeight=Screen.FromPoint(anchor).WorkingArea.Height/dpiScale;
+            float workHeight=PanelWorkArea.Height/dpiScale;
             navigation.MaximumHeight=(int)workHeight-24;
             navigation.VisibleChoices=Math.Max(2,Math.Min(7,(int)((workHeight-88)/36)-2));
             var controls=PopupPages.Build(owner,navigation,headsetProgress>.98f,owner.UseWirelessLayout?MainWireless():null);
@@ -402,7 +403,7 @@ namespace AtkBatteryTray {
             if(navigation.Page!=PopupPage.Main)targetSize=PopupPages.SizeFor(ControlsForPage());
             if(pageProgress<1f)targetSize.Height=(int)Math.Round(pageStartHeight+(targetSize.Height-pageStartHeight)*pageProgress);
             Size physical=UiState.ScaleSize(targetSize,dpiScale);
-            if(updatedAnchor.HasValue){var area=updatedAnchor.Value.WorkArea;physical=new Size(Math.Min(physical.Width,area.Width),Math.Min(physical.Height,area.Height));}
+            var area=PanelWorkArea;physical=new Size(Math.Min(physical.Width,area.Width),Math.Min(physical.Height,area.Height));
             if(ClientSize!=physical) {
                 ClientSize=physical;
                 if(!layeredRendering)UpdateFallbackRegion();
@@ -460,7 +461,7 @@ namespace AtkBatteryTray {
             presentationDepth++;
             try {
                 BeginPresentation();updatedAnchor=placement;anchor=placement.HasValue?placement.Value.Point:click??owner.CursorPosition();
-                if(!placement.HasValue&&fromLauncher){var screen=Screen.FromPoint(anchor).WorkingArea;anchor=new Point(screen.Right-24,screen.Top+16);}
+                if(!placement.HasValue&&fromLauncher){var screen=PanelWorkArea;anchor=new Point(screen.Right-24,screen.Top+16);}
                 dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;
                 frameAlpha=3;PositionForSize(6);Show();Activate();owner.PanelOpened();AnimateTo(1f,190f);
             } finally {
@@ -471,12 +472,14 @@ namespace AtkBatteryTray {
         }
         void PositionForSize(int slideY) {
             if(updatedAnchor.HasValue){var placement=updatedAnchor.Value;Location=TrayPanelPlacement.Position(anchor,placement.WorkArea,Size,placement.Edge);return;}
-            var screen=Screen.FromPoint(anchor).WorkingArea;
+            var screen=PanelWorkArea;
             int margin=(int)Math.Round(8*dpiScale);
             int x=Math.Max(screen.Left+margin,Math.Min(anchor.X-Width/2,screen.Right-Width-margin));
             int y=anchor.Y<screen.Top+100*dpiScale?screen.Top+margin:anchor.Y-Height-(int)(14*dpiScale);
             y+=(int)Math.Round(slideY*dpiScale);
-            y=Math.Max(screen.Top+margin,Math.Min(y,screen.Bottom-Height-margin));Location=new Point(x,y);
+            y=Math.Max(screen.Top+margin,Math.Min(y,screen.Bottom-Height-margin));
+            // A size-capped panel may have less than a full margin available.
+            Location=new Point(Math.Max(screen.Left,Math.Min(x,screen.Right-Width)),Math.Max(screen.Top,Math.Min(y,screen.Bottom-Height)));
         }
         public void Reveal() {
             if(disposingPopup||Disposing||IsDisposed)return;

@@ -66,7 +66,7 @@ static class UpdateAnchorTests {
         var taskbar=new Rectangle(0,1392,2560,48);var icon=new Rectangle(2480,1400,24,24);var click=new Point(2100,12);
         var screens=new[]{screen,new Rectangle(-1920,0,1920,1080)};var areas=new[]{area,new Rectangle(-1920,0,1920,1040)};
         var chosen=TrayPanelPlacement.FindAnchor(click,screen,icon,true,screens,areas,taskbar,TaskbarEdge.Bottom);
-        Check(chosen.HasValue&&chosen.Value.Point==click&&chosen.Value.WorkArea==area&&chosen.Value.Edge==TaskbarEdge.Top,"MDF click wins over the hidden bottom tray");
+        Check(chosen.HasValue&&chosen.Value.Point==click&&chosen.Value.WorkArea==new Rectangle(0,24,2560,1368)&&chosen.Value.Edge==TaskbarEdge.Top,"MDF click wins over the hidden bottom tray while reserving its overlap");
         var location=TrayPanelPlacement.Position(chosen.Value.Point,area,new Size(260,300),chosen.Value.Edge);
         Check(location==new Point(1970,24),"MDF remembered click opens below the top icon");
         Check(TrayPanelPlacement.FindAnchor(click,screen,icon,false,screens,areas,taskbar,TaskbarEdge.Bottom).Value.Point==click,"remembered click also wins over a visible shell icon");
@@ -85,6 +85,78 @@ static class UpdateAnchorTests {
         foreach(TaskbarEdge edge in Enum.GetValues(typeof(TaskbarEdge))){
             var fallback=TrayPanelPlacement.Fallback(screens[1],areas[1],edge);
             Check(fallback.Edge==edge&&fallback.Point==TrayPanelPlacement.Anchor(null,areas[1],edge).Point,"no top reservation preserves taskbar corner: "+edge);
+        }
+    }
+    static void AutoHiddenTaskbarAreas(){
+        var screen=new Rectangle(0,0,1600,900);
+        var edges=new[]{TaskbarEdge.Left,TaskbarEdge.Top,TaskbarEdge.Right,TaskbarEdge.Bottom};
+        var bars=new[]{new Rectangle(0,0,60,900),new Rectangle(0,0,1600,60),new Rectangle(1540,0,60,900),new Rectangle(0,840,1600,60)};
+        var expected=new[]{new Rectangle(60,0,1540,900),new Rectangle(0,60,1600,840),new Rectangle(0,0,1540,900),new Rectangle(0,0,1600,840)};
+        var partial=new[]{new Rectangle(2,0,1598,900),new Rectangle(0,2,1600,898),new Rectangle(0,0,1598,900),new Rectangle(0,0,1600,898)};
+        var screens=new[]{screen,new Rectangle(-1600,0,1600,900),new Rectangle(0,-900,1600,900)};
+        for(int i=0;i<edges.Length;i++){
+            var edge=edges[i];var bar=bars[i];
+            var reserved=TrayPanelPlacement.Reserved(screen,screen,bar,edge,true);
+            Check(reserved==expected[i],"reserve full auto-hidden taskbar thickness: "+edge);
+            Check(TrayPanelPlacement.Reserved(screen,screen,bar,edge,false)==screen,"visible state never reserves an overlapping bar: "+edge);
+            Check(TrayPanelPlacement.Reserved(screen,reserved,bar,edge,false)==reserved,"visible taskbar is not deducted twice: "+edge);
+            Check(TrayPanelPlacement.Reserved(screen,reserved,bar,edge,true)==reserved,"reservation is idempotent: "+edge);
+            Check(TrayPanelPlacement.Reserved(screen,partial[i],bar,edge,true)==reserved,"only remaining overlap is deducted: "+edge);
+            var floating=bar;floating.Inflate(-1,-1);
+            Check(TrayPanelPlacement.Reserved(screen,screen,floating,edge,true)==screen,"floating appbar is ignored: "+edge);
+            var inset=bar;inset.Offset(edge==TaskbarEdge.Left?10:edge==TaskbarEdge.Right?-10:0,edge==TaskbarEdge.Top?10:edge==TaskbarEdge.Bottom?-10:0);
+            Check(TrayPanelPlacement.Reserved(screen,screen,inset,edge,true)==screen,"full-span bar away from screen edge is ignored: "+edge);
+            var shortBar=bar;if(edge==TaskbarEdge.Left||edge==TaskbarEdge.Right)shortBar.Height--;else shortBar.Width--;
+            Check(TrayPanelPlacement.Reserved(screen,screen,shortBar,edge,true)==screen,"partial-edge bar is ignored: "+edge);
+            for(int monitor=1;monitor<screens.Length;monitor++)
+                Check(TrayPanelPlacement.Reserved(screens[monitor],screens[monitor],bar,edge,true)==screens[monitor],"other monitor is unaffected: "+edge+"/"+monitor);
+            var shiftedBar=bar;shiftedBar.Offset(-1600,0);var shiftedArea=reserved;shiftedArea.Offset(-1600,0);
+            Check(TrayPanelPlacement.Reserved(screens[1],screens[1],shiftedBar,edge,true)==shiftedArea,"taskbar on negative-coordinate monitor: "+edge);
+            var click=new Point(bar.Left+bar.Width/2,bar.Top+bar.Height/2);
+            var remembered=TrayPanelPlacement.FindAnchor(click,screen,null,true,screens,screens,bar,edge).Value;
+            Check(remembered.Point==click&&remembered.WorkArea==reserved&&remembered.Edge==edge,"saved tray click reserves work area: "+edge);
+            var icon=new Rectangle(click.X-1,click.Y-1,2,2);
+            var visible=TrayPanelPlacement.FindAnchor(null,null,icon,false,new[]{screen},new[]{reserved},bar,edge).Value;
+            Check(visible.WorkArea==reserved&&visible.Edge==edge,"shell icon keeps already-reserved visible work area: "+edge);
+            var fallback=TrayPanelPlacement.Fallback(screen,screen,edge,bar,true);
+            Check(fallback.WorkArea==reserved&&fallback.Edge==edge,"missing icon fallback reserves work area: "+edge);
+            foreach(var anchor in new[]{remembered,fallback}){
+                var size=new Size(260,300);var bounds=new Rectangle(TrayPanelPlacement.Position(anchor.Point,anchor.WorkArea,size,anchor.Edge),size);
+                Check(reserved.Contains(bounds)&&!bar.IntersectsWith(bounds),"panel clears revealed taskbar: "+edge);
+                Check(TrayPanelPlacement.Position(anchor.Point,anchor.WorkArea,reserved.Size,anchor.Edge)==reserved.Location,"maximum-size panel fits reserved area: "+edge);
+            }
+        }
+        Check(TrayPanelPlacement.Reserved(screen,screen,null,TaskbarEdge.Bottom,true)==screen,"missing taskbar leaves area unchanged");
+        Check(TrayPanelPlacement.Reserved(screen,screen,Rectangle.Empty,TaskbarEdge.Bottom,true)==screen,"empty taskbar leaves area unchanged");
+        var mdfScreen=new Rectangle(0,0,2560,1440);var mdfArea=new Rectangle(0,24,2560,1416);var bottom=new Rectangle(0,1368,2560,72);
+        var mdfExpected=new Rectangle(0,24,2560,1344);
+        Check(TrayPanelPlacement.Reserved(mdfScreen,mdfArea,bottom,TaskbarEdge.Bottom,true)==mdfExpected,"MDF top reservation survives measured 72px bottom taskbar");
+        var mdf=TrayPanelPlacement.Fallback(mdfScreen,mdfArea,TaskbarEdge.Bottom,bottom,true);
+        Check(mdf.WorkArea==mdfExpected&&mdf.Point==new Point(2559,24)&&mdf.Edge==TaskbarEdge.Top,"MDF fallback keeps upper-right placement");
+        var saved=TrayPanelPlacement.FindAnchor(new Point(2100,12),mdfScreen,null,true,new[]{mdfScreen},new[]{mdfArea},bottom,TaskbarEdge.Bottom).Value;
+        Check(saved.WorkArea==mdfExpected&&saved.Edge==TaskbarEdge.Top&&saved.Point==new Point(2100,12),"MDF saved top icon keeps priority with bottom reservation");
+    }
+    static void ReservedPanelLimits(){
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false});
+        using(var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot();},delegate(int stage){throw new Exception("unexpected hardware write");})){
+            owner.NativeMousePresent=false;owner.GenericReady=true;owner.WirelessDevices=new WirelessDevice[30];
+            for(int i=0;i<owner.WirelessDevices.Length;i++)owner.WirelessDevices[i]=new WirelessDevice {Id="fixture-"+i,Name="Fixture keyboard",Kind="keyboard"};
+            using(var popup=new Details(owner))foreach(float scale in new[]{1f,1.5f,2f}){
+                var screen=new Rectangle(0,0,1600,900);var bar=new Rectangle(0,828,1600,72);
+                var placement=TrayPanelPlacement.Fallback(screen,screen,TaskbarEdge.Bottom,bar,true);
+                typeof(Details).GetField("updatedAnchor",Private).SetValue(popup,placement);
+                typeof(Details).GetField("anchor",Private).SetValue(popup,placement.Point);
+                typeof(Details).GetField("dpiScale",Private).SetValue(popup,scale);
+                typeof(Details).GetMethod("UpdateLayoutSize",Private).Invoke(popup,null);
+                var layout=(WirelessLayout)typeof(Details).GetMethod("MainWireless",Private).Invoke(popup,null);
+                Check(layout.Paged&&layout.Size.Height<=(int)(placement.WorkArea.Height/scale)-24,"wireless cards paginate within reserved height at "+scale);
+                Check(popup.ClientSize==UiState.ScaleSize(layout.Size,scale),"footer is laid out rather than clipped by the size cap at "+scale);
+                Check(placement.WorkArea.Contains(popup.Bounds)&&!bar.IntersectsWith(popup.Bounds),"panel fits above taskbar at "+scale);
+                typeof(Details).GetMethod("ControlsForPage",Private).Invoke(popup,null);
+                var navigation=(PopupNavigation)Field(popup,"navigation");
+                Check(navigation.MaximumHeight==(int)(placement.WorkArea.Height/scale)-24,"menu size limit uses the same reserved area at "+scale);
+            }
+            owner.ExitThread();
         }
     }
     static void PositionSettings(){
@@ -152,7 +224,7 @@ static class UpdateAnchorTests {
             popup.Close();
             PanelStartup.Forward(PanelOpenRequest.Launcher,launcher,updated);
             Pump(delegate{var current=(Details)Field(owner,"details");return current!=null&&current!=popup&&!current.IsDisposed;});popup=(Details)Field(owner,"details");
-            var cursorScreen=Screen.FromPoint(fixedPoint).WorkingArea;
+            var cursorScreen=TrayPanelPlacement.WorkingArea(Screen.FromPoint(fixedPoint));
             Check((Point)Field(popup,"anchor")==new Point(cursorScreen.Right-24,cursorScreen.Top+16),"launcher keeps its existing upper-right anchor");
             Check(saves==0,"updated and legacy launcher paths do not record an icon click");
             popup.Close();reads=0;owner.HandleTrayMouseUp(MouseButtons.Left);popup=(Details)Field(owner,"details");
@@ -170,7 +242,7 @@ static class UpdateAnchorTests {
         }
     }
     [STAThread] static int Main() {
-        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();AnchorPriority();PositionSettings();Retries();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
+        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();AnchorPriority();AutoHiddenTaskbarAreas();ReservedPanelLimits();PositionSettings();Retries();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
 }
