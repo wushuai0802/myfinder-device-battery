@@ -330,6 +330,25 @@ class TriageTests(unittest.TestCase):
 
 
 class KnownIdsTests(unittest.TestCase):
+    def test_legacy_headset_snapshot_keeps_its_single_vendor_identity(self):
+        with workspace_temp() as folder:
+            engine = Path(folder) / "old-engine"
+            providers = engine / "providers"
+            providers.mkdir(parents=True)
+            (engine / "compatibility.json").write_text(
+                '{"readers": [{"provider": "mchose_headset", "kinds": ["headset"]}], "nativeProfiles": []}',
+                encoding="utf-8")
+            (providers / "mchose_headset.py").write_text(
+                'raise RuntimeError("old reader executed")\nVID = 0x291D\n'
+                'PIDS = {0x385D: "MCHOSE V9 PRO"}\n', encoding="utf-8")
+            result = known_ids.build_index(engine_root=engine)
+            self.assertEqual(result["devices"], [dict(provider="mchose_headset", vendorId=0x291D,
+                                                    productId=0x385D, name="MCHOSE V9 PRO",
+                                                    kind="headset", source="builtin")])
+            self.assertEqual(result["vendors"], {"mchose_headset": [0x291D]})
+            self.assertEqual(result["unparsed"], [])
+            self.assertEqual(result["partial"], {})
+
     def test_external_engine_reads_only_legacy_snapshot_without_imports(self):
         with workspace_temp() as folder:
             engine = Path(folder) / "old-engine"

@@ -46,7 +46,7 @@ PROVIDERS = (
 PROVIDER_VIDS = {
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
-    "mchose_headset": (0x291D,),
+    "mchose_headset": (0x291D, 0x3837),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
@@ -483,6 +483,9 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return 0
     module = importlib.import_module("providers." + name)
     inventory = device_pack.select_inventory(name, inventory)
+    if name == "mchose_headset":
+        return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
+                    if (d.get("vendor_id"), d.get("product_id")) in module.PIDS})
     pids = set()
     for field in ("PIDS", "KNOWN", "DONGLES", "RECEIVERS", "HEADSETS", "WIRED", "BRAGI_PIDS", "MOUSE_MODELS", "MODELS", "CLASSIC_MODELS"):
         value = getattr(module, field, ())

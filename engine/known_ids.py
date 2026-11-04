@@ -155,6 +155,13 @@ def build_index(root=None, *, engine_root=None):
                             if module == "razer" and "KEYBOARD_INTERFACE" in source.values else set())
             for table in TABLES.get(module, ()):
                 # Each table has an explicit VID relation, not a cross product.
+                if module == "mchose_headset":
+                    for key, value in source.table(table):
+                        identity = source.literal(key)
+                        # Older snapshots used one VID and integer PID keys.
+                        vid, pid = identity if isinstance(identity, list) else (source.get("VID"), identity)
+                        add(module, vid, pid, source.name(value), default_kind)
+                    continue
                 if module == "mchose":
                     vid = source.get("A5_VID")
                 elif module != "pulsar":

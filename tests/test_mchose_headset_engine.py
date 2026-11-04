@@ -7,9 +7,10 @@ import unittest
 ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
 sys.path.insert(0, str(ENGINE / "tests"))
-from test_mchose_headset import M, entry, fixture, reply
+from test_mchose_headset import M, entry, fixture, reply, turbo_inventory
 from catalog import verification_for
-from server import BatteryEngine, PROVIDERS, PROVIDER_VIDS, normalise, scoped_poll
+from known_ids import build_index
+from server import BatteryEngine, PROVIDERS, PROVIDER_VIDS, normalise, recognized_candidate_count, scoped_poll
 
 T1, T2 = "2026-11-04T00:00:00Z", "2026-11-04T00:01:00Z"
 
@@ -22,8 +23,40 @@ class MchoseBridgeTests(unittest.TestCase):
 
     def test_registration_and_level_c(self):
         self.assertIn(("mchose_headset", "MchoseHeadsetProvider"), PROVIDERS)
-        self.assertEqual(PROVIDER_VIDS["mchose_headset"], (0x291D,))
+        self.assertEqual(PROVIDER_VIDS["mchose_headset"], (0x291D, 0x3837))
         self.assertEqual(verification_for("mchose_headset")[0], "C")
+
+    def test_offline_index_contains_only_the_exact_headset_identities(self):
+        for engine_root in (None, ENGINE):
+            with self.subTest(engine_root=engine_root):
+                index = build_index(engine_root=engine_root)
+                rows = [d for d in index["devices"] if d["provider"] == "mchose_headset"]
+                self.assertEqual([(d["vendorId"], d["productId"], d["name"], d["kind"]) for d in rows],
+                                 [(0x291D, 0x385D, "MCHOSE V9 PRO", "headset"),
+                                  (0x3837, 0x600A, "MCHOSE V9 Turbo+", "headset")])
+                self.assertEqual(index["vendors"]["mchose_headset"], [0x291D, 0x3837])
+                self.assertNotIn("mchose_headset", index["unparsed"])
+                self.assertNotIn("mchose_headset", index["partial"])
+                self.assertFalse(any((d["vendorId"], d["productId"]) == (0x3837, 0x6008)
+                                     for d in index["devices"]))
+
+    def test_candidate_count_uses_vendor_pid_pairs_and_excludes_lighting(self):
+        rejected = [entry(vendor_id=0x3837, product_id=0x6008), entry(product_id=0x600A),
+                    entry(vendor_id=0x3837)]
+        self.assertEqual(recognized_candidate_count("mchose_headset", rejected), 0)
+        self.assertEqual(recognized_candidate_count("mchose_headset", turbo_inventory() + rejected), 1)
+        self.assertEqual(recognized_candidate_count("mchose_headset", [entry()] + turbo_inventory()), 2)
+
+    def test_turbo_scoped_poll_produces_fresh_level_c_headset(self):
+        inventory = [entry()] + turbo_inventory()
+        with fixture([reply(80)], inventory) as bus:
+            status, = scoped_poll(M.MchoseHeadsetProvider(), inventory, "turbo")
+            self.assertEqual(bus.opened, [b"turbo-ff90"])
+        result = normalise(status, None, T1)
+        self.assertEqual((result["name"], result["percent"], result["kind"], result["verificationLevel"]),
+                         ("MCHOSE V9 Turbo+", 80, "headset", "C"))
+        self.assertTrue(result["fresh"])
+        self.assertFalse(result["charging"])
 
     def test_power_transition_clears_old_percentage_and_preserves_power_evidence(self):
         for state in (0x00, 0x03):

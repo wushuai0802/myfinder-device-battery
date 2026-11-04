@@ -11,7 +11,8 @@ what comes back, and where each protocol was taken from.
 **Project verification: C, pending hardware validation.** This project implements
 only `FF90:0001` with known input and output lengths of exactly 64 bytes (including
 report ID `55`). Unknown/mismatched lengths cause no request. Physical receivers
-remain distinct; `FF22`, `FF82`, V9 Turbo and Turbo+ are not battery targets here.
+remain distinct; `FF22` and `FF82` are not battery targets. The separate Turbo+
+identity now reuses this reader under the evidence and limits below.
 
 One output request `55 65 01` plus 61 zero bytes is followed by input reads on the
 same handle, within a one-second deadline and at most 32 frames. Non-battery
@@ -39,6 +40,30 @@ transitions, power cycling, receiver replugging and final UI still need hardware
 validation. The current native UI requires a fresh numeric level to display its
 charging indicator, so the engine's external-power flag with an unknown percentage
 is not yet displayed there; native UI changes are outside this provider task.
+
+### MCHOSE V9 Turbo+ (3837:600A)
+
+**Project verification: C. Source: 用户实机抓包，#61 (2026-11-04).** The user's
+capture identifies the 2.4 GHz headset receiver as `3837:600A`, product
+`MCHOSE V9 Turbo+`, manufacturer `C-Media Electronics Inc`. Interface 0 has
+`FF21:0001` (input/output 2/2), `FF22:0001` (0/0), `000C:0001` (3/0),
+`000B:0001` (3/3), `FF90:0001` (64/64), and `FF82:0001` (64/64).
+Only `FF90:0001` with exact 64/64 lengths may receive the V9 PRO battery query
+`55 65 01` plus 61 zero bytes. Unknown or mismatched lengths cause no I/O.
+
+Two queries returned `55 65 50 02` followed by zeros: **80%, discharging**,
+matching the actual headset. Charging/external power (`00`/`03`) and power-off
+(`1A`) were **not hardware-tested on Turbo+**; their handling is inherited from
+V9 PRO above. Silence still does not prove power-off. This capture establishes
+discharge only, not percentage resolution, state transitions or final UI behavior.
+
+The simultaneously connected `3837:6008`, product `V9 Turbo`, manufacturer
+`wch.cn`, is a **lighting device**, not another battery target. It is not added
+to any reader. Both `3837:600A` and `3837:6008` are excluded from the mouse
+provider's broad `3837` scan before any I/O, regardless of their collections or
+report lengths, with the reason recorded in diagnostics. No mouse feature,
+lighting, EQ or firmware commands are sent. The implementation reuses the
+existing local reader from protocol facts; no code is copied from the issue.
 
 ### Astro A50 Gen 5 (Logitech 046D:0B1C)
 

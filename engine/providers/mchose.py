@@ -54,6 +54,8 @@ Exception: A7 V3's 3837:1018 receiver shares the configuration collection but us
 output report 0x4D and a different command set (OpenMouse's V3 codec). Its separate
 read-only path below requires FF01:0001 and 64-byte input/output caps; it never
 falls back to a legacy exchange. See the V3 source/license notes in upstream-protocols.md.
+3837:600A is the V9 Turbo+ headset (mchose_headset); 3837:6008 is its lighting
+device. Both are excluded before any mouse I/O (用户实机抓包，#61).
 
 The first-generation A5 Pro Max (0x2023 - the 1K receiver F013, the 4K receiver F015 and the
 wired mouse F019; issue #149) speaks a third exchange, taken from the community web driver
@@ -475,6 +477,11 @@ class MchoseProvider(Provider):
 
         found: Dict[str, List[Tuple[int, bool, int, int]]] = {}   # key -> readings
         for (vid, pid), ifaces in groups.items():
+            if vid == 0x3837 and pid in (0x600A, 0x6008):
+                reason = ("V9 Turbo+ headset reserved for mchose_headset" if pid == 0x600A
+                          else "V9 Turbo lighting device; no battery reader")
+                self._diag.append(f"[MCHOSE] {vid:04x}:{pid:04x} {reason}; no mouse commands sent")
+                continue
             if vid == 0x3837 and pid in (0x1015, 0x3033):
                 # Keyboard/shared keyboard PIDs never receive mouse probes,
                 # including when the strict keyboard reader rejects their caps.

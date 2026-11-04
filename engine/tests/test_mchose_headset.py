@@ -1,4 +1,4 @@
-"""V9 PRO protocol fixtures; HID, topology and time are all simulated."""
+"""V9 PRO / Turbo+ protocol fixtures; HID, topology and time are simulated."""
 from contextlib import contextmanager
 from pathlib import Path
 import sys
@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _hidstub  # noqa: F401
 from providers import mchose_headset as M
+from providers import mchose as Mouse
 
 
 def entry(physical="receiver-a", **changes):
@@ -22,6 +23,16 @@ def entry(physical="receiver-a", **changes):
 
 def reply(level=20, state=0x02, command=0x65):
     return [0x55, command, level, state] + [0] * 60
+
+
+def turbo_inventory():
+    """The six interface-0 collections in the user's #61 hardware capture."""
+    return [entry("turbo", vendor_id=0x3837, product_id=0x600A,
+                  product_string="MCHOSE V9 Turbo+", manufacturer_string="C-Media Electronics Inc",
+                  interface_number=0, usage_page=page, input_report_length=inp,
+                  output_report_length=out, path=f"turbo-{page:04x}".encode())
+            for page, inp, out in ((0xFF21, 2, 2), (0xFF22, 0, 0), (0x000C, 3, 0),
+                                   (0x000B, 3, 3), (0xFF90, 64, 64), (0xFF82, 64, 64))]
 
 
 class FakeHid:
@@ -64,7 +75,8 @@ def fixture(frames=(), inventory=None, **kwargs):
     bus = FakeHid(frames, **kwargs)
     infos = [entry()] if inventory is None else inventory
     with patch.object(M, "hid", bus), \
-            patch.object(M.hidlist, "enumerate", return_value=infos), \
+            patch.object(M.hidlist, "enumerate", side_effect=lambda vid=0: [
+                d for d in infos if not vid or d["vendor_id"] == vid]), \
             patch.object(M, "time", SimpleNamespace(monotonic=lambda: bus.now)), \
             patch("topology.usb_parent", return_value=None):
         yield bus
@@ -151,7 +163,8 @@ class MchoseHeadsetTests(unittest.TestCase):
 
     def test_wrong_identity_or_collection_never_selected(self):
         for changes in (dict(usage_page=0xFF22), dict(usage_page=0xFF82), dict(usage=2),
-                        dict(vendor_id=0x3837, product_id=0x600A), dict(product_id=0x6008),
+                        dict(vendor_id=0x3837, product_id=0x385D), dict(product_id=0x600A),
+                        dict(vendor_id=0x3837, product_id=0x6008), dict(product_id=0x6008),
                         dict(vendor_id=0x5253)):
             with self.subTest(changes=changes), fixture([reply()], [entry(**changes)]) as bus:
                 self.assertEqual(self.provider.poll(), [])
@@ -191,6 +204,69 @@ class MchoseHeadsetTests(unittest.TestCase):
             self.assertEqual(self.provider.poll(), [])
             self.assertEqual(bus.closed, bus.opened)
             self.assertIn("fixture failure", " ".join(self.provider.diagnostics()))
+
+    def test_turbo_capture_reads_80_only_on_ff90_with_lighting_present(self):
+        # Lighting caps here are adversarial mock values, not claimed capture facts.
+        lighting = entry("lighting", vendor_id=0x3837, product_id=0x6008,
+                         product_string="V9 Turbo", manufacturer_string="wch.cn")
+        inventory = [lighting] + list(reversed(turbo_inventory()))
+        with fixture([reply(80), reply(80)], inventory) as bus, patch.object(Mouse, "hid", bus):
+            mouse = Mouse.MchoseProvider()
+            for _ in range(2):
+                self.assertEqual(mouse.poll(), [])
+                status, = self.provider.poll()
+                self.assertEqual((status.name, status.level, status.charging, status.online, status.kind),
+                                 ("MCHOSE V9 Turbo+", 80, False, True, "headset"))
+            self.assertEqual(bus.opened, [b"turbo-ff90"] * 2)
+            self.assertEqual(bus.writes, [(b"turbo-ff90", [0x55, 0x65, 1] + [0] * 61)] * 2)
+            self.assertEqual(bus.closed, bus.opened)
+        diagnostics = " ".join(mouse.diagnostics())
+        self.assertIn("600a V9 Turbo+ headset reserved", diagnostics)
+        self.assertIn("6008 V9 Turbo lighting device", diagnostics)
+
+    def test_turbo_wrong_caps_or_collection_never_fall_back_to_mouse_or_siblings(self):
+        for changes in (dict(input_report_length=None), dict(output_report_length=None),
+                        dict(input_report_length=0), dict(output_report_length=0),
+                        dict(input_report_length=63), dict(output_report_length=63),
+                        dict(input_report_length=65), dict(output_report_length=65),
+                        dict(usage_page=0xFF01), dict(usage=2)):
+            inventory = turbo_inventory()
+            next(d for d in inventory if d["usage_page"] == 0xFF90).update(changes)
+            with self.subTest(changes=changes), fixture([reply(80)], inventory) as bus, \
+                    patch.object(Mouse, "hid", bus):
+                self.assertEqual(Mouse.MchoseProvider().poll(), [])
+                self.assertEqual(self.provider.poll(), [])
+                self.assertEqual(bus.opened, [])
+                self.assertEqual(bus.writes, [])
+                self.assertIn("nothing sent", " ".join(self.provider.diagnostics()))
+
+    def test_lighting_never_receives_commands_even_with_mouse_or_headset_caps(self):
+        for page in (0xFF01, 0xFF90, 0xFF82):
+            inventory = [entry("lighting", vendor_id=0x3837, product_id=0x6008, usage_page=page)]
+            with self.subTest(page=page), fixture([reply(80)], inventory) as bus, \
+                    patch.object(Mouse, "hid", bus):
+                self.assertEqual(Mouse.MchoseProvider().poll(), [])
+                self.assertEqual(self.provider.poll(), [])
+                self.assertEqual(bus.opened, [])
+                self.assertEqual(bus.writes, [])
+
+    def test_turbo_inherits_unverified_external_power_and_off_semantics(self):
+        for state in (0x00, 0x03, 0x1A):
+            with self.subTest(state=state), fixture([reply(80, state)], turbo_inventory()):
+                status, = self.provider.poll()
+                self.assertIsNone(status.level)
+                self.assertTrue(status.level_unavailable)
+                self.assertTrue(status.connection_known)
+                self.assertEqual(status.charging, state != 0x1A)
+                self.assertEqual(status.charging_known, state != 0x1A)
+                self.assertEqual(status.online, state != 0x1A)
+
+    def test_pro_and_turbo_keep_distinct_names_and_identities(self):
+        with fixture([reply(20), reply(80)], [entry()] + turbo_inventory()):
+            statuses = self.provider.poll()
+        self.assertEqual([(s.name, s.level) for s in statuses],
+                         [("MCHOSE V9 PRO", 20), ("MCHOSE V9 Turbo+", 80)])
+        self.assertEqual(len({s.key for s in statuses}), 2)
 
 
 if __name__ == "__main__":

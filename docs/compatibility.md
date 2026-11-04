@@ -15,7 +15,7 @@
 | SteelSeries | 鼠标、耳机 | Aerox/Rival及Arctis/Nova/GameBuds已列明型号，按各自报文匹配 |
 | Corsair | 鼠标、耳机 | Dark Core RGB Pro SE、Virtuoso部分型号、Void v2/HS80 Max等对应接收器 |
 | Audeze、JBL、Astro | 耳机 | Maxwell、Quantum 910、A50 Gen 5等已列明设备 |
-| MCHOSE V9 PRO（C，待实机验证） | 耳机 | 仅 `291D:385D / FF90:0001`，输入/输出均为64字节；接电隐藏冻结百分比，不区分充电中与满电，不含Turbo/Turbo+ |
+| MCHOSE V9 PRO / V9 Turbo+（C） | 耳机 | 仅 `291D:385D` 与 `3837:600A` 的 `FF90:0001`，输入/输出均为64字节；Turbo+来源：用户实机抓包，#61，80%放电已实测，充电和关机未实测；接电隐藏冻结百分比，不区分充电中与满电；`3837:6008` 是灯控，不发送命令 |
 | ASUS ROG/TUF | 鼠标 | 内置型号表；不扩称支持所有ROG键盘 |
 | Pulsar / ATK / VXE | 鼠标 | Pulsar X2部分型号、VXE R1部分接收器等，按确切ID与集合匹配 |
 | ATK FF02 协议族（C，协议族匹配，未实测） | 鼠标 | 表外 `373B` 设备必须具有 `FF02:0002` 集合且输出报告长度恰好17字节；仅发送现有电量查询 |
@@ -47,7 +47,7 @@ ATK 的协议族匹配仍不保证所有 A9 Air 或同名变体可读：`373B:12
 
 界面、桥接、安装事务及协议解析均有自动化验证；其他人的实际硬件仍需按型号核验。兼容表会随验证结果更新。
 
-V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前百分比时显示充电指示，因此接电时会显示电量未知，尚不显示该指示；完整界面体验仍待后续验证。
+V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机语义沿用 V9 PRO，尚未实测），但当前原生界面仅在有当前百分比时显示充电指示，因此接电时会显示电量未知，尚不显示该指示；完整界面体验仍待后续验证。
 
 <!-- BEGIN GENERATED COMPATIBILITY CATALOG -->
 来源：`engine/compatibility.json`；由 `python engine/catalog.py --markdown` 离线生成。
@@ -64,8 +64,8 @@ V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前�
 | HECATE G3M PRO | mouse | C | 协议已接入，待本项目实机验证；仅320F:706E / FF1C:0092，输入/输出ID 04各64字节且描述符确认字节数组；只读1A 06百分比，充电未知；不含Rainy75 320F:5088；未知长度或集合不唯一不发送 |
 | 前行者 EWEADN S9 | mouse | C | 协议已接入，待本项目实机验证；仅089D:062F / FF01:0010；未编号输出32字节payload（hidapi含占位共33）；输入长度须由描述符确认，读取15–33字节；回复身份必须M156；充电未知、休眠不显示0%；实际输入caps待实机确认 |
 | 飞智 Flydigi APEX5 | gamepad | C | 协议已接入，待本项目实机验证；仅37D7:2501 / FFA0:0001，输出03/输入04各32字节，逐ID核对描述符容量；只读GET_INFO单片型号80回复；0–5档用approx显示约略电量，充电隐藏百分比；不含FFEE集合或底座 |
-| MCHOSE 已列明协议与型号 | mouse | C | 协议已接入，待本项目实机验证；既有型号及A7 V3 Pro：V3仅3837:1018 / FF01:0001，输入与输出均为64字节（含ID 4D）；只读0900电量，长度未知或不符不发送，不回退V2；Pro待实机验证 |
-| MCHOSE V9 PRO | headset | C | 协议已接入，待本项目实机验证；仅291D:385D / FF90:0001，输入与输出均为64字节；接电隐藏百分比，不区分充电中与满电；不含Turbo/Turbo+ |
+| MCHOSE 已列明协议与型号 | mouse | C | 协议已接入，待本项目实机验证；既有型号及A7 V3 Pro：V3仅3837:1018 / FF01:0001，输入与输出均为64字节（含ID 4D）；只读0900电量，长度未知或不符不发送，不回退V2；Pro待实机验证；3837:600A耳机与6008灯控完全跳过，不发送鼠标命令 |
+| MCHOSE V9 PRO / V9 Turbo+ | headset | C | 协议已接入，待本项目实机验证；仅291D:385D与3837:600A / FF90:0001，输入与输出均为64字节；Turbo+来源：用户实机抓包，#61，80%放电已实测，充电00/03与关机1A未实测、沿用V9 PRO语义；接电隐藏百分比，不区分充电中与满电；3837:6008是灯控，不加入读取器 |
 | MCHOSE G98 V3 | keyboard | C | 协议已接入，待本项目实机验证；仅3837:1015，产品全名 MCHOSE G98 V3 2.4G / FF80:0001；描述符须唯一确认输入/输出ID 4D及容量，未知或多ID拒绝；回复校验算法、补零及休眠缓存待实机确认 |
 | MCHOSE G87 V2 | keyboard | C | 协议已接入，待本项目实机验证；仅3837:3033，产品全名 MCHOSE G87 V2 2.4G / 0001:0000；输出ID 0且64字节payload，输入ID/容量须由描述符唯一确认；只读活动配置，无setBase；回复校验算法及休眠缓存待实机确认 |
 | HyperX Cloud Alpha 2 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
@@ -94,5 +94,5 @@ V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前�
 | VGN Dragonfly 4K Receiver (3554:F505) | mouse | D | 已发现但未取得电量，不列为兼容 |
 | MCHOSE K99 V3 2.4G (3837:3033) | keyboard | D | 已发现但未取得电量，不列为兼容 |
 
-通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO、G98 V3、G87 V2、G3M PRO、EWEADN S9、Flydigi APEX5 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。
+通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO / V9 Turbo+、G98 V3、G87 V2、G3M PRO、EWEADN S9、Flydigi APEX5 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。
 <!-- END GENERATED COMPATIBILITY CATALOG -->

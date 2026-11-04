@@ -1,9 +1,11 @@
-"""MCHOSE V9 PRO, 291D:385D / FF90:0001 only (verification level C).
+"""MCHOSE V9 PRO / V9 Turbo+, exact identities and FF90:0001 (level C).
 
 Protocol facts: research/p2-protocols.md section 4, sources S8-S10 (MIT
 projects and upstream hardware reports); S14 is corroboration only, no code
 copied. Output/input reports include ID 55 and are exactly 64 bytes. Only
 the battery query 55 65 01 is sent; no feature, EQ or firmware commands.
+Turbo+ 3837:600A: 用户实机抓包，#61 confirms 80% discharge twice. Its
+charging/off states remain untested; 3837:6008 is lighting, never a target.
 
 00/03 mean external power, including fully charged while plugged in. Their
 percentage is frozen and must not be displayed. 1A explicitly means off;
@@ -24,8 +26,10 @@ from topology import physical_groups
 from . import hidlist
 from .base import DeviceStatus, Provider, hexdump, log
 
-VID = 0x291D
-PIDS = {0x385D: "MCHOSE V9 PRO"}
+PIDS = {
+    (0x291D, 0x385D): "MCHOSE V9 PRO",
+    (0x3837, 0x600A): "MCHOSE V9 Turbo+",
+}
 USAGE_PAGE, USAGE = 0xFF90, 0x0001
 REPORT_LEN = 64
 READ_TIMEOUT_MS = 1000
@@ -58,7 +62,7 @@ class MchoseHeadsetProvider(Provider):
 
     def _pick(self, infos):
         for info in infos:
-            if (info.get("vendor_id") != VID or info.get("product_id") not in PIDS
+            if ((info.get("vendor_id"), info.get("product_id")) not in PIDS
                     or (info.get("usage_page"), info.get("usage")) != (USAGE_PAGE, USAGE)):
                 continue
             lengths = (info.get("input_report_length"), info.get("output_report_length"))
@@ -66,7 +70,7 @@ class MchoseHeadsetProvider(Provider):
                 self._diag.append(f"  input/output lengths {lengths}; require 64/64: nothing sent")
                 continue
             return info
-        self._diag.append("  no eligible 291d:385d ff90:0001 collection: nothing sent")
+        self._diag.append("  no eligible V9 PRO/Turbo+ ff90:0001 collection: nothing sent")
         return None
 
     def _query(self, path):
@@ -110,13 +114,14 @@ class MchoseHeadsetProvider(Provider):
         self._diag = []
         if hid is None:
             return []
-        try:
-            infos = hidlist.enumerate(VID)
-        except Exception as error:  # pragma: no cover
-            log.warning("hid.enumerate(mchose_headset): %s", error)
-            return []
-        matched = [info for info in infos if info.get("vendor_id") == VID
-                   and info.get("product_id") in PIDS]
+        infos = []
+        for vid in sorted({vid for vid, _ in PIDS}):
+            try:
+                infos.extend(hidlist.enumerate(vid))
+            except Exception as error:  # pragma: no cover
+                log.warning("hid.enumerate(mchose_headset, %04x): %s", vid, error)
+        matched = [info for info in infos
+                   if (info.get("vendor_id"), info.get("product_id")) in PIDS]
         out = []
         for physical, group in physical_groups(matched).items():
             info = self._pick(group)
@@ -127,7 +132,7 @@ class MchoseHeadsetProvider(Provider):
                 continue
             level, charging, online = reading
             out.append(DeviceStatus(
-                f"mchose_headset:{physical}", PIDS[info["product_id"]],
+                f"mchose_headset:{physical}", PIDS[info["vendor_id"], info["product_id"]],
                 level, charging, online, self.name, kind="headset",
                 connection_known=True, charging_known=online, physical_id=physical,
                 level_unavailable=level is None))
