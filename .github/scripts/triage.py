@@ -1,6 +1,6 @@
 """Rule-based, offline issue triage. No issue text is executed or echoed in replies.
 
-Usage: triage.py --issue issue.json --comments comments.json --known-ids known.json
+Usage: triage.py --issue issue.json --comments comments.json --known-ids released.json --known-ids-next main.json
 The comments file may be a flat list or gh api --paginate --slurp pages; without
 --comments, an embedded issue["comments"] list is used. A null label means no-op.
 """
@@ -18,6 +18,8 @@ NEEDS_INFO = ("自动回复：这次反馈没有带上设备信息，我们没�
 SUPPORTED = ("自动回复：报告里的 {models} 在支持列表中。如果还是没有电量，请依次试试："
              "1）唤醒设备后在程序里点重新同步；2）暂时关闭厂商驱动后再试；3）拔插接收器。"
              "仍不行的话，请在这里补充一次新的反馈报告。维护者会尽快查看。")
+IN_NEXT_RELEASE = ("自动回复：报告里的 {models} 已在开发版中加入读取，会随下一个测试版提供，届时会在这里通知。"
+                   "新加入的设备需要实机确认，到时欢迎帮忙对照官方软件的读数。维护者会尽快查看。")
 PAIR = re.compile(r"(?<![\w:])([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})(?![\w:])")
 TYPE = re.compile(r"^[ \t]*(?:\*\*)?类型(?:\*\*)?[ \t]*[：:][ \t]*([^\r\n]+?)[ \t\r]*$", re.MULTILINE)
 DEVICE_TYPES = {"设备不识别", "电量或 DPI 不对"}
@@ -94,7 +96,7 @@ def report_devices(text):
     return rows
 
 
-def decide(issue, known, comments=None):
+def decide(issue, known, comments=None, known_next=None):
     labels = labels_of(issue)
     result = {"label": None, "reply": None, "reason": "未命中设备或问题类型规则。", "remove_labels": []}
     if "triage:locked" in labels or "pull_request" in issue:
@@ -114,7 +116,12 @@ def decide(issue, known, comments=None):
     index = {}
     for device in known["devices"]:
         index.setdefault((device["vendorId"], device["productId"]), []).append(device)
+    next_index = {}
+    for device in (known_next or {}).get("devices", []):
+        next_index.setdefault((device["vendorId"], device["productId"]), []).append(device)
     vendors = {vid for ids in known["vendors"].values() for vid in ids}
+    vendors.update(vid for ids in (known_next or {}).get("vendors", {}).values() for vid in ids)
+    known_pairs = index.keys() | next_index.keys()
     reported = rows
     rows, ignored = [], []
     for row in reported:
@@ -127,21 +134,24 @@ def decide(issue, known, comments=None):
         else:
             rows.append(row)
     hits = [(row, index[row[:2]]) for row in rows if row[3] == "unadapted" and row[:2] in index]
+    next_hits = [(row, next_index[row[:2]]) for row in rows
+                 if row[3] == "unadapted" and row[:2] not in index and row[:2] in next_index]
     new_vendors = [row for row in rows if row[0] not in vendors]
     reply = None
     if device_request and not reported:
         label, reason, reply = "needs-info", "设备类反馈缺少 VID:PID。", NEEDS_INFO
     elif category == "电量或 DPI 不对" and reported and all(row[3] == "card" for row in reported):
         label, reason = "bug", "只有已取得电量的卡片设备，但反馈电量或 DPI 读数不对，需要人工检查。"
-    elif hits:
-        label = "supported"
-        reason = "设备 ID 命中内置支持列表，但本次未取得电量。"
+    elif hits or next_hits:
+        label = "supported" if hits else "in-next-release"
+        reason = ("设备 ID 命中已发布版本的内置支持列表，但本次未取得电量。" if hits
+                  else "设备 ID 仅命中开发版支持列表，尚未包含在最新正式发布中。")
         # Only repository-owned model names enter the fixed reply, never names
         # supplied by the issue author. Neutralise mentions in future pack names.
         names = sorted({d["name"].replace("@", "＠").replace("\n", " ").replace("\r", " ")
-                        for _, devices in hits for d in devices})
-        reply = SUPPORTED.format(models="、".join(names))
-    elif any(row[:2] not in index and row[0] in vendors and any(page >= 0xFF00 for page, _ in row[2])
+                        for _, devices in (hits or next_hits) for d in devices})
+        reply = (SUPPORTED if hits else IN_NEXT_RELEASE).format(models="、".join(names))
+    elif any(row[:2] not in known_pairs and row[0] in vendors and any(page >= 0xFF00 for page, _ in row[2])
              for row in rows):
         label, reason = "pack-candidate", "已支持厂商的未知产品 ID，且同一设备带厂商自定义集合。"
     elif new_vendors:
@@ -177,9 +187,11 @@ def main():
     parser.add_argument("--issue", required=True)
     parser.add_argument("--comments")
     parser.add_argument("--known-ids", required=True)
+    parser.add_argument("--known-ids-next", help="main index; --known-ids is the latest release")
     args = parser.parse_args()
     result = decide(read_json(args.issue), read_json(args.known_ids),
-                    read_json(args.comments) if args.comments else None)
+                    read_json(args.comments) if args.comments else None,
+                    read_json(args.known_ids_next) if args.known_ids_next else None)
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 
 

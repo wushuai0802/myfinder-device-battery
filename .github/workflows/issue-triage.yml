@@ -7,7 +7,6 @@ on:
     types: [created]
 
 permissions:
-  issues: write
   contents: read
 
 concurrency:
@@ -15,33 +14,85 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  triage:
+  indexes:
     if: >-
       !github.event.issue.pull_request &&
       (github.event_name != 'issue_comment' ||
        (github.event.comment.user.type != 'Bot' && github.event.comment.user.login != 'github-actions[bot]'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.14'
+      - name: Index main and the latest stable release without loading readers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/triage" "$RUNNER_TEMP/released"
+          python -I -B engine/known_ids.py --json > "$RUNNER_TEMP/triage/known-ids-next.json"
+          # gh's latest-release endpoint excludes drafts and prereleases.
+          release_tag=$(gh release view --json tagName --jq .tagName)
+          git check-ref-format "refs/tags/$release_tag"
+          release_commit=$(git rev-parse --verify "refs/tags/$release_tag^{commit}")
+          paths=(engine)
+          if test -n "$(git ls-tree "$release_commit" -- devices/pack)"; then
+            paths+=(devices/pack)
+          fi
+          git archive --format=tar --output="$RUNNER_TEMP/released.tar" "$release_commit" "${paths[@]}"
+          tar -xf "$RUNNER_TEMP/released.tar" -C "$RUNNER_TEMP/released"
+          if test -f "$RUNNER_TEMP/released/engine/known_ids.py"; then
+            python -I -B "$RUNNER_TEMP/released/engine/known_ids.py" --json > "$RUNNER_TEMP/triage/known-ids.json"
+          else
+            # Old releases (including v1.3.5) have no indexer. Main's parser
+            # reads their provider sources as AST; it never imports old code.
+            python -I -B engine/known_ids.py --json --engine-root "$RUNNER_TEMP/released/engine" > "$RUNNER_TEMP/triage/known-ids.json"
+          fi
+          cp .github/scripts/triage.py "$RUNNER_TEMP/triage/triage.py"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: triage-inputs
+          path: ${{ runner.temp }}/triage/
+          if-no-files-found: error
+          retention-days: 1
+
+  triage:
+    needs: indexes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # No checkout or release code runs with the issue-writing token.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          persist-credentials: false
+          name: triage-inputs
+          path: ${{ runner.temp }}/triage/
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: '3.14'
-      - name: Index known IDs without loading providers
-        run: python -I -B engine/known_ids.py --json > "$RUNNER_TEMP/known-ids.json"
       - name: Fetch current issue and all comments, then decide
         shell: bash
         run: |
           set -euo pipefail
           gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER" > "$RUNNER_TEMP/issue.json"
           gh api --paginate --slurp "repos/$GH_REPO/issues/$ISSUE_NUMBER/comments?per_page=100" > "$RUNNER_TEMP/comments.json"
-          python -I -B .github/scripts/triage.py --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/known-ids.json" > "$RUNNER_TEMP/decision.json"
+          python -I -B "$RUNNER_TEMP/triage/triage.py" --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/triage/known-ids.json" --known-ids-next "$RUNNER_TEMP/triage/known-ids-next.json" > "$RUNNER_TEMP/decision.json"
       - name: Replace triage labels and post the template once
         shell: bash
         run: |
@@ -50,12 +101,13 @@ jobs:
           # comments posted since the first snapshot (including our own marker).
           gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER" > "$RUNNER_TEMP/issue.json"
           gh api --paginate --slurp "repos/$GH_REPO/issues/$ISSUE_NUMBER/comments?per_page=100" > "$RUNNER_TEMP/comments.json"
-          python -I -B .github/scripts/triage.py --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/known-ids.json" > "$RUNNER_TEMP/decision.json"
+          python -I -B "$RUNNER_TEMP/triage/triage.py" --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/triage/known-ids.json" --known-ids-next "$RUNNER_TEMP/triage/known-ids-next.json" > "$RUNNER_TEMP/decision.json"
           label=$(jq -r '.label // empty' "$RUNNER_TEMP/decision.json")
           case "$label" in
             '') exit 0 ;;
             triage:needs-info) color=D876E3 ;;
             triage:supported) color=0E8A16 ;;
+            triage:in-next-release) color=0052CC ;;
             triage:pack-candidate) color=1D76DB ;;
             triage:insufficient-evidence) color=FBCA04 ;;
             triage:new-vendor) color=5319E7 ;;

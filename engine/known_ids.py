@@ -3,6 +3,8 @@
 IDs in the JSON are integers; source is 'builtin' or 'pack'. Migrated providers
 use the offline profile registry; legacy providers are parsed statically.
 Optional devices/pack/*.json files use the engine's device-pack validator.
+--engine-root reads another snapshot's engine directory strictly as data and
+does not use the current checkout's builtin profile IDs.
 Rejected packs/rows and unrecognised modules are reported in unparsed.
 For provider sources, unparsed lists modules with no indexed IDs; partial maps
 modules with indexed IDs but incomplete coverage to an explanatory reason.
@@ -36,7 +38,7 @@ TABLES = {
     "logitech": ("HEADSETS",), "logitech_centurion": ("PIDS",),
     "mchose": ("A5_PIDS",), "mchose_headset": ("PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
-    "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",),
+    "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
 HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles"}
@@ -100,14 +102,19 @@ def word(value):
     return result
 
 
-def build_index(root=None):
-    root = Path(root) if root else Path(__file__).resolve().parent.parent
-    catalog = json.loads((root / "engine/compatibility.json").read_text(encoding="utf-8-sig"))
+def build_index(root=None, *, engine_root=None):
+    # An external snapshot must never inherit the running checkout's registry or
+    # import its own Python modules. Only the local, audited helpers run here.
+    external = engine_root is not None
+    root = Path(engine_root).resolve().parent if external else (
+        Path(root) if root else ENGINE.parent)
+    engine = Path(engine_root).resolve() if external else root / "engine"
+    catalog = json.loads((engine / "compatibility.json").read_text(encoding="utf-8-sig"))
     readers = {item["provider"]: item for item in catalog["readers"]}
     devices, vendors, unparsed, partial = set(), {}, set(), {}
-    registered = registered_ids()
+    registered = [] if external else registered_ids()
     profiled = {}
-    for profile in profiles():
+    for profile in (() if external else profiles()):
         profiled.setdefault(profile.provider, set()).update(profile.vendor_ids)
 
     def add(provider, vid, pid, name, kind, source="builtin"):
@@ -117,7 +124,7 @@ def build_index(root=None):
         devices.add((provider, vid, pid, name, kind, source))
         vendors.setdefault(provider, set()).add(vid)
 
-    for path in sorted((root / "engine/providers").glob("*.py")):
+    for path in sorted((engine / "providers").glob("*.py")):
         module = path.stem
         if module in HELPERS or module.endswith("_profiles"):
             continue  # Helpers and protocol data are represented by their owner.
@@ -130,12 +137,20 @@ def build_index(root=None):
         vendors[module] = set()
         try:
             source = StaticSource(path)
+            if external and module == "razer" and "KNOWN" not in source.values:
+                # Newer snapshots moved these literal tables into a data module.
+                # Parse that snapshot's tables too, without importing the module.
+                profile_path = path.with_name("razer_profiles.py")
+                if profile_path.is_file():
+                    source = StaticSource(profile_path)
             for key in source.values:
                 if key == "VID" or key.endswith(("_VID", "_VIDS")):
                     value = source.get(key)
                     vendors[module].update(word(v) for v in (value if isinstance(value, list) else [value]))
             kinds = readers.get(module, {}).get("kinds", [])
             default_kind = kinds[0] if len(kinds) == 1 else None
+            keyboard_ids = ({word(source.literal(key)) for key, _ in source.table("KEYBOARD_INTERFACE")}
+                            if module == "razer" and "KEYBOARD_INTERFACE" in source.values else set())
             for table in TABLES.get(module, ()):
                 # Each table has an explicit VID relation, not a cross product.
                 if module == "mchose":
@@ -164,6 +179,9 @@ def build_index(root=None):
                         kind = "mouse" if table == "BRAGI_PIDS" and pid == 0x1B7F else "headset"
                     elif module == "logitech":
                         kind = "headset"
+                    elif module == "razer":
+                        kind = ("keyboard" if pid in keyboard_ids or pid in (0x025A, 0x025C)
+                                else "headset" if pid in (0x0528, 0x0555, 0x0556, 0x0557) else "mouse")
                     add(module, vid, pid, name, kind)
             if module in SINGLE:
                 vid = next(iter(vendors[module]))
@@ -213,9 +231,11 @@ def build_index(root=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="print the stable JSON index")
-    parser.parse_args()
+    parser.add_argument("--engine-root", type=Path,
+                        help="statically read another snapshot's engine directory; never import it")
+    args = parser.parse_args()
     # ASCII escapes also make redirected Windows output independent of its codepage.
-    print(json.dumps(build_index(), ensure_ascii=True, sort_keys=True, indent=2))
+    print(json.dumps(build_index(engine_root=args.engine_root), ensure_ascii=True, sort_keys=True, indent=2))
 
 
 if __name__ == "__main__":

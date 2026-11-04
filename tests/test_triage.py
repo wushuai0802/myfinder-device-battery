@@ -60,6 +60,53 @@ def comment(body, bot=False):
 
 
 class TriageTests(unittest.TestCase):
+    def test_issue_29_release_and_main_have_distinct_support(self):
+        next_index = {"vendors": {"mchose_headset": [0x291D]}, "devices": [
+            {"provider": "mchose_headset", "vendorId": 0x291D, "productId": 0x385D,
+             "name": "MCHOSE V9 PRO", "kind": "headset"}]}
+        body = in_app(report(unknown='291D:385D "untrusted @name $(command)" FF00:0001'))
+        payload = issue(body, labels=("triage:supported", "in-app-feedback"))
+        payload["number"] = 29
+        result = triage.decide(payload, KNOWN, known_next=next_index)
+        self.assertEqual(result["label"], "triage:in-next-release")
+        self.assertEqual(result["remove_labels"], ["triage:supported"])
+        self.assertEqual(result["reply"], triage.MARKER + "\n" +
+                         triage.IN_NEXT_RELEASE.format(models="MCHOSE V9 PRO"))
+        self.assertNotIn("untrusted", result["reply"])
+        released = triage.decide(payload, next_index, known_next=next_index)
+        self.assertEqual(released["label"], "triage:supported")
+        self.assertEqual(released["reply"], triage.MARKER + "\n" +
+                         triage.SUPPORTED.format(models="MCHOSE V9 PRO"))
+        # A release hit wins when a report includes both release and main-only IDs.
+        mixed = issue(in_app(report(unknown='291D:385D "V9" FF00:0001\n373B:1278 "ATK" FF02:0002')))
+        self.assertEqual(triage.decide(mixed, KNOWN, known_next=next_index)["label"], "triage:supported")
+        for bot_comment, suppressed in (
+            (comment(triage.MARKER, True), True),
+            (comment(triage.MARKER), False),
+            ({"body": triage.MARKER, "user": {"type": "Bot", "login": "other[bot]"}}, False),
+        ):
+            with self.subTest(comment=bot_comment):
+                result = triage.decide(payload, KNOWN, [[bot_comment]], next_index)
+                self.assertEqual(result["reply"] is None, suppressed)
+        locked = issue(body, labels=("triage:locked",))
+        self.assertIsNone(triage.decide(locked, KNOWN, known_next=next_index)["label"])
+        # Cards, noise and loose mentions must not become a development-support hit.
+        for body in (in_app(description='291D:385D "V9" FF00:0001'),
+                     in_app(report(card='V9 | headset | mchose_headset | 80% | 当前读数：是 | 291D:385D')),
+                     in_app(report(unknown='291D:385D "Touchpad" FF00:0001'))):
+            self.assertNotEqual(triage.decide(issue(body), KNOWN, known_next=next_index)["label"],
+                                "triage:in-next-release")
+        # Keep the existing main-vendor rules when neither index matches an ID.
+        for row, expected in (('291D:EEEE "unknown" FF00:0001', "pack-candidate"),
+                              ('291D:EEEE "unknown" 0001:0006', "insufficient-evidence"),
+                              ('ABCD:1234 "unknown" FF00:0001', "new-vendor")):
+            result = triage.decide(issue(in_app(report(unknown=row))), KNOWN, known_next=next_index)
+            self.assertEqual(result["label"], "triage:" + expected)
+            self.assertIsNone(result["reply"])
+        loose = triage.decide(issue(in_app(description='291D:385D "V9" FF00:0001')),
+                              KNOWN, known_next=next_index)
+        self.assertEqual(loose["label"], "triage:insufficient-evidence")
+
     def classify(self, body, label, **kwargs):
         result = triage.decide(issue(body, **kwargs), KNOWN)
         self.assertEqual(result["label"], "triage:" + label)
@@ -290,6 +337,44 @@ class TriageTests(unittest.TestCase):
 
 
 class KnownIdsTests(unittest.TestCase):
+    def test_external_engine_reads_only_legacy_snapshot_without_imports(self):
+        with workspace_temp() as folder:
+            engine = Path(folder) / "old-engine"
+            providers = engine / "providers"
+            providers.mkdir(parents=True)
+            (engine / "compatibility.json").write_text('{"readers": [], "nativeProfiles": []}', encoding="utf-8")
+            # Any attempt to import snapshot code fails, including package setup.
+            for name in ("__init__", "profiles", "razer_profiles"):
+                (providers / (name + ".py")).write_text('raise RuntimeError("old code executed")', encoding="utf-8")
+            (providers / "razer.py").write_text(
+                'raise RuntimeError("old reader executed")\nRAZER_VID = 0x1532\n'
+                'KNOWN = {0x001F: ("Old Mouse", 0xFF), 0x025A: ("Old Keyboard", 0x3F), '
+                '0x0528: ("Old Headset", 0x3F), 0x0290: ("Interface Keyboard", 0x9F)}\n'
+                'KEYBOARD_INTERFACE = {0x0290: 2}\n', encoding="utf-8")
+            with patch.object(known_ids, "registered_ids", side_effect=AssertionError("main registry used")), \
+                    patch.object(known_ids, "profiles", side_effect=AssertionError("main profiles used")):
+                result = known_ids.build_index(engine_root=engine)
+            self.assertEqual({d["productId"]: (d["name"], d["kind"]) for d in result["devices"]}, {
+                0x001F: ("Old Mouse", "mouse"), 0x025A: ("Old Keyboard", "keyboard"),
+                0x0528: ("Old Headset", "headset"), 0x0290: ("Interface Keyboard", "keyboard")})
+            self.assertEqual(result["unparsed"], [])
+            run = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "engine/known_ids.py"),
+                                  "--json", "--engine-root", str(engine)],
+                                 check=True, capture_output=True, timeout=10)
+            self.assertEqual(json.loads(run.stdout), result)
+
+    def test_external_profile_tables_are_static_and_do_not_leak_main_ids(self):
+        with workspace_temp() as folder:
+            root = index_fixture(folder)
+            result = known_ids.build_index(engine_root=root / "engine")
+            self.assertEqual(result, known_ids.build_index())
+            profile = root / "engine/providers/razer_profiles.py"
+            profile.write_text('raise RuntimeError("must not execute")\nRAZER_VID = 0x1532\n'
+                               'KNOWN = {0x001F: ("Snapshot Mouse", 0xFF)}\n', encoding="utf-8")
+            result = known_ids.build_index(engine_root=root / "engine")
+            self.assertEqual([(d["productId"], d["name"]) for d in result["devices"]
+                              if d["provider"] == "razer"], [(0x001F, "Snapshot Mouse")])
+
     def test_real_index_is_deterministic_and_does_not_import_hardware(self):
         real_import = builtins.__import__
 
@@ -531,6 +616,19 @@ runpy.run_path(target, run_name="__main__")
                                   "--known-ids", str(work / "known.json")], check=True, capture_output=True)
             self.assertEqual(json.loads(run.stdout)["label"], "triage:supported")
 
+    def test_command_line_accepts_release_and_next_indexes(self):
+        with workspace_temp() as folder:
+            work = Path(folder)
+            (work / "released.json").write_text(json.dumps(KNOWN), encoding="utf-8")
+            (work / "next.json").write_text(json.dumps(known_ids.build_index()), encoding="utf-8")
+            (work / "issue.json").write_text(json.dumps(issue(in_app(
+                report(unknown='291D:385D "V9 PRO" FF00:0001')))), encoding="utf-8")
+            run = subprocess.run([sys.executable, "-I", "-B", str(ROOT / ".github/scripts/triage.py"),
+                                  "--issue", str(work / "issue.json"), "--known-ids", str(work / "released.json"),
+                                  "--known-ids-next", str(work / "next.json")],
+                                 check=True, capture_output=True, timeout=10)
+            self.assertEqual(json.loads(run.stdout)["label"], "triage:in-next-release")
+
 
 def workspace_temp():
     target = ROOT / "tmp"
@@ -561,6 +659,24 @@ def pack_document(entries=None, disabled=None):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_indexes_have_read_only_checkout_and_both_revisions(self):
+        text = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
+        indexing, writing = text.split("\n  triage:\n", 1)
+        self.assertNotIn("issues: write", indexing)
+        self.assertIn("contents: read", indexing)
+        self.assertIn("persist-credentials: false", indexing)
+        self.assertIn("ref: main", indexing)
+        self.assertIn("fetch-depth: 0", indexing)
+        self.assertIn("gh release view --json tagName", indexing)
+        self.assertIn("git archive", indexing)
+        self.assertIn('test -f "$RUNNER_TEMP/released/engine/known_ids.py"', indexing)
+        self.assertIn('--engine-root "$RUNNER_TEMP/released/engine"', indexing)
+        self.assertIn("needs: indexes", writing)
+        self.assertIn("issues: write", writing)
+        self.assertNotIn("uses: actions/checkout", writing)
+        self.assertEqual(writing.count('--known-ids-next "$RUNNER_TEMP/triage/known-ids-next.json"'), 2)
+        self.assertIn("triage:in-next-release) color=0052CC", writing)
+
     def test_run_blocks_never_interpolate_issue_text(self):
         text = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
         # Scan every expression, including multiline expressions. This is stricter
