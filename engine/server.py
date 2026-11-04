@@ -32,6 +32,7 @@ PROVIDERS = (
     ("mchose_glw_keyboard", "MchoseGlwKeyboardProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
+    ("cherry", "CherryProvider"),
     ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
     ("barracuda", "BarracudaProvider"), ("asus", "AsusProvider"),
@@ -50,6 +51,7 @@ PROVIDER_VIDS = {
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
+    "cherry": (0x046A,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
@@ -67,7 +69,7 @@ BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 NO_CHARGING_EVIDENCE = {"bluetooth", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard"}
+KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "cherry"}
 
 
 def keyboard_diagnostics(provider):
