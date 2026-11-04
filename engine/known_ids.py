@@ -1,9 +1,9 @@
-"""Offline triage index. Parse provider source; never import/run a HID reader.
+"""Offline triage index. Use protocol data; never import/run a HID reader.
 
-IDs in the JSON are integers. Optional devices/pack/*.json files use
-{"devices": [{"provider": str, "vendorId": int or hex str,
-              "productId": int or hex str, "name": str, "kind": str}]}.
-Unrecognised pack schemas/modules are reported, never inferred as supported.
+IDs in the JSON are integers; source is 'builtin' or 'pack'. Migrated providers
+use the offline profile registry; legacy providers are parsed statically.
+Optional devices/pack/*.json files use the engine's device-pack validator.
+Rejected packs/rows and unrecognised modules are reported in unparsed.
 For provider sources, unparsed lists modules with no indexed IDs; partial maps
 modules with indexed IDs but incomplete coverage to an explanatory reason.
 """
@@ -13,6 +13,16 @@ import argparse
 import ast
 import json
 from pathlib import Path
+import sys
+
+
+# Isolated Python (-I) omits the script directory on ordinary Python installs.
+ENGINE = Path(__file__).resolve().parent
+if str(ENGINE) not in sys.path:
+    sys.path.insert(0, str(ENGINE))
+
+from device_pack import load_pack
+from providers.profiles import profiles, registered_ids
 
 
 # Explicit table meanings prevent protocol opcodes/model numbers becoming PIDs.
@@ -25,11 +35,11 @@ TABLES = {
     "keychron": ("PIDS",), "lamzu": ("PIDS",), "lofree": ("DONGLES",),
     "logitech": ("HEADSETS",), "logitech_centurion": ("PIDS",),
     "mchose": ("A5_PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS",),
-    "razer": ("KNOWN",), "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
+    "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
-HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020"}
+HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles"}
 
 
 class StaticSource:
@@ -95,18 +105,28 @@ def build_index(root=None):
     catalog = json.loads((root / "engine/compatibility.json").read_text(encoding="utf-8-sig"))
     readers = {item["provider"]: item for item in catalog["readers"]}
     devices, vendors, unparsed, partial = set(), {}, set(), {}
+    registered = registered_ids()
+    profiled = {}
+    for profile in profiles():
+        profiled.setdefault(profile.provider, set()).update(profile.vendor_ids)
 
-    def add(provider, vid, pid, name, kind):
+    def add(provider, vid, pid, name, kind, source="builtin"):
         vid, pid = word(vid), word(pid)
         if not all(isinstance(s, str) and s.strip() for s in (provider, name, kind)):
             raise ValueError("missing device metadata")
-        devices.add((provider, vid, pid, name, kind))
+        devices.add((provider, vid, pid, name, kind, source))
         vendors.setdefault(provider, set()).add(vid)
 
     for path in sorted((root / "engine/providers").glob("*.py")):
         module = path.stem
-        if module in HELPERS:
-            continue  # Transport helpers are already represented by their owner.
+        if module in HELPERS or module.endswith("_profiles"):
+            continue  # Helpers and protocol data are represented by their owner.
+        if module in profiled:
+            vendors[module] = set(profiled[module])
+            for row in registered:
+                if row[0] == module:
+                    add(*row)
+            continue
         vendors[module] = set()
         try:
             source = StaticSource(path)
@@ -138,10 +158,6 @@ def build_index(root=None):
                     kind = default_kind
                     if module == "lamzu":
                         name = source.get("NAME")  # PIDS values describe transport.
-                    elif module == "razer":
-                        # These are the same model-name distinctions as kind_of.
-                        kind = ("keyboard" if any(s in name.lower() for s in ("blackwidow", "deathstalker"))
-                                else "headset" if "blackshark" in name.lower() else "mouse")
                     elif module == "steelseries":
                         kind = "mouse" if table == "MOUSE_MODELS" else "headset"
                     elif module == "corsair":
@@ -175,17 +191,20 @@ def build_index(root=None):
     for profile in catalog["nativeProfiles"]:
         add(profile["provider"], profile["match"]["vendorId"], profile["match"]["productId"],
             profile["name"], profile["kind"])
+    disabled = set()
     for path in sorted((root / "devices/pack").glob("*.json")):
-        try:
-            pack = json.loads(path.read_text(encoding="utf-8-sig"))
-            rows = pack["devices"]
-            if not isinstance(rows, list):
-                raise ValueError("invalid pack")
-            for row in rows:
-                add(row["provider"], row["vendorId"], row["productId"], row["name"], row["kind"])
-        except (KeyError, ValueError, TypeError):
+        pack = load_pack(path)
+        if pack.rejected:
             unparsed.add(path.relative_to(root).as_posix())
-    fields = ("provider", "vendorId", "productId", "name", "kind")
+        for entry in pack.entries:
+            # Already validated by the engine, including profile compatibility.
+            devices.add((entry.provider, entry.match.vendor_id, entry.match.product_id,
+                         entry.name, entry.kind, "pack"))
+            vendors.setdefault(entry.provider, set()).add(entry.match.vendor_id)
+        disabled.update((entry.provider, entry.vendor_id, entry.product_id) for entry in pack.disabled)
+    # Disables win over every source, including legacy tables and other files.
+    devices = {row for row in devices if row[:3] not in disabled}
+    fields = ("provider", "vendorId", "productId", "name", "kind", "source")
     return {"vendors": {key: sorted(value) for key, value in sorted(vendors.items())},
             "devices": [dict(zip(fields, row)) for row in sorted(devices)],
             "unparsed": sorted(unparsed), "partial": dict(sorted(partial.items()))}

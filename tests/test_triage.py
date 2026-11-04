@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -185,7 +186,7 @@ class KnownIdsTests(unittest.TestCase):
         real_import = builtins.__import__
 
         def guarded(name, *args, **kwargs):
-            if name.split(".")[0] in {"hid", "hidapi", "providers", "server", "ctypes"}:
+            if name.split(".")[0] in {"hid", "hidapi", "server", "ctypes"}:
                 raise AssertionError("hardware module imported: " + name)
             return real_import(name, *args, **kwargs)
 
@@ -221,6 +222,73 @@ class KnownIdsTests(unittest.TestCase):
         self.assertNotIn(("lofree", 0x388D, 0x0024), entries)  # Cable is deliberately not read.
         self.assertFalse(any(d["vendorId"] == 0x05AC and d["productId"] == 0x024F for d in first["devices"]))
         self.assertGreater(len(entries), 250)
+
+    def test_razer_registry_preserves_80_builtin_ids(self):
+        result = known_ids.build_index()
+        rows = {d["productId"]: d for d in result["devices"] if d["provider"] == "razer"}
+        self.assertEqual(len(rows), 80)
+        for pid, name, kind in (
+            (0x001F, "Razer Naga Epic", "mouse"),
+            (0x00D7, "Razer Basilisk V3 Pro 35K Phantom Green", "mouse"),
+            (0x025A, "Razer BlackWidow V3 Pro", "keyboard"),
+            (0x025C, "Razer BlackWidow V3 Pro", "keyboard"),
+            (0x0528, "Razer BlackShark V2 Pro (2020)", "headset"),
+            (0x0557, "Razer BlackShark V2 Pro (2023)", "headset"),
+        ):
+            with self.subTest(pid=pid):
+                self.assertEqual(rows[pid], {"provider": "razer", "vendorId": 0x1532,
+                                            "productId": pid, "name": name, "kind": kind,
+                                            "source": "builtin"})
+        self.assertTrue({0x0095, 0x00CB, 0x052E, 0x053A}.isdisjoint(rows))
+        self.assertNotIn("profiles", result["vendors"])
+        self.assertNotIn("razer_profiles", result["vendors"])
+
+    def test_fresh_cli_imports_only_offline_provider_modules(self):
+        code = '''
+from pathlib import Path
+import runpy
+import sys
+
+class NoHardware:
+    def find_spec(self, fullname, path=None, target=None):
+        if (fullname.split(".")[0] in {"hid", "hidapi", "server", "ctypes"}
+                or (fullname.startswith("providers.")
+                    and fullname not in {"providers.base", "providers.profiles"}
+                    and not fullname.endswith("_profiles"))):
+            raise AssertionError("hardware module imported: " + fullname)
+
+sys.meta_path.insert(0, NoHardware())
+target = sys.argv[1]
+# Match ordinary Python -I, even when the bundled runtime adds engine via ._pth.
+sys.path = [p for p in sys.path if Path(p).resolve() != Path(target).resolve().parent]
+sys.argv = [target, "--json"]
+runpy.run_path(target, run_name="__main__")
+'''
+        run = subprocess.run([sys.executable, "-I", "-B", "-c", code,
+                              str(ROOT / "engine/known_ids.py")],
+                             capture_output=True, text=True, timeout=10)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), known_ids.build_index())
+
+    def test_future_profiled_provider_uses_registry_without_parsing_reader(self):
+        from types import SimpleNamespace
+
+        with workspace_temp() as folder:
+            root = Path(folder)
+            providers = root / "engine/providers"
+            providers.mkdir(parents=True)
+            (root / "engine/compatibility.json").write_text('{"readers": [], "nativeProfiles": []}', encoding="utf-8")
+            for name in ("future", "future_profiles", "profiles"):
+                (providers / (name + ".py")).write_text('raise RuntimeError("must not execute")', encoding="utf-8")
+            row = ("future", 0x1234, 0xABCD, "Future Keyboard", "keyboard", "builtin")
+            with patch.object(known_ids, "profiles", return_value=(SimpleNamespace(provider="future", vendor_ids=(0x1234,)),)), \
+                    patch.object(known_ids, "registered_ids", return_value=[row]):
+                result = known_ids.build_index(root)
+            self.assertEqual(result["devices"], [dict(zip(
+                ("provider", "vendorId", "productId", "name", "kind", "source"), row))])
+            self.assertEqual(result["vendors"], {"future": [0x1234]})
+            self.assertEqual(result["unparsed"], [])
+            self.assertEqual(result["partial"], {})
 
     def test_real_logitech_index_drives_triage(self):
         known = known_ids.build_index()
@@ -266,13 +334,78 @@ class KnownIdsTests(unittest.TestCase):
             self.assertEqual(initial["devices"], [])
             pack = root / "devices/pack"
             pack.mkdir(parents=True)
-            (pack / "example.json").write_text(json.dumps({"devices": [
-                {"provider": "future", "vendorId": "1234", "productId": "ABCD", "name": "Fixture", "kind": "mouse"}
-            ]}), encoding="utf-8")
+            (pack / "example.json").write_text(json.dumps(pack_document([pack_entry()])), encoding="utf-8")
             (pack / "bad.json").write_text('{"unexpected": []}', encoding="utf-8")
             result = known_ids.build_index(root)
-            self.assertEqual(result["devices"][0]["productId"], 0xABCD)
+            self.assertEqual(result["devices"], [{"provider": "razer", "vendorId": 0x1532,
+                                                "productId": 0xFE01, "name": "Pack Mouse",
+                                                "kind": "mouse", "source": "pack"}])
             self.assertEqual(result["unparsed"], ["devices/pack/bad.json", "future"])
+
+    def test_pack_disables_override_builtin_legacy_and_other_pack_files(self):
+        with workspace_temp() as folder:
+            root = index_fixture(folder)
+            pack_dir = root / "devices/pack"
+            baseline = known_ids.build_index(root)
+            self.assertEqual(baseline, known_ids.build_index())  # Missing directory is optional.
+            pack_dir.mkdir(parents=True)
+            additions = pack_document([pack_entry(), pack_entry("FE02")])
+            denied = [("razer", "1532", "00B9"), ("razer", "1532", "FE01"),
+                      ("logitech", "046D", "0AB5")]
+            disables = pack_document(disabled=[
+                {"provider": provider, "vendorId": vid, "productId": pid, "reason": "fixture"}
+                for provider, vid, pid in denied
+            ] + [{"provider": "barracuda", "vendorId": "1532", "productId": "FE02", "reason": "other provider"}])
+            for first, second in ((additions, disables), (disables, additions)):
+                with self.subTest(disables_first=first is disables):
+                    (pack_dir / "a.json").write_text(json.dumps(first), encoding="utf-8")
+                    (pack_dir / "z.json").write_text(json.dumps(second), encoding="utf-8")
+                    result = known_ids.build_index(root)
+                    keys = {(d["provider"], d["vendorId"], d["productId"]): d for d in result["devices"]}
+                    for provider, vid, pid in denied:
+                        self.assertNotIn((provider, int(vid, 16), int(pid, 16)), keys)
+                    self.assertEqual(keys["razer", 0x1532, 0xFE02]["source"], "pack")
+                    self.assertEqual(result["unparsed"], baseline["unparsed"])
+                    self.assertEqual(result["partial"], baseline["partial"])
+                    self.assertEqual(result, known_ids.build_index(root))
+            self.assertEqual(known_ids.build_index(), baseline)  # No global pack state.
+
+    def test_pack_validation_matches_engine_acceptance_and_fallback(self):
+        from device_pack import MAX_BYTES, load_pack
+
+        with workspace_temp() as folder:
+            root = index_fixture(folder)
+            baseline = known_ids.build_index(root)
+            pack_dir = root / "devices/pack"
+            pack_dir.mkdir(parents=True)
+            path = pack_dir / "fixture.json"
+            invalid_revision = pack_document([pack_entry(profileRev=99)])
+            native_disable = {"provider": "native_atk", "vendorId": "373B", "productId": "1278", "reason": "unsupported"}
+            cases = [
+                "{bad", '{"devices": []}',
+                json.dumps(pack_document())[:-1] + ', "loader": 1}',
+                " " * (MAX_BYTES + 1),
+                json.dumps(invalid_revision),
+                json.dumps(pack_document([pack_entry("00B9"), pack_entry("0095"), pack_entry()])),
+                json.dumps(pack_document([pack_entry(profile="unknown"), pack_entry("FE02")])),
+                json.dumps(pack_document([pack_entry(), pack_entry(name="duplicate"), pack_entry("FE02")])),
+                json.dumps(pack_document([pack_entry(kind="keyboard"), pack_entry("FE02")])),
+                json.dumps(pack_document([pack_entry()], [native_disable])),
+                json.dumps(pack_document([pack_entry(name=" ")])),
+            ]
+            for document in cases:
+                with self.subTest(document=document[:120]):
+                    path.write_text(document, encoding="utf-8")
+                    validated = load_pack(path)
+                    result = known_ids.build_index(root)
+                    actual = [d for d in result["devices"] if d["source"] == "pack"]
+                    expected = [{"provider": e.provider, "vendorId": e.match.vendor_id,
+                                 "productId": e.match.product_id, "name": e.name,
+                                 "kind": e.kind, "source": "pack"} for e in validated.entries]
+                    self.assertEqual(actual, expected)
+                    self.assertEqual([d for d in result["devices"] if d["source"] == "builtin"], baseline["devices"])
+                    self.assertEqual(result["unparsed"], sorted(baseline["unparsed"] +
+                                     (["devices/pack/fixture.json"] if validated.rejected else [])))
 
     def test_command_line_json_contract(self):
         with workspace_temp() as folder:
@@ -294,6 +427,28 @@ def workspace_temp():
     target = ROOT / "tmp"
     target.mkdir(exist_ok=True)
     return tempfile.TemporaryDirectory(prefix="triage-test-", dir=target)
+
+
+def index_fixture(folder):
+    root = Path(folder)
+    providers = root / "engine/providers"
+    providers.mkdir(parents=True)
+    for path in (ROOT / "engine/providers").glob("*.py"):
+        shutil.copyfile(path, providers / path.name)
+    shutil.copyfile(ROOT / "engine/compatibility.json", root / "engine/compatibility.json")
+    return root
+
+
+def pack_entry(pid="FE01", **values):
+    return dict({"provider": "razer", "profile": "hyperspeed-mouse-1f", "profileRev": 1,
+                 "match": {"vendorId": "1532", "productId": pid},
+                 "name": "Pack Mouse", "kind": "mouse", "source": "issue-fixture"}, **values)
+
+
+def pack_document(entries=None, disabled=None):
+    return {"format": "myfinder-device-pack", "loader": 1, "packVersion": 2026110401,
+            "keyId": "test-key", "createdAt": "2026-11-04T00:00:00Z",
+            "entries": entries or [], "disabled": disabled or []}
 
 
 class WorkflowTests(unittest.TestCase):
