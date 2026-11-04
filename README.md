@@ -47,7 +47,7 @@ Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDoc
 - ATK HUB 识别为 **A9 Air+** 的2.4 GHz鼠标，已验证接收器 VID/PID `373B:1278`、FF02:0002、17字节报告。其他接收器或同名变体不保证兼容。
 - **HyperX Cloud Alpha Wireless**，已验证 `03F0:098D`、FF43:0202、31字节报告。
 - 音源切换和 Windows 麦克风静音支持用户主动绑定其他活动音频端点；这不会让其他耳机自动获得电量支持。
-- 通用读取支持Logitech HID++鼠标/键盘/耳机、Razer无线鼠标和部分2.4G键盘，以及SteelSeries、HyperX、Corsair、ASUS ROG、Audeze、JBL、Pulsar、WLmouse、MCHOSE、Lofree等已列明型号。
+- 通用读取支持Logitech HID++鼠标/键盘/耳机、Razer无线鼠标和部分2.4G键盘，以及SteelSeries、HyperX、Corsair、ASUS ROG、Audeze、JBL、Pulsar、WLmouse、MCHOSE、Lofree、CHERRY等已列明型号。
 - 蓝牙使用Windows已经提供的电量；标准HID设备只有明确声明电量字段时才读取。私有协议设备按内置型号表识别，不向未知接收器试发厂商命令。
 - 自动按设备类型生成鼠标、耳机、键盘卡片；设备更多时可用滚轮或页码按钮浏览。通用设备只显示已有可靠能力，DPI写入限原生ATK、PRO X Wireless / C547及下述精确名称的G Pro Wireless Gaming Mouse。
 - 支持设备插上接收器或完成系统蓝牙连接后即可读取。未支持或未返回数据的设备保持未知，不显示编造百分比；同品牌全系列与“市面所有设备”不作保证。

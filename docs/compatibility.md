@@ -72,6 +72,7 @@ V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前�
 | HyperX Cloud III 与已列明Core变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud II 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Keychron M5 / Ultra-Link 8K | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| CHERRY MX 2.0S 系列 2.4G 接收器 | keyboard | A | 本项目历史实机验证；本轮状态仍需复验；仅046A:01E0（2026-11-04 在提交者本机实机读到电量）与046A:01AC（仅上游实机证据）；须存在0xFF1C厂商集合；发送64字节输出报告 04 20 00 1A 06，仅接受byte1=0x20的回复，电量取byte8（0..100），充电取byte9；不向其他CHERRY接收器发送厂商命令 |
 | Pulsar / ATK / VXE / Hitscan 已列明型号及 ATK FF02 协议族 | mouse | C | 协议已接入，待本项目实机验证；既有匹配表不变；表外373B仅FF02:0002且输出恰好17字节；协议族匹配，未实测；排除原生373B:1278，不开放DPI |
 | JBL Quantum 910 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Logitech HID++ 与已列明G系列耳机 | mouse, keyboard, headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
