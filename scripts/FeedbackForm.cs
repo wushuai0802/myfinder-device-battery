@@ -46,6 +46,9 @@ namespace AtkBattery {
         }
     }
     internal interface IFeedbackTransport {UpdateResponse Post(Uri uri,byte[] body,CancellationToken token);}
+    internal sealed class FeedbackNotSentException:IOException {
+        internal FeedbackNotSentException(Exception error):base("Feedback request was not sent.",error){}
+    }
     internal sealed class FeedbackHttp:IFeedbackTransport {
         internal static HttpWebRequest CreateRequest(Uri uri){
             FeedbackRelay.ValidateUri(uri);
@@ -58,15 +61,16 @@ namespace AtkBattery {
             request.ServicePoint.Expect100Continue=false;return request;
         }
         public UpdateResponse Post(Uri uri,byte[] body,CancellationToken token){
-            var request=CreateRequest(uri);request.ContentLength=body.Length;
-            // Keep cancellation registered through response reads, not just through GetResponse.
-            var registration=token.Register(request.Abort);
+            bool sending=false;CancellationTokenRegistration registration=default(CancellationTokenRegistration);
             try{
-                token.ThrowIfCancellationRequested();using(var stream=request.GetRequestStream()){stream.Write(body,0,body.Length);}
+                var request=CreateRequest(uri);request.ContentLength=body.Length;
+                // Keep cancellation registered through response reads, not just through GetResponse.
+                registration=token.Register(request.Abort);
+                token.ThrowIfCancellationRequested();using(var stream=request.GetRequestStream()){sending=true;stream.Write(body,0,body.Length);}
                 token.ThrowIfCancellationRequested();HttpWebResponse response;
                 try{response=(HttpWebResponse)request.GetResponse();}catch(WebException error){response=error.Response as HttpWebResponse;if(response==null)throw;}
                 return new UpdateResponse((int)response.StatusCode,response.GetResponseStream(),response.ContentLength,null,response.Headers["Retry-After"],delegate{response.Dispose();registration.Dispose();});
-            }catch{registration.Dispose();throw;}
+            }catch(Exception error){registration.Dispose();if(!sending)throw new FeedbackNotSentException(error);throw;}
         }
     }
     internal sealed class FeedbackSession {
@@ -88,37 +92,43 @@ namespace AtkBattery {
         [DataMember(Name="replyAccess")] public bool ReplyAccess {get;set;}
     }
     internal sealed class FeedbackClient {
-        readonly string relay;readonly IFeedbackTransport http;readonly FeedbackSession session;readonly int timeoutMilliseconds;readonly FeedbackStore store;readonly Func<DateTime> clock;
-        internal FeedbackClient(string address,IFeedbackTransport transport,FeedbackSession history,int timeout=20000,FeedbackStore records=null,Func<DateTime> now=null){relay=address;http=transport;session=history;timeoutMilliseconds=timeout;store=records??new FeedbackStore(null);clock=now??delegate{return DateTime.UtcNow;};}
+        readonly string relay;readonly IFeedbackTransport http;readonly FeedbackSession session;readonly int timeoutMilliseconds;readonly FeedbackStore store;readonly Func<DateTime> clock;readonly Func<byte[],FeedbackReceipt> readReceipt;
+        internal FeedbackClient(string address,IFeedbackTransport transport,FeedbackSession history,int timeout=20000,FeedbackStore records=null,Func<DateTime> now=null,Func<byte[],FeedbackReceipt> receiptReader=null){relay=address;http=transport;session=history;timeoutMilliseconds=timeout;store=records??new FeedbackStore(null);clock=now??delegate{return DateTime.UtcNow;};readReceipt=receiptReader??delegate(byte[] bytes){return UpdateJson.Read<FeedbackReceipt>(bytes);};}
         internal static string IssueUrl(long number){if(number<=0||number>9007199254740991L)throw new ArgumentException("Invalid issue number.");return "https://github.com/wushuai0802/myfinder-device-battery/issues/"+number.ToString(CultureInfo.InvariantCulture);}
         internal static bool IsIssueUrl(long number,string url){return number>0&&number<=9007199254740991L&&String.Equals(url,IssueUrl(number),StringComparison.Ordinal);}
         internal FeedbackResult Submit(string category,string description,string diagnostics,CancellationToken token){
             token.ThrowIfCancellationRequested();
             if(!FeedbackInput.Valid(category,description))return new FeedbackResult(FeedbackResultKind.Unavailable);
             if(String.IsNullOrEmpty(relay))return new FeedbackResult(FeedbackResultKind.Browser);
+            string creation=null;bool mayHaveCreated=false;
             try{
                 var endpoint=FeedbackRelay.Endpoint(relay);string key=FeedbackProtocol.NewKey();
-                string creation=store.BeginCreation(category,description,key,clock());
+                creation=store.BeginCreation(category,description,key,clock());
                 using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
                     timeout.CancelAfter(timeoutMilliseconds);var cancel=timeout.Token;
-                    for(int attempt=0;attempt<2;attempt++)using(var response=http.Post(endpoint,FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null),cancel)){
-                        cancel.ThrowIfCancellationRequested();
-                        if(response.Status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
-                        if(response.Status==400&&attempt==0){
-                            var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
-                            if(error!=null&&error.Error=="invalid")continue;
+                    for(int attempt=0;attempt<2;attempt++){
+                        var payload=FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null);cancel.ThrowIfCancellationRequested();mayHaveCreated=true;
+                        using(var response=http.Post(endpoint,payload,cancel)){
+                            if(response.Status==400||response.Status==413||response.Status==429||response.Status==503)mayHaveCreated=false;
+                            cancel.ThrowIfCancellationRequested();
+                            if(response.Status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
+                            if(response.Status==400&&attempt==0){
+                                var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
+                                if(error!=null&&error.Error=="invalid")continue;
+                            }
+                            if(response.Status!=201)return new FeedbackResult(FeedbackResultKind.Unavailable);
+                            var receipt=readReceipt(FeedbackProtocol.Read(response,16384,cancel));
+                            if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
+                            session.MarkSuccess();
+                            var result=new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,attempt==0&&receipt.ReplyAccess);
+                            try{store.CompleteCreation(creation,result,clock());}catch(Exception){return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,result.ReplyAccess,false);}
+                            return result;
                         }
-                        if(response.Status!=201)return new FeedbackResult(FeedbackResultKind.Unavailable);
-                        var receipt=UpdateJson.Read<FeedbackReceipt>(FeedbackProtocol.Read(response,16384,cancel));
-                        if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
-                        cancel.ThrowIfCancellationRequested();session.MarkSuccess();
-                        var result=new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,attempt==0&&receipt.ReplyAccess);
-                        try{store.CompleteCreation(creation,result,clock());}catch(Exception){return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,result.ReplyAccess,false);}
-                        return result;
                     }
                 }
                 return new FeedbackResult(FeedbackResultKind.Unavailable);
-            }catch(Exception){token.ThrowIfCancellationRequested();return new FeedbackResult(FeedbackResultKind.Unavailable);}
+            }catch(Exception error){if(error is FeedbackNotSentException)mayHaveCreated=false;token.ThrowIfCancellationRequested();return new FeedbackResult(FeedbackResultKind.Unavailable);}
+            finally{if(creation!=null&&!mayHaveCreated)try{store.CancelCreation(creation);}catch(Exception){}}
         }
     }
     internal sealed class FeedbackBrowserSubmission {
@@ -143,7 +153,7 @@ namespace AtkBatteryTray {
         readonly ThemedButton submit,cancel,fallback,view,mine;
         CancellationTokenSource pending;FeedbackResult receipt;bool busy;
         internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
-        internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null):base(dark){
+        internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null,Action<long> openMyFeedback=null):base(dark){
             report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;
             copy=copyText??Clipboard.SetText;open=openLink??delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});};
             confirm=confirmation??delegate(string question){return ThemedMessage.Show(this,"反馈问题",question,MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)==DialogResult.Yes;};
@@ -152,8 +162,8 @@ namespace AtkBatteryTray {
             Text="反馈问题";ShowInTaskbar=false;StartPosition=FormStartPosition.CenterParent;FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
             ClientSize=new Size(540,568);categories=new ThemedSegments(Theme) {Name="Categories",AccessibleName="类型"};diagnostics=new ThemedSwitch(Theme);
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
-            mine=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="MyFeedback",Text=replies.Store.MenuText,AutoSize=true};
-            mine.Click+=delegate{using(var dialog=new MyFeedbackDialog(replies,report,Theme.Dark,open))dialog.ShowDialog(this);mine.Text=replies.Store.MenuText;};
+            mine=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="MyFeedback",Text=replies.Store.MenuText,AutoSize=true,Enabled=openMyFeedback!=null};
+            mine.Click+=delegate{openMyFeedback(0);mine.Text=replies.Store.MenuText;};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
             var typeCard=new ThemedSection(Theme) {Name="FeedbackTypeCard",Dock=DockStyle.Fill,Height=54};

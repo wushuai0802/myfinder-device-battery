@@ -337,16 +337,13 @@ namespace AtkBatteryTray {
         internal void Notice(string text){navigation.Notice=text;Invalidate();}
         internal void NoticeUpdated(){updatedNotice="已更新到 "+AppRuntime.Version;updatedNoticeTimer.Stop();updatedNoticeTimer.Start();Invalidate();}
         void ShowFeedback(){
-            using(var dialog=new FeedbackForm(owner.CreateFeedbackReport(),navigation.Page==PopupPage.DeviceMissing,Style.Dark,copyText,openLink,feedbackReplies:owner.FeedbackReplies)){
+            using(var dialog=new FeedbackForm(owner.CreateFeedbackReport(),navigation.Page==PopupPage.DeviceMissing,Style.Dark,copyText,openLink,feedbackReplies:owner.FeedbackReplies,openMyFeedback:owner.OpenMyFeedback)){
                 feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
                 try{dialog.ShowDialog(this);}finally{feedbackModal=false;ignoreDeactivate=false;}
             }
         }
         void ShowMyFeedback(){
-            using(var dialog=new MyFeedbackDialog(owner.FeedbackReplies,owner.CreateFeedbackReport(),Style.Dark,openLink)){
-                feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
-                try{dialog.ShowDialog(this);}finally{feedbackModal=false;ignoreDeactivate=false;Invalidate();}
-            }
+            owner.OpenMyFeedback();
         }
         void EditAlias(bool mouse,string deviceKey=null,string groupKey=null) {
             var pref=DeviceSettings.Current;

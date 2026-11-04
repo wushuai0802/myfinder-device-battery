@@ -58,6 +58,59 @@ static class FeedbackRepliesTests {
         http=new Http {Reply=delegate{return Response(400,"{\"error\":\"invalid\"}");}};
         Check(new FeedbackClient(Relay,http,new FeedbackSession()).Submit("other","valid description",null,CancellationToken.None).Kind==FeedbackResultKind.Unavailable&&http.Bodies.Count==2,"second invalid does not loop");
     }
+    static FeedbackStore FullStore(){
+        var store=Store();store.Change(delegate(FeedbackData data){for(int i=1;i<=50;i++){var record=Record(i);record.CreatedAt=Start.AddMinutes(i);if(i==1)record.State="closed";data.Records.Add(record);}});return store;
+    }
+    static void CreationRetention(){
+        foreach(int status in new[]{400,413,429,503}){
+            var store=FullStore();string key=store.Find(1).ReplyKey;var http=new Http();
+            http.Reply=delegate{
+                Check(store.Snapshot().Records.Count==51&&store.Find(1).ReplyKey==key,"no real record trimmed before rejection "+status);
+                return Response(status,"{\"error\":\"invalid\"}");
+            };
+            var result=new FeedbackClient(Relay,http,new FeedbackSession(),20000,store).Submit("other","valid description",null,CancellationToken.None);
+            Check(result.Kind==(status==429?FeedbackResultKind.RateLimited:FeedbackResultKind.Unavailable)&&store.Snapshot().Records.Count==50&&store.Find(1).ReplyKey==key,"definite rejection removes only its placeholder "+status);
+        }
+        foreach(bool timeout in new[]{false,true}){
+            var store=FullStore();var http=new Http {Reply=delegate{if(timeout)throw new WebException("timeout",WebExceptionStatus.Timeout);throw new FeedbackNotSentException(new IOException("before sending"));}};
+            new FeedbackClient(Relay,http,new FeedbackSession(),20000,store).Submit("other","valid description",null,CancellationToken.None);
+            Check(store.Find(1)!=null&&store.Snapshot().Records.Count==(timeout?51:50),"only an unknown result retains its placeholder");
+        }
+        var full=FullStore();var sent=new Http {Reply=delegate{Check(full.Snapshot().Records.Count==51&&full.Find(1)!=null,"success also waits for the network result before trimming");return Response(201,"{\"number\":51,\"url\":\""+FeedbackClient.IssueUrl(51)+"\",\"replyAccess\":true}");}};
+        new FeedbackClient(Relay,sent,new FeedbackSession(),20000,full).Submit("other","valid description",null,CancellationToken.None);
+        Check(full.Snapshot().Records.Count==50&&full.Find(1)==null&&full.Find(51).ReplyKey!=null,"only a completed creation consumes a real-record slot");
+        var pending=FullStore();string id=pending.BeginCreation("other","pending description",FeedbackProtocol.NewKey(),Start);
+        pending.Change(delegate(FeedbackData data){data.Records.Add(data.Records[data.Records.Count-1]);});
+        Check(pending.Snapshot().Records.FindAll(delegate(FeedbackRecord r){return r.CreationId==id;}).Count==1&&pending.Find(1)!=null,"one placeholder per CreationId never consumes the 50-record cap");
+        string path=Path.Combine(output,"pending-creation-"+Guid.NewGuid().ToString("N")+".dat");var disk=new FeedbackStore(path,delegate{return Start;});
+        string expired=disk.BeginCreation("other","expired description",FeedbackProtocol.NewKey(),Start.AddHours(-24).AddTicks(-1));
+        string boundary=disk.BeginCreation("other","boundary description",FeedbackProtocol.NewKey(),Start.AddHours(-24));
+        string fresh=disk.BeginCreation("other","fresh description",FeedbackProtocol.NewKey(),Start);
+        var loaded=new FeedbackStore(path,delegate{return Start;});var records=loaded.Snapshot().Records;
+        Check(records.Count==2&&!records.Exists(delegate(FeedbackRecord r){return r.CreationId==expired;})&&records.Exists(delegate(FeedbackRecord r){return r.CreationId==boundary;})&&records.Exists(delegate(FeedbackRecord r){return r.CreationId==fresh;}),"load expires only placeholders older than 24 hours");
+        var noResend=new Http();Service(loaded,noResend).Poll(false,null,CancellationToken.None);Check(noResend.Bodies.Count==0,"unknown creations are never resent or polled automatically");
+        using(var cancellation=new CancellationTokenSource()){
+            var store=Store();var http=new Http();
+            var client=new FeedbackClient(Relay,http,new FeedbackSession(),20000,store,delegate{cancellation.Cancel();return Start;});
+            bool cancelled=false;try{client.Submit("other","valid description",null,cancellation.Token);}catch(OperationCanceledException){cancelled=true;}
+            Check(cancelled&&http.Bodies.Count==0&&store.Snapshot().Records.Count==0,"cancellation before transport removes the saved placeholder");
+        }
+        bool notSent=false;using(var cancellation=new CancellationTokenSource()){
+            cancellation.Cancel();try{new FeedbackHttp().Post(new Uri(Relay+"/feedback"),new byte[0],cancellation.Token);}catch(FeedbackNotSentException){notSent=true;}
+        }Check(notSent,"concrete transport identifies cancellation before any network I/O");
+    }
+    static void ConfirmedReceiptCancellation(){
+        foreach(bool fallback in new[]{false,true})using(var cancellation=new CancellationTokenSource()){
+            var store=Store();var http=new Http();var session=new FeedbackSession(delegate{return Start;});
+            http.Reply=delegate{return fallback&&http.Bodies.Count==1?Response(400,"{\"error\":\"invalid\"}"):Created(!fallback);};
+            var client=new FeedbackClient(Relay,http,session,20000,store,delegate{return Start;},delegate(byte[] bytes){
+                var receipt=UpdateJson.Read<FeedbackReceipt>(bytes);Check(FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url),"race fixture fully reads and validates the 201 receipt");cancellation.Cancel();return receipt;
+            });
+            var result=client.Submit("other","valid description",null,cancellation.Token);
+            Check(cancellation.IsCancellationRequested&&result.Kind==FeedbackResultKind.Success&&result.Saved&&session.NeedsConfirmation&&store.Find(42)!=null,"confirmed creation survives cancellation at the receipt boundary");
+            Check(store.Snapshot().Records.Count==1&&store.Find(42).Number==42&&store.Find(42).CreationId==null&&http.Bodies.Count==(fallback?2:1),"confirmed receipt is bound exactly once without resending");
+        }
+    }
     static void Persistence(){
         string path=Path.Combine(output,"feedback-"+Guid.NewGuid().ToString("N")+".dat");var store=new FeedbackStore(path);var record=Record();record.Comments.Add(Comment("123"));record.ReadIds.Add("123");record.NotifiedIds.Add("123");
         record.Pending=new FeedbackSupplement {RequestId=Guid.NewGuid().ToString("D"),Description="exact pending description",Diagnostics=Report().FullText,AppVersion=AppRuntime.Version};
@@ -67,7 +120,8 @@ static class FeedbackRepliesTests {
         Check(!Encoding.UTF8.GetString(File.ReadAllBytes(path)).Contains(record.ReplyKey)&&!Encoding.UTF8.GetString(File.ReadAllBytes(path)).Contains(record.Pending.Description),"credential and content are not plaintext on disk");
         store.MarkRead(42);Check(new FeedbackStore(path).Snapshot().LastBalloonAt==Start&&Directory.GetFiles(output,Path.GetFileName(path)+".*.tmp").Length==0,"atomic replacement leaves a loadable document and no temp file");
         byte[] corrupt={1,2,3,4,5};File.WriteAllBytes(path,corrupt);store=new FeedbackStore(path);
-        Check(store.Snapshot().Records.Count==0&&File.ReadAllBytes(path+".bad").Length==5,"corruption starts empty and preserves the bad bytes");
+        Check(store.Snapshot().Records.Count==0&&!File.Exists(path)&&File.ReadAllBytes(path+".bad").Length==5,"corruption starts empty and moves the bad bytes out of the load path");
+        new FeedbackStore(path);new FeedbackStore(path);Check(Directory.GetFiles(output,Path.GetFileName(path)+"*.bad").Length==1,"later starts do not create repeated bad files");
         store.Change(delegate(FeedbackData d){d.Records.Add(Record(99));});Check(new FeedbackStore(path).Find(99)!=null,"recovered store remains writable");
         var capped=Store();capped.Change(delegate(FeedbackData d){for(int i=1;i<=50;i++){var r=Record(i);r.CreatedAt=Start.AddMinutes(i);if(i==10||i==20)r.State="closed";d.Records.Add(r);}});
         capped.Change(delegate(FeedbackData d){d.Records.Add(Record(51));});Check(capped.Find(10)==null&&capped.Find(1)!=null&&capped.Snapshot().Records.Count==50,"oldest closed goes first even when open records are older");
@@ -89,7 +143,7 @@ static class FeedbackRepliesTests {
         FeedbackSchedule.Failed(record,Start.AddHours(24),null);Check(record.NextCheckAt.HasValue&&!record.ClosedFollowupDone,"failed final closed check still retries");
         FeedbackReplies.Merge(record,closed,Start.AddHours(25),0.5);Check(record.ClosedFollowupDone&&!record.NextCheckAt.HasValue,"successful final check stops polling");
         FeedbackReplies.Merge(record,Item(),Start.AddHours(26),0.5);Check(!record.ClosedFollowupDone&&!record.ClosedAt.HasValue&&record.NextCheckAt.HasValue,"manual observation of reopening resumes schedule");
-        record=Record();FeedbackSchedule.Failed(record,Start,null);Check(record.NextCheckAt==Start.AddMinutes(15),"first failure");FeedbackSchedule.Failed(record,Start,null);Check(record.NextCheckAt==Start.AddHours(1),"second failure");FeedbackSchedule.Failed(record,Start,null);Check(record.NextCheckAt==Start.AddHours(6),"third failure");
+        record=Record();FeedbackSchedule.Failed(record,Start,null);Check(record.NextCheckAt==Start.AddHours(6),"first failure respects normal period");FeedbackSchedule.Failed(record,Start,null);Check(record.NextCheckAt==Start.AddHours(6),"second failure respects normal period");FeedbackSchedule.Failed(record,Start,null);Check(record.NextCheckAt==Start.AddHours(6),"third failure");
         FeedbackSchedule.Failed(record,Start,Start.AddDays(1));Check(record.NextCheckAt==Start.AddDays(1),"Retry-After overrides shorter failure delay");
         Check(FeedbackProtocol.RetryAt("7200",Start)==Start.AddHours(2)&&FeedbackProtocol.RetryAt(Start.AddHours(3).ToString("R"),Start)==Start.AddHours(3)&&FeedbackProtocol.RetryAt("bad",Start)==null,"seconds and HTTP-date Retry-After");
         bool enabled=false;var store=Store(Record());var http=new Http {Reply=delegate{return Replies(Item(42,Comment("10")));}};var service=Service(store,http,delegate{return now;},delegate{return enabled;});now=Start.AddHours(1);
@@ -98,11 +152,31 @@ static class FeedbackRepliesTests {
         enabled=true;now=now.AddDays(31);service.Poll(true,null,CancellationToken.None);int calls=http.Bodies.Count;service.Poll(true,null,CancellationToken.None);Check(calls==2&&http.Bodies.Count==calls&&store.Find(42).NextCheckAt==now.AddDays(7),"waking from sleep runs one round and schedules from now, with no catch-up burst");
         now=Start;store=Store(Record());http=new Http {Reply=delegate{return Replies(Item());}};service=Service(store,http,delegate{return now;});service.Poll(true,null,CancellationToken.None);Check(http.Bodies.Count==0,"due records still wait for startup jitter");now=Start.AddMinutes(6);service.Poll(true,null,CancellationToken.None);Check(http.Bodies.Count==1,"startup due record polls after jitter");
         now=Start;store=Store(Record());http=new Http {Reply=delegate{return Response(503,"{\"error\":\"unavailable\"}","7200");}};service=Service(store,http,delegate{return now;});service.Poll(false,null,CancellationToken.None);
-        Check(store.Find(42).NextCheckAt==Start.AddHours(2)&&store.Snapshot().PollNotBefore==Start.AddHours(2),"503 upstream pause persists Retry-After");
+        Check(store.Find(42).NextCheckAt==Start.AddHours(6)&&store.Snapshot().PollNotBefore==Start.AddHours(2),"503 upstream pause persists Retry-After without shortening the normal record period");
         service.Poll(false,null,CancellationToken.None);Check(http.Bodies.Count==1,"manual refresh also respects upstream pause");
         now=Start.AddHours(2);service.Poll(false,null,CancellationToken.None);Check(http.Bodies.Count==2,"pause eventually expires");
         store=Store(Record());http=new Http {Reply=delegate{return Response(429,"invalid JSON","7200");}};service=Service(store,http);service.Poll(false,null,CancellationToken.None);service.Poll(false,null,CancellationToken.None);
         Check(http.Bodies.Count==1&&store.Snapshot().PollNotBefore==Start.AddHours(2),"malformed limit body cannot bypass Retry-After");
+    }
+    static void ScheduleRegressions(){
+        foreach(string state in new[]{"open","closed"}){
+            var record=Record();record.State=state;record.ClosedAt=Start;
+            Check(FeedbackSchedule.Due(record,Start.AddDays(90).AddTicks(-1))&&!FeedbackSchedule.Due(record,Start.AddDays(90)),"90-day boundary applies to "+state);
+            Check(!FeedbackSchedule.Next(record,Start.AddDays(90),0.5).HasValue,"all states stop scheduling after 90 idle days");
+            FeedbackSchedule.Failed(record,Start.AddDays(90),null);Check(!record.NextCheckAt.HasValue,"failure cannot resume an expired record");
+        }
+        foreach(int days in new[]{30,60,89}){
+            var record=Record();DateTime now=Start.AddDays(days);
+            for(int i=0;i<4;i++){FeedbackSchedule.Failed(record,now,now.AddHours(12));Check(record.NextCheckAt==now.AddDays(7),"weekly idle record never retries early, attempt "+i);}
+            FeedbackSchedule.Failed(record,now,now.AddDays(8));Check(record.NextCheckAt==now.AddDays(8),"longer Retry-After still wins over weekly period");
+        }
+        foreach(string status in new[]{"unavailable","error"}){
+            var record=Record();record.State="closed";record.ClosedAt=Start;record.NextCheckAt=Start.AddHours(24);var store=Store(record);DateTime now=Start.AddHours(24);
+            var http=new Http {Reply=delegate{return Replies(new FeedbackReplyItem {Number=42,Status=status});}};var service=Service(store,http,delegate{return now;});
+            service.Poll(false,null,CancellationToken.None);var saved=store.Find(42);
+            Check(saved.LastCheckedAt==now&&saved.ClosedFollowupDone==(status=="unavailable")&&saved.NextCheckAt.HasValue==(status!="unavailable"),"closed unavailable completes follow-up while transient error remains retryable");
+            now=Start.AddDays(90);service.Poll(true,null,CancellationToken.None);Check(http.Bodies.Count==1,"closed failures cannot poll past the 90-day limit");
+        }
     }
     static void Merging(){
         var record=Record();var auto=Comment("1","automation");FeedbackReplies.Merge(record,Item(42,auto),Start,0.5);var data=new FeedbackData();data.Records.Add(record);
@@ -121,12 +195,31 @@ static class FeedbackRepliesTests {
         record.Comments=new List<FeedbackComment> {Comment("99","automation","[link](https://evil.invalid) <script>evil</script>\0\u202e",true)};record.ReplyKey=null;
         string display=FeedbackText.Comments(record);Check(display.Contains("自动初筛")&&display.Contains("（内容过长，已截断）")&&display.Contains("此反馈只能在网页查看")&&display.Contains("<script>")&&!display.Contains("\0")&&!display.Contains("\u202e"),"labels, fallback notice and literal plain-text rendering");
     }
+    static void NotificationRegressions(){
+        var record=Record();record.Comments.Add(Comment("20"));record.ReadIds.Add("20");var data=new FeedbackData();data.Records.Add(record);
+        Check(FeedbackReplies.MarkNotifications(data,Start)==null&&!data.LastBalloonAt.HasValue,"a previously read but unnotified maintainer comment never balloons");
+        record.Comments.Add(Comment("21","automation"));var store=Store(record);store.MarkRead(42);store.MarkRead(42);
+        Check(store.Find(42).NotifiedIds.Count==2&&store.Find(42).NotifiedIds.Contains("20")&&store.Find(42).NotifiedIds.Contains("21"),"marking read acknowledges all IDs once without using the balloon cap");
+        store=Store(Record());store.Change(delegate(FeedbackData d){d.LastBalloonAt=Start;});DateTime now=Start.AddHours(1);
+        var http=new Http {Reply=delegate{return Replies(Item(42,Comment("22")));}};var service=Service(store,http,delegate{return now;});int balloons=0;service.BalloonReady+=delegate{balloons++;};
+        var result=service.Poll(false,null,CancellationToken.None);
+        Check(result.Balloon==null&&balloons==0&&store.Snapshot().LastBalloonAt==Start&&store.Find(42).NotifiedIds.Count==0,"manual refresh never notifies or consumes the six-hour cap");
+        store.MarkRead(42);now=Start.AddHours(7);service.Poll(true,null,CancellationToken.None);
+        Check(balloons==0&&store.Snapshot().LastBalloonAt==Start&&store.Find(42).NotifiedIds.Contains("22"),"reply read during cooldown never creates a stale balloon later");
+        http.Reply=delegate{return Replies(Item(42,Comment("22"),Comment("23")));};now=Start.AddHours(13);service.Poll(true,null,CancellationToken.None);
+        Check(balloons==1&&store.Snapshot().LastBalloonAt==now&&store.Find(42).NotifiedIds.Contains("23"),"only an automatic poll with an unread new maintainer comment consumes the cap");
+        store=Store(Record());http=new Http {Reply=delegate{return Replies(Item(42,Comment("24")));}};service=Service(store,http);balloons=0;service.BalloonReady+=delegate{balloons++;};
+        using(var dialog=new MyFeedbackDialog(service,Report(),false,delegate{},42)){
+            dialog.Opacity=0;dialog.Show();Find<Button>(dialog,"RefreshFeedbackReplies").PerformClick();Pump(delegate{return Find<Label>(dialog,"FeedbackHistoryStatus").Text=="已刷新。";});
+            Check(balloons==0&&!store.Snapshot().LastBalloonAt.HasValue&&store.Find(42).ReadIds.Contains("24")&&store.Find(42).NotifiedIds.Contains("24"),"dialog refresh displays and acknowledges the reply without a balloon");dialog.Close();
+        }
+    }
     sealed class CountStream:MemoryStream {internal int Count;internal CountStream(byte[] bytes):base(bytes){}public override int Read(byte[] buffer,int offset,int count){int n=base.Read(buffer,offset,count);Count+=n;return n;}}
     static void ReplyBoundaries(){
         var store=Store();store.Change(delegate(FeedbackData d){for(int i=1;i<=23;i++)d.Records.Add(Record(i));});var http=new Http();
         http.Reply=delegate(Uri uri,byte[] body,CancellationToken token){var request=UpdateJson.Read<FeedbackRepliesRequest>(body);Check(uri.AbsoluteUri==Relay+"/feedback/replies"&&request.Numbers.Length<=10&&request.Schema==1&&Fields(body).Count==2,"batch endpoint and exact public request shape");var items=new List<FeedbackReplyItem>();foreach(long n in request.Numbers)items.Add(Item(n,Comment(n.ToString())));return Replies(items.ToArray());};
-        var service=Service(store,http);int balloons=0;service.BalloonReady+=delegate(FeedbackBalloon b){balloons++;Check(store.Find(1).NotifiedIds.Count==1&&b.Count==23,"all IDs durably marked before notification event");};
-        service.Poll(false,null,CancellationToken.None);Check(http.Bodies.Count==3&&balloons==1,"23 records use three batches and one balloon");
+        DateTime now=Start;var service=Service(store,http,delegate{return now;});int balloons=0;service.BalloonReady+=delegate(FeedbackBalloon b){balloons++;Check(store.Find(1).NotifiedIds.Count==1&&b.Count==23,"all IDs durably marked before notification event");};
+        now=Start.AddHours(1);service.Poll(true,null,CancellationToken.None);Check(http.Bodies.Count==3&&balloons==1,"23 records use three automatic batches and one balloon");
         foreach(string invalid in new[]{"{}","not JSON","{\"schema\":1,\"items\":[]}","{\"schema\":1,\"items\":[{\"number\":42,\"status\":\"ok\",\"state\":\"open\",\"comments\":[]}]}",UpdateJson.Text(new FeedbackRepliesResponse {Schema=1,Items=new[]{Item(99)}})}){
             store=Store(Record());http=new Http {Reply=delegate{return Response(200,invalid);}};Service(store,http).Poll(false,null,CancellationToken.None);Check(store.Find(42).Failures==1&&store.Find(42).Comments.Count==0,"malformed batch fails closed");
         }
@@ -136,6 +229,34 @@ static class FeedbackRepliesTests {
         store=Store(Record(42),Record(43));http=new Http {Reply=delegate{return Replies(new FeedbackReplyItem {Number=42,Status="unavailable"},Item(43,Comment("6")));}};
         Service(store,http).Poll(false,null,CancellationToken.None);Check(!store.Find(42).CanSupplement&&store.Find(42).Failures==1&&store.Find(43).Comments.Count==1,"per-item unavailability does not discard other replies");
         store=Store(Record(42),Record(43));http=new Http {Reply=delegate{return Response(429,"{\"error\":\"rate_limited\"}","3600");}};service=Service(store,http);service.Poll(false,null,CancellationToken.None);service.Poll(false,null,CancellationToken.None);Check(http.Bodies.Count==1&&store.Snapshot().PollNotBefore==Start.AddHours(1),"429 pauses the whole batch round");
+    }
+    static void DefaultsAndBatchFailures(){
+        var previous=DeviceSettings.Current;
+        try{
+            typeof(DeviceSettings).GetMethod("UseDefaults",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,null);
+            DateTime now=Start;var store=Store(Record());var http=new Http {Reply=delegate{return Replies(Item());}};
+            var service=new FeedbackReplies(store,http,Relay,delegate{return now;},delegate{return 0.5;});now=Start.AddHours(1);
+            service.Poll(true,null,CancellationToken.None);Check(DeviceSettings.UsingDefaults&&http.Bodies.Count==0,"default service blocks automatic polling on unreadable-settings fallback");
+            service.Poll(false,null,CancellationToken.None);Check(http.Bodies.Count==1,"manual polling still works while settings use defaults");
+            var injected=Service(Store(Record()),http,delegate{return now;});
+            using(var dispatch=new Control())using(var controller=new FeedbackReplyController(injected,dispatch,delegate{})){
+                now=now.AddHours(1);typeof(FeedbackReplyController).GetMethod("Check",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(controller,null);
+                Check(http.Bodies.Count==1,"controller independently blocks fallback defaults even with an injected enabled service");
+                DeviceSettings.UseTransientConfiguration(new AudioBindings {CheckFeedbackReplies=true});
+                typeof(FeedbackReplyController).GetMethod("Check",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(controller,null);
+                Check(http.Bodies.Count==2,"controller resumes after an explicit valid configuration");
+            }
+        }finally{DeviceSettings.UseTransientConfiguration(previous);}
+        foreach(int code in new[]{500,503,200}){
+            var store=Store(Record());var http=new Http {Reply=delegate{return Response(code,"invalid JSON");}};
+            var result=Service(store,http).Poll(false,null,CancellationToken.None);
+            Check(result.Message=="暂时无法检查回复，请稍后重试。","whole-batch failure is never overwritten by the per-record loop "+code);
+        }
+        var partial=new Http {Reply=delegate{return Replies(new FeedbackReplyItem {Number=42,Status="unavailable"});}};
+        Check(Service(Store(Record()),partial).Poll(false,null,CancellationToken.None).Message=="部分反馈暂时无法读取，请稍后重试。","valid per-item unavailable keeps the partial-failure message");
+        var many=Store();many.Change(delegate(FeedbackData d){for(int i=1;i<=11;i++)d.Records.Add(Record(i));});var batches=new Http();
+        batches.Reply=delegate{return batches.Bodies.Count==1?Response(500,"{}"):Replies(new FeedbackReplyItem {Number=11,Status="unavailable"});};
+        Check(Service(many,batches).Poll(false,null,CancellationToken.None).Message=="暂时无法检查回复，请稍后重试。"&&batches.Bodies.Count==2,"later partial batch cannot overwrite an earlier whole-batch failure");
     }
     static void Supplements(){
         var record=Record();var store=Store(record);var http=new Http();string requestId=null;string exact=null;
@@ -215,6 +336,22 @@ static class FeedbackRepliesTests {
         }finally{ThemedDialog.WorkingAreaProvider=previous;}
     }
     static object Field(object owner,string name){return owner.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(owner);}
+    static int HistoryWindows(){int count=0;foreach(Form form in Application.OpenForms)if(form is MyFeedbackDialog)count++;return count;}
+    static void HistoryEntry(Action entry,MyFeedbackDialog expected,bool submission=false){
+        int duplicates=0;bool clicked=false;string marker="entry "+Guid.NewGuid().ToString("N");var replies=(FeedbackReplies)Field(expected,"replies");
+        replies.Store.Change(delegate(FeedbackData data){data.Records.Find(delegate(FeedbackRecord r){return r.Number==42;}).Comments.Add(Comment((9000+checks).ToString(),"maintainer",marker));});
+        // Close a regressed modal duplicate so a failure reports instead of hanging the harness.
+        using(var guard=new System.Windows.Forms.Timer {Interval=20}){
+            guard.Tick+=delegate{
+                var forms=new List<Form>();foreach(Form form in Application.OpenForms)forms.Add(form);
+                foreach(var form in forms)if(form is MyFeedbackDialog&&!Object.ReferenceEquals(form,expected)){duplicates++;form.Close();}
+                if(submission&&!clicked)foreach(var form in forms)if(form is FeedbackForm){clicked=true;Find<Button>(form,"MyFeedback").PerformClick();form.Close();}
+            };
+            guard.Start();entry();guard.Stop();
+        }
+        Check(duplicates==0&&HistoryWindows()==1&&!expected.IsDisposed&&Find<TextBox>(expected,"FeedbackComments").Text.Contains(marker),"entry reloads the existing history window");
+        if(submission)Check(clicked,"production submission form button was exercised");
+    }
     static void NativeBalloonRouting(){
         DeviceSettings.UseTransientConfiguration(new AudioBindings {RememberReadings=false,ReducedMotion=true});
         using(var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot();},delegate(int stage){throw new Exception("No device writes");},null,null)){
@@ -224,16 +361,22 @@ static class FeedbackRepliesTests {
             using(var form=new FeedbackForm(Report(),false,false,delegate{},delegate{},Relay,new Http(),feedbackReplies:owner.FeedbackReplies))Check(Find<Button>(form,"MyFeedback").Text=="我的反馈（2）","submission form shows unread reply count");
             var tray=(NotifyIcon)Field(owner,"tray");var route=(TrayBalloonRoute)Field(owner,"balloonRoute");
             typeof(ContextMenuStrip).GetMethod("OnOpening",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tray.ContextMenuStrip,new object[]{new System.ComponentModel.CancelEventArgs()});
-            bool menu=false;foreach(ToolStripItem item in tray.ContextMenuStrip.Items)if(item.Text=="我的反馈（2）")menu=true;Check(menu,"tray menu shows unread reply count");
+            ToolStripMenuItem menu=null;foreach(ToolStripItem item in tray.ContextMenuStrip.Items)if(item.Text=="我的反馈（2）")menu=(ToolStripMenuItem)item;Check(menu!=null,"tray menu shows unread reply count");
             route.Set(TrayBalloonKind.Feedback,42);typeof(NotifyIcon).GetMethod("OnBalloonTipClicked",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tray,null);Application.DoEvents();
-            var history=(MyFeedbackDialog)Field(owner,"feedbackDialog");Check(history!=null&&history.Visible&&Find<TextBox>(history,"FeedbackComments").Text.Contains("selected record reply")&&owner.FeedbackReplies.Store.Find(43).Unread==1,"native feedback balloon opens and marks only its target record");history.Close();
+            var history=(MyFeedbackDialog)Field(owner,"feedbackDialog");Check(history!=null&&history.Visible&&Find<TextBox>(history,"FeedbackComments").Text.Contains("selected record reply")&&owner.FeedbackReplies.Store.Find(43).Unread==1,"native feedback balloon opens and marks only its target record");
+            HistoryEntry(delegate{menu.PerformClick();},history);
             route.Set(TrayBalloonKind.LowBattery);typeof(NotifyIcon).GetMethod("OnBalloonTipClicked",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tray,null);Application.DoEvents();
-            Check(Field(owner,"details")!=null,"native low-battery balloon still opens device panel");owner.ExitThread();
+            var details=Field(owner,"details");Check(details!=null,"native low-battery balloon still opens device panel");
+            HistoryEntry(delegate{details.GetType().GetMethod("ShowMyFeedback",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(details,null);},history);
+            HistoryEntry(delegate{details.GetType().GetMethod("ShowFeedback",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(details,null);},history,true);
+            route.Set(TrayBalloonKind.Feedback,43);typeof(NotifyIcon).GetMethod("OnBalloonTipClicked",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tray,null);Application.DoEvents();
+            Check(Object.ReferenceEquals(Field(owner,"feedbackDialog"),history)&&HistoryWindows()==1&&Find<TextBox>(history,"FeedbackComments").Text.Contains("请提供复现步骤")&&owner.FeedbackReplies.Store.Find(43).Unread==0,"a second balloon reloads its requested number in the same instance");
+            history.Close();owner.OpenMyFeedback(42);Check(!Object.ReferenceEquals(Field(owner,"feedbackDialog"),history)&&HistoryWindows()==1,"closing history allows a fresh single instance");owner.ExitThread();
         }
     }
     [STAThread] static int Main(string[] args){
         output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
-        Run("schema 2 creation and safe fallback",Creation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("merge and notifications",Merging);Run("reply validation and batching",ReplyBoundaries);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history and supplement layout",Layouts);Run("native balloon and unread routing",NativeBalloonRouting);
+        Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history and supplement layout",Layouts);Run("native balloon and unread routing",NativeBalloonRouting);
         Console.WriteLine(checks+" feedback reply checks, "+failures+" failed groups; fake transport only");return failures==0?0:1;
     }
 }

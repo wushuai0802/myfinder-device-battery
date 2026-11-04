@@ -84,7 +84,7 @@ namespace AtkBattery {
         readonly object gate=new object();readonly string path;FeedbackData data;bool writable=true;
         internal static FeedbackStore Current {get{return current.Value;}}
         // A null path is an isolated, in-memory store for injected/offline callers.
-        internal FeedbackStore(string file){path=file;data=Load();}
+        internal FeedbackStore(string file,Func<DateTime> now=null){path=file;data=Load((now??delegate{return DateTime.UtcNow;})());}
         static T Clone<T>(T value){return UpdateJson.Read<T>(Encoding.UTF8.GetBytes(UpdateJson.Text(value)));}
         internal FeedbackData Snapshot(){lock(gate)return Clone(data);}
         internal FeedbackRecord Find(long number){return Snapshot().Records.Find(delegate(FeedbackRecord r){return r.Number==number&&number>0;});}
@@ -94,27 +94,29 @@ namespace AtkBattery {
             if(!writable)throw new IOException("Feedback storage is unavailable.");
             var next=Clone(data);change(next);Validate(next);Trim(next);Save(next);data=next;
         }}
-        internal void MarkRead(long number){Change(delegate(FeedbackData next){var record=next.Records.Find(delegate(FeedbackRecord r){return r.Number==number;});if(record!=null)foreach(var c in record.Comments)if(!record.ReadIds.Contains(c.Id))record.ReadIds.Add(c.Id);});}
+        internal void MarkRead(long number){Change(delegate(FeedbackData next){var record=next.Records.Find(delegate(FeedbackRecord r){return r.Number==number;});if(record!=null)foreach(var c in record.Comments){if(!record.ReadIds.Contains(c.Id))record.ReadIds.Add(c.Id);if(!record.NotifiedIds.Contains(c.Id))record.NotifiedIds.Add(c.Id);}});}
         internal void Delete(long number){Change(delegate(FeedbackData next){next.Records.RemoveAll(delegate(FeedbackRecord r){return r.Number==number;});});}
         internal string BeginCreation(string category,string description,string key,DateTime now){
             string id=Guid.NewGuid().ToString("D");string summary=FeedbackText.Plain(description.Trim()).Replace('\n',' ').Replace('\t',' ');
             Change(delegate(FeedbackData next){next.Records.Add(new FeedbackRecord {CreationId=id,Category=category,Summary=FeedbackInput.Prefix(summary,Math.Min(60,summary.Length)),ReplyKey=key,CreatedAt=now,LastActivityAt=now,NextCheckAt=now});});return id;
         }
+        internal void CancelCreation(string id){Change(delegate(FeedbackData next){next.Records.RemoveAll(delegate(FeedbackRecord r){return r.Number==0&&r.CreationId==id;});});}
         internal void CompleteCreation(string id,FeedbackResult result,DateTime now){Change(delegate(FeedbackData next){
             var record=next.Records.Find(delegate(FeedbackRecord r){return r.CreationId==id;});if(record==null)throw new InvalidDataException("Missing feedback creation.");
             next.Records.RemoveAll(delegate(FeedbackRecord r){return r!=record&&r.Number==result.Number;});
             record.Number=result.Number;record.Url=result.Url;record.CreationId=null;if(!result.ReplyAccess)record.ReplyKey=null;
             record.CanSupplement=result.ReplyAccess;record.NextCheckAt=now.AddHours(6);
         });}
-        FeedbackData Load(){
+        FeedbackData Load(DateTime now){
             if(path==null)return new FeedbackData();
             try{
                 if(!File.Exists(path))return new FeedbackData();
                 byte[] encrypted=UpdateJson.ReadBytes(path,128*1024*1024);
-                var value=UpdateJson.Read<FeedbackData>(ProtectedData.Unprotect(encrypted,entropy,DataProtectionScope.CurrentUser));Validate(value);Trim(value);return value;
+                var value=UpdateJson.Read<FeedbackData>(ProtectedData.Unprotect(encrypted,entropy,DataProtectionScope.CurrentUser));Validate(value);
+                value.Records.RemoveAll(delegate(FeedbackRecord r){return r.Number==0&&now-r.CreatedAt>TimeSpan.FromHours(24);});Trim(value);return value;
             }catch(Exception){
                 // Do not overwrite unreadable data if preserving it also failed.
-                try{if(File.Exists(path)){string bad=path+".bad";if(File.Exists(bad))bad=path+"."+Guid.NewGuid().ToString("N")+".bad";File.Copy(path,bad,false);}}
+                try{if(File.Exists(path)){string bad=path+".bad";if(File.Exists(bad))bad=path+"."+Guid.NewGuid().ToString("N")+".bad";File.Move(path,bad);}}
                 catch(Exception){writable=false;}
                 return new FeedbackData();
             }
@@ -129,10 +131,14 @@ namespace AtkBattery {
             }finally{if(File.Exists(temp))File.Delete(temp);}
         }
         static void Trim(FeedbackData value){
-            while(value.Records.Count>50){
+            var creations=new HashSet<string>();
+            for(int i=value.Records.Count-1;i>=0;i--)if(value.Records[i].Number==0&&!creations.Add(value.Records[i].CreationId))value.Records.RemoveAt(i);
+            // Pending creations never use a completed record's slot or discard its credential.
+            var records=value.Records.FindAll(delegate(FeedbackRecord r){return r.Number>0;});
+            while(records.Count>50){
                 FeedbackRecord oldest=null;
-                foreach(var r in value.Records)if(oldest==null||(r.State=="closed"&&oldest.State!="closed")||(r.State==oldest.State&&r.CreatedAt<oldest.CreatedAt))oldest=r;
-                value.Records.Remove(oldest);
+                foreach(var r in records)if(oldest==null||(r.State=="closed"&&oldest.State!="closed")||(r.State==oldest.State&&r.CreatedAt<oldest.CreatedAt))oldest=r;
+                records.Remove(oldest);value.Records.Remove(oldest);
             }
         }
         static void Validate(FeedbackData value){

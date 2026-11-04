@@ -99,19 +99,22 @@ namespace AtkBattery {
     internal static class FeedbackSchedule {
         internal static DateTime First(DateTime now,double random){return now.AddMinutes(1+9*Math.Max(0,Math.Min(1,random)));}
         internal static DateTime? Next(FeedbackRecord record,DateTime now,double random){
-            if(record.State=="closed")return record.ClosedFollowupDone?(DateTime?)null:(record.ClosedAt??now).AddHours(24);
             double idle=(now-record.LastActivityAt).TotalDays;
             if(idle>=90)return null;
+            if(record.State=="closed")return record.ClosedFollowupDone?(DateTime?)null:(record.ClosedAt??now).AddHours(24);
             return now.AddHours(idle>=30?168:6*(0.8+0.4*Math.Max(0,Math.Min(1,random))));
         }
         internal static void Failed(FeedbackRecord record,DateTime now,DateTime? retry){
             record.Failures=Math.Min(3,record.Failures+1);record.LastCheckedAt=now;
+            double idle=(now-record.LastActivityAt).TotalDays;
+            if(idle>=90||record.State=="closed"&&record.ClosedFollowupDone){record.NextCheckAt=null;return;}
             var next=now.AddMinutes(record.Failures==1?15:record.Failures==2?60:360);
+            var normal=now.AddHours(idle>=30?168:record.State=="closed"?24:6);if(next<normal)next=normal;
             record.NextCheckAt=retry.HasValue&&retry.Value>next?retry:next;
         }
         internal static bool Due(FeedbackRecord record,DateTime now){
-            if(record.Number<=0||!record.NextCheckAt.HasValue||record.NextCheckAt.Value>now)return false;
-            return record.State=="closed"?!record.ClosedFollowupDone:(now-record.LastActivityAt).TotalDays<90;
+            if(record.Number<=0||!record.NextCheckAt.HasValue||record.NextCheckAt.Value>now||(now-record.LastActivityAt).TotalDays>=90)return false;
+            return record.State!="closed"||!record.ClosedFollowupDone;
         }
     }
     internal sealed class FeedbackBalloon {
@@ -131,7 +134,7 @@ namespace AtkBattery {
         int polling,supplementing;
         internal FeedbackReplies(FeedbackStore store,IFeedbackTransport transport,string address=null,Func<DateTime> now=null,Func<double> jitter=null,Func<bool> checkEnabled=null,int timeout=20000){
             Store=store;http=transport;relay=address??FeedbackRelay.Url;clock=now??delegate{return DateTime.UtcNow;};var rng=new Random();random=jitter??rng.NextDouble;
-            enabled=checkEnabled??delegate{return DeviceSettings.Current.CheckFeedbackReplies;};firstCheck=FeedbackSchedule.First(clock(),random());timeoutMilliseconds=timeout;
+            enabled=checkEnabled??delegate{return DeviceSettings.Current.CheckFeedbackReplies&&!DeviceSettings.UsingDefaults;};firstCheck=FeedbackSchedule.First(clock(),random());timeoutMilliseconds=timeout;
         }
         internal static void Merge(FeedbackRecord record,FeedbackReplyItem item,DateTime now,double jitter){
             bool activity=false;var comments=new List<FeedbackComment>();
@@ -149,7 +152,7 @@ namespace AtkBattery {
             int count=0;long number=0;
             foreach(var record in data.Records){
                 bool changed=false;
-                foreach(var comment in record.Comments)if(comment.Author=="maintainer"&&!record.NotifiedIds.Contains(comment.Id)){record.NotifiedIds.Add(comment.Id);changed=true;}
+                foreach(var comment in record.Comments)if(comment.Author=="maintainer"&&!record.NotifiedIds.Contains(comment.Id)&&!record.ReadIds.Contains(comment.Id)){record.NotifiedIds.Add(comment.Id);changed=true;}
                 if(changed){count++;if(number==0)number=record.Number;}
             }
             if(count==0)return null;data.LastBalloonAt=now;return new FeedbackBalloon(number,count);
@@ -161,7 +164,7 @@ namespace AtkBattery {
             try{
                 var data=Store.Snapshot();if(data.PollNotBefore.HasValue&&now<data.PollNotBefore.Value){result.Message="检查暂缓，请稍后刷新。";return result;}
                 var due=data.Records.FindAll(delegate(FeedbackRecord r){return r.Number>0&&(!number.HasValue||r.Number==number.Value)&&(!automatic||FeedbackSchedule.Due(r,now));});
-                bool checkedAny=false;
+                bool checkedAny=false,failedBatch=false;
                 // Each due record occurs once. Dates are advanced from completion, never replayed from an old deadline.
                 for(int start=0;start<due.Count;start+=10){
                     token.ThrowIfCancellationRequested();if(automatic&&!enabled())break;
@@ -183,18 +186,21 @@ namespace AtkBattery {
                         }
                     }catch(Exception){token.ThrowIfCancellationRequested();reply=null;}
                     now=clock();checkedAny=true;
-                    if(reply==null)result.Message="暂时无法检查回复，请稍后重试。";
+                    if(reply==null){failedBatch=true;result.Message="暂时无法检查回复，请稍后重试。";}
                     Store.Change(delegate(FeedbackData next){
                         if(pause)next.PollNotBefore=retry;
                         for(int i=0;i<numbers.Length;i++){
                             var record=next.Records.Find(delegate(FeedbackRecord r){return r.Number==numbers[i];});if(record==null)continue;
                             if(reply!=null&&reply.Items[i].Status=="ok")Merge(record,reply.Items[i],now,random());
-                            else{FeedbackSchedule.Failed(record,now,retry);result.Message="部分反馈暂时无法读取，请稍后重试。";if(reply!=null&&reply.Items[i].Status=="unavailable")record.CanSupplement=false;}
+                            else{
+                                FeedbackSchedule.Failed(record,now,retry);
+                                if(reply!=null){if(!failedBatch)result.Message="部分反馈暂时无法读取，请稍后重试。";if(reply.Items[i].Status=="unavailable"){record.CanSupplement=false;if(record.State=="closed"){record.ClosedFollowupDone=true;record.NextCheckAt=null;}}}
+                            }
                         }
                     });
                     if(pause)break;
                 }
-                if(checkedAny){
+                if(automatic&&checkedAny){
                     Store.Change(delegate(FeedbackData next){result.Balloon=MarkNotifications(next,clock());});
                     var notify=BalloonReady;if(result.Balloon!=null&&notify!=null)notify(result.Balloon);
                 }

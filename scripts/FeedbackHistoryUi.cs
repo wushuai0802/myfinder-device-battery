@@ -121,11 +121,11 @@ namespace AtkBatteryTray {
         }
         void OnBalloon(FeedbackBalloon balloon){try{dispatch.BeginInvoke((MethodInvoker)delegate{lock(gate){if(!disposed)notify(balloon);}});}catch(InvalidOperationException){}}
         void Check(){
-            CancellationTokenSource cancel;lock(gate){if(disposed||pending!=null||!DeviceSettings.Current.CheckFeedbackReplies)return;cancel=new CancellationTokenSource();pending=cancel;}
+            CancellationTokenSource cancel;lock(gate){if(disposed||pending!=null||!DeviceSettings.Current.CheckFeedbackReplies||DeviceSettings.UsingDefaults)return;cancel=new CancellationTokenSource();pending=cancel;}
             try{replies.Poll(true,null,cancel.Token);}catch(OperationCanceledException){}
             finally{lock(gate){if(pending==cancel)pending=null;}cancel.Dispose();}
         }
-        internal void ConfigurationChanged(){lock(gate){if(!DeviceSettings.Current.CheckFeedbackReplies&&pending!=null)pending.Cancel();}}
+        internal void ConfigurationChanged(){lock(gate){if((!DeviceSettings.Current.CheckFeedbackReplies||DeviceSettings.UsingDefaults)&&pending!=null)pending.Cancel();}}
         public void Dispose(){lock(gate){disposed=true;timer.Dispose();replies.BalloonReady-=OnBalloon;if(pending!=null)pending.Cancel();}}
     }
     internal enum TrayBalloonKind {LowBattery,Update,Feedback}
