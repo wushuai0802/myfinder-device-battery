@@ -24,6 +24,7 @@ DEVICE_TYPES = {"设备不识别", "电量或 DPI 不对"}
 BUG_TYPES = {"界面或操作", "其他"}
 HEADINGS = {"有卡片的设备": "card", "未取得电量的设备": "unadapted",
             "已隐藏的重复连接": "ignore", "读取器健康": "ignore"}
+NOISE_NAME = re.compile(r"HIDI2C|Touchpad|Multitouch|Precision", re.IGNORECASE)
 
 
 def comments_list(value):
@@ -35,6 +36,20 @@ def comments_list(value):
 
 def labels_of(issue):
     return sorted({item if isinstance(item, str) else item["name"] for item in issue.get("labels", [])})
+
+
+def device_row(match, line, source):
+    # Product names may contain ID-shaped text; collections follow the last quote.
+    tail = line[match.end():]
+    if '"' in tail:
+        name, tail = tail.rsplit('"', 1)
+        name = name.split('"', 1)[-1]
+    else:
+        collection = PAIR.search(tail)
+        name = tail[:collection.start()] if collection else tail
+    name = line[:match.start()] + name
+    collections = tuple((int(m[1], 16), int(m[2], 16)) for m in PAIR.finditer(tail))
+    return (int(match[1], 16), int(match[2], 16), collections, source, name.strip())
 
 
 def report_devices(text):
@@ -58,20 +73,15 @@ def report_devices(text):
         if section == "ignore":
             continue
         if section == "card":
-            match = PAIR.search(line.rsplit(" | ", 1)[-1]) if " | " in line else None
-            if match and match.end() == len(line.rsplit(" | ", 1)[-1]):
-                rows.append((int(match[1], 16), int(match[2], 16), (), "card"))
+            # FeedbackReport emits five fields even when VID:PID is unavailable.
+            # Card presence matters, but neither its name nor identity is evidence.
+            if len(line.split(" | ")) >= 5:
+                rows.append((None, None, (), "card", ""))
             continue
-        # Product strings may themselves contain ID-shaped text. Only text after
-        # the last quote is a collection list in FeedbackReport's unadapted row.
         if section == "unadapted":
             match = PAIR.match(line)
             if match:
-                tail = line[match.end():]
-                if '"' in tail:
-                    tail = tail.rsplit('"', 1)[-1]
-                collections = tuple((int(m[1], 16), int(m[2], 16)) for m in PAIR.finditer(tail))
-                rows.append((int(match[1], 16), int(match[2], 16), collections, "unadapted"))
+                rows.append(device_row(match, line, "unadapted"))
             continue
         matches = list(PAIR.finditer(line))
         if matches:
@@ -80,11 +90,7 @@ def report_devices(text):
             first = matches[0]
             if int(first[1], 16) in (0x0001, 0x000C) or int(first[1], 16) >= 0xFF00:
                 continue
-            tail = line[first.end():]
-            if '"' in tail:
-                tail = tail.rsplit('"', 1)[-1]
-            collections = tuple((int(m[1], 16), int(m[2], 16)) for m in PAIR.finditer(tail))
-            rows.append((int(first[1], 16), int(first[2], 16), collections, "mention"))
+            rows.append(device_row(first, line, "mention"))
     return rows
 
 
@@ -109,31 +115,51 @@ def decide(issue, known, comments=None):
     for device in known["devices"]:
         index.setdefault((device["vendorId"], device["productId"]), []).append(device)
     vendors = {vid for ids in known["vendors"].values() for vid in ids}
-    hits = [(row, index[row[:2]]) for row in rows if row[:2] in index]
+    reported = rows
+    rows, ignored = [], []
+    for row in reported:
+        # Cards already have readings. Retain only their presence for needs-info
+        # and the card-only incorrect-reading exception, never their identities.
+        if row[3] == "card":
+            continue
+        if set(row[2]) == {(0x0001, 0x0002)} or NOISE_NAME.search(row[4]):
+            ignored.append(row)
+        else:
+            rows.append(row)
+    hits = [(row, index[row[:2]]) for row in rows if row[3] == "unadapted" and row[:2] in index]
+    new_vendors = [row for row in rows if row[0] not in vendors]
     reply = None
-    if device_request and not rows:
+    if device_request and not reported:
         label, reason, reply = "needs-info", "设备类反馈缺少 VID:PID。", NEEDS_INFO
+    elif category == "电量或 DPI 不对" and reported and all(row[3] == "card" for row in reported):
+        label, reason = "bug", "只有已取得电量的卡片设备，但反馈电量或 DPI 读数不对，需要人工检查。"
     elif hits:
         label = "supported"
-        reason = ("设备 ID 命中内置支持列表，但本次未取得电量。" if any(row[3] == "unadapted" for row, _ in hits)
-                  else "设备 ID 精确命中支持列表。")
+        reason = "设备 ID 命中内置支持列表，但本次未取得电量。"
         # Only repository-owned model names enter the fixed reply, never names
         # supplied by the issue author. Neutralise mentions in future pack names.
         names = sorted({d["name"].replace("@", "＠").replace("\n", " ").replace("\r", " ")
                         for _, devices in hits for d in devices})
         reply = SUPPORTED.format(models="、".join(names))
-    elif any(vid in vendors and any(page >= 0xFF00 for page, _ in cols) for vid, _, cols, _ in rows):
+    elif any(row[:2] not in index and row[0] in vendors and any(page >= 0xFF00 for page, _ in row[2])
+             for row in rows):
         label, reason = "pack-candidate", "已支持厂商的未知产品 ID，且同一设备带厂商自定义集合。"
-    elif rows and all(cols and all(page < 0xFF00 for page, _ in cols) for _, _, cols, _ in rows):
-        label, reason = "insufficient-evidence", "报告只提供标准 HID 集合，无法确认私有电量协议。"
-    elif any(vid not in vendors for vid, _, _, _ in rows):
-        label, reason = "new-vendor", "设备厂商 ID 不在当前支持范围。"
+    elif new_vendors:
+        ids = "、".join(sorted({f"{row[0]:04X}:{row[1]:04X}" for row in new_vendors}))
+        label, reason = "new-vendor", "设备厂商 ID 不在当前支持范围：" + ids + "。"
+    elif (rows and all(row[2] and all(page < 0xFF00 for page, _ in row[2]) for row in rows)) or (ignored and not rows):
+        label, reason = "insufficient-evidence", "排除噪声后只看到标准 HID 接口，无法确认私有电量协议。"
     elif category in BUG_TYPES and not rows:
-        label, reason = "bug", "界面、操作或其他问题，未包含设备 ID。"
+        label, reason = "bug", "界面、操作或其他问题，未包含待分类设备 ID。"
     elif rows:
-        label, reason = "insufficient-evidence", "已支持厂商的未知产品，缺少厂商自定义集合证据。"
+        label, reason = "insufficient-evidence", "缺少未取得电量设备的支持匹配或未知产品的厂商自定义集合证据。"
+    elif reported:
+        label, reason = "insufficient-evidence", "报告仅有已取得电量的卡片设备，缺少待分类设备的证据。"
     else:
         return result
+    if ignored:
+        ids = "、".join(sorted({f"{row[0]:04X}:{row[1]:04X}" for row in ignored}))
+        reason += " 已忽略触摸板、虚拟设备名称或仅含 0001:0002 集合的行：" + ids + "。"
     result.update(label="triage:" + label, reason=reason)
     result["remove_labels"] = [old for old in labels if old.startswith("triage:") and old != result["label"]]
     if reply and not any((comment.get("user") or {}).get("login") == "github-actions[bot]"

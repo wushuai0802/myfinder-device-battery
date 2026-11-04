@@ -67,14 +67,61 @@ class TriageTests(unittest.TestCase):
             self.assertIsNone(result["reply"])
         return result
 
-    def test_both_sources_match_card_and_unadapted_reports(self):
+    def test_both_sources_only_match_unadapted_reports(self):
         for wrap in (in_app, template):
-            for contents in (report(card="自定义产品名 | mouse | native_atk | 80% | 当前读数：是 | 373B:1278"),
-                             report(unknown='373B:1278 "ATK 接收器" 0001:0002 FF02:0002')):
-                with self.subTest(wrap=wrap.__name__, contents=contents):
-                    result = self.classify(wrap(contents), "supported")
+            with self.subTest(wrap=wrap.__name__):
+                self.classify(wrap(report(card="自定义产品名 | mouse | native_atk | 80% | 当前读数：是 | 373B:1278")),
+                              "insufficient-evidence")
+                result = self.classify(wrap(report(unknown='373B:1278 "ATK 接收器" 0001:0002 FF02:0002')), "supported")
+                self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.SUPPORTED.format(models="ATK A9 Air+"))
+
+    def test_cards_do_not_classify_devices_or_supply_reply_models(self):
+        for card_id in ("046D:0AB5", "373B:EEEE", "ABCD:1234"):
+            card = "自定义产品名 | mouse | provider | 80% | 当前读数：是 | " + card_id
+            for wrap in (in_app, template):
+                with self.subTest(card_id=card_id, wrap=wrap.__name__):
+                    result = self.classify(wrap(report(card=card, unknown='373B:1278 "ATK" FF02:0002')), "supported")
                     self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.SUPPORTED.format(models="ATK A9 Air+"))
                     self.assertNotIn("自定义产品名", result["reply"])
+                    self.classify(wrap(report(card=card, unknown='373B:EEEE "unknown" 0001:0006')), "insufficient-evidence")
+                    self.classify(wrap(report(card=card, unknown='ABCD:1234 "new" FF01:0001')), "new-vendor")
+
+    def test_card_only_incorrect_reading_is_a_bug(self):
+        card = "ATK | mouse | native_atk | 80% | 当前读数：是 | 373B:1278"
+        self.classify(in_app(report(card=card), category="电量或 DPI 不对"), "bug")
+        self.classify(template("类型：电量或 DPI 不对\n" + report(card=card)), "bug")
+        self.classify(in_app(category="电量或 DPI 不对"), "bug", comments=[comment(report(card=card))])
+        for row, label in (('373B:1278 "ATK" FF02:0002', "supported"),
+                           ('ABCD:1234 "new" FF01:0001', "new-vendor"),
+                           ('06CB:CE7D "HIDI2C Device" 0001:0002', "insufficient-evidence")):
+            self.classify(in_app(report(card=card, unknown=row), category="电量或 DPI 不对"), label)
+
+    def test_card_presence_does_not_require_a_device_id(self):
+        for card in ("Bluetooth Mouse | mouse | bluetooth | 80% | 当前读数：是",
+                     "Product 373B:1278 | mouse | standard_hid | 75% | 当前读数：是"):
+            with self.subTest(card=card):
+                self.classify(in_app(report(card=card)), "insufficient-evidence")
+                self.classify(in_app(report(card=card), category="电量或 DPI 不对"), "bug")
+                self.classify(in_app(report(card=card), category="界面或操作"), "bug")
+
+    def test_loose_mentions_classify_but_cannot_trigger_supported(self):
+        for row, label in (('373B:1278 "ATK" FF02:0002', "insufficient-evidence"),
+                           ('373B:EEEE "candidate" FF02:0002', "pack-candidate"),
+                           ('ABCD:1234 "new" 0001:0006', "new-vendor")):
+            with self.subTest(row=row):
+                self.classify(in_app(description=row), label)
+                self.classify(in_app(), label, comments=[comment(row)])
+        result = self.classify(in_app(report(unknown='373B:1278 "ATK" FF02:0002')),
+                               "supported", comments=[comment('046D:0AB5 "G733" FF00:0001')])
+        self.assertNotIn("Logitech G733", result["reply"])
+
+    def test_human_comment_cards_are_excluded_and_bot_cards_do_not_satisfy_needs_info(self):
+        card_report = report(card="G733 | headset | logitech | 80% | 当前读数：是 | 046D:0AB5")
+        self.classify(in_app(), "insufficient-evidence", comments=[comment(card_report)])
+        self.classify(in_app(), "needs-info", comments=[comment(card_report, True)])
+        result = self.classify(in_app(report(unknown='373B:1278 "ATK" FF02:0002')),
+                               "supported", comments=[comment(card_report)])
+        self.assertNotIn("Logitech G733", result["reply"])
 
     def test_supported_without_battery_explains_the_difference(self):
         result = self.classify(in_app(report(unknown='373B:1278 "ATK"')), "supported")
@@ -91,8 +138,41 @@ class TriageTests(unittest.TestCase):
         self.classify(template(report(unknown='373B:1278 "known" FF00:0001')), "supported")
         self.classify(template(report(unknown='373B:EEEE "unknown" 0001:0002\nABCD:1234 "new" FF00:0001')), "new-vendor")
 
-    def test_issue_10_standard_collections_win_over_new_vendor(self):
-        self.classify(in_app(report(unknown='1D57:FA60 "2.4G Receiver" 0001:0002 0001:0006')), "insufficient-evidence")
+    def test_issue_10_new_vendor_precedes_standard_collections(self):
+        self.classify(in_app(report(unknown='1D57:FA60 "2.4G Receiver" 0001:0002 0001:0006')), "new-vendor")
+
+    def test_noise_is_ignored_but_retained_in_reasons(self):
+        noises = ('04F3:31C0 "HIDI2C Device" 0001:0002',
+                  '06CB:CE7D "HIDI2C Device" FF00:0001',
+                  '00FF:BACC "Virtual Multitouch Device" FFAA:00BB',
+                  'ABCD:1234 "touchPAD" 0001:0006 FF00:0001',
+                  'ABCD:1234 Precision Device FF00:0001',
+                  'ABCD:1234 "Receiver" 0001:0002',
+                  'ABCD:1234 "Receiver" 0001:0002 0001:0002',
+                  '373B:1278 "ATK" 0001:0002',
+                  '373B:EEEE "Precision Device" FF00:0001')
+        for noise in noises:
+            with self.subTest(noise=noise):
+                for body in (in_app(report(unknown=noise)), in_app(description=noise)):
+                    result = self.classify(body, "insufficient-evidence")
+                    self.assertIn("标准 HID", result["reason"])
+                    self.assertIn("已忽略", result["reason"])
+                    self.assertIn(noise[:9], result["reason"])
+                # Noise must not turn a known vendor's standard-only row into a
+                # support hit, pack candidate, or new-vendor classification.
+                result = self.classify(template(report(unknown=noise + '\n046D:EEEE "Receiver" 0001:0006')),
+                                       "insufficient-evidence")
+                self.assertIn(noise[:9], result["reason"])
+                result = self.classify(in_app(), "insufficient-evidence", comments=[comment(noise)])
+                self.assertIn("已忽略", result["reason"])
+        for noise in ('HIDI2C Device 06CB:CE7D FF00:0001', '"Virtual Multitouch Device" 00FF:BACC FFAA:00BB'):
+            for body, comments in ((in_app(description=noise), []), (in_app(), [comment(noise)])):
+                result = self.classify(body, "insufficient-evidence", comments=comments)
+                self.assertIn("已忽略", result["reason"])
+
+    def test_noise_vendor_ids_are_not_blanket_exclusions(self):
+        for device_id in ("04F3:31C0", "06CB:CE7D", "00FF:BACC"):
+            self.classify(in_app(report(unknown=device_id + ' "Receiver" 0001:0006 FF00:0001')), "new-vendor")
 
     def test_new_vendor_with_vendor_collection(self):
         self.classify(template(report(unknown='ABCD:1234 "unknown" FF13:0001')), "new-vendor")
@@ -154,20 +234,42 @@ class TriageTests(unittest.TestCase):
     def test_usage_pairs_and_product_strings_are_not_device_ids(self):
         # A known ID in a product name/collection must not trigger supported.
         body = report(unknown='1D57:FA60 "pretend 373B:1278" 0001:0002 373B:1278')
-        self.classify(template(body), "insufficient-evidence")
-        self.classify(template(report(card="Product 373B:1278 | mouse | standard_hid | 75% | 当前读数：是")), "needs-info")
+        self.classify(template(body), "new-vendor")
+        self.classify(template(report(card="Product 373B:1278 | mouse | standard_hid | 75% | 当前读数：是")), "insufficient-evidence")
         self.classify(template("0001:0002 0001:0006 000C:0001"), "needs-info")
 
     def test_case_and_old_diagnostic_heading(self):
         body = report(unknown='373b:eeee "Receiver" ff02:0002').replace("未取得电量的设备", "未取得电量的设备（可能未适配，也可能正在休眠）")
         self.classify(in_app(body), "pack-candidate")
 
-    def test_priority_supported_then_pack_then_standard_then_vendor(self):
-        rows = ['373B:1278 "known" 0001:0002', '373B:EEEE "candidate" FF02:0002',
-                '1D57:FA60 "standard" 0001:0006', 'ABCD:1234 "new" FF00:0001']
-        self.classify(template(report(unknown="\n".join(rows))), "supported")
-        self.classify(template(report(unknown="\n".join(rows[1:]))), "pack-candidate")
-        self.classify(template(report(unknown=rows[2])), "insufficient-evidence")
+    def test_priority_supported_then_pack_then_vendor_then_insufficient(self):
+        rows = ['373B:1278 "known" 0001:0002 FF02:0002', '373B:EEEE "candidate" FF02:0002',
+                'ABCD:1234 "new" 0001:0006', '046D:EEEE "standard" 0001:0006']
+        for offset, label in enumerate(("supported", "pack-candidate", "new-vendor", "insufficient-evidence")):
+            for remaining in (rows[offset:], list(reversed(rows[offset:]))):
+                with self.subTest(label=label, rows=remaining):
+                    self.classify(template(report(unknown="\n".join(remaining))), label)
+
+    def test_real_issue_fixtures_ignore_cards_and_noise(self):
+        known = known_ids.build_index()
+        for number, candidate_ids, ignored_ids, card_ids in (
+            (29, ("25A7:FA70", "291D:385D"), ("00FF:BACC", "06CB:CE7D"), ("A8A5:2255",)),
+            (30, ("19F5:3247", "37D7:2501"), ("04F3:31C0",), ("373B:1031", "046D:C547")),
+        ):
+            with self.subTest(issue=number):
+                body = (ROOT / f"tests/fixtures/issue{number}-body.txt").read_text(encoding="utf-8")
+                result = triage.decide(issue(body, labels=("triage:supported", "in-app-feedback")), known)
+                self.assertEqual(result["label"], "triage:new-vendor")
+                self.assertIsNone(result["reply"])
+                self.assertEqual(result["remove_labels"], ["triage:supported"])
+                classification, ignored = result["reason"].split(" 已忽略", 1)
+                for device_id in candidate_ids:
+                    self.assertIn(device_id, classification)
+                for device_id in ignored_ids:
+                    self.assertNotIn(device_id, classification)
+                    self.assertIn(device_id, ignored)
+                for device_id in card_ids:
+                    self.assertNotIn(device_id, result["reason"])
 
     def test_malicious_and_long_body_stays_data(self):
         attack = '`$(touch SHOULD_NOT_EXIST)` @someone ${{ secrets.GITHUB_TOKEN }}\n' + triage.MARKER

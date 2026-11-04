@@ -1,0 +1,33 @@
+来自程序内反馈 · 版本 1.3.5
+
+**类型**：设备不识别
+
+**描述**
+```
+腹灵f12不显示
+```
+
+<details><summary>诊断信息</summary>
+
+```
+MyFinder Device Battery 1.3.5
+Windows 10.0.26100.4946
+
+有卡片的设备
+EWEADN S7SE | mouse | mchose | 58% | 当前读数：是 | A8A5:2255
+
+已隐藏的重复连接
+无记录
+
+未取得电量的设备
+00FF:BACC "Virtual Multitouch Device" 0001:0002
+00FF:BACC "Virtual Multitouch Device" 0001:0002
+00FF:BACC "Virtual Multitouch Device" FFAA:00BB
+00FF:BACC "Virtual Multitouch Device" FFEE:00CC
+06CB:CE7D "HIDI2C Device" 0001:0002
+06CB:CE7D "HIDI2C Device" FF00:0001
+25A7:FA70 "2.4G Wireless Receiver" 0001:0002 0001:0006 0001:0006 0001:0006 0001:0006 0001:0080 000C:0001 FF01:0000
+291D:385D "MCHOSE V9 PRO" 000B:0001 000C:0001 000C:0001 FF22:0001 FF82:0001 FF90:0001
+```
+
+</details>

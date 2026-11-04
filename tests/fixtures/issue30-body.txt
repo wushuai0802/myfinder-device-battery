@@ -1,0 +1,31 @@
+来自程序内反馈 · 版本 1.3.5
+
+**类型**：设备不识别
+
+**描述**
+```
+设备识别不到，键盘，nuphy kick75 usb2.4连接
+
+手柄八爪鱼5也识别不到，usb2.4连接
+```
+
+<details><summary>诊断信息</summary>
+
+```
+MyFinder Device Battery 1.3.5
+Windows 10.0.22631.6199
+
+有卡片的设备
+ATK 8K Dongle Light Version | mouse | pulsar | 50% | 当前读数：是 | 373B:1031
+PRO X SUPERLIGHT 2 SE | mouse | logitech | 47% | 当前读数：是 | 046D:C547
+
+已隐藏的重复连接
+无记录
+
+未取得电量的设备
+04F3:31C0 "HIDI2C Device" 0001:0002
+19F5:3247 "NuPhy Kick75 Dongle" 0001:0002 0001:0006 0001:0006 0001:0080 000C:0001 FF31:0074
+37D7:2501 "Flydigi APEX5 Wireless" 0001:0002 0001:0006 FFA0:0001 FFEE:0001
+```
+
+</details>
