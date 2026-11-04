@@ -259,12 +259,18 @@ class TriageTests(unittest.TestCase):
             with self.subTest(issue=number):
                 body = (ROOT / f"tests/fixtures/issue{number}-body.txt").read_text(encoding="utf-8")
                 result = triage.decide(issue(body, labels=("triage:supported", "in-app-feedback")), known)
-                self.assertEqual(result["label"], "triage:new-vendor")
-                self.assertIsNone(result["reply"])
-                self.assertEqual(result["remove_labels"], ["triage:supported"])
+                if number == 29:  # V9 PRO is now indexed; existing supported precedence applies.
+                    self.assertEqual(result["label"], "triage:supported")
+                    self.assertIn("MCHOSE V9 PRO", result["reply"])
+                    self.assertEqual(result["remove_labels"], [])
+                else:
+                    self.assertEqual(result["label"], "triage:new-vendor")
+                    self.assertIsNone(result["reply"])
+                    self.assertEqual(result["remove_labels"], ["triage:supported"])
                 classification, ignored = result["reason"].split(" 已忽略", 1)
-                for device_id in candidate_ids:
-                    self.assertIn(device_id, classification)
+                if number != 29:
+                    for device_id in candidate_ids:
+                        self.assertIn(device_id, classification)
                 for device_id in ignored_ids:
                     self.assertNotIn(device_id, classification)
                     self.assertIn(device_id, ignored)
@@ -309,6 +315,7 @@ class KnownIdsTests(unittest.TestCase):
             ("logitech", 0x046D, 0xC548, "Logitech HID++ 接收器", "device"),
             ("mchose", 0x2023, 0xF013, "MCHOSE A5 Pro Max (1K receiver)", "mouse"),
             ("mchose", 0xA8A5, 0x2255, "MCHOSE mouse", "mouse"),
+            ("mchose_headset", 0x291D, 0x385D, "MCHOSE V9 PRO", "headset"),
         ):
             with self.subTest(provider=provider, pid=pid):
                 row = entries[(provider, vid, pid)]

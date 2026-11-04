@@ -52,6 +52,7 @@
     {"provider":"audeze","name":"Audeze Maxwell 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/audeze.py"},
     {"provider":"wlmouse","name":"WLmouse 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/wlmouse.py"},
     {"provider":"mchose","name":"MCHOSE 已列明协议与型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/mchose.py"},
+    {"provider":"mchose_headset","name":"MCHOSE V9 PRO","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/mchose_headset.py","matchScope":"仅291D:385D / FF90:0001，输入与输出均为64字节；接电隐藏百分比，不区分充电中与满电；不含Turbo/Turbo+","reference":"engine/research/p2-protocols.md#4-mchose-v9-pro-291d385d可限定实现","precision":"设备原始百分比，上游观察为10%步进，不宣称1%精度"},
     {"provider":"hyperx_alpha2","name":"HyperX Cloud Alpha 2","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_alpha2.py"},
     {"provider":"hyperx_cloud3","name":"HyperX Cloud III 与已列明Core变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3.py"},
     {"provider":"hyperx","name":"HyperX Cloud II 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx.py"},

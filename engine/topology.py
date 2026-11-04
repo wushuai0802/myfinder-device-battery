@@ -192,7 +192,8 @@ def discover(paths, excluded=(), *, full=False):
             if hid.HidD_GetPreparsedData(handle, c.byref(data)):
                 caps = Caps()
                 if hid.HidP_GetCaps(data, c.byref(caps)) == 0x00110000:
-                    info.update(usage_page=caps.page, usage=caps.usage)
+                    info.update(usage_page=caps.page, usage=caps.usage,
+                                input_report_length=caps.input, output_report_length=caps.output)
                     caps_complete = True
             for field, getter in (("product_string", "HidD_GetProductString"),
                                   ("manufacturer_string", "HidD_GetManufacturerString"),

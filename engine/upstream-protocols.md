@@ -6,6 +6,40 @@ what comes back, and where each protocol was taken from.
 
 ## Headsets
 
+### MCHOSE V9 PRO (291D:385D)
+
+**Project verification: C, pending hardware validation.** This project implements
+only `FF90:0001` with known input and output lengths of exactly 64 bytes (including
+report ID `55`). Unknown/mismatched lengths cause no request. Physical receivers
+remain distinct; `FF22`, `FF82`, V9 Turbo and Turbo+ are not battery targets here.
+
+One output request `55 65 01` plus 61 zero bytes is followed by input reads on the
+same handle, within a one-second deadline and at most 32 frames. Non-battery
+frames such as `55 11` are skipped. A full `55 65` response uses byte 2 for the
+percentage and byte 3 for state: `02` accepts only 0-100; `00`/`03` signal external
+power with `level=None` (charging-compatible flag true, unable to distinguish
+charging from full while plugged in); `1A` explicitly signals offline with no
+percentage. An explicit unknown percentage clears the old value in the engine.
+Other states and invalid lengths/percentages are diagnosed and rejected. Silence
+does not prove power-off. No feature, EQ, firmware or alternative protocol commands
+are sent, and no speculative checksum is added.
+
+Sources: [rafagfran hardware/caps report](https://github.com/rafagfran/mchose-v9-pro-battery-tray#protocolo)
+([MIT](https://github.com/rafagfran/mchose-v9-pro-battery-tray/blob/main/LICENSE));
+[Device-Battery-Info issue #24](https://github.com/PyFlat/Device-Battery-Info/issues/24)
+and [parser](https://github.com/PyFlat/Device-Battery-Info/blob/main/src/DeviceBatteryInfo/Sources/Mchose/MchoseProtocol.cs)
+([MIT](https://github.com/PyFlat/Device-Battery-Info/blob/main/LICENSE)). The issue's
+user captures have no separately identified licence. The
+[JoaoKSS Linux source](https://github.com/JoaoKSS/MCHOSE_v9_PRO_Controller/blob/main/mchose_qt.py)
+corroborates only the battery frame; no licence was found, and no implementation
+or extra commands were copied. See [research section 4 and S8-S10/S14](research/p2-protocols.md#4-mchose-v9-pro-291d385d可限定实现)
+for evidence limits. Upstream hardware evidence does not count as this project's
+acceptance. Independent reads with the vendor app closed, charging/full/unplug
+transitions, power cycling, receiver replugging and final UI still need hardware
+validation. The current native UI requires a fresh numeric level to display its
+charging indicator, so the engine's external-power flag with an unknown percentage
+is not yet displayed there; native UI changes are outside this provider task.
+
 ### Astro A50 Gen 5 (Logitech 046D:0B1C)
 
 **Connection:** Base station

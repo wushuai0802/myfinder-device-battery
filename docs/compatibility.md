@@ -2,7 +2,7 @@
 
 目标是让兼容清单内的设备接上就用：自动枚举、匹配内置读取器并生成卡片，不让最终用户填写协议参数、安装Python或录制USB数据。
 
-当前源码1.3.2的设备范围沿用1.3系列：26个通用读取器，加上原有ATK A9 Air+与HyperX Cloud Alpha Wireless专用读取。没有统一协议能覆盖所有2.4G外设；以下是协议/型号族范围，不是市场占有率统计，也不等于每个变体均已实测。
+当前设备范围为27个通用读取器，加上原有ATK A9 Air+与HyperX Cloud Alpha Wireless专用读取。没有统一协议能覆盖所有2.4G外设；以下是协议/型号族范围，不是市场占有率统计，也不等于每个变体均已实测。
 
 机器可读验证来源为[兼容目录](../engine/compatibility.json)，详情页使用同一来源。本项目已经取得历史实机证据的确切原生配置标A；通用读取器统一保守标C，表示协议已接入、仍需本项目按型号实测，上游记录不会自动升级为本项目实测。INFI75标D，当前不宣称兼容。
 
@@ -15,6 +15,7 @@
 | SteelSeries | 鼠标、耳机 | Aerox/Rival及Arctis/Nova/GameBuds已列明型号，按各自报文匹配 |
 | Corsair | 鼠标、耳机 | Dark Core RGB Pro SE、Virtuoso部分型号、Void v2/HS80 Max等对应接收器 |
 | Audeze、JBL、Astro | 耳机 | Maxwell、Quantum 910、A50 Gen 5等已列明设备 |
+| MCHOSE V9 PRO（C，待实机验证） | 耳机 | 仅 `291D:385D / FF90:0001`，输入/输出均为64字节；接电隐藏冻结百分比，不区分充电中与满电，不含Turbo/Turbo+ |
 | ASUS ROG/TUF | 鼠标 | 内置型号表；不扩称支持所有ROG键盘 |
 | Pulsar / ATK / VXE | 鼠标 | Pulsar X2部分型号、VXE R1部分接收器等，按确切ID与集合匹配 |
 | ATK FF02 协议族（C，协议族匹配，未实测） | 鼠标 | 表外 `373B` 设备必须具有 `FF02:0002` 集合且输出报告长度恰好17字节；仅发送现有电量查询 |
@@ -46,6 +47,8 @@ ATK 的协议族匹配仍不保证所有 A9 Air 或同名变体可读：`373B:12
 
 界面、桥接、安装事务及协议解析均有自动化验证；其他人的实际硬件仍需按型号核验。兼容表会随验证结果更新。
 
+V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前百分比时显示充电指示，因此接电时会显示电量未知，尚不显示该指示；完整界面体验仍待后续验证。
+
 <!-- BEGIN GENERATED COMPATIBILITY CATALOG -->
 来源：`engine/compatibility.json`；由 `python engine/catalog.py --markdown` 离线生成。
 
@@ -59,6 +62,7 @@ ATK 的协议族匹配仍不保证所有 A9 Air 或同名变体可读：`373B:12
 | Audeze Maxwell 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | WLmouse 已列明型号 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | MCHOSE 已列明协议与型号 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| MCHOSE V9 PRO | headset | C | 协议已接入，待本项目实机验证；仅291D:385D / FF90:0001，输入与输出均为64字节；接电隐藏百分比，不区分充电中与满电；不含Turbo/Turbo+ |
 | HyperX Cloud Alpha 2 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud III 与已列明Core变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud II 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
@@ -83,5 +87,5 @@ ATK 的协议族匹配仍不保证所有 A9 Air 或同名变体可读：`373B:12
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 
-通用读取器来源固定为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段读取为本项目实现。
+通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。
 <!-- END GENERATED COMPATIBILITY CATALOG -->

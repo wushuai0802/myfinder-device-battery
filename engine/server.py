@@ -25,6 +25,7 @@ from device_pack import EMPTY_PACK, load_pack, parse_pack
 PROVIDERS = (
     ("razer", "RazerProvider"), ("audeze", "AudezeProvider"),
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
+    ("mchose_headset", "MchoseHeadsetProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
     ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
@@ -41,6 +42,7 @@ PROVIDERS = (
 PROVIDER_VIDS = {
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
+    "mchose_headset": (0x291D,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
@@ -254,19 +256,28 @@ def normalise(status, previous, now, cached=False):
     system = status.source_quality == "system_property" or status.source == "bluetooth"
     online = bool(status.online)
     connection_known = online if status.connection_known is None else bool(status.connection_known)
+    # A current explicit state (e.g. plugged-in V9 with a frozen percentage)
+    # invalidates history without pretending to have measured a new level.
+    unavailable = (status.level_unavailable and not cached and not system
+                   and status.source_quality == "device_reply" and status.connection_known is True)
+    if unavailable:
+        value = None
     acquired = online and value is not None and not cached
     fresh = acquired and not system
-    if not acquired and old:
+    if not acquired and old and not unavailable:
         value = old.get("percent")
     measured = (valid_time(status.measured_at_utc) or now) if fresh else old.get("measuredAtUtc")
     queried = status.queried_at_utc or (now if acquired else old.get("queriedAtUtc"))
     # Legacy confirmedAt is the property query time for Bluetooth, not a
     # fabricated device measurement timestamp. measuredAt remains null there.
     confirmed = measured if fresh else (queried if acquired and system else old.get("confirmedAtUtc"))
+    if unavailable:
+        measured = confirmed = None
+        queried = status.queried_at_utc or now
     charging_known = (status.charging_known if status.charging_known is not None
                       else status.source not in NO_CHARGING_EVIDENCE and isinstance(status.charging, bool))
-    charging = bool(status.charging) if fresh and charging_known else None
-    quality = "cached" if not acquired else "system_property" if system else "device_reply"
+    charging = bool(status.charging) if (fresh or unavailable and online) and charging_known else None
+    quality = "device_reply" if unavailable else "cached" if not acquired else "system_property" if system else "device_reply"
     from catalog import verification_for
     verification_level, verification_label = verification_for(status.source)
     pack_model = status.model_source == "pack"

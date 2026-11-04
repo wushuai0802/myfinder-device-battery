@@ -44,6 +44,7 @@ class DeviceStatus:
     pack_version: Optional[int] = None
     verification_level: str = ""   # pack row's evidence level, defaults to C
     model_reference: str = ""      # pack's issue/evidence reference, not a command
+    level_unavailable: bool = False  # explicit reply invalidates any old percentage
 
 
 class Provider:

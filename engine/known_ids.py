@@ -34,7 +34,7 @@ TABLES = {
     "hyperx_cloud3s": ("PIDS",), "jbl": ("PIDS",),
     "keychron": ("PIDS",), "lamzu": ("PIDS",), "lofree": ("DONGLES",),
     "logitech": ("HEADSETS",), "logitech_centurion": ("PIDS",),
-    "mchose": ("A5_PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS",),
+    "mchose": ("A5_PIDS",), "mchose_headset": ("PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",),
 }

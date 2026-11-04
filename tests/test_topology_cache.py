@@ -110,6 +110,26 @@ class DescriptorCacheTests(unittest.TestCase):
         self.assertEqual(second[0]["serial_number"], "")
         self.assertEqual(second[0]["usage"], 0x0092)
 
+    def test_report_lengths_come_from_caps_and_survive_cache(self):
+        def caps(data, pointer):
+            result = self.caps(data, pointer)
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.input, value.output = 64, 64
+            return result
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        first = self.scan([PATH_A])[0]
+        second = self.scan([PATH_A])[0]
+        for info in (first, second):
+            self.assertEqual((info["input_report_length"], info["output_report_length"]), (64, 64))
+        self.assertEqual(self.kernel.CreateFileW.call_count, 1)
+
+    def test_failed_caps_leave_report_lengths_unknown(self):
+        self.fail_caps.add(PATH_A)
+        info, = self.scan([PATH_A])
+        self.assertNotIn("input_report_length", info)
+        self.assertNotIn("output_report_length", info)
+
     def test_full_topology_change_reopens_all_selected_paths(self):
         self.scan([PATH_A])
         self.kernel.CreateFileW.reset_mock()

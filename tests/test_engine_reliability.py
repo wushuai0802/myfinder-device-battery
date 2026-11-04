@@ -99,7 +99,7 @@ class FakeReader:
         if command["action"] == "topology":
             return {"inventory": self.pool.inventory}
         if command["action"] == "smoke":
-            return {"providerCount": 26, "devices": []}
+            return {"providerCount": len(server.PROVIDERS) + 1, "devices": []}
         if command["action"] == "set_dpi":
             return outcome
         physical = command.get("physicalId", "")
@@ -1314,7 +1314,7 @@ class ProcessIsolationTests(unittest.TestCase):
         self.assertGreaterEqual(len(frames), 2)
         self.assertTrue(frames[-1]["complete"])
         self.assertTrue(all(f["schema"] == 2 and f["requestId"] == 7 and f["generation"] == 8 for f in frames))
-        self.assertEqual(frames[-1]["providerCount"], 26)
+        self.assertEqual(frames[-1]["providerCount"], len(server.PROVIDERS) + 1)
         self.assertEqual(frames[-1]["errors"], [])
         self.assertEqual(frames[-1]["devices"], [])
 
@@ -1322,7 +1322,7 @@ class ProcessIsolationTests(unittest.TestCase):
 class CompatibilityCatalogTests(unittest.TestCase):
     def test_catalog_reader_names_and_native_exclusions_align(self):
         result = validate_catalog()
-        self.assertEqual(result["readerCount"], 26)
+        self.assertEqual(result["readerCount"], len(server.PROVIDERS) + 1)
         self.assertEqual(result["nativeProfileCount"], 2)
         self.assertEqual(result["errors"], [])
 
