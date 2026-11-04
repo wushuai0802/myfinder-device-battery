@@ -4,6 +4,8 @@ IDs in the JSON are integers. Optional devices/pack/*.json files use
 {"devices": [{"provider": str, "vendorId": int or hex str,
               "productId": int or hex str, "name": str, "kind": str}]}.
 Unrecognised pack schemas/modules are reported, never inferred as supported.
+For provider sources, unparsed lists modules with no indexed IDs; partial maps
+modules with indexed IDs but incomplete coverage to an explanatory reason.
 """
 from __future__ import annotations
 
@@ -92,7 +94,7 @@ def build_index(root=None):
     root = Path(root) if root else Path(__file__).resolve().parent.parent
     catalog = json.loads((root / "engine/compatibility.json").read_text(encoding="utf-8-sig"))
     readers = {item["provider"]: item for item in catalog["readers"]}
-    devices, vendors, unparsed = set(), {}, set()
+    devices, vendors, unparsed, partial = set(), {}, set(), {}
 
     def add(provider, vid, pid, name, kind):
         vid, pid = word(vid), word(pid)
@@ -157,15 +159,18 @@ def build_index(root=None):
                 for pid in source.get("RECEIVERS"):
                     add(module, source.get("LOGITECH_VID"), pid, "Logitech HID++ 接收器", "device")
                 # Paired model names/kinds and other HID++ identities are dynamic.
-                unparsed.add(module)
+                partial[module] = "已收录耳机和接收器固定 ID，其他 HID++ 设备及配对型号依赖运行时识别。"
             elif module == "mchose":
                 add(module, source.get("G7_VID"), source.get("G7_PID"), "MCHOSE mouse", "mouse")
                 # MODEL_NAMES uses reply model codes, NOT USB product IDs.
-                unparsed.add(module)
+                partial[module] = "已收录 A5 和 G7 固定 ID，其他系列按厂商与 HID 集合动态识别，回复型号代码不是 USB 产品 ID。"
             elif module not in TABLES:
                 unparsed.add(module)  # Includes runtime-only Bluetooth identities.
         except (KeyError, ValueError, TypeError, SyntaxError):
-            unparsed.add(module)
+            if any(row[0] == module for row in devices):
+                partial[module] = "已收录部分固定 ID，但其余定义无法静态解析。"
+            else:
+                unparsed.add(module)
 
     for profile in catalog["nativeProfiles"]:
         add(profile["provider"], profile["match"]["vendorId"], profile["match"]["productId"],
@@ -183,7 +188,7 @@ def build_index(root=None):
     fields = ("provider", "vendorId", "productId", "name", "kind")
     return {"vendors": {key: sorted(value) for key, value in sorted(vendors.items())},
             "devices": [dict(zip(fields, row)) for row in sorted(devices)],
-            "unparsed": sorted(unparsed)}
+            "unparsed": sorted(unparsed), "partial": dict(sorted(partial.items()))}
 
 
 def main():

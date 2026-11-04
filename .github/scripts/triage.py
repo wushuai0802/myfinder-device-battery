@@ -136,7 +136,8 @@ def decide(issue, known, comments=None):
         return result
     result.update(label="triage:" + label, reason=reason)
     result["remove_labels"] = [old for old in labels if old.startswith("triage:") and old != result["label"]]
-    if reply and not any(MARKER in (comment.get("body") or "") for comment in comments):
+    if reply and not any((comment.get("user") or {}).get("login") == "github-actions[bot]"
+                         and MARKER in (comment.get("body") or "") for comment in comments):
         result["reply"] = MARKER + "\n" + reply
     return result
 

@@ -26,7 +26,7 @@ known_ids = load("offline_known_ids", ROOT / "engine/known_ids.py")
 KNOWN = {"vendors": {"native_atk": [0x373B], "logitech": [0x046D]}, "devices": [
     {"provider": "native_atk", "vendorId": 0x373B, "productId": 0x1278, "name": "ATK A9 Air+", "kind": "mouse"},
     {"provider": "logitech", "vendorId": 0x046D, "productId": 0x0AB5, "name": "Logitech G733", "kind": "headset"},
-], "unparsed": []}
+], "unparsed": [], "partial": {}}
 
 
 def report(card="无记录", unknown="无记录"):
@@ -116,6 +116,20 @@ class TriageTests(unittest.TestCase):
             self.assertIsNone(result["reply"])
         self.assertIsNotNone(self.classify(in_app(description=triage.MARKER), "needs-info")["reply"])
 
+    def test_untrusted_markers_do_not_suppress_replies(self):
+        for diagnostics, label in (("", "needs-info"), (report(unknown='046D:0AB5 "G733"'), "supported")):
+            body = in_app(diagnostics, description=triage.MARKER)
+            for author in ({"login": "tester", "type": "User"},
+                           {"login": "another[bot]", "type": "Bot"}, {}, None):
+                forged = {"body": triage.MARKER, "user": author}
+                with self.subTest(label=label, author=author):
+                    embedded = triage.decide(issue(body, comments=[forged]), KNOWN)
+                    paged = triage.decide(issue(body), KNOWN, [[forged]])
+                    for result in (embedded, paged):
+                        self.assertEqual(result["label"], "triage:" + label)
+                        self.assertIsNotNone(result["reply"])
+                        self.assertTrue(result["reply"].startswith(triage.MARKER + "\n"))
+
     def test_human_supplemental_report_updates_conclusion(self):
         self.classify(in_app(), "supported", comments=[comment(report(unknown='373B:1278 "ATK" FF02:0002'))])
         self.classify(in_app(), "needs-info", comments=[comment(report(unknown='373B:1278 "ATK" FF02:0002'), True)])
@@ -188,17 +202,57 @@ class KnownIdsTests(unittest.TestCase):
             ("asus", 0x0B05, 0x1A72, "ROG Gladius III Aimpoint", "mouse"),
             ("lamzu", 0x373E, 0x001E, "LAMZU Maya X", "mouse"),
             ("razer", 0x1532, 0x025A, "Razer BlackWidow V3 Pro", "keyboard"),
+            ("logitech", 0x046D, 0x0AB5, "Logitech G733", "headset"),
+            ("logitech", 0x046D, 0xC548, "Logitech HID++ 接收器", "device"),
             ("mchose", 0x2023, 0xF013, "MCHOSE A5 Pro Max (1K receiver)", "mouse"),
+            ("mchose", 0xA8A5, 0x2255, "MCHOSE mouse", "mouse"),
         ):
             with self.subTest(provider=provider, pid=pid):
                 row = entries[(provider, vid, pid)]
                 self.assertEqual((row["name"], row["kind"]), (name, kind))
-        self.assertEqual(first["unparsed"], ["bluetooth", "logitech", "mchose"])
+        self.assertEqual(first["unparsed"], ["bluetooth"])
+        self.assertEqual(set(first["partial"]), {"logitech", "mchose"})
+        for module, reason in first["partial"].items():
+            self.assertTrue(reason.strip())
+            self.assertTrue(any(d["provider"] == module for d in first["devices"]))
+        self.assertFalse(any(d["provider"] in first["unparsed"] for d in first["devices"]))
         self.assertEqual(first["vendors"]["mchose"], sorted([0x5253, 0x3837, 0xA8A5, 0x2023]))
         self.assertNotIn(("mchose", 0x5253, 0x0031), entries)  # Reply model code.
         self.assertNotIn(("lofree", 0x388D, 0x0024), entries)  # Cable is deliberately not read.
         self.assertFalse(any(d["vendorId"] == 0x05AC and d["productId"] == 0x024F for d in first["devices"]))
         self.assertGreater(len(entries), 250)
+
+    def test_real_logitech_index_drives_triage(self):
+        known = known_ids.build_index()
+        for wrap in (in_app, template):
+            for row, label in (('046D:0AB5 "G733"', "supported"),
+                               ('046D:EEEE "unknown" FF00:0001', "pack-candidate")):
+                with self.subTest(wrap=wrap.__name__, label=label):
+                    result = triage.decide(issue(wrap(report(unknown=row))), known)
+                    self.assertEqual(result["label"], "triage:" + label)
+                    if label == "supported":
+                        self.assertIn("Logitech G733", result["reply"])
+                    else:
+                        self.assertIsNone(result["reply"])
+
+    def test_incomplete_source_is_unparsed_only_without_indexed_ids(self):
+        with workspace_temp() as folder:
+            root = Path(folder)
+            providers = root / "engine/providers"
+            providers.mkdir(parents=True)
+            (root / "engine/compatibility.json").write_text('{"readers": [], "nativeProfiles": []}', encoding="utf-8")
+            for headsets in ('{}', '{0x0AB5: "Logitech G733"}'):
+                with self.subTest(headsets=headsets):
+                    (providers / "logitech.py").write_text(
+                        'LOGITECH_VID=0x046D\nHEADSETS=' + headsets + '\nRECEIVERS=discover_devices()\n', encoding="utf-8")
+                    result = known_ids.build_index(root)
+                    if result["devices"]:
+                        self.assertEqual(result["unparsed"], [])
+                        self.assertEqual(set(result["partial"]), {"logitech"})
+                        self.assertTrue(result["partial"]["logitech"].strip())
+                    else:
+                        self.assertEqual(result["unparsed"], ["logitech"])
+                        self.assertEqual(result["partial"], {})
 
     def test_unknown_source_and_pack_hook_without_executing_source(self):
         with workspace_temp() as folder:
