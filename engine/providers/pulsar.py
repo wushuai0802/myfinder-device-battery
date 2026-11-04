@@ -183,6 +183,9 @@ PIDS: Dict[int, Dict[int, str]] = {
         0x5406: "Pulsar X2 CrazyLight Mini (2.4 GHz)",
         0x3414: "Pulsar X2 CrazyLight Mini (wired)",
     },
+    0x391D: {
+        0x1A1A: "VGN Dragonfly 3 MasterGT",
+    },
 }
 
 # Exact IDs with protocol evidence but no project hardware validation. Unlike

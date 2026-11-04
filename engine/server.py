@@ -50,7 +50,7 @@ PROVIDER_VIDS = {
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
-    "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
+    "pulsar": (0x3554, 0x373B, 0x3770, 0x3710, 0x391D), "jbl": (0x0ECB,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
