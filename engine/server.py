@@ -26,6 +26,8 @@ PROVIDERS = (
     ("razer", "RazerProvider"), ("audeze", "AudezeProvider"),
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
     ("mchose_headset", "MchoseHeadsetProvider"),
+    ("mchose_qhw_keyboard", "MchoseQhwKeyboardProvider"),
+    ("mchose_glw_keyboard", "MchoseGlwKeyboardProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
     ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
@@ -43,6 +45,7 @@ PROVIDER_VIDS = {
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D,),
+    "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
@@ -61,6 +64,16 @@ BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 NO_CHARGING_EVIDENCE = {"bluetooth", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
+KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard"}
+
+
+def keyboard_diagnostics(provider):
+    # These new readers emit only bounded, protocol-owned messages (no paths,
+    # serials, product strings or raw exception text). Do not expose legacy logs.
+    if provider.name not in KEYBOARD_DIAGNOSTICS:
+        return []
+    lines = provider.diagnostics()
+    return lines if len(lines) <= 16 else lines[:6] + lines[-10:]
 
 
 def utcnow():
@@ -424,6 +437,8 @@ def reader_child():
                     candidates = recognized_candidate_count(name, command.get("inventory", []), device_pack)
                 response = {"statuses": [asdict(s) for s in statuses[:MAX_DEVICES]], "checkedAtUtc": utcnow(),
                             "candidateCount": candidates}
+                if name in KEYBOARD_DIAGNOSTICS:
+                    response["diagnostics"] = keyboard_diagnostics(provider)
             elif action == "set_dpi":
                 # Only the selected physical receiver reaches the provider. The
                 # provider re-reads slot/unit, current value and supported range
@@ -588,7 +603,7 @@ class BatteryEngine:
                 "providerCount": len(self.providers), "errors": (list(self.errors) + errors)[:32],
                 "health": health, "checkedAtUtc": utcnow(), "packageSmoke": self.package_smoke}
 
-    def _accept(self, reader_key, name, statuses, now, physical="", candidate_count=0):
+    def _accept(self, reader_key, name, statuses, now, physical="", candidate_count=0, diagnostics=()):
         group = {}
         for key in self.by_provider.get(reader_key, {}):
             self.dpi_targets.pop(key, None)
@@ -618,6 +633,8 @@ class BatteryEngine:
                                    "state": "ok" if group else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),
                                    "reason": "" if group else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
+        if name in KEYBOARD_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
+            self.health[reader_key]["diagnostics"] = [str(line)[:200] for line in diagnostics[-16:]]
 
     def _failure(self, reader_key, name, code):
         for key, value in self.by_provider.get(reader_key, {}).items():
@@ -784,7 +801,8 @@ class BatteryEngine:
                     finally:
                         self._hidlist.enumerate = original
                     misses = getattr(provider, "_misses", {})
-                    self._accept(key, provider.name, [replace(s, cached=s.cached or bool(misses.get(s.key, 0))) for s in statuses], utcnow())
+                    self._accept(key, provider.name, [replace(s, cached=s.cached or bool(misses.get(s.key, 0))) for s in statuses], utcnow(),
+                                 diagnostics=keyboard_diagnostics(provider))
                 except Exception:
                     self._failure(key, provider.name, "read_failed")
                 if progress:
@@ -1022,7 +1040,8 @@ class BatteryEngine:
                             # legacy identity or authorise a cache migration.
                             statuses = [replace(status, legacy_key="") for status in statuses]
                         self._accept(reader_key, name, statuses, valid_time(result.get("checkedAtUtc")) or utcnow(), physical,
-                                     candidate_count=max(0, min(512, int(result.get("candidateCount", 0)))))
+                                     candidate_count=max(0, min(512, int(result.get("candidateCount", 0)))),
+                                     diagnostics=result.get("diagnostics", ()))
                     if progress and partial_count < MAX_PARTIALS:
                         partial_count += 1
                         progress(self._snapshot(request_id, generation, False))

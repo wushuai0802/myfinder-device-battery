@@ -21,6 +21,7 @@ MAX_BYTES = 256 * 1024
 MAX_ENTRIES = 2000
 BRAND_PROVIDERS = frozenset((
     "razer", "audeze", "wlmouse", "mchose", "mchose_headset", "hyperx_alpha2", "hyperx_cloud3",
+    "mchose_qhw_keyboard", "mchose_glw_keyboard",
     "hyperx", "keychron", "pulsar", "jbl", "logitech", "steelseries", "barracuda",
     "asus", "gwolves", "lofree", "astro", "corsair", "lamzu", "am_infinity",
     "steelseries_elite", "logitech_centurion", "hyperx_cloud3s", "nzxt",

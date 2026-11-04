@@ -394,6 +394,11 @@ class MchoseProvider(Provider):
 
         found: Dict[str, List[Tuple[int, bool, int, int]]] = {}   # key -> readings
         for (vid, pid), ifaces in groups.items():
+            if vid == 0x3837 and pid in (0x1015, 0x3033):
+                # Keyboard/shared keyboard PIDs never receive mouse probes,
+                # including when the strict keyboard reader rejects their caps.
+                self._diag.append("[MCHOSE] keyboard identity reserved; no mouse commands sent")
+                continue
             if (vid, pid) == (0x3837, 0x1018):
                 # Feedback #24: A7 V3 shares FF01:0001 with V2 but uses output
                 # report 0x4D, not the inverted 0x11/0x12 feature protocol.

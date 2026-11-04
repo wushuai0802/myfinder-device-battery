@@ -75,7 +75,7 @@ def markdown():
         lines.append("| " + entry["name"] + " | " + ", ".join(entry["kinds"]) + " | " + level + " | " + data["levels"][level] + "；" + entry.get("matchScope", "限代码内既有匹配表") + " |")
     for entry in data["observedUnsupported"]:
         lines.append("| " + entry["name"] + " | " + entry["kind"] + " | " + entry["verificationLevel"] + " | 已发现但未取得电量，不列为兼容 |")
-    lines += ["", "通用读取器基础来源为 HaloBattery `" + data["upstream"]["commit"] + "`；标准HID字段及 MCHOSE V9 PRO 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。",
+    lines += ["", "通用读取器基础来源为 HaloBattery `" + data["upstream"]["commit"] + "`；标准HID字段及 MCHOSE V9 PRO、G98 V3、G87 V2 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。",
               END]
     return "\n".join(lines)
 

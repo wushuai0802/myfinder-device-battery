@@ -37,6 +37,7 @@ TABLES = {
     "keychron": ("PIDS",), "lamzu": ("PIDS",), "lofree": ("DONGLES",),
     "logitech": ("HEADSETS",), "logitech_centurion": ("PIDS",),
     "mchose": ("A5_PIDS",), "mchose_headset": ("PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS",),
+    "mchose_qhw_keyboard": ("PIDS",), "mchose_glw_keyboard": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
 }

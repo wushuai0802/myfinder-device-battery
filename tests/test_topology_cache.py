@@ -130,6 +130,83 @@ class DescriptorCacheTests(unittest.TestCase):
         self.assertNotIn("input_report_length", info)
         self.assertNotIn("output_report_length", info)
 
+    def keyboard_descriptor(self, protocol="qhw", input_ids=(0x4D,), output_ids=(0x4D,)):
+        self.identities[PATH_A] = (0x3837, 0x1015 if protocol == "qhw" else 0x3033)
+        self.products[PATH_A] = "MCHOSE G98 V3 2.4G" if protocol == "qhw" else "MCHOSE G87 V2 2.4G"
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = (0xFF80, 1) if protocol == "qhw" else (1, 0)
+            value.input, value.output = 65, 65
+            value.iv, value.ob = len(input_ids), len(output_ids)
+            return 0x00110000
+
+        def fields(report_type, values, length, data):
+            for value, report_id in zip(values, input_ids if report_type == 0 else output_ids):
+                value.report = report_id
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetValueCaps.side_effect = fields
+        self.hid.HidP_GetButtonCaps.side_effect = fields
+
+    def test_keyboard_report_ids_use_both_value_and_button_caps_and_survive_cache(self):
+        for protocol, inp, out in (("qhw", (0x4D,), (0x4D,)), ("glw", (7,), (0,))):
+            with self.subTest(protocol=protocol):
+                self.cache.clear()
+                self.keyboard_descriptor(protocol, inp, out)
+                first, = self.scan([PATH_A])
+                self.kernel.CreateFileW.reset_mock()
+                second, = self.scan([PATH_A])
+                self.kernel.CreateFileW.assert_not_called()
+                self.assertEqual(first, second)
+                self.assertEqual(first["input_report_ids"], inp)
+                self.assertEqual(first["output_report_ids"], out)
+                self.hid.HidP_GetValueCaps.assert_called()
+                self.hid.HidP_GetButtonCaps.assert_called()
+                self.hid.HidD_GetFeature.assert_not_called()
+                self.hid.HidD_SetFeature.assert_not_called()
+                self.kernel.ReadFile.assert_not_called()
+                self.kernel.WriteFile.assert_not_called()
+
+    def test_multiple_declared_ids_are_preserved_instead_of_guessing_from_max_length(self):
+        self.keyboard_descriptor(input_ids=(0x4D, 0x4E))
+        info, = self.scan([PATH_A])
+        self.assertEqual(info["input_report_ids"], (0x4D, 0x4E))
+
+    def test_keyboard_failed_or_partial_id_discovery_stays_unknown_and_is_retried(self):
+        self.keyboard_descriptor()
+        self.hid.HidP_GetValueCaps.side_effect = lambda *args: 0
+        info, = self.scan([PATH_A])
+        self.assertIsNone(info["input_report_ids"])
+        self.assertNotIn(PATH_A, self.cache)
+
+        def partial(report_type, values, length, data):
+            ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+            return 0x00110000
+
+        self.hid.HidP_GetValueCaps.side_effect = partial
+        info, = self.scan([PATH_A])
+        self.assertIsNone(info["input_report_ids"])
+        self.keyboard_descriptor()
+        self.assertEqual(self.scan([PATH_A])[0]["input_report_ids"], (0x4D,))
+        self.assertIn(PATH_A, self.cache)
+
+    def test_report_id_inspection_does_not_expand_to_other_models_or_collections(self):
+        self.scan([PATH_A])
+        self.hid.HidP_GetValueCaps.assert_not_called()
+        self.hid.HidP_GetButtonCaps.assert_not_called()
+        self.cache.clear()
+        self.keyboard_descriptor()
+        self.products[PATH_A] = "MCHOSE K99 V3 2.4G"
+        self.scan([PATH_A])
+        self.hid.HidP_GetValueCaps.assert_not_called()
+        self.cache.clear()
+        self.keyboard_descriptor()
+        self.hid.HidP_GetCaps.side_effect = self.caps  # wrong collection
+        self.scan([PATH_A])
+        self.hid.HidP_GetValueCaps.assert_not_called()
+
     def test_full_topology_change_reopens_all_selected_paths(self):
         self.scan([PATH_A])
         self.kernel.CreateFileW.reset_mock()

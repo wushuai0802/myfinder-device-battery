@@ -373,6 +373,73 @@ last value on a greyed icon, so live readings want CAM closed.
 
 ## Mice and keyboards
 
+### MCHOSE G98 V3 (3837:1015, QHW)
+
+**Project verification: C, pending hardware validation.** Only the exact product
+string `MCHOSE G98 V3 2.4G` and collection `FF80:0001` are eligible. Both input
+and output must declare only report ID `4D`, with descriptor capacities of at
+least 10 and 8 payload bytes respectively. Windows caps lengths include the ID
+slot. The request is zero-padded to that output capacity; input must have its
+exact descriptor length and ID. Unknown lengths/IDs and ambiguous collections
+are refused before command I/O. No probing on `FF70`, `FF81` or `FF31:0074`.
+
+The only output payload is `01 03 00 04 09 00 ss cc`, where the sequence starts
+at zero, wraps at 256, and `cc = 0E XOR ss`. A reply must echo version, flags,
+command `0904`, bizCode and sequence, and declare exactly two data bytes:
+`charge level`. Percentage is 0..100; charge 0 is discharging, 1 charging,
+2 full (charging=false); other values are rejected. The trailing reply checkCode
+algorithm is unconfirmed and is **not** validated using a guessed XOR. Padding,
+fixed hardware report lengths, full-state behavior, independent cold-start reads
+and stale receiver replies while asleep/off still need real captures.
+
+### MCHOSE G87 V2 (3837:3033, GLW)
+
+**Project verification: C, pending hardware validation.** The PID is shared with
+other keyboards, so the exact product `MCHOSE G87 V2 2.4G` and collection
+`0001:0000` are mandatory. `FF31:0074`, standard keyboard/mouse/consumer
+collections and other product names never receive these requests. Output must
+be unnumbered, 64 payload bytes (65 Windows/hidapi output bytes). Input must
+declare exactly one ID and at least 64 payload bytes. That descriptor ID and
+capacity determine the exact accepted input layout: hidapi strips the zero ID
+slot on unnumbered input, but retains a nonzero ID. Multiple IDs are rejected,
+because collection-wide maximum caps do not prove per-ID capacity.
+
+Only three output requests are used: `04` reads base offset 0/length 56; then
+`05` reads the active profile at offset `64*profile`/length 56 and
+`64*profile+56`/length 8. The `55 cmd 00 sum len offsetLE 00` header is padded
+to 64 payload bytes; sum is the low byte of payload[4..63]. Base data[0] must
+be in 0..3; a 0..3 permutation in data[2..5] maps it to the active slot,
+otherwise the documented legacy direct index is used and diagnosed. Invalid
+indices stop the read; no `setBase`, repair, handshake, heartbeat or settings
+commands are sent. Replies must start `AA`, echo command and offset, and declare
+the full requested length; a short final segment is not a shorter HID report.
+Both segments must be complete before using config[32]: low seven bits are a
+0..100 percentage and bit 7 is charging. A failed read never becomes zero.
+Reply checksum/other header flags are unconfirmed and are not guessed. Active
+profile changes during a read, charging/full transitions, padding, cold-start
+independence and sleep/off caching require hardware acceptance.
+
+For both keyboards, descriptor IDs come from Windows `HidP_GetValueCaps` and
+`HidP_GetButtonCaps` using the existing zero-access discovery handle, without
+reading device input or feature reports. Reads have a one-second/32-frame bound
+per request. The mouse provider explicitly skips both keyboard PIDs even when
+keyboard matching fails. Provider diagnostics record refusals and unconfirmed
+protocol boundaries, also exposed in the engine JSON health diagnostics. Native
+UI text is unchanged and does not consume that additional diagnostics array.
+An unresolved Windows USB parent is refused: path-scoped readers cannot rule out
+another collection belonging to the same receiver. Tests use synthetic HID/caps
+only, not hardware evidence.
+
+Sources: [batch2 research, sections 1/3 and source table M1/M2](research/batch2-protocols.md),
+the official [M HUB application](https://www.mchose.com.cn/assets/main-ChPQDflP.js)
+and [CZ SDK](https://www.mchose.com.cn/cizhou/CZ_SHARED_DATA/main.b1d3fb6f68d495cc5961.js)
+(SHA256 recorded in the research). No open-source reuse licence was found for
+the vendor code. These readers independently implement documented protocol
+facts; no vendor source or automatic repair branch was copied. Community
+G87 `3837:201B`, G87 `41E4:2001`, K99 and G98 V2 protocols are different and
+are not reused. The research table separately records their MIT, missing or
+unverified licence status; none establishes acceptance for these two identities.
+
 ### Keychron Ultra-Link 8K, Keychron M5
 
 **Connection:** 2.4 GHz receiver (3434:D028) and USB cable (3434:D048)

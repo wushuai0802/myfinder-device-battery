@@ -200,6 +200,16 @@ def discover(paths, excluded=(), *, full=False):
                                   ("serial_number", "HidD_GetSerialNumberString")):
                 value = c.create_unicode_buffer(256)
                 info[field] = value.value if getattr(hid, getter)(handle, value, c.sizeof(value)) else ""
+            # The two keyboard protocols require proof of report IDs as well as
+            # capacity. Inspect only their exact identity/collection; no I/O.
+            if caps_complete and attrs.vendor == 0x3837 and (
+                    (attrs.product, info["product_string"], caps.page, caps.usage) in (
+                        (0x1015, "MCHOSE G98 V3 2.4G", 0xFF80, 1),
+                        (0x3033, "MCHOSE G87 V2 2.4G", 1, 0))):
+                from mchose_keyboard_hid import keyboard_caps
+                info.update(keyboard_caps(hid, data, caps))
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("input_report_ids", "output_report_ids"))
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
             inventory.append(info)

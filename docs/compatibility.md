@@ -63,6 +63,8 @@ V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前�
 | WLmouse 已列明型号 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | MCHOSE 已列明协议与型号 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | MCHOSE V9 PRO | headset | C | 协议已接入，待本项目实机验证；仅291D:385D / FF90:0001，输入与输出均为64字节；接电隐藏百分比，不区分充电中与满电；不含Turbo/Turbo+ |
+| MCHOSE G98 V3 | keyboard | C | 协议已接入，待本项目实机验证；仅3837:1015，产品全名 MCHOSE G98 V3 2.4G / FF80:0001；描述符须唯一确认输入/输出ID 4D及容量，未知或多ID拒绝；回复校验算法、补零及休眠缓存待实机确认 |
+| MCHOSE G87 V2 | keyboard | C | 协议已接入，待本项目实机验证；仅3837:3033，产品全名 MCHOSE G87 V2 2.4G / 0001:0000；输出ID 0且64字节payload，输入ID/容量须由描述符唯一确认；只读活动配置，无setBase；回复校验算法及休眠缓存待实机确认 |
 | HyperX Cloud Alpha 2 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud III 与已列明Core变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud II 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
@@ -87,5 +89,5 @@ V9 PRO 的接电状态由读取器输出，但当前原生界面仅在有当前�
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 
-通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。
+通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO、G98 V3、G87 V2 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。
 <!-- END GENERATED COMPATIBILITY CATALOG -->
