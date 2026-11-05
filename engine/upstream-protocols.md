@@ -1065,6 +1065,106 @@ receiver/firmware's matching collection, descriptor-proven input/output or
 feature IDs and lengths, and a battery request/reply tied to that precise
 variant. Further N75 implementation remains deferred under the revised brief.
 
+### Deferred Rapoo 24AE:1412, 1421, 14A1, 1601
+
+**Not implemented; D — user-reported identities, no battery reading from this
+project.** Each PID was checked independently against the official
+[Rapoo A HUB](https://hub.rapoo.cn/) bundle supplied at
+`.ai/evidence/rapoohub/index-cgGQw9wn.js`, retrieved 2026-11-05 from
+`https://hid.rapoo.cn/AHUB_WEB/dist/assets/js/index-cgGQw9wn.js`. SHA256:
+`09a7906e669d75275a77ab394207bb6ab7264efa6eb6998fea3c792a31a36ecf`.
+Only protocol facts were extracted; no vendor implementation was copied.
+No redistribution licence or source commit was supplied for this artifact.
+
+| Target / task diagnosis | Exact official identity and dispatch | Decision |
+| --- | --- | --- |
+| `24AE:1412`, #120 VT3 dual 8K | `model:"VT3"`, `mainControl:"VT3"`, product IDs `[17938,5138]` (`4612,1412`); `dongleModel:"Dongle_NordicL5"`, `driver:"VT_nrf54L"`, MCU `N54L15` | Deferred: passive report fields identified, complete battery exchange not established. |
+| `24AE:1421`, #86 VT3S MAX | `model:"VT3S MAX"`, `mainControl:"VT3S MAX"`, product IDs `[17953,5153]` (`4621,1421`); same dongle/driver/MCU | Deferred independently for the same protocol gaps. |
+| `24AE:14A1`, #54 | `model:"VT0 Air MAX"`, `mainControl:"VT0Air MAX"`, product IDs `[18081,5281]` (`46A1,14A1`); same dongle/driver/MCU | Deferred independently for the same protocol gaps. The exact official name corrects the older batch4 note's shorthand "VT0". |
+| `24AE:1601`, #36 user-reported VT9 PRO | No matching device manifest in this supplied bundle; official class, `mainControl`, `dongleModel` and filters unknown | Deferred: identity-to-protocol mapping and the entire battery exchange remain unproven. |
+
+The first three identities each occur in exactly one product-ID declaration.
+Their official filters all designate **`FF00:0002` as the default
+"Configuration Interface (Secondary)"**. `FF00:000E` is "Only update Firmware";
+`FF00:0001` is "Only update WCH Firmware". Neither update collection is a battery
+fallback. Factory dispatch uses the manifest's `driver`, with
+`VT_nrf54L` registered to `Ik` (`VTNrf54LMouseDevice`, extending `Os`/`Dl`).
+`mainControl` and `dongleModel` identify firmware models rather than selecting
+a different battery class. Each target is the second product ID and selects
+wireless command routing byte `A5`; the paired wired IDs are outside this task.
+
+#### Confirmed Nordic facts and missing exchange evidence
+
+| Item | Observation in the supplied artifact / unresolved boundary |
+| --- | --- |
+| Battery delivery | `Ik.handleReport` handles **Input report ID `07`**, passes the body (excluding report ID) to `Ok`/`dy`, and publishes battery changes. These three manifests use the default retail parser, not the cybercafe wrapper. |
+| Fields | Body `[0]` low nibble is connection protocol, high nibble sensor; `[6]` is `batStatus`, `[7]` is `batPercent`. Thus hidapi's numbered input would place the battery fields at full-report `[7]` and `[8]`. These are status notifications, not proven replies to a battery query. |
+| Length / integrity | `dy` uses defaults for missing bytes and conditionally parses fields through body `[17]`. This proves field offsets, **not** an 8-, 18-, 31- or 63-byte fixed payload. No checksum validation is present in this parser; that does not prove the firmware has no integrity fields. The task diagnostics provide top-level collections, not per-report byte-array descriptors. |
+| Request | No standalone battery query or battery EEPROM address is established for this class. `Ik` installs config/DPI/keys/performance/firmware/pairing features, but no battery feature. Its connection callback reads configuration and DPI; those operations are not documented as battery requests. No request bytes, response correlation, request length or response deadline can therefore be specified. |
+| Host session | WebHID/NodeHID channel open/close only open/close host handles and register/remove input listeners. The base connection session calls the class callback. No Nordic battery-specific enter/exit command was found in these paths. This does not establish when an otherwise idle receiver will emit a fresh status report. |
+| Excluded command families | The AP/Telink3228C `getBatteryLevel:173` / `readBatteryStatus()` and the CH315 `batteryPercent:t[9]` parser belong to other classes. Telink8273's `BB` status path also has no dispatch link to these targets. They cannot supply the missing Nordic exchange. |
+
+In particular, Nordic `en.init_default_flash` is **`AD`**, and
+`zx.initAllConfigs` sends Output ID `06` with body `A5 AD 52 3D` for a wireless
+factory reset. It is **not** the AP class's `AD` battery query. The Nordic
+general command transport uses Output `06` and Feature `08` (busy `02`, OK `01`),
+which are separate from passive Input `07`. No reset, configuration write,
+pairing, firmware operation, guessed unlock frame, report-length trial or
+cross-protocol fallback is implemented or sent.
+
+For `1601`, bounded searches found no standalone decimal `5633`, hexadecimal
+`0x1601`, product-ID declaration containing that value, or exact
+`model:"VT9 PRO"`. The nearby `VT9 PRO V2` uses `46A9/14A9`, not `1601`.
+The older OpenMouse `1205/4405` protocol evidence in
+`research/batch4-protocols.md` still does not establish this target's class.
+
+#### Reproducible source locations
+
+All offsets are zero-based **UTF-16 character offsets**, not UTF-8 byte offsets.
+The following strings are unique within this exact supplied bundle:
+
+| Offset | Searchable anchor | Fact |
+| --- | --- | --- |
+| `1996012` | `RH={channel:["china_game","global"],model:"VT3"` | `1412` manifest and filters |
+| `2004523` | `model:"VT3S MAX",mainControl:"VT3S MAX"` | `1421` manifest and filters |
+| `1952330` | `model:"VT0 Air MAX",mainControl:"VT0Air MAX"` | `14A1` manifest and filters |
+| `120182` | `static create(t,e){const s=this.registry.get(t.driver)` | Factory dispatch key |
+| `815800` | `is.register("VT_nrf54L",Ik)` | Official Nordic class registration |
+| `229394` | `class Ik extends Os` | Wireless PID selection, installed features, connection callback |
+| `231310` | `async handleReport(e,s){if(e===7){const o=Ok` | Nordic input-report selection |
+| `228733` | `batStatus:n[6]??0,batPercent:n[7]??0` | Default retail battery body offsets |
+| `141295` | `const Dl=class Dl` | Base host connection lifecycle |
+| `123291` | `class Po{` | WebHID host handles and input listeners |
+| `126440` | `class Ul{` | NodeHID host handles and numbered input splitting |
+| `1795166` | `function J(K){const te=K.features.battery,me=g.get(K.id);if(!te||!me||!S(K))return` | UI battery query requires a battery feature, absent from `Ik` |
+| `150137` | `yn={outputReportId:6` | Nordic general command IDs and adjacent command table |
+| `162287` | `async initAllConfigs(){const t=en.init_default_flash` | `AD` is factory reset in this class |
+| `620900` | `getBatteryLevel:173` | Different AP command family, not target evidence |
+
+REA static inventory Evidence
+`ev_c916928de743ac34d1ba6c176b1431508231b32d2cd196517037b4dbb558d83a`
+parsed the single supplied JS file without execution or parse errors. Its
+semantic graph reached its node ceiling and is partial; the identity and
+protocol facts above were checked directly in the source. Static analysis
+does not establish firmware behavior or battery accuracy.
+
+To unblock the first three PIDs, obtain their exact collection's per-report
+descriptor (including byte-array proof of ID `07` and its length), a complete
+read-only battery request/reply if one exists, or evidence that passive
+notifications alone provide fresh battery status without setup commands.
+Confirm validity/charging states and sleep/disconnect behavior against actual
+reports; do not turn missing fields or silence into 0%. For `1601`, first obtain
+an exact official device/class/filter mapping, then the corresponding exchange
+and descriptors. A session command, if required, needs evidence of read-only
+semantics and a matching exit before any implementation.
+
+No Rapoo provider, known-ID support registration, device-pack extension or
+topology probing was added. All four are explicitly `compatible:false` in the
+observed-unsupported catalog, not grade C readers. There are no request-byte or
+synthetic-reply tests because no exchange is implemented or invented. No
+hardware was accessed; actual descriptors, freshness, sleep behavior, charging
+and coexistence with the official driver remain unverified.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

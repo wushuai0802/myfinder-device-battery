@@ -112,6 +112,50 @@
       "capabilities": [],
       "reference": "engine/research/batch2-protocols.md#1-g87-v2可实现使用-glw-键盘协议",
       "notes": "#43仅有枚举；K99记录的03命令/回复byte8与G87的05配置D[32]不同，缺少该型号固件复用GLW电量字段的证据，暂不扩展产品名；待描述符、协议字段确认及实机验证。"
+    },
+    {
+      "id": "rapoo_vt3_1412_observed",
+      "name": "Rapoo VT3 (24AE:1412)",
+      "kind": "mouse",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"24AE","productId":"1412","usagePage":"FF00","usage":"0002"},
+      "capabilities": [],
+      "reference": "engine/upstream-protocols.md#deferred-rapoo-24ae1412-1421-14a1-1601",
+      "notes": "#120用户诊断；官方A HUB精确匹配VT3 / VT_nrf54L / Dongle_NordicL5，配置集合FF00:0002。Input 07的payload[6]/[7]为电池状态/百分比，但缺少完整报告长度和独立只读电量请求；不移用Telink AP的AD命令，不注册读取器。"
+    },
+    {
+      "id": "rapoo_vt3s_max_1421_observed",
+      "name": "Rapoo VT3S MAX (24AE:1421)",
+      "kind": "mouse",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"24AE","productId":"1421","usagePage":"FF00","usage":"0002"},
+      "capabilities": [],
+      "reference": "engine/upstream-protocols.md#deferred-rapoo-24ae1412-1421-14a1-1601",
+      "notes": "#86用户诊断；官方A HUB精确匹配VT3S MAX / VT_nrf54L / Dongle_NordicL5，配置集合FF00:0002。与1412分别核对到同一被动Input 07解析类；缺少完整报告长度和独立只读电量请求，不注册读取器。"
+    },
+    {
+      "id": "rapoo_vt0_air_max_14a1_observed",
+      "name": "Rapoo VT0 Air MAX (24AE:14A1)",
+      "kind": "mouse",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"24AE","productId":"14A1","usagePage":"FF00","usage":"0002"},
+      "capabilities": [],
+      "reference": "engine/upstream-protocols.md#deferred-rapoo-24ae1412-1421-14a1-1601",
+      "notes": "#54用户诊断；官方A HUB精确型号是VT0 Air MAX（mainControl=VT0Air MAX），修正旧调研简称VT0。VT_nrf54L / Dongle_NordicL5，配置集合FF00:0002；缺少完整Input 07长度和独立只读电量请求，不注册读取器。"
+    },
+    {
+      "id": "rapoo_vt9_pro_1601_observed",
+      "name": "Rapoo VT9 PRO（用户报告，24AE:1601）",
+      "kind": "mouse",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"24AE","productId":"1601"},
+      "capabilities": [],
+      "reference": "engine/upstream-protocols.md#deferred-rapoo-24ae1412-1421-14a1-1601",
+      "notes": "#36用户诊断；所供A HUB脚本未找到1601/5633设备条目，官方类、配置集合、只读请求、报告ID/长度及回复均未确定。VT9 PRO V2的14A9和OpenMouse的1205不是此PID证据，不注册读取器。"
     }
   ]
 }
