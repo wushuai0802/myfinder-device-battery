@@ -24,7 +24,7 @@ import sys
 REPO = "wushuai0802/myfinder-device-battery"
 MAINTAINER = "wushuai0802"
 BOT = "github-actions[bot]"
-DAILY_CAP = 100
+DAILY_CAP = 200
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NOISE = re.compile(r"HIDI2C|VHF|LED|Touch|Controller|ITE Device|Virtual|OrayVHID|Tecent", re.I)
 ID_LINE = re.compile(r'^\s*([0-9A-F]{4}):([0-9A-F]{4}) "([^"]*)"(.*)$')
