@@ -13,7 +13,10 @@ static class UpdateAnchorTests {
     const BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
     static void Check(bool value,string name){if(!value)throw new Exception("FAIL "+name);checks++;}
     static object Field(object target,string name){return target.GetType().GetField(name,Private).GetValue(target);}
-    static void Pump(Func<bool> done,int timeout=3000){var clock=Stopwatch.StartNew();while(!done()&&clock.ElapsedMilliseconds<timeout){Application.DoEvents();Thread.Sleep(5);}Check(done(),"asynchronous request completes");}
+    // The updated-panel paths deliberately wait about two seconds for a tray icon
+    // before falling back, so a 3 s budget left <1 s of slack under a busy CI/test
+    // host. The budget only bounds waiting; completion is still asserted.
+    static void Pump(Func<bool> done,int timeout=10000){var clock=Stopwatch.StartNew();while(!done()&&clock.ElapsedMilliseconds<timeout){Application.DoEvents();Thread.Sleep(5);}Check(done(),"asynchronous request completes");}
     static void ArgumentsAndForwarding() {
         Check(PanelStartup.Parse(new[]{"--show"})==PanelOpenRequest.Launcher,"legacy show uses launcher placement");
         Check(PanelStartup.Parse(new[]{"--show-updated"})==PanelOpenRequest.Updated,"updated show uses tray placement");
