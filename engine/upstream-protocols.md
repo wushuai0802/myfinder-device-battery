@@ -6,6 +6,198 @@ what comes back, and where each protocol was taken from.
 
 ## Headsets
 
+### ATK N9 headsets (373B:1262, 12D6 and deferred 1204)
+
+**Project verification: C, synthetic tests only; no hardware or network access.**
+The independent `atk_headset` reader enables only the N9 V2 Ultimate receiver
+`373B:1262` (#233) and N9 V2 ULTRA receiver `373B:12D6` (#175). Initial N9
+Ultra `373B:1204` (#172) is a different, serial protocol and remains unsupported.
+The three identities are explicitly excluded from Pulsar's broad ATK mouse
+fallback, before any output-length probe or I/O. RS7 Air `373B:1258` remains
+unsupported as described below. No vendor implementation code was copied.
+
+#### Pinned static evidence and device mapping
+
+Source: the supplied ATK official [web driver](https://v3-hub.atkgear.com/)
+3.2.31 snapshot, acquired 2026-11-06 according to the task brief. Inspection
+was offline; the vendor scripts were never executed. No licence granting
+reuse of the vendor implementation was identified; only protocol facts are
+used. All paths below are under `.ai/evidence/atkhub/`.
+
+| Artifact | SHA256 |
+| --- | --- |
+| `chunks/demoMode.store-DxbvbikM.js` (abbreviated D below) | `c7074e87900c6a5ad7c7cf14a5cb651301db5c596dba047c707e48378811ba5f` |
+| `chunks/base-hid-device-LO0Bgz6G.js` (B) | `6167161fbc554e18a07a1ef051a71f0fcee0a2f9030a32b5000440a9453e85c7` |
+| `index-CZmQJ_5t.js` | `a50c5a635161e4b90600d54e9a79c435d4cb7f8f3ed78c7912b86f700293f77f` |
+| `chunks/keyboard-info.util-BIIiAZ5K.js` | `2c2ba18a25520733e497d4920bc1d057824bd45402f55429f5b9a9f95402bce3` |
+| `chunks/keymap-DgEcmce_.js` | `6fc006ea717fb74e350e9481d4b1939142d40c7191ea7f657ea31be5500face6` |
+
+Offsets below are zero-based UTF-16 character indices in the decoded file
+(PowerShell/.NET string indexing), **not byte offsets**; literal anchors are
+included for independent lookup. The local `chunks.txt` and directory contain
+32 JS chunks, rather than the brief's stated 40; some imports are absent.
+Claims are limited to the traced files and paths, not the complete application.
+REA parsed this tree as inert text, with partial graph coverage (three parse
+failures and the semantic node ceiling). Its retained application evidence is
+`ev_c7ee1fc64b76b59f44acbe062c0c87c550247c6d76272a003869b53341021a18`, summary
+`ev_347c5e384b5c8f3bf189e4a02cd28e8322ceb8ae5e180762647337913d2553f0`.
+The following facts were checked directly in the pinned text rather than
+inferred from graph omissions.
+
+| Identity | Catalog / controller evidence | Decision |
+| --- | --- | --- |
+| `373B:1262` / decimal 4706 | D `productId:4706,usage` at 1041170, `controller:wo`, `model:"bolutek"`, N9 V2 Ultimate | Enable receiver only, C. |
+| `373B:12D6` / decimal 4822 | D `productId:4822` at 1041870, same controller/model, N9 V2 ULTRA | Enable receiver only, C. |
+| `373B:1204` / decimal 4612 | D `productId:4612` at 1040567, `controller:yh`, `model:"n9-pro"`, Electron/Windows only, serial options 9600/8N1 | Record only; do not send HID 55 or mouse 08 frames. |
+| Other N9 catalog entries | Initial Pro `11CB`/wired `11CA`, initial Ultra wired `1203`; V2 Pro receiver `12D4`/wired `12D3`, Ultimate wired `1261`, ULTRA wired `12D5` | Not enabled by this change. V2 entries share `wo`, but these other identities/transports lack the supplied collection diagnostics. |
+
+The headset catalog's `usagePage:12,usage:1` is a consumer-control discovery
+filter, **not** the Windows battery collection. D's Bolutek constants at
+740892 (`var yD=85,kz=65424,Cz=1,Sz=65,Iz=65410,Dz=1,WA=63`) and
+`connectOtaDevices` at 742446 explicitly map same-VID/PID `FF90:0001` to the
+bidirectional report-`55` handle and `FF82:0001` to firmware output report `41`.
+The input handler at 744276 also checks report ID `55`. This unsafe OTA path
+is inspected only to establish channel identity; **none of it is called**.
+The HubKeyBindings selector at D 1519395 independently searches Input report
+`55` and falls back to `FF90:0001`. These facts corroborate the two collections
+reported in #175/#233 without assuming all 373B receivers share a protocol.
+
+#### V2 battery frame, parsing and session boundary
+
+D `var Az=63` at 726108 and `wo=class Uk` at 726954 allocate a zeroed 63-byte
+payload. `getDeviceInfo` at 727406 sets GetBattery `65` and the endpoint byte;
+`Gz.processDeviceInfo` at 760068 calls it with `bd.Headset == 1`. `wo.send` /
+`bz.promiseRun` use output `sendReport(85, payload)`, not a feature transfer.
+The exact hidapi request, including report ID, is:
+
+```text
+55 65 01 [61 zero bytes]                 (64 bytes total)
+```
+
+No checksum, sequence number, authentication token or preliminary identification
+is present in this getter. `wo` inherits B's open/listen lifecycle; B's
+`async connect(){await y(this.device)}` only opens the handle. The `wo`
+constructor starts `regBindDevice()` (D 732426), an asynchronous local
+`bolutekTools` IPC call for audio registry settings, catches failure and does
+not await it or gate `getDeviceInfo` on it. That native implementation is not
+in the snapshot. We neither invoke it nor claim its effects are read-only.
+There is no demonstrated device-side handshake dependency in the inspected
+battery path; standalone reads with the vendor application closed remain
+unverified on hardware. `requiresDriver` in the catalog is not proof that a
+HID battery query requires the vendor's audio driver or registry writes.
+
+D `wp=` at 720935 defines the battery states; `function Ok(t)` at 721962
+accepts command `65` only when the input **payload** has at least 21 bytes.
+It takes payload byte 1 as percentage and byte 2 as status. Including the HID
+report ID, the reader interprets:
+
+| Raw bytes | Meaning / local handling |
+| --- | --- |
+| `[0]=55, [1]=65, [2]=0..100, [3]=02` | Online, discharging; show percentage. |
+| Same header, `[3]=03` | Online, charging; show the reported percentage. |
+| Same header, `[3]=04` | Online, full; charging flag false, as in the official parser. Do not force the reported percentage to 100. |
+| Same header, `[3]=1A` | Official `Unknown` state maps to offline; stop with no reading. |
+| `[0]=55, [1]=0A, [2]=01` | Explicit disconnect event in `bz.onDeviceToHostReportReceived`; stop with no reading. The inverse connect event is not battery evidence. |
+| Other state, invalid percentage/header/length, silence | No new reading, no error. In particular `00` is not an accepted ATK state. |
+
+This deliberately does not reuse MCHOSE's `00/03` external-power semantics,
+despite the identical request prefix. The vendor parser checks no checksum;
+we do not invent one. Its remaining status bytes describe EQ/audio/light and
+firmware versions, which the battery reader does not act on.
+
+`topology.discover` obtains report sizes without commands, only for the two
+exact IDs on `FF90:0001`. A unique collection with descriptor-proven Input
+and Output report `55` is required before opening for I/O. Output must be
+64 bytes. The input length must be proven per report, equal its collection
+maximum and in **22..64 bytes** including ID: 22 follows the vendor's minimum
+21-byte payload, and 64 is a conservative local ceiling, not a captured input
+length. Each accepted reply must exactly match that runtime length. Unknown,
+split/ambiguous descriptors and incompatible lengths fail closed; no sibling,
+feature, mouse or serial fallback is attempted. No actual descriptor was
+available to confirm that these guards pass on either receiver.
+
+One output query is followed by at most one second / 32 input reads; short
+writes are not retried. Off/disconnect/silence returns an empty reading list,
+not 0%, a synthetic error or a fresh disconnected card. Existing engine
+history may remain unconfirmed until the receiver disappears. No wake or
+configuration command is sent to obtain a reading.
+
+#### Commands excluded from the implementation
+
+All V2 frames below use report `55` unless stated otherwise. Command values
+come from D's `qi` enumeration and `wo` methods at 720k..732k; they are not
+part of the allow-list. Only the fixed `55 65 01` query above is exposed.
+
+| Operation | Excluded command / path |
+| --- | --- |
+| EQ / parametric EQ | `21 01 ...` (`setEqMode`); `68 ...` (`setPeqPoint`, `setPeqMultiPoints`). |
+| Lighting | `01` run, `02` stop, `03` configure, `04` data, `05` end; hub light `0E 01 ...`. |
+| Audio / events / timing | Sidetone `07 01 ...`, surround `08 ...`, spatial `09 ...`, key event `0F ...`, auto-power-off `23 01 ...`, prompt volume `24 01 ...`; all registry/audio setters. |
+| Factory reset | `22 01 ...` (`factoryReset`), plus its local registry-reset path. |
+| Firmware mode and data | D `enterUpdate` at 742978 sends raw `55 55 <target> 00 ...` on FF90. Firmware data is report `41` with 63 payload bytes on FF82. Neither collection probing for OTA nor any updater lifecycle is reused. |
+| Pairing | No separate exact pairing request was established in these inspected N9 classes. Do not infer an opcode or invoke key events/reset/OTA as pairing or initialization. |
+| Other reads | Version `AA`, EQ/PEQ/configuration getters and hub-info `10` are unnecessary for battery and never sent. |
+
+#### Deferred initial N9 Ultra and keyboards
+
+Initial N9 Ultra uses D `yh=class extends Uz` (749754), with serial base `t_`
+and options 9600 baud, 8 data bits, no parity, one stop bit, no flow control.
+`getBatteryInfo` (752919), `runCmd` and `dr.createBatteryInfo` (754640) establish
+64-byte **serial** packets: battery `02 00 03` + 61 zeros, connection status
+`02 00 04` + 61 zeros. `createData` removes the first three bytes; data[1]
+(raw byte 4) contains percentage in bits 0..6 and charging in bit 7. Status
+data[1] equal to 1 means connected. The UI first checks status, then battery,
+and rounds values above 89 to 100; that UI policy is not a measured precision.
+These bytes are not HID reports and prove no `FF02:0002` report ID/size or
+safe HID bridge for #172. Serial port association/native transport and any
+native initialization remain unverified, so no reader is added for `1204`.
+Its serial EQ writes (command `03`, subcommands `20/21/22`), microphone writes
+(`02`, `20..24`), effect writes/reset (`04`, `20/21`) and surround writes (`05`,
+`20/21`) are excluded; no exact initial-N9 pairing, lighting, hardware factory
+reset or firmware frame was established in this inspected serial path.
+
+RS7 Air `373B:1258` maps at D `productId:4696` (158274) to `mn`, BITYUAN,
+`FF60:0061`, with `custom Ac` naming ATK RS7 Air. The `mn` controller's
+`async getPowerInfo(){return this.result()}` at 123446 is empty. Its 32-byte,
+report-0 configuration transport is not battery evidence. Do not send its
+reset payload `03 96 15`, lighting writes `07 41 ...`, key/macro/calibration,
+storage or OTA operations to discover battery state.
+
+Other keyboard candidates are recorded, not enabled: D `c3` / `controller:ps`
+at 542184 maps HFD A87 PRO `111E/111F`, A87 Ultra `1231`, A98 `114D/114E`
+and A98 Pro `1151/1152`, all VID `373B`, collection `FF60:0061`. Its `XN`
+getter at 205184 sends report-0 payload `02 96 24` + 29 zeros; payload bytes
+3/4 are level/charging, with nonzero charging hiding percentage. `ZN` queries
+connection using payload `AA FD` + 30 zeros, status byte 2 equal to 1/2 for
+connected/disconnected. Numeric constants are in `keyboard-info.util` at
+95813/97180/98060/98817. Input size, complete response validation and startup
+dependencies were not closed in this review; output size alone proves no input
+length. RS6/RS8 Neo's separate mixed/obfuscated BYKB `getBatteryStatus` path
+was not fully traced. None supplies missing RS7 Air evidence. Other headset
+controllers (Mercury/Ttgk/Ktmicro) are also not declared battery-compatible
+from configuration methods or placeholder power values.
+
+#### Validation and remaining boundaries
+
+Synthetic tests cover exact bytes, all documented V2 battery states, malformed
+and unrelated replies, runtime per-ID length proof, collection/identity gates,
+bounded reads, short writes, handle closure, and absence of every non-battery
+send/feature call. Fake Windows descriptor tests check discovery, cache reuse
+and recovery without hardware I/O. Registration, the offline ID index, grade C,
+scoped headset output and no-error empty readings are covered at the bridge.
+`device_pack.py` receives only the provider name in its existing brand-disable
+allow-list to preserve registration invariants; no configurable protocol is added.
+The generated compatibility section is synchronized without changing its manual
+introduction. The required offline suites passed: 722 engine tests and 350
+project Python tests, including existing ATK/Pulsar coverage. The latter
+reported ResourceWarnings from the unchanged issue-digest file writers;
+there were no test failures.
+
+Actual report descriptors, fresh percentage accuracy, cold independent reads,
+charging/full transitions, power-off/sleep/wake, unplug/replug, concurrent vendor
+software and the native UI remain unverified. No acceptance is inferred from
+static protocol recovery or synthetic success.
+
 ### MCHOSE V9 PRO (291D:385D)
 
 **Project verification: C, pending hardware validation.** This project implements

@@ -2,7 +2,8 @@
 
 MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matching
 (协议族匹配，未实测; level C). Only FF02:0002 with a known output length of exactly
-17 bytes receives the existing power query. FF04/FF05 alone and unknown lengths
+17 bytes receives the existing power query. N9 headset IDs 1204/1262/12D6 are
+excluded before collection/length probing. FF04/FF05 alone and unknown lengths
 are not sufficient. DPI uses a separate exact allow-list below; the server keeps
 native 373B:1278 excluded. Scyrox 3554:F517, VGN F2 Master+ 3554:FB56 and
 VXE R1 SE 1K 3554:F58E also require FF02:0002 and exactly 17 output bytes;
@@ -106,6 +107,8 @@ VOLTAGE_SLICE = (8, 10)
 CONTROL_INTERFACE = 1           # the tool reads its 17-byte replies on interface 1
 CONTROL_USAGE = (0xFF02, 0x0002)   # the collection the OpenMouse ATK/VXE panel opens
 LINK8K_ID = (0x3710, 0x5501)
+# Exact N9 identities use serial/Bolutek, never the broad ATK mouse fallback.
+ATK_HEADSET_PIDS = {0x1204, 0x1262, 0x12D6}
 
 
 class _HIDP_CAPS(ctypes.Structure):
@@ -604,6 +607,9 @@ class PulsarProvider(Provider):
             if vid == 0x373B:
                 candidates += sorted({d["product_id"] for d in infos if d["product_id"] not in pids})
             for pid in candidates:
+                if vid == 0x373B and pid in ATK_HEADSET_PIDS:
+                    self._diag.append(f"  ATK {vid:04x}:{pid:04x} headset reserved: nothing sent")
+                    continue
                 mine = [d for d in infos if d["product_id"] == pid]
                 if not mine:
                     continue

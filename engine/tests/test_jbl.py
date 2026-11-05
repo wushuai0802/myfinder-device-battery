@@ -17,6 +17,7 @@ import threading
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _hidstub  # noqa: E402, F401
@@ -167,6 +168,39 @@ class PollTest(unittest.TestCase):
         self.provider._readers[PATH].thread.join(WAIT)
         self.provider.poll()
         self.assertIn("  open: open failed", self.provider.diagnostics())
+
+    def test_open_failure_survives_observation_before_thread_exit(self):
+        self.rx.open_error = OSError("open failed")
+        with patch.object(J.threading, "Thread") as factory:
+            thread = factory.return_value
+            thread.is_alive.return_value = True
+            # The worker has recorded its error, but has not exited yet.
+            thread.start.side_effect = lambda: factory.call_args.kwargs["target"]()
+            self.provider.poll()
+            self.assertIn("  open: open failed", self.provider.diagnostics())
+            thread.is_alive.return_value = False
+            self.provider.poll()
+            self.assertIn("  open: open failed", self.provider.diagnostics())
+
+    def test_open_failure_between_take_and_exit_check_is_not_discarded(self):
+        self.rx.open_error = OSError("open failed")
+        with patch.object(J.threading, "Thread") as factory:
+            thread = factory.return_value
+            thread.is_alive.return_value = True
+            self.provider.poll()  # Worker has not run yet; no hardware access.
+            reader = self.provider._readers[PATH]
+            take = reader.take
+
+            def finish_after_take():
+                result = take()
+                reader._run()  # Complete the fake open immediately after take.
+                thread.is_alive.return_value = False
+                return result
+
+            with patch.object(reader, "take", side_effect=finish_after_take):
+                self.provider.poll()
+            self.provider.poll()
+            self.assertIn("  open: open failed", self.provider.diagnostics())
 
     def test_reader_stops_when_the_receiver_is_gone(self):
         self.provider.poll()

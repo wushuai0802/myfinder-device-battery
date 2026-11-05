@@ -71,6 +71,7 @@ class _Reader:
         self._level: Optional[int] = None    # newest level since the last take()
         self._power: Optional[bool] = None   # newest 0x09 state since the last take()
         self._lines: List[str] = []          # diagnostics since the last take()
+        self._error: Optional[str] = None    # terminal failure, retained until replacement
         self._reports = 0
         self.heard = threading.Event()       # a level arrived and was not taken yet
         self._stop = threading.Event()
@@ -85,14 +86,17 @@ class _Reader:
 
     def take(self) -> Tuple[Optional[int], Optional[bool], List[str]]:
         with self._lock:
-            out = (self._level, self._power, self._lines)
+            lines = self._lines + ([self._error] if self._error is not None else [])
+            out = (self._level, self._power, lines)
             self._level, self._power, self._lines = None, None, []
             self.heard.clear()
         return out
 
     def _note(self, line: str) -> None:
         with self._lock:
-            self._lines.append(line)
+            # Both callers terminate the worker. Observing the error while the
+            # thread is still exiting must not erase its failure on the next poll.
+            self._error = line
 
     def _run(self) -> None:
         dev = hid.device()
@@ -168,11 +172,15 @@ class JblProvider(Provider):
             reader = self._readers[path] = _Reader(path)
             if self._listen_first:
                 reader.heard.wait(self._listen_first)
+        # Only replace a worker known to have exited BEFORE draining its data.
+        # If it exits after this check, its final reports/error survive to the
+        # next poll instead of being discarded with the old reader.
+        exited = not reader.alive()
         level, on, lines = reader.take()
         self._diag += lines
         if on is not None:
             self._power[path] = on
-        if not reader.alive():
+        if exited:
             # the open failed or the receiver went away: try again, heard on the next poll
             self._readers[path] = _Reader(path)
         return level

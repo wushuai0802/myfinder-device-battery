@@ -361,6 +361,83 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.assertNotIn("output_report_sizes", info)
                 self.hid.HidP_GetValueCaps.assert_not_called()
 
+    def test_atk_headset_report_proof_is_descriptor_only_and_cached(self):
+        from providers import atk_headset
+        for pid in (0x1262, 0x12D6):
+            for length in (22, 64):
+                with self.subTest(pid=pid, input_length=length):
+                    self.cache.clear()
+                    self.hid.HidP_GetValueCaps.reset_mock()
+                    self.batch3_descriptor((0x373B, pid), (0xFF90, 1), {0x55: length}, {0x55: 64})
+                    first, = self.scan([PATH_A])
+                    self.assertEqual(first["input_report_sizes"], {"85": length})
+                    self.assertEqual(first["output_report_sizes"], {"85": 64})
+                    self.assertEqual(atk_headset.AtkHeadsetProvider()._pick([first]), first)
+                    self.assertEqual([call.args[0] for call in self.hid.HidP_GetValueCaps.call_args_list], [0, 1])
+                    self.assertEqual(self.kernel.CreateFileW.call_args.args[1], 0)
+                    self.kernel.CreateFileW.reset_mock()
+                    self.assertEqual(self.scan([PATH_A]), [first])
+                    self.kernel.CreateFileW.assert_not_called()
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
+    def test_atk_headset_failed_report_proof_is_retried_and_wrong_ids_rejected(self):
+        from providers import atk_headset
+        for direction in (0, 1):
+            for defect in ("failure", "nonbyte", "alias", "partial"):
+                with self.subTest(direction=direction, defect=defect):
+                    self.cache.clear()
+                    self.batch3_descriptor((0x373B, 0x1262), (0xFF90, 1), {0x55: 64}, {0x55: 64})
+                    original = self.hid.HidP_GetValueCaps.side_effect
+
+                    def fields(report_type, values, length, data):
+                        result = original(report_type, values, length, data)
+                        if report_type == direction:
+                            if defect == "failure":
+                                return 0
+                            if defect == "nonbyte":
+                                values[0].bits = 16
+                            elif defect == "alias":
+                                values[0].alias = 1
+                            elif defect == "partial":
+                                ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+                        return result
+
+                    self.hid.HidP_GetValueCaps.side_effect = fields
+                    info, = self.scan([PATH_A])
+                    self.assertIsNone(atk_headset.AtkHeadsetProvider()._pick([info]))
+                    self.assertNotIn(PATH_A, self.cache)
+                    self.batch3_descriptor((0x373B, 0x1262), (0xFF90, 1), {0x55: 64}, {0x55: 64})
+                    recovered, = self.scan([PATH_A])
+                    self.assertEqual(atk_headset.AtkHeadsetProvider()._pick([recovered]), recovered)
+        self.cache.clear()
+        self.batch3_descriptor((0x373B, 0x1262), (0xFF90, 1), {0x41: 64}, {0x55: 64})
+        wrong_id, = self.scan([PATH_A])
+        self.assertIsNone(atk_headset.AtkHeadsetProvider()._pick([wrong_id]))
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
+    def test_atk_headset_proof_never_expands_to_firmware_or_other_devices(self):
+        for identity, collection in (((0x373B, 0x1262), (0xFF82, 1)),
+                                     ((0x373B, 0x12D6), (0xFF82, 1)),
+                                     ((0x373B, 0x1262), (0xFF90, 2)),
+                                     ((0x373B, 0x1204), (0xFF90, 1)),
+                                     ((0x373B, 0x1258), (0xFF60, 0x61)),
+                                     ((0x373B, 0x12D4), (0xFF90, 1)),
+                                     ((0x291D, 0x1262), (0xFF90, 1))):
+            with self.subTest(identity=identity, collection=collection):
+                self.cache.clear()
+                self.hid.HidP_GetValueCaps.reset_mock()
+                self.batch3_descriptor(identity, collection, {0x55: 64}, {0x55: 64})
+                info, = self.scan([PATH_A])
+                self.assertNotIn("input_report_sizes", info)
+                self.assertNotIn("output_report_sizes", info)
+                self.hid.HidP_GetValueCaps.assert_not_called()
+
     def test_batch3_report_sizes_are_per_id_cached_and_descriptor_only(self):
         cases = (((0x320F, 0x706E), (0xFF1C, 0x92), {4: 64}, {4: 64}),
                  ((0x3554, 0xFA09), (0xFF04, 2), {19: 20}, {19: 20}),

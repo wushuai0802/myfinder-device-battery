@@ -211,6 +211,8 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_ids", "output_report_ids"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x373B, 0x1262, 0xFF90, 0x0001),
+                    (0x373B, 0x12D6, 0xFF90, 0x0001),
                     (0x3710, 0x5501, 0xFF02, 0x0002),
                     (0x3554, 0xFA09, 0xFF04, 0x0002),
                     (0x41E4, 0x2001, 0xFF04, 0x0002),
