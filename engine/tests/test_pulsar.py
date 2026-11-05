@@ -319,6 +319,10 @@ class PulsarTest(unittest.TestCase):
             for pid in pids:
                 with self.subTest(vid=vid, pid=pid):
                     bus = FakeBus(vid, pid, [reply(33)])
+                    if (vid, pid) == (0x3710, 0x5501):
+                        for col in bus.cols:
+                            col.info.update(input_report_length=17, output_report_length=17,
+                                            input_report_sizes={"8": 17}, output_report_sizes={"8": 17})
                     # Newly admitted CompX IDs require descriptor evidence; legacy models still
                     # exercise the established unknown-length allowance here.
                     strict = (vid, pid) in ((0x3554, 0xF517), (0x3554, 0xFB56),
