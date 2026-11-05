@@ -101,6 +101,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 | MCHOSE K99 V3 2.4G (3837:3033) | keyboard | D | 已发现但未取得电量，不列为兼容 |
+| Pulsar Link 8K 接收器（用户报告，3710:5501） | mouse | D | 已发现但未取得电量，不列为兼容 |
 | Rapoo VT9 PRO（用户报告，24AE:1601） | mouse | D | 已发现但未取得电量，不列为兼容 |
 
 通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO / V9 Turbo+、G98 V3、G87 V2、G3M PRO、EWEADN S9、Flydigi APEX5 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。

@@ -1341,6 +1341,109 @@ does not supply their exact target usage/report descriptor variants or prove
 which named devices take feature vs output transport. They are **recorded only,
 not enabled**. FA07 and other keyboard/mouse identities are also excluded.
 
+### Pulsar Link 8K receiver 3710:5501
+
+**2026-11-05: recorded only, not implemented.** The task brief identifies #134's
+receiver as `3710:5501`. The supplied Pulsar web driver has the same CompX battery
+request and field positions as `providers/pulsar.py`, but does **not** establish
+this receiver's usage page/usage or descriptor report lengths. Do not infer
+`FF02:0002` from another CompX receiver or from the application's transmit buffer.
+No IDs, battery reads, identification handshake or DPI support are added here.
+The catalog records this reported device as **D / compatible=false**, not C
+(which means a protocol has actually been integrated).
+
+#### Local evidence and reproducible anchors
+
+Only the supplied `.ai/evidence/pulsarhub/` snapshot was inspected; no website,
+device or updater was run. The brief attributes it to
+`https://bbb.pulsar.gg/cMouse/`; `cfg.json` reports version `1.3.13`.
+Protocol facts below are independently described, not copied implementation code.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `app.2262e49f.js` | `45ee1dca4bd3196dbf5cfad73b984c5e592d03ad15a501cfad76b751e2b5cec5` |
+| `cfg.json` | `85e02f7f77e71236b6acfe30c6a04ed91593e4aeeb8b947796711214a6d94d52` |
+| `devicename.json` | `b0470ebf70f0ffbb2eed597f92cc381fc5eb5c2d7924560c2969d0fc6debe8e9` |
+| `sensor.json` | `72c4b019ad255c2ca0f5b66599e43df1798b9299d380dc108eff81245185cdb6` |
+| `chunk-vendors.adfd4048.js` | `770bd14f84ba13a767099b5bb91e394afa784c6fa87c16d3298c1b3390b598d8` |
+
+Anchors below are function/symbol names and zero-based UTF-16 character offsets
+in the hashed application file (not byte offsets). REA static inventory Evidence
+`ev_dc65d32b33630ad67fc6cf363ac765f6f3136f88881fd2a1d78ccb5c54bdc757`
+parsed both JS files without parse errors; its semantic graph is partial. The
+following conclusions use direct inspection of the named functions and JSON,
+not a claim of complete automatic data-flow recovery or observed execution.
+
+| Question | Observed static evidence / boundary |
+| --- | --- |
+| USB selection | `cfg.json` `/vid` and `/pid/mouse/wireless`; filter construction near `94319` forms the Cartesian product of the VID list and all configured PIDs. This includes `3710:5501`, but does not prove that every generated pair is a real product. |
+| Collection | `Ut` at `40090`, repeated in `ds` at `48225`: one input report, one output report, output report ID equal to `mt=8` (`37676`). Neither predicate checks usage page, usage, report size/count or input report ID. `os` separately accepts incoming report ID 8. |
+| Missing descriptor | All five supplied files contain no `usagePage`, `usage`, `reportSize`, `reportCount`, `reportDescriptor` or `HIDP_CAPS` fields. No device descriptor/capture is supplied. The exact target collection and its input/output lengths remain unknown. |
+| Request | `ut.BatteryLevel=4` (`36122`), `hs` (`48118`), checksum `cs` (`47852`), sender `ls` (`47519`): 16 payload bytes sent with report ID 8. Including that ID, the full request is `08 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 49`; the sum modulo 256 is `55`. This matches `make_request()` byte for byte. Buffer length is not descriptor evidence. |
+| Reply | `os` (`43145`) reads the 16-byte payload excluding report ID: command at 0, success status at 1, percentage at 5, charging iff byte 6 equals 1, voltage at 7–8 big-endian. Including report ID, these are raw bytes 1, 2, 6, 7, 8–9. The snapshot does not establish that every actual reply has exactly this payload length. |
+| Model identity | `gs` (`48918`) sends command `01` with an eight-byte payload (four random bytes, then four zeros). `os` takes CID, MID, transport type and dongle type from payload 9–12 (raw 10–13). `deviceConnect` near `95000` matches CID/MID against `cfg.json` mouse entries and selects `sensor.json`; the name handler near `117062` uses matching CID and `name[MID-1]` in `devicename.json`. PID `5501` alone does not identify the paired mouse. No live CID/MID is available. |
+
+The raw battery field layout agrees with the existing reader for normal 0/1
+charging flags, but the complete behavior is **not identical**. The web handler
+updates battery only for status zero and treats charging as exactly 1; the
+existing parser does not check status and treats any nonzero charging byte as
+true. Conversely, the existing parser validates checksum and percentage range;
+the web battery handler has no equivalent checks. The web UI also smooths and
+persists the displayed percentage, whereas the provider returns the raw level.
+These differences are recorded without changing any existing supported model.
+
+`Cs` (`49818`) wraps the battery request in `ys(1)` / `ys(0)` device-online
+commands (command `03`, payload byte 5 toggled), and the driver has a separate
+PC-driver-status command `02`. It is unknown whether this receiver answers a
+standalone `04` query without that session setup. The web retry timing, UI
+smoothing and initialization are not permission to reproduce its state changes.
+The existing provider's bounded timeouts and sleeping/history behavior are
+unchanged; none has been verified on this receiver.
+
+#### State-changing paths — never send for this investigation
+
+The `ut` command map at `36122` declares the following operations. The distinction
+between a declaration and a directly traced sender matters: declarations alone
+do not prove execution on `3710:5501`.
+
+| Operation | Commands / anchors |
+| --- | --- |
+| Pair / factory reset | `05 DongleEnterPair` (`ws`) and `09 ClearSetting` (`xs`), both directly constructed and sent. `06 GetPairState` only polls the result; do not start pairing to identify the mouse. |
+| Write configuration / active profile | `07 WriteFlashData`, directly sent by `Qs` (`54288`) and `ei` (`54693`) for settings, DPI, keys and macros; `0F SetCurrentConfig` in `$s`. |
+| Driver/session state | `02 PCDriverStatus` in `fs`; `03 DeviceOnLine` with the control byte changed in `ys`; command `01` is the random identity handshake, whose side effects are not established. None is required or sent by this investigation. |
+| Other settings | Declared `14 Set4KDongleRGB`, `16 SetLongRangeMode`, `18 SetPulsarDongleLightParam`, `23 SetPulsarDongleKeyFunction`, `25 SetPulsarDongleDPILightParam`, `27 SetPulsarDongleOButtonCurrentMode`, `29 SetPulsarDongleOButtonFunction`; these have setter paths using `us`. Also declared: `0B SetDeviceVidPid`, `0C SetDeviceDescriptorString`, `0D EnterUsbUpdateMode`, `11 EnterMTKMode`, `B0 MusicColorful`, `B1 MusicSingleColor`, `F0 WriteKBCIdMID`; do not treat the declaration as a verified target-specific frame. |
+| Firmware / bootloader | Separate updater map `oe` (`25977`) defines `B0 Cmd_PrepareDownLoad` and `B1 Cmd_DownLoadFile` (distinct from the music-command namespace), and packet markers `C0`/`C1`. `Ge` (`31473`) loads reset/prepare/data commands, report IDs and endpoints from a firmware file; `qe` (`33686`) sends reset-to-update, and `ze`/`it` send preparation and firmware data with output or feature reports. Firmware files are absent, so the exact target boot/reset frames cannot be established. Never fetch firmware or invoke this updater. |
+
+No application code was executed and no commands were sent. Since `3710:5501`
+remains outside `PIDS`, even a synthetic `FF02:0002` / 17-byte collection must not
+open a HID I/O handle. Tests cover this exclusion and the shared request/normal
+reply facts using synthetic data, not a captured hardware exchange.
+
+#### Other configured receiver candidates — not newly enabled
+
+The wireless PID list is `5406, 5502, 5501, 5504, 5407, F517, 5601, 5603`.
+Existing `3710:5406` and `3554:F517` keep their separate prior evidence and
+behavior. The remaining Cartesian-product candidates are recorded only:
+
+| VID | PIDs not currently claimed by this provider |
+| --- | --- |
+| `3710` | `5502`, `5501`, `5504`, `5407`, `F517`, `5601`, `5603` |
+| `3554` | `5406`, `5502`, `5501`, `5504`, `5407`, `5601`, `5603` |
+
+All lack the same exact-collection/descriptor proof in this snapshot; no
+additional real products or mouse model names are inferred. The configured
+keyboard and wired PID lists are not expanded by this receiver task.
+
+To revisit implementation, obtain the target receiver's descriptor (usage
+page/usage, report IDs and input/output sizes), a standalone read-only `04`
+request/reply trace with status/checksum, and evidence of normal charging flags
+or their encoding. Then apply an exact VID:PID/collection/descriptor gate and
+separate any target-specific parser differences. Sleep/wake, cached readings,
+charging transitions and paired-model identity still require hardware evidence.
+`server.py` already includes VID `3710`; `known_ids.py` derives its supported
+PIDs from the provider table. Neither that table nor `topology.py` is changed
+while the descriptor prerequisite is missing.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

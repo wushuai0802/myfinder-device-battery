@@ -116,6 +116,17 @@
       "notes": "#43仅有枚举；K99记录的03命令/回复byte8与G87的05配置D[32]不同，缺少该型号固件复用GLW电量字段的证据，暂不扩展产品名；待描述符、协议字段确认及实机验证。"
     },
     {
+      "id": "pulsar_link_8k_5501_observed",
+      "name": "Pulsar Link 8K 接收器（用户报告，3710:5501）",
+      "kind": "mouse",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {"vendorId":"3710","productId":"5501"},
+      "capabilities": [],
+      "reference": "engine/upstream-protocols.md#pulsar-link-8k-receiver-37105501",
+      "notes": "#134任务简报报告；官方网页快照含该VID/PID且04电量帧与CompX相同，但未提供usagePage/usage及输入输出报告描述符；状态与充电标志解析也有差异。仅记录，不注册、不打开、不发送；补齐描述符与只读回复证据后再接入，尚非C级。"
+    },
+    {
       "id": "rapoo_vt9_pro_1601_observed",
       "name": "Rapoo VT9 PRO（用户报告，24AE:1601）",
       "kind": "mouse",
