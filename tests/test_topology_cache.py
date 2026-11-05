@@ -234,6 +234,7 @@ class DescriptorCacheTests(unittest.TestCase):
     def test_batch3_report_sizes_are_per_id_cached_and_descriptor_only(self):
         cases = (((0x320F, 0x706E), (0xFF1C, 0x92), {4: 64}, {4: 64}),
                  ((0x3554, 0xFA09), (0xFF04, 2), {19: 20}, {19: 20}),
+                 ((0x41E4, 0x2001), (0xFF04, 2), {19: 20}, {19: 20}),
                  ((0x320F, 0x5088), (0xFF1C, 0x92), {4: 64}, {4: 64}),
                  ((0x089D, 0x062F), (0xFF01, 0x10), {0: 33}, {0: 33}),
                  ((0x37D7, 0x2501), (0xFFA0, 1), {4: 32}, {3: 32, 8: 13}))
@@ -254,7 +255,13 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.kernel.WriteFile.assert_not_called()
 
     def test_fa09_single_byte_selector_arrays_are_proven_without_device_commands(self):
-        self.batch3_descriptor((0x3554, 0xFA09), (0xFF04, 2), {19: 20}, {19: 20})
+        self.by_single_byte_selector_arrays((0x3554, 0xFA09))
+
+    def test_41e4_single_byte_selector_arrays_are_proven_without_device_commands(self):
+        self.by_single_byte_selector_arrays((0x41E4, 0x2001))
+
+    def by_single_byte_selector_arrays(self, identity):
+        self.batch3_descriptor(identity, (0xFF04, 2), {19: 20}, {19: 20})
         original = self.hid.HidP_GetCaps.side_effect
 
         def caps(data, pointer):
@@ -328,6 +335,11 @@ class DescriptorCacheTests(unittest.TestCase):
     def test_batch3_size_discovery_does_not_expand_to_nearby_devices(self):
         for identity, collection in (((0x320F, 0x5055), (0xFF1C, 0x92)),
                                      ((0x3554, 0xFA09), (0xFF02, 2)),
+                                     ((0x41E4, 0x2001), (0xFF02, 2)),
+                                     ((0x41E4, 0x2001), (0xFF04, 1)),
+                                     ((0x41E4, 0x2201), (0xFF00, 2)),
+                                     ((0x41E4, 0xFA09), (0xFF04, 2)),
+                                     ((0x3554, 0x2001), (0xFF04, 2)),
                                      ((0x3554, 0xFA07), (0xFF04, 2)),
                                      ((0x320F, 0x5088), (0xFF1C, 0x91)),
                                      ((0x089D, 0x062F), (0xFF00, 0)),

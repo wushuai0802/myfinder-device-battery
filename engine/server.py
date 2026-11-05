@@ -57,7 +57,7 @@ PROVIDER_VIDS = {
     "vgn_keyboard": (0x320F,),
     "vgn_dragonfly3": (0x391D,), "ninjutso_legacy": (0x1915,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
-    "mchose_by_keyboard": (0x3554,),
+    "mchose_by_keyboard": (0x3554, 0x41E4),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
     "rapoo": (0x24AE,),
@@ -519,7 +519,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return 0
     module = importlib.import_module("providers." + name)
     inventory = device_pack.select_inventory(name, inventory)
-    if name == "mchose_headset":
+    if name in ("mchose_headset", "mchose_by_keyboard"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if (d.get("vendor_id"), d.get("product_id")) in module.PIDS})
     pids = set()

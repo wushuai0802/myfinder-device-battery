@@ -1,4 +1,4 @@
-"""M HUB BY keyboard receiver: model-gated, read-only 3554:FA09 support.
+"""M HUB BY keyboard receivers: model-gated 3554:FA09 / 41E4:2001 reads.
 
 Protocol facts independently implemented from main-DCRwBIvm.js, not vendor
 code. See upstream-protocols.md for framing, identification and untested limits.
@@ -7,7 +7,11 @@ Only generic receiver names take this wireless path; no substring brand guesses.
 import battery_hid as H
 
 VID = 0x3554
-PIDS = {0xFA09: "MCHOSE BY keyboard (model identification required)"}
+# Exact pairs, never a cross product of vendor and product IDs.
+PIDS = {
+    (0x3554, 0xFA09): "MCHOSE BY keyboard (model identification required)",
+    (0x41E4, 0x2001): "MCHOSE BY keyboard (model identification required)",
+}
 RECEIVER_NAMES = frozenset(("2.4G Wireless Receiver", "MCHOSE 2.4G Wireless"))
 
 # Six-byte model identifiers from M HUB's keyboardPwds table, not credentials.
@@ -71,7 +75,8 @@ def parse_reply(reply):
 
 class MchoseByKeyboardProvider(H.BatteryHidProvider):
     name = "mchose_by_keyboard"
-    vid, pids = VID, PIDS
+    vid = VID
+    pids = {pid: name for (vid, pid), name in PIDS.items() if vid == VID}
     collection = (0xFF04, 0x0002)
     input_id = output_id = 0x13
     input_bounds = (20, 20)
@@ -97,7 +102,20 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
 
     def poll(self):
         self._seen = set()
-        result = super().poll()
+        result, diagnostics = [], []
+        original = self.vid, self.pids
+        try:
+            # Reuse the same descriptor gate and state machine for each exact
+            # vendor's PID table. Prune identity/back-off caches only after BOTH
+            # inventories, so polling one vendor never forgets the other.
+            for vid in sorted({vid for vid, _ in PIDS}):
+                self.vid = vid
+                self.pids = {pid: name for (vendor, pid), name in PIDS.items() if vendor == vid}
+                result.extend(super().poll())
+                diagnostics.extend(self._diag)
+        finally:
+            self.vid, self.pids = original
+            self._diag = diagnostics
         for cache in (self._models, self._attempts):
             for key in [k for k in cache if k not in self._seen]:
                 del cache[key]

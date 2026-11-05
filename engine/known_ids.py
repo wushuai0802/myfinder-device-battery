@@ -159,7 +159,7 @@ def build_index(root=None, *, engine_root=None):
                             if module == "razer" and "KEYBOARD_INTERFACE" in source.values else set())
             for table in TABLES.get(module, ()):
                 # Each table has an explicit VID relation, not a cross product.
-                if module == "mchose_headset":
+                if module in ("mchose_headset", "mchose_by_keyboard"):
                     for key, value in source.table(table):
                         identity = source.literal(key)
                         # Older snapshots used one VID and integer PID keys.

@@ -820,8 +820,9 @@ and [CZ SDK](https://www.mchose.com.cn/cizhou/CZ_SHARED_DATA/main.b1d3fb6f68d495
 (SHA256 recorded in the research). No open-source reuse licence was found for
 the vendor code. These readers independently implement documented protocol
 facts; no vendor source or automatic repair branch was copied. Community
-G87 `3837:201B`, G87 `41E4:2001`, K99 and G98 V2 protocols are different and
-are not reused. The research table separately records their MIT, missing or
+G87 `3837:201B`, G87 `41E4:2001`, K99 and G98 V2 protocols differ from these
+QHW/GLW readers and are not reused here. `41E4:2001` is now separately gated by
+the [BY reader](#mchose-41e42001-and-other-41e4-identities). The research table records their MIT, missing or
 unverified licence status; none establishes acceptance for these two identities.
 
 ### Keychron Ultra-Link 8K, Keychron M5
@@ -1222,8 +1223,11 @@ that recognized receiver. `getDevName` also recognizes named K99_V2/G98/X75/
 X75_V2/GX87/GX87_V2/K87/G75_Pro variants, but that alone does not prove they use
 the wireless rather than wired transport.
 
-This implementation supports **only those two exact generic wireless names**
-and re-reads the model every poll. It never trusts an injected/cached `realName`,
+This implementation supports **only those two exact generic wireless names**.
+It identifies a recognized model once per observed plug-in; an unknown model
+is remembered without further sends until removal. Silent identification is
+retried on the next poll, then backs off from 60 seconds to at most 30 minutes.
+It never trusts an injected/cached `realName`,
 a substring such as `X75`, the manufacturer string, or the USB ID alone. The
 following source-table codes are protocol facts, not passwords or credentials:
 
@@ -1340,6 +1344,69 @@ appears with FF00/FF04 in the filter table and K99/K87 naming logic. The evidenc
 does not supply their exact target usage/report descriptor variants or prove
 which named devices take feature vs output transport. They are **recorded only,
 not enabled**. FA07 and other keyboard/mouse identities are also excluded.
+
+#### MCHOSE 41E4:2001 and other 41E4 identities
+
+**Implemented, C / synthetic tests only, 2026-11-05.** The same source artifact
+and SHA-256 above establish that `41E4:2001` uses **the identical BY wireless
+identity/battery path** when its product name is exactly `MCHOSE 2.4G Wireless`
+or `2.4G Wireless Receiver`. The task's #169 diagnostics identify the receiver
+as `MCHOSE 2.4G Wireless`, with `FF04:0002` and `FF02:0002`; they do not supply
+raw reports or prove their sizes. Only `FF04:0002` is eligible here. At runtime
+the same preparsed-descriptor proof must establish one input and one output
+byte-array report, each ID `0x13` and 20 bytes including the report-ID slot.
+Unknown lengths, extra IDs, an ambiguous collection or a different product
+name fail closed before any battery/identity handle is opened.
+
+Evidence chain in `main-DCRwBIvm.js` (named anchors, not copied implementation):
+
+| Anchor | Static observation and consequence |
+| --- | --- |
+| `HidIndexDeviceFilters`, `getDeviceMapInner` predicates `la`, `ca`, `pa` | `16868:8193` / page `65284` is selected by both `la` and `ca`; FA09 is `13652:64009` / page `65284` in `pa`. Both feed the same device map. |
+| `getDeviceMapInner` constants `va`, `Ca`, functions `Va`, `Ba`, `keyboardPwds` | Exact generic names enter the same `getPassWord` query and exact six-byte match against all 18 model codes above. Only a match produces `realName` with the model suffix; the unresolved generic entry is removed. There is no additional PID/model cross-product restriction. |
+| `registerHidDevice`, `instantiateDevice`, `defaultWirelessRID`, `diffRID` | Both generic names create `HidDeviceHandler` with `isWired=false`, report ID 19. Every model's wireless RID is 19; the 6/9 distinction is for wired feature reports only. |
+| `configManagerMap`, `readCommand`, `crcHandler16`, `genCommandHandler` | Both IDs use the exact 20-byte `13 05 ... 19` and `13 4A ... 5E` requests above, additive request checksum included. WebHID sends 19 data bytes with report ID 19 separately. No VID/PID-dependent frame or checksum branch is present in this read path. |
+| `DeviceManager.handleInputReport`, `handleCommandResponse`, `getPassWordParserWireless`, `getBatteryParser(false)`, `Parser.generateBit` | Same reply assembly, six-byte model code at HID offsets 5..10, percentage at 5, full flag in the low nibble and charge flag in the high nibble at 6. The trailer is discarded, not checksum-validated; input report ID/length are not checked upstream, hence our conservative descriptor gate. |
+| `isValidPrefix`, home battery function `Nd`, `resolveBatteryIcon` | The identified generic receiver enters the BY `getBattery` call. Charging is charge flag 1 below 100%; the full flag does not override percentage. The PID-based `getDevName` defaults (`G87` / `G75_V2`) apply to named devices, not an unidentified generic receiver. |
+
+REA parsed this supplied tree without executing it (Evidence
+`ev_162220dc08fe53e87d23d4e5d7c36c3d45ce64d42db5ccb9952aa6c29a630c6c`;
+summary `ev_45a313db6506e640effb350cfd228af8557a462b8de73fe34a989eaafef4b1f4`).
+Its semantic graph reached the node ceiling; the table's specific branches and
+shared method bodies were inspected directly. This proves static reuse for
+the selected names/IDs, not complete bundle coverage or device execution.
+
+The provider adds only the exact pair `41E4:2001`, retaining `3554:FA09`;
+`3554:2001` and `41E4:FA09` are not accepted. It shares the existing codec,
+model gate, bounded reads and zero-percent rejection. Model/unknown/silent
+back-off caches remain per physical receiver and path across both vendor
+inventories, and are pruned only after both have been polled. No model name is
+guessed from PID 2001. The **state-changing commands excluded** are the same
+complete BY map listed above: wireless `01` key settings, `02` per-key RGB,
+`03` macros, `04` performance, `06` reset and `09` lighting (wired `03`, `06`,
+`05`, `04`, `04`, `10`, respectively). This reader can only send identity `05`
+and battery `4A`; it never invokes any setter, feature operation, firmware or
+pairing path. No authentication/unlock or wake command is added.
+
+Other literal product IDs for VID 16868 in this bundle were checked separately:
+
+| PID (decimal / hex) | Upstream route / limit | Decision |
+| --- | --- | --- |
+| 8705 / `2201` | `la`, page `FF00`; `getDevName` selects G87 for named devices. A non-generic name uses wired feature ID 6, a different transport/frame. | Record only; no exact usage/report descriptor evidence for a wireless variant. |
+| 8196 / `2004`, 8707 / `2203` | `ua`, page `FF00`; named UT98 or G98_V2 in `getDevName`, wired feature ID 9 via `diffRID`. | Record only; same class family does not prove the 20-byte wireless descriptor/transport. |
+| 4353 / `1101`, 4354 / `1102` | `ryMouseFilters`, `getMouseMapInner` and the mouse branch of `Nd`; pages `FF01` / `FF0B`. | Mouse paths, not BY receiver evidence; never queried by this reader. |
+| 4097 / `1001`, 4099 / `1003`, 4612 / `1204` | `getMouseMapInner` and the mouse branch of `Nd`, page `FF00`. | Record only; no BY receiver claim. |
+| Other `21xx` literals in `HidIndexDeviceFilters` / `getDeviceMapInner` | Standard page `0001:0000` or `FF00:0001` entries, without the `la`/`ca`/`ua` BY identity evidence above. | Not enabled; protocol, generic-name eligibility and exact descriptor variant are not established here. |
+
+Validation uses synthetic descriptor/reply fixtures, including the complete
+FA09 behavioral suite applied to `41E4:2001`, G87/G75_V2 identity results, exact
+request bytes, forbidden-send traces, independent two-vendor caches, scoped
+reader-child transport and stale-reading preservation. **No hardware was
+opened or queried.** Actual #169 report descriptors, firmware behavior, reply
+checksum, cold-start independence, sleeping/cached replies, charge transitions
+and coexistence with M HUB remain unverified. These are the same acceptance
+limits as FA09, not evidence of a different wire protocol. Dynamic remote M HUB
+configuration and other firmware versions are outside this static snapshot.
 
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
