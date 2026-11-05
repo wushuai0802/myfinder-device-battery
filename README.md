@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.3.8-beta.4**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.3.8-beta.5**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.3.8-beta.5 新增 ATK F1 V3 等 CompX 鼠标的 DPI 档位切换，以及雷柏 VT3 系列电量（均待实机验证）。
 
 1.3.8-beta.4 修复“我的反馈”窗口卡死；新增 VGN 蜻蜓 3 SE、Ninjutso Sora V2（待实机验证）。
 
