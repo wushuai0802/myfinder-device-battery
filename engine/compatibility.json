@@ -48,6 +48,7 @@
     }
   ],
   "readers": [
+    {"provider":"rog_omni_keyboard","name":"ROG Strix Scope II 96 Wireless / Omni","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/rog_omni_keyboard.py","matchScope":"仅0B05:1ACE接收器 MI_02 FF02/FF00、64字节且描述符匹配；配对列表必须唯一包含1AB0键盘于report 2；只读A0 00与12 01；一次46%读数与用户约40%相近，未有精确对照；充电、休眠、断连和其他型号未实测","reference":"engine/upstream-protocols.md#rog-strix-scope-ii-96-wireless-via-omni"},
     {"provider":"razer","name":"Razer 已列明鼠标、耳机与键盘","kinds":["mouse","headset","keyboard"],"verificationLevel":"C","source":"engine/providers/razer.py","matchScope":"限代码内既有匹配表；含 Viper V3 Pro SE（1532:00DE / 00DF，transaction 0x1F），待实机验证","reference":"engine/upstream-protocols.md#razer-viper-v3-pro-se"},
     {"provider":"audeze","name":"Audeze Maxwell 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/audeze.py"},
     {"provider":"wlmouse","name":"WLmouse 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/wlmouse.py"},
