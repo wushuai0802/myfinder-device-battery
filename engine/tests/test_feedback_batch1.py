@@ -122,13 +122,20 @@ class FeedbackProtocolTests(unittest.TestCase):
         read.assert_called_once_with(next(d["path"] for d in infos if d["usage_page"] == 0xFF01))
 
     def test_only_supported_new_ids_enter_the_offline_index(self):
-        entries = {(d["vendorId"], d["productId"]): d for d in known_ids.build_index()["devices"]}
+        rows = known_ids.build_index()["devices"]
+        entries = {(d["vendorId"], d["productId"]): d for d in rows}
         entry = entries[(0x3554, 0xF517)]
         self.assertEqual((entry["provider"], entry["name"], entry["kind"]),
                          ("pulsar", "Scyrox 8K 接收器", "mouse"))
         v3 = entries[(0x3837, 0x1018)]
         self.assertEqual((v3["provider"], v3["kind"]), ("mchose", "mouse"))
-        keyboard = entries[(0x3554, 0xFA09)]
+        # FA09 now has separate FF04 M HUB and FF02 VGN HUB readers. Do not
+        # collapse their provider identity just because the USB pair is shared.
+        keyboards = {d["provider"]: d for d in rows
+                     if (d["vendorId"], d["productId"]) == (0x3554, 0xFA09)}
+        self.assertEqual(set(keyboards), {"mchose_by_keyboard", "vgn_beiying"})
+        self.assertEqual(keyboards["vgn_beiying"]["kind"], "keyboard")
+        keyboard = keyboards["mchose_by_keyboard"]
         self.assertEqual((keyboard["provider"], keyboard["kind"]), ("mchose_by_keyboard", "keyboard"))
         self.assertIn("model identification required", keyboard["name"])
         self.assertNotIn((0x3554, 0xFA07), entries)

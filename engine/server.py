@@ -28,6 +28,7 @@ PROVIDERS = (
     ("mchose_headset", "MchoseHeadsetProvider"),
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
     ("vgn_keyboard", "VgnKeyboardProvider"),
+    ("vgn_beiying", "VgnBeiyingProvider"),
     ("vgn_dragonfly3", "VgnDragonfly3Provider"),
     ("ninjutso_legacy", "NinjutsoLegacyProvider"),
     ("flydigi", "FlydigiProvider"),
@@ -55,6 +56,7 @@ PROVIDER_VIDS = {
     "mchose_headset": (0x291D, 0x3837),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "vgn_keyboard": (0x320F,),
+    "vgn_beiying": (0x258A, 0x3554, 0x391D),
     "vgn_dragonfly3": (0x391D,), "ninjutso_legacy": (0x1915,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
@@ -78,7 +80,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard"}
+KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying"}
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -519,7 +521,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return 0
     module = importlib.import_module("providers." + name)
     inventory = device_pack.select_inventory(name, inventory)
-    if name in ("mchose_headset", "mchose_by_keyboard"):
+    if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if (d.get("vendor_id"), d.get("product_id")) in module.PIDS})
     pids = set()

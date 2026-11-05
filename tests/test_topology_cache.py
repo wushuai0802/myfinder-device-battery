@@ -334,7 +334,7 @@ class DescriptorCacheTests(unittest.TestCase):
 
     def test_batch3_size_discovery_does_not_expand_to_nearby_devices(self):
         for identity, collection in (((0x320F, 0x5055), (0xFF1C, 0x92)),
-                                     ((0x3554, 0xFA09), (0xFF02, 2)),
+                                     ((0x3554, 0xFA09), (0xFF02, 1)),
                                      ((0x41E4, 0x2001), (0xFF02, 2)),
                                      ((0x41E4, 0x2001), (0xFF04, 1)),
                                      ((0x41E4, 0x2201), (0xFF00, 2)),

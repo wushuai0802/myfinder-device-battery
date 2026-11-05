@@ -41,6 +41,7 @@ TABLES = {
     "mchose_by_keyboard": ("PIDS",),
     "g3m": ("PIDS",), "eweadn": ("PIDS",), "flydigi": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
+    "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
@@ -159,7 +160,7 @@ def build_index(root=None, *, engine_root=None):
                             if module == "razer" and "KEYBOARD_INTERFACE" in source.values else set())
             for table in TABLES.get(module, ()):
                 # Each table has an explicit VID relation, not a cross product.
-                if module in ("mchose_headset", "mchose_by_keyboard"):
+                if module in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
                     for key, value in source.table(table):
                         identity = source.literal(key)
                         # Older snapshots used one VID and integer PID keys.

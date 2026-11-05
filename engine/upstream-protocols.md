@@ -1408,6 +1408,129 @@ and coexistence with M HUB remain unverified. These are the same acceptance
 limits as FA09, not evidence of a different wire protocol. Dynamic remote M HUB
 configuration and other firmware versions are outside this static snapshot.
 
+### VGN beiying keyboard receivers
+
+**C / 258A:024F 用户实机验证，#190；其余五条仅官方静态协议证据，待本项目实机验证。**
+Thanks to **shijiu599** for issue **#190**, the V98 Pro V3 receiver readout,
+the 99% plugged/unplugged comparison, and the fixed-usage descriptor proof
+proposal. The supplied issue is `.ai/evidence/issue-190.md`; its saved Chinese
+text has encoding damage, but the code, IDs and numeric frame evidence are
+legible. This implementation shares BY framing with MCHOSE rather than copying
+the proposed provider or vendor code.
+
+Source: the supplied [VGN HUB bundle](https://drive.vgnlab.com.cn/assets/index-ZngoA_qG.js),
+`.ai/evidence/vgnhub/index-ZngoA_qG.js`, 2,960,070 bytes, SHA-256
+`53adfab22f478249bdb9117bb26cedf8a7d3c6c561f2f2eb735e7d86e943be63`.
+REA parsed this file without execution (Evidence
+`ev_8b7ab4ceabb53af4ff5db48e9d6a240b92c7f4b397bd4055665c804a651413ae`;
+summary `ev_2125bf75a686ed414ee5d9794386480c969df554682a41136f95715cec7914b7`).
+Its semantic graph reached its node ceiling; the following findings were
+checked directly against source anchors, not inferred from complete graph coverage.
+Offsets below are zero-based UTF-16 character offsets in this exact bundle.
+
+#### Complete beiying device table and routing
+
+All 14 `customDeviceType:"beiying"` rows use `deviceKeyboard`. IDs, collections
+and report IDs below are hexadecimal. The table starts at offset 1715479;
+the last row starts at 1721391. Only the six `receiver:true` rows are enabled.
+
+| VID:PID | Official product | Collection | Report | Decision |
+| --- | --- | --- | --- | --- |
+| `258A:024E` | VGN V98pro V3 | `FF00:0001` | `09` | Wired; excluded |
+| `258A:024F` | VGN V98pro V3 | `FF02:0002` | `13` | Enabled; user hardware evidence #190 |
+| `258A:027E` | VGN V98pro V3 | `FF00:0001` | `09` | Wired; excluded |
+| `258A:027F` | VGN V98pro V3 | `FF02:0002` | `13` | Enabled; static evidence only |
+| `258A:010C` | VXE V87pro | `FF00:0001` | `06` | Wired; excluded |
+| `3554:FA09` | VXE V87pro | `FF02:0002` | `13` | Enabled; static evidence only |
+| `258A:026A` | VGN V87 V2 | `FF00:0001` | `09` | Wired; excluded |
+| `258A:027B` | VGN V87 V2 | `FF02:0002` | `13` | Enabled; static evidence only |
+| `391D:2003` | VGN N75 V2 | `FF00:0001` | `09` | Wired; excluded |
+| `391D:2A01` | VGN N75 V2 | `FF02:0002` | `13` | Enabled; static evidence only |
+| `391D:2004` | VGN N75 V2 | `FF00:0001` | `09` | Wired; excluded |
+| `391D:2005` | VGN V108 | `FF00:0001` | `09` | Wired; excluded |
+| `391D:2006` | VGN V108 | `FF00:0001` | `09` | Wired; excluded |
+| `391D:2A02` | VGN V108 | `FF02:0002` | `13` | Enabled; static evidence only |
+
+The N75 receiver row also contains `path:"mi_01&col01"`. The inspected WebHID
+read path uses `getDevice`'s exact VID/PID match and collection page/usage,
+not that path string or a product-name/model whitelist. `isBeiyingDongle`
+(2873695) explicitly lists all six pairs. The branch at 2878686 selects `ns`
+for N75, `ds` for V87pro, otherwise `As`, installs `readBuffer`, then calls
+`getDeviceInfo` -> `getBatteryInternal`. Constructors only initialize host
+state; this battery path does not call a model query, `getDeviceAllData`,
+configuration setters, unlock, pairing or wake commands.
+
+`As` (2064857), `ns` (2120381) and `ds` (2168848) all use report 19 and the
+same battery command. `getCrc` seeds the report ID and adds the WebHID data
+bytes; `sendCmd` pads to 19 data bytes and calls output `sendReport`, not a
+feature operation. Complete hidapi request, including the report-ID slot:
+
+```text
+13 4A 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 5E
+```
+
+`readBuffer` accepts command `4A` and reads WebHID data `[4]` (full-frame
+`[5]`) as percentage. It reads/discards data `[5]`; it does not establish
+charging semantics or verify the response checksum. Issue #190 supplies the
+additional evidence: full-frame `[6]` bit `0x10` changed with external power
+at the same 99%, with trailers `D3` plugged and `C3` unplugged. The sum of the
+preceding 19 bytes modulo 256 matches both. A request without the checksum
+was reported silently discarded. This is user-reported hardware evidence,
+not a capture made by this task.
+
+`by_keyboard.py` now holds the existing fixed BY read frames and single-packet
+payload parser. MCHOSE retains its FF04 collection, generic-name/model gate,
+identity caching/back-off, zero-percent refusal, nibble semantics and lack of
+reply-checksum validation. `providers/vgn_beiying.py` instead reads directly,
+requires the reply checksum, rejects echo/bad header/length/out-of-range
+percentage, and accepts 0..100 without inventing MCHOSE's zero-asleep policy.
+Only `258A:024F` reports charging as known; other IDs leave it unknown. At
+100%, bit 4 is not forced off: full-on-external-power semantics remain untested.
+`3554:FA09 / FF02:0002` and MCHOSE's `FF04:0002` remain separate endpoints;
+neither this row nor the PID alone proves compatibility with other brands.
+
+#### Descriptor gate and excluded state changes
+
+Every enabled pair requires a unique FF02:0002 collection under a resolved
+physical parent and **one input and one output report, ID 13, exactly 20 bytes
+including ID**, proven at runtime. Unknown or mismatched lengths, extra report
+IDs and ambiguous endpoints cause no reader open or send. Existing byte-value
+and 0..255-selector proofs remain supported. The additional
+`battery_hid.fixed_usage_report_size` proof requires one non-aliased button cap,
+Data/Array flags, non-range repeated fixed usage, no value caps, and
+`report_count == maximum - 1`. Topology opts into this fallback only for the
+six exact pairs and FF02:0002, never for wired devices or MCHOSE's FF04 path.
+It uses cached preparsed descriptors only; no input/output/feature transfers.
+Failed proof is not cached as success and can be retried at later discovery.
+
+The state-changing commands found in the beiying controller classes are:
+
+| Transport / command | Effect and source anchors | Reader policy |
+| --- | --- | --- |
+| Receiver `01` | Key/layer remapping, disable/clear keys; `setKey`, `clearAllKey`, `sendKeyMatrixPackets` | Never sent |
+| Receiver `02` | Per-key custom RGB, including clearing custom lighting; `sendCustomLightingPackets` | Never sent |
+| Receiver `03` | Macro storage; `setMacro` / `setMacroInternal` | Never sent |
+| Receiver `04` | Profile/performance, OS mode, Win/all-key locks, debounce/tap delay, direction keys, dormancy and lighting settings; `sendProfilePackets` | Never sent |
+| Receiver `09` | Lighting color tables; `sendKeyboardLightPackets` | Never sent |
+| Receiver factory reset | `factoryDataReset` / `factoryDataResetInternal` compose profile, custom-color, color-table and key writes above; no standalone reset needed | Never invoked |
+| Wired feature `03`, `04`, `05`, `06`, `0A` | Key matrix, profile, macros, custom RGB, color table respectively; `_o`, `is`, `rs` setters / `sendCmdWithBuffer` / `sendCmdProfile` | All wired endpoints and feature APIs excluded |
+| Wired N75 feature `08` | `is.sendRhythm` writes a 378-byte rhythm-light buffer | Never sent |
+
+The provider exposes only the fixed `4A` battery request, once per poll per
+eligible receiver, with no write retry and bounded input reads. It does not
+send even the read-only `05` model query or other configuration reads; no
+firmware, pairing or reset entry point is implemented. Synthetic write traces
+assert the entire packet, so any command other than this battery request fails.
+
+Tests cover both #190 charging frames, checksum corruption, percentage limits,
+echo rejection, all six pairs, crossed/wired IDs, descriptor positive/negative
+cases, isolation/JSON preservation, history on silence and existing MCHOSE BY
+behavior. **This task did not access hardware or the network.** Remaining
+unknowns: sibling descriptors/reply checksums and firmware behavior in practice,
+full-charge external-power meaning, zero-percent/sleep/cached replies, repeated
+polling, cold starts and coexistence with VGN HUB. No current hardware acceptance
+or new verification level is inferred from synthetic tests.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

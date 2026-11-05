@@ -5,6 +5,7 @@ code. See upstream-protocols.md for framing, identification and untested limits.
 Only generic receiver names take this wireless path; no substring brand guesses.
 """
 import battery_hid as H
+from by_keyboard import identity_request, make_request, payload as _payload
 
 VID = 0x3554
 # Exact pairs, never a cross product of vendor and product IDs.
@@ -28,26 +29,6 @@ MODEL_CODES = {
     "0300000001ed": "GX87_V2", "030000000135": "K87",
     "030000000335": "G75_V2", "0a0000000034": "G87_V2",
 }
-
-
-def identity_request():
-    return [0x13, 0x05, 0x01] + [0] * 16 + [0x19]
-
-
-def make_request():
-    return [0x13, 0x4A, 0x01] + [0] * 16 + [0x5E]
-
-
-def _payload(reply, command):
-    # M HUB strips the four-byte packet header and last byte, and accepts
-    # command + total + sequence. Restrict these tiny reads to one packet.
-    # Its input handler does NOT verify the last-byte checksum; do not invent
-    # a response algorithm from the request's additive checksum.
-    if (len(reply) != 20 or any(type(b) is not int or not 0 <= b <= 255 for b in reply)
-            or list(reply[:4]) != [0x13, command, 1, 0]
-            or list(reply) in (identity_request(), make_request())):
-        return None
-    return reply[5:19]
 
 
 def parse_model(reply):

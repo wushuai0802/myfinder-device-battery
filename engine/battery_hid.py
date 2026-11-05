@@ -24,7 +24,7 @@ READ_TIMEOUT_MS = 1000
 MAX_READS = 32
 
 
-def byte_report_sizes(api, data, caps, report_type):
+def byte_report_sizes(api, data, caps, report_type, *, allow_fixed_usage=False):
     """Prove sizes of simple, non-aliased byte arrays, or fail closed.
 
 One value-cap per ID supplies the entire payload. A collection maximum must
@@ -35,7 +35,10 @@ String keys survive the reader child's JSON boundary without conversion.
                                (caps.ob, caps.ov, caps.output),
                                (caps.fb, caps.fv, caps.feature))[report_type]
     if buttons and not count:
-        return byte_array_report_size(api, data, buttons, maximum, report_type)
+        sizes = byte_array_report_size(api, data, buttons, maximum, report_type)
+        if sizes is None and allow_fixed_usage:
+            sizes = fixed_usage_report_size(api, data, buttons, maximum, report_type)
+        return sizes
     if buttons or not 1 <= count <= 32 or not 2 <= maximum <= 4096:
         return None
     fn = api.HidP_GetValueCaps
@@ -89,9 +92,31 @@ def byte_array_report_size(api, data, buttons, maximum, report_type):
     return {str(field.report): maximum}
 
 
-def battery_caps(api, data, caps):
-    return {"input_report_sizes": byte_report_sizes(api, data, caps, 0),
-            "output_report_sizes": byte_report_sizes(api, data, caps, 1)}
+def fixed_usage_report_size(api, data, buttons, maximum, report_type):
+    """Prove #190's lone fixed-usage Data,Array report; opt-in identities only.
+
+    HIDP_BUTTON_CAPS lacks an element width. One non-aliased item, a repeated
+    fixed usage, and report_count == maximum - 1 establish a byte-array payload
+    including the report-ID slot. Mixed fields are rejected by the caller.
+    """
+    if buttons != 1 or not 2 <= maximum <= 4096:
+        return None
+    fn = api.HidP_GetButtonCaps
+    fn.argtypes = [c.c_int, c.POINTER(Buttons), c.POINTER(c.c_ushort), c.c_void_p]
+    fn.restype = c.c_int32
+    fields, actual = (Buttons * 1)(), c.c_ushort(1)
+    if fn(report_type, fields, c.byref(actual), data) != 0x00110000 or actual.value != 1:
+        return None
+    field = fields[0]
+    if (field.alias or field.field & 0x03 or field.is_range
+            or field.usage_min != field.usage_max or field.report_count != maximum - 1):
+        return None
+    return {str(field.report): maximum}
+
+
+def battery_caps(api, data, caps, *, allow_fixed_usage=False):
+    return {"input_report_sizes": byte_report_sizes(api, data, caps, 0, allow_fixed_usage=allow_fixed_usage),
+            "output_report_sizes": byte_report_sizes(api, data, caps, 1, allow_fixed_usage=allow_fixed_usage)}
 
 
 class BatteryHidProvider(Provider):

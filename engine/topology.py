@@ -222,6 +222,19 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            # Fixed-usage arrays are enabled only for VGN HUB's exact beiying
+            # receiver pairs/collection, never for M HUB's FF04 BY endpoint.
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x258A, 0x024F, 0xFF02, 0x0002),
+                    (0x258A, 0x027F, 0xFF02, 0x0002),
+                    (0x258A, 0x027B, 0xFF02, 0x0002),
+                    (0x3554, 0xFA09, 0xFF02, 0x0002),
+                    (0x391D, 0x2A01, 0xFF02, 0x0002),
+                    (0x391D, 0x2A02, 0xFF02, 0x0002)):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and attrs.vendor == 0x24AE and attrs.product in (0x1412, 0x1421, 0x14A1) and (
                     caps.page, caps.usage) == (0xFF00, 0x0002):
                 # Passive Rapoo input only: never query feature/output reports.
