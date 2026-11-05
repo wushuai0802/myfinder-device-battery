@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.3.8-beta.2**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.3.8-beta.3**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.3.8-beta.3 设备休眠时不再显示红色错误，改为“动一下即可刷新”的提示。
 
 1.3.8-beta.2 新增 VGN 2.4G 键盘接收器（S99 / V98 PRO / VXE75 V2 等）；修复手柄显示为通用设备；手动安装可自动关闭正在运行的程序。
 
