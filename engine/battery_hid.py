@@ -33,6 +33,8 @@ String keys survive the reader child's JSON boundary without conversion.
 """
     buttons, count, maximum = ((caps.ib, caps.iv, caps.input) if report_type == 0
                                else (caps.ob, caps.ov, caps.output))
+    if buttons and not count:
+        return byte_array_report_size(api, data, buttons, maximum, report_type)
     if buttons or not 1 <= count <= 32 or not 2 <= maximum <= 4096:
         return None
     fn = api.HidP_GetValueCaps
@@ -50,6 +52,42 @@ String keys survive the reader child's JSON boundary without conversion.
     return sizes if max(sizes.values()) == maximum else None
 
 
+class Buttons(c.Structure):
+    _fields_ = [("page", c.c_ushort), ("report", c.c_ubyte), ("alias", c.c_ubyte), ("field", c.c_ushort),
+                ("link", c.c_ushort), ("link_usage", c.c_ushort), ("link_page", c.c_ushort),
+                ("is_range", c.c_ubyte), ("str_range", c.c_ubyte), ("designator_range", c.c_ubyte),
+                ("absolute", c.c_ubyte), ("report_count", c.c_ushort), ("reserved2", c.c_ushort),
+                ("reserved", c.c_uint32 * 9), ("usage_min", c.c_ushort), ("usage_max", c.c_ushort),
+                ("string_min", c.c_ushort), ("string_max", c.c_ushort),
+                ("designator_min", c.c_ushort), ("designator_max", c.c_ushort),
+                ("index_min", c.c_ushort), ("index_max", c.c_ushort)]
+
+
+def byte_array_report_size(api, data, buttons, maximum, report_type):
+    """Prove the size of a lone byte-selector array report, or fail closed.
+
+    Some vendor collections (VGN 320F:5088) declare their payload as one
+    Input/Output(Data,Array) item with usages 0..255, i.e. one byte per element.
+    Windows reports such arrays as a single button cap without an element count,
+    so the size is the collection maximum - valid only when this is the only
+    item and the only report ID in the collection for that direction.
+    """
+    if buttons != 1 or not 2 <= maximum <= 4096:
+        return None
+    fn = api.HidP_GetButtonCaps
+    fn.argtypes = [c.c_int, c.POINTER(Buttons), c.POINTER(c.c_ushort), c.c_void_p]
+    fn.restype = c.c_int32
+    fields, actual = (Buttons * 1)(), c.c_ushort(1)
+    if fn(report_type, fields, c.byref(actual), data) != 0x00110000 or actual.value != 1:
+        return None
+    field = fields[0]
+    # Main-item bit 1 (Variable) clear = array; byte selectors span exactly 0..255.
+    if (field.alias or field.field & 0x02 or not field.is_range
+            or field.usage_min != 0 or field.usage_max != 255):
+        return None
+    return {str(field.report): maximum}
+
+
 def battery_caps(api, data, caps):
     return {"input_report_sizes": byte_report_sizes(api, data, caps, 0),
             "output_report_sizes": byte_report_sizes(api, data, caps, 1)}
@@ -59,6 +97,7 @@ class BatteryHidProvider(Provider):
     """Each subclass supplies one exact identity and one fixed read request."""
     charging_known = False
     verification_level = "C"
+    read_timeout_ms = READ_TIMEOUT_MS
 
     def __init__(self):
         self._diag = []
@@ -98,7 +137,7 @@ class BatteryHidProvider(Provider):
             self._diag.append("short/failed battery query write; no retry")
             return None
         length = info["input_report_length"] - (self.input_id == 0)
-        deadline = time.monotonic() + READ_TIMEOUT_MS / 1000
+        deadline = time.monotonic() + self.read_timeout_ms / 1000
         for _ in range(MAX_READS):
             remaining = deadline - time.monotonic()
             if remaining <= 0:

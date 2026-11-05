@@ -32,6 +32,9 @@ class VgnKeyboardProvider(BatteryHidProvider):
     output_bytes = 64
     kind = "keyboard"
     verification_level = "A"  # One maintainer reading; not all shared-ID devices.
+    # The dongle answers about 1.03 s after the query (VGN HUB capture and maintainer
+    # test), past the shared 1 s budget; asleep or awake, the reply is that slow.
+    read_timeout_ms = 2500
     make_request = staticmethod(make_request)
     parse_reply = staticmethod(parse_reply)
 
