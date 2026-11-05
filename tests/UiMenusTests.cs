@@ -104,11 +104,67 @@ static class UiMenusTests {
     }
     static void PreferenceOrder(){
         using(var f=new Fixture()){
-            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preferences include theme style and the requested noninteractive groups");
+            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preferences include theme style, font size and the requested noninteractive groups");
             f.Page(PopupPage.Preferences);var toggle=f.Find("自动检查反馈回复");Check(toggle.Id==226&&toggle.Checked,"feedback checking defaults on in the settings page");f.Activate(toggle);
             Check(!DeviceSettings.Current.CheckFeedbackReplies&&f.Saves==1,"feedback checking toggle uses the existing configuration writer");
             var beta=f.Find("提醒测试版更新");Check(beta.Id==227&&beta.Checked,"beta update reminders default on in the settings page");f.Activate(beta);
             Check(!DeviceSettings.Current.IncludeBetaUpdates&&f.Saves==2,"beta reminder toggle uses the existing configuration writer");
+        }
+    }
+    static bool IsInteger(float value){return Math.Abs(value-(float)Math.Round(value))<.001f;}
+    static void FontSizePreferencesAndLayout(){
+        string root=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"ui-font-settings-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);string path=Path.Combine(root,"settings.json");
+        Check(new AudioBindings().FontSize=="normal"&&DeviceSettings.LoadBindings(path).FontSize=="normal","new and missing configurations default FontSize to normal");
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"Theme\":\"dark\",\"MouseAlias\":\"保留鼠标\"}");
+        var legacy=DeviceSettings.LoadBindings(path);Check(legacy.FontSize=="normal"&&legacy.Theme=="dark"&&legacy.MouseAlias=="保留鼠标","legacy configuration defaults FontSize to normal without losing fields");
+        foreach(string mode in new[]{"normal","large","unknown",null}){
+            var candidate=legacy.Clone();candidate.FontSize=mode;DeviceSettings.SaveBindings(path,candidate);
+            var loaded=DeviceSettings.LoadBindings(path);string expected=mode=="large"?"large":"normal";
+            Check(loaded.FontSize==expected&&loaded.Clone().FontSize==expected&&loaded.MouseAlias=="保留鼠标","FontSize round-trips and normalizes: "+(mode??"null"));
+        }
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"FontSize\":{},\"MouseAlias\":\"对象回退\"}");
+        var malformed=DeviceSettings.LoadBindings(path);Check(malformed.FontSize=="normal"&&malformed.MouseAlias=="对象回退","non-string FontSize falls back to normal");
+        using(var f=new Fixture()){
+            f.Owner.NativeMousePresent=true;f.Owner.Current=new BatteryReading {Percent=82,TimestampUtc=DateTime.UtcNow};
+            f.Owner.Dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("font-test"),ActiveStage=1,TimestampUtc=DateTime.UtcNow};
+            foreach(int v in new[]{400,800,1600,3200})f.Owner.Dpi.Stages.Add(new DpiStage {XDpi=v,YDpi=v});
+            f.Owner.Headset=new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=64,BatteryTimestampUtc=DateTime.UtcNow};
+            f.Owner.Audio=new AudioReading {TimestampUtc=DateTime.UtcNow,SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="桌面扬声器",HeadsetAvailable=true,HeadsetId="headset",HeadsetName="无线耳机",MicrophoneAvailable=true,MicrophoneId="mic",MicrophoneMuted=false,ActiveOutput="speaker",ConsoleOutputId="speaker",MultimediaOutputId="speaker",VolumeEndpointId="speaker",OutputVolumePercent=50,Devices=new[]{new AudioDeviceChoice {Id="speaker",Name="桌面扬声器",Flow=0,FormFactor=1},new AudioDeviceChoice {Id="headset",Name="无线耳机",Flow=0,FormFactor=3},new AudioDeviceChoice {Id="mic",Name="无线麦克风",Flow=1}}};
+            f.Owner.WirelessDevices=new[]{Device("w-mouse","无线鼠标"),Device("w-kbd","无线键盘","keyboard"),Device("w-pad","无线手柄","gamepad")};
+            f.Page(PopupPage.Preferences);var row=f.Find("字号");Check(row.Id==228&&row.Value=="标准","preferences display standard font size by default");
+            f.Activate(row);Check(f.Navigation.Page==PopupPage.ChoosePreference&&PopupPages.Title(f.Navigation)=="字号","activating font size opens the secondary chooser");
+            var choices=f.Controls();Check(Texts(choices)=="标准|较大"&&Selected(choices)==1&&choices.Find(delegate(PopupControl c){return c.Id==460;}).Selected,"chooser lists standard and large with standard selected");
+            int savesBefore=f.Saves;f.Activate(choices.Find(delegate(PopupControl c){return c.Id==461;}));
+            Check(f.Saves==savesBefore+1&&DeviceSettings.Current.FontSize=="large"&&VisualDesign.LargeFont&&f.Navigation.Page==PopupPage.Preferences,"choosing large saves and returns to preferences");
+            Check(f.Find("字号").Value=="较大"&&VisualDesign.PanelWidth==300&&VisualDesign.DeviceNameFontSize==14f&&VisualDesign.SubtitleFontSize==13f,"large mode enlarges font and panel metrics");
+            foreach(string fontMode in new[]{"normal","large"}){
+                var pref=DeviceSettings.Current;pref.FontSize=fontMode;DeviceSettings.UseTransientConfiguration(pref);
+                var observed=new List<DrawnLabel>();CompactRenderer.LabelObserver=observed.Add;
+                try{
+                    var mainSize=VisualDesign.PanelSizeFor(true,f.Owner.Dpi);
+                    using(var bmp=new Bitmap(mainSize.Width,mainSize.Height))using(var g=Graphics.FromImage(bmp))CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,false,f.Owner.Headset,f.Owner.Audio);
+                    var wirelessLayout=WirelessLayout.Build(f.Owner,0,1000);
+                    using(var bmp=new Bitmap(wirelessLayout.Size.Width,wirelessLayout.Size.Height))using(var g=Graphics.FromImage(bmp))CompactRenderer.PaintWireless(g,f.Owner,wirelessLayout,false,new PanelFeedback());
+                    foreach(PopupPage page in Enum.GetValues(typeof(PopupPage)))if(page!=PopupPage.Main){
+                        var nav=new PopupNavigation {Page=page,PreferenceAction=228,SelectedDeviceKey="w-mouse",SelectedDeviceName="无线鼠标",VisibleChoices=7,MaximumHeight=360};
+                        var pageRows=PopupPages.Build(f.Owner,nav,true);var sz=PopupPages.SizeFor(pageRows);
+                        Check(sz.Width==VisualDesign.PanelWidth&&sz.Height<=360,"page "+page+" fits within 360px work area in "+fontMode+" mode (actual "+sz+")");
+                        float bottom=0;
+                        foreach(var item in pageRows){
+                            if(item.Id==6)continue;
+                            Check(item.Rect.Top>=bottom&&item.Rect.Left>=0&&item.Rect.Right<=sz.Width&&item.Rect.Bottom<=sz.Height-(VisualDesign.LargeFont?32:28),"row "+item.Text+" on "+page+" does not overlap or overflow in "+fontMode);
+                            bottom=item.Rect.Bottom;
+                        }
+                        using(var bmp=new Bitmap(sz.Width,sz.Height))using(var g=Graphics.FromImage(bmp))PopupPages.Paint(g,f.Owner,nav,pageRows,false,-1,-1,-1);
+                    }
+                    Check(observed.Count>40,"96 DPI observer captured key labels in "+fontMode);
+                    foreach(var label in observed){
+                        Check(IsInteger(label.FontSize),"96 DPI font size is integer for "+label.Text+": "+label.FontSize);
+                        Check(IsInteger(label.DeviceRect.X)&&IsInteger(label.DeviceRect.Y)&&IsInteger(label.DeviceRect.Width)&&IsInteger(label.DeviceRect.Height),"96 DPI label coordinates are integers for "+label.Text+": "+label.DeviceRect);
+                    }
+                }finally{CompactRenderer.LabelObserver=null;}
+            }
+            var reset=DeviceSettings.Current;reset.FontSize="normal";DeviceSettings.UseTransientConfiguration(reset);
         }
     }
     static void HelpActions(){
@@ -349,7 +405,7 @@ static class UiMenusTests {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=cached.GetValue(null);
         try{
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
-            Run("more-options rows",MoreRows);Run("preference order",PreferenceOrder);Run("help actions and routes",HelpActions);Run("empty-card entry",EmptyCard);Run("hidden empty-card recovery",HiddenEmptyCard);Run("empty reasons and wrapped bounds",EmptyReasonsAndBounds);Run("hidden detail access",HiddenDetails);Run("tray rules and fixed devices",TrayRulesAndPins);Run("hidden fixed devices",HiddenFixedDevices);Run("native pin consistency",NativePins);Run("tray pagination and identity",TrayPaginationAndIdentity);Run("new and legacy volume defaults",LegacyVolumeDefaults);Run("help accessibility and bounds",HelpAccessibilityAndBounds);
+            Run("more-options rows",MoreRows);Run("preference order",PreferenceOrder);Run("font size preferences, large layout and 96 DPI integer coordinates",FontSizePreferencesAndLayout);Run("help actions and routes",HelpActions);Run("empty-card entry",EmptyCard);Run("hidden empty-card recovery",HiddenEmptyCard);Run("empty reasons and wrapped bounds",EmptyReasonsAndBounds);Run("hidden detail access",HiddenDetails);Run("tray rules and fixed devices",TrayRulesAndPins);Run("hidden fixed devices",HiddenFixedDevices);Run("native pin consistency",NativePins);Run("tray pagination and identity",TrayPaginationAndIdentity);Run("new and legacy volume defaults",LegacyVolumeDefaults);Run("help accessibility and bounds",HelpAccessibilityAndBounds);
             Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices, no real clipboard/browser/settings writes");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;cached.SetValue(null,previous);}
     }

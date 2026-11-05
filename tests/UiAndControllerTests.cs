@@ -163,7 +163,7 @@ static class UiAndControllerTests {
                 navigation.Page=PopupPage.Preferences;navigation.VisibleChoices=3;navigation.MaximumHeight=259;navigation.Offset=0;
                 var compactPreferences=PopupPages.Build(context,navigation,true);
                 Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==8;})&&PopupPages.SizeFor(compactPreferences).Height<260,"secondary preferences paginate in a small high-DPI work area");
-                navigation.Offset=11;compactPreferences=PopupPages.Build(context,navigation,true);
+                navigation.Offset=12;compactPreferences=PopupPages.Build(context,navigation,true);
                 Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==217;})&&compactPreferences.Exists(delegate(PopupControl row){return row.Id==7;}),"clear-history remains reachable on the last preferences page");
                 navigation.VisibleChoices=7;navigation.MaximumHeight=0;navigation.Offset=0;
                 navigation.Page=PopupPage.Main;

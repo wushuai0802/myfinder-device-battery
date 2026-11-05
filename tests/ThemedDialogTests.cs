@@ -262,6 +262,8 @@ static class ThemedDialogTests {
     }
     static void DialogControlLayout(string kind){
         SelectTheme("ocean",false);
+        foreach(string fontSize in new[]{"normal","large"}){
+        var pref=DeviceSettings.Current;pref.FontSize=fontSize;DeviceSettings.UseTransientConfiguration(pref);
         foreach(float scale in new[]{1f,1.25f,1.5f,2f})WithDpi((int)Math.Round(96*scale),delegate{
             using(var feedback=new FeedbackForm(Report(),true,false,delegate{},delegate{},""))
             using(var dialog=kind=="feedback"?(ThemedDialog)feedback:kind=="diagnostic"?feedback.CreateDiagnosticsDialog():kind=="update"?new UpdateDialog(Release(),true):kind=="message"?ThemedMessage.Create("确认",Lines(30),MessageBoxButtons.YesNo):new ThemedAliasDialog("名称","设备",12)){
@@ -277,12 +279,14 @@ static class ThemedDialogTests {
                         var card=Find<Control>(dialog,"FeedbackDiagnosticsCard");
                         var leaves=new List<Control>();foreach(var control in VisibleTree(card))if(control.Controls.Count==0)leaves.Add(control);
                         Check(leaves.Count==2&&leaves.Contains(Find<Control>(dialog,"IncludeDiagnostics"))&&leaves.Contains(Find<Control>(dialog,"ViewDiagnostics")),"diagnostic card has only switch and preview leaves");
-                        if(scale==1f&&width==0)foreach(var control in VisibleTree(dialog))if(control.Name=="FeedbackRemaining"||Ancestor(card,control))Console.WriteLine(ControlPath(control)+" bounds="+dialog.RectangleToClient(control.RectangleToScreen(control.ClientRectangle)));
+                        if(fontSize=="normal"&&scale==1f&&width==0)foreach(var control in VisibleTree(dialog))if(control.Name=="FeedbackRemaining"||Ancestor(card,control))Console.WriteLine(ControlPath(control)+" bounds="+dialog.RectangleToClient(control.RectangleToScreen(control.ClientRectangle)));
                     }
                     var update=dialog as UpdateDialog;if(update!=null){update.Downloading();Application.DoEvents();NoOverlap(dialog);update.Finished("已取消更新。");Application.DoEvents();NoOverlap(dialog);}
                 }
             }
         });
+        }
+        SelectTheme("ocean",false);
     }
     static void SegmentClientPixels(){
         SelectTheme("ocean",false);var theme=new DialogTheme(false);

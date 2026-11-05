@@ -57,6 +57,7 @@ namespace AtkBattery {
             }
             pref.TrayIconStyle=ReadString(root["TrayIconStyle"]);
             var hint=root["TrayGroupHintShown"];pref.TrayGroupHintShown=hint!=null&&hint.GetAttribute("type")=="boolean"&&hint.InnerText=="true";
+            if(root["FontSize"]!=null&&root["FontSize"].GetAttribute("type")!="string")while(root["FontSize"]!=null)root.RemoveChild(root["FontSize"]);
             foreach(string field in new[]{"TrayGroups","TrayIconStyle","TrayGroupHintShown"})while(root[field]!=null)root.RemoveChild(root[field]);
             Normalize(pref);
         }

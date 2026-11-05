@@ -9,7 +9,7 @@ namespace AtkBatteryTray {
         internal BatteryView Battery;
         internal WirelessDevice Device;
         internal bool NativeMouse,NativeHeadset,AudioOnly,Hidden;
-        internal int Height {get{return NativeMouse?VisualDesign.MouseCardHeight(Dpi):NativeHeadset||AudioOnly?96:WirelessLayout.DpiStageCount(Device)>0?WirelessLayout.DpiStageCount(Device)>4?126:96:VisualDesign.GenericCardHeight;}}
+        internal int Height {get{return NativeMouse?VisualDesign.MouseCardHeight(Dpi):NativeHeadset||AudioOnly?VisualDesign.HeadsetCardHeight:WirelessLayout.DpiStageCount(Device)>0?WirelessLayout.DpiStageCount(Device)>4?VisualDesign.CardHeightExpanded:VisualDesign.CardHeightNormal:VisualDesign.GenericCardHeight;}}
         internal DpiConfig Dpi;
         internal float Top;
     }
@@ -22,9 +22,9 @@ namespace AtkBatteryTray {
         internal bool VolumeCollapsed;
         internal bool AllHidden;
         internal float VolumeTop;
-        internal RectangleF VolumeRect {get{return new RectangleF(0,VolumeTop,260,VisualDesign.SystemVolumeHeightFor(VolumeCollapsed));}}
+        internal RectangleF VolumeRect {get{return new RectangleF(0,VolumeTop,VisualDesign.PanelWidth,VisualDesign.SystemVolumeHeightFor(VolumeCollapsed));}}
         internal bool Paged {get{return Start>0||End<All.Count;}}
-        internal Size Size {get{return new Size(260,(int)Footer+30);}}
+        internal Size Size {get{return new Size(VisualDesign.PanelWidth,(int)Footer+VisualDesign.FooterHeight);}}
         internal static WirelessLayout Build(TrayContext owner,int offset,int maximumHeight,bool includeHidden=false) {
             var layout=new WirelessLayout();var pref=DeviceSettings.Current;var now=DateTime.UtcNow;
             layout.VolumeCollapsed=pref.VolumeCollapsed;

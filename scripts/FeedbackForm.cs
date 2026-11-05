@@ -173,8 +173,10 @@ namespace AtkBatteryTray {
                 string category=FeedbackInput.CategoryAt(i);categories.AddOption("Category-"+category,FeedbackInput.CategoryLabel(category),category);
                 if(category==FeedbackInput.DefaultCategory(deviceMissing))categories.SelectedIndex=i;
             }
-            categories.SizeChanged+=delegate{typeCard.Height=typeCard.Padding.Vertical+typeTitle.PreferredHeight+4+categories.Height;};
+            Action sizeTypeCard=delegate{typeCard.Height=typeCard.Padding.Vertical+typeTitle.PreferredHeight+4+categories.Height;};
+            categories.SizeChanged+=delegate{sizeTypeCard();};typeTitle.SizeChanged+=delegate{sizeTypeCard();};
             typeCard.Controls.Add(categories);typeCard.Controls.Add(typeTitle);layout.Controls.Add(typeCard,0,0);
+            sizeTypeCard();
             var descriptionCard=new ThemedSection(Theme) {Name="FeedbackDescriptionCard",Dock=DockStyle.Fill};
             var descriptionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};descriptionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<4;i++)descriptionLayout.RowStyles.Add(new RowStyle(i==2?SizeType.Percent:SizeType.AutoSize,i==2?100:0));
