@@ -1,4 +1,4 @@
-. (Join-Path $PSScriptRoot 'Manifest.Common.ps1')
+﻿. (Join-Path $PSScriptRoot 'Manifest.Common.ps1')
 
 function New-DeviceBatteryShortcutShell {
     if (-not ('DeviceBatterySetup.ShortcutShell' -as [type])) {
@@ -210,7 +210,7 @@ function Get-DeviceBatteryOwnedProcesses([string]$InstallDirectory) {
 
 function Assert-DeviceBatteryStopped([string]$InstallDirectory,[object[]]$ChangedPaths) {
     if(@(Get-DeviceBatteryOwnedProcesses $InstallDirectory).Count -gt 0) {
-        throw 'Exit Device Battery and its portable reader before updating any installed payload file.'
+        throw "MyFinder 设备电量仍在运行。请在任务栏托盘图标上右键选择‘退出’（读取组件会一并关闭），然后重新运行安装。"
     }
     # A reader can briefly retain a file after process exit or a scan. Bound the
     # entire preflight, and retry only Windows sharing/locking conflicts. Never
@@ -226,7 +226,7 @@ function Assert-DeviceBatteryStopped([string]$InstallDirectory,[object[]]$Change
                 if($failure -is [IO.IOException] -and ($failure.HResult -band 0xffff) -in @(32,33) -and $retryWindow.ElapsedMilliseconds -lt 1000) {
                     Start-Sleep -Milliseconds 50
                     if(@(Get-DeviceBatteryOwnedProcesses $InstallDirectory).Count -gt 0) {
-                        throw 'Exit Device Battery and its portable reader before updating any installed payload file.'
+                        throw "MyFinder 设备电量仍在运行。请在任务栏托盘图标上右键选择‘退出’（读取组件会一并关闭），然后重新运行安装。"
                     }
                     continue
                 }

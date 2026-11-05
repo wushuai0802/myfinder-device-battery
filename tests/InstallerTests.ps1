@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$OutputDirectory)
+﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 $project=Split-Path -Parent $PSScriptRoot
@@ -21,6 +21,142 @@ function Assert([bool]$Condition,[string]$Name){if(-not $Condition){throw ('FAIL
 function Assert-Rejected([scriptblock]$Operation,[string]$Name){$failed=$false;try{& $Operation|Out-Null}catch{$failed=$true};Assert $failed $Name}
 function Stop-Fixture($Process) {if($Process -and -not $Process.HasExited){$Process.Kill();$Process.WaitForExit(5000)|Out-Null}}
 function Refresh-FixtureManifest {$null=New-DeviceBatteryPackageManifest $source}
+function Test-ManualInstallerStop {
+    $manualRoot=Join-Path $fixtureRoot 'manual stop fixtures'
+    $manualPackage=Join-Path $manualRoot 'package'
+    New-Item -ItemType Directory -Path $manualRoot -Force|Out-Null
+    Copy-Item -LiteralPath $source -Destination $manualPackage -Recurse
+    $manualTarget=Join-Path $manualRoot 'installed program'
+    $manualData=Join-Path $manualRoot 'data'
+    $manualStartup=Join-Path $manualRoot 'Startup';$manualPrograms=Join-Path $manualRoot 'Programs'
+    $manualState=[pscustomobject]@{InstallDirectory=$manualTarget;Running=$false;Interactive=$true;Answer='Y';PromptCount=0;
+        InteractiveChecks=0;ExitCalls=0;ExitRequested=$false;ExitSucceeds=$false;ExitPolls=0;ForcedStops=0;ExitPath='';ExitArguments='';Prompt=''}
+    # Only this copied package sees fake processes, registry probes and shell notifications.
+    # Even a regressed force-stop attempt is trapped without touching a real process.
+    [IO.File]::AppendAllText((Join-Path $manualPackage 'scripts\Install.Common.ps1'),@'
+
+function Get-DeviceBatteryStartupApproval([string]$Name){return $null}
+function Update-DeviceBatteryShellIcons([string]$Executable,[string]$StartupShortcut,[string]$ManualShortcut){}
+function Get-DeviceBatteryOwnedProcesses([string]$InstallDirectory) {
+    if($InstallDirectory -ine $manualState.InstallDirectory){throw 'FAIL process discovery used a different installation root'}
+    if($manualState.ExitRequested -and $manualState.ExitSucceeds) {
+        $manualState.ExitPolls++
+        if($manualState.ExitPolls -ge 2){$manualState.Running=$false}
+    }
+    if($manualState.Running) {
+        foreach($relative in @('outputs\AtkMouseBattery.exe','outputs\AtkMouseBattery.exe','engine\runtime\python.exe')) {
+            $fake=[pscustomobject]@{Id=2147483647;Path=(Join-Path $InstallDirectory $relative);State=$manualState}
+            $fake|Add-Member -MemberType ScriptMethod -Name Kill -Value {$this.State.ForcedStops++;throw 'FAIL process Kill is forbidden'}
+            $fake
+        }
+    }
+}
+function Start-Process {
+    param([string]$FilePath,[string]$ArgumentList,[string]$WorkingDirectory,[string]$WindowStyle)
+    $manualState.ExitCalls++;$manualState.ExitPath=$FilePath;$manualState.ExitArguments=$ArgumentList
+    if($FilePath -ine (Join-Path $manualState.InstallDirectory 'outputs\AtkMouseBattery.exe') -or
+        $ArgumentList -cne '--exit' -or $WorkingDirectory -ine (Split-Path -Parent $FilePath) -or $WindowStyle -cne 'Hidden'){
+        throw 'FAIL exit request must use only the installed executable with --exit'
+    }
+    $manualState.ExitRequested=$true
+}
+function Stop-Process {
+    param($InputObject,$Id,$Name,[switch]$Force)
+    $manualState.ForcedStops++;throw 'FAIL Stop-Process is forbidden'
+}
+'@,(New-Object Text.UTF8Encoding($false)))
+    $null=New-DeviceBatteryPackageManifest $manualPackage
+    $entry=Join-Path $manualPackage 'scripts\Install-Startup.ps1'
+    $entryPaths=@{InstallDirectory=$manualTarget;DataDirectory=$manualData;StartupDirectory=$manualStartup;ProgramsDirectory=$manualPrograms}
+    $hooks=@{
+        CanPrompt={$manualState.InteractiveChecks++;return $manualState.Interactive}
+        ConfirmStopRunning={param($Message) $manualState.PromptCount++;$manualState.Prompt=$Message;return $manualState.Answer}
+        StopTimeoutMilliseconds=2000
+    }
+    function Get-ManualInstallSnapshot {
+        return (@(foreach($root in @($manualTarget,$manualData,$manualStartup,$manualPrograms)) {
+            foreach($file in @(Get-ChildItem -LiteralPath $root -Recurse -File -Force|Sort-Object FullName)) {
+                $file.FullName+'|'+(Get-DeviceBatteryFileHash $file.FullName)
+            }
+        }) -join "`n")
+    }
+    function Assert-ManualInstallRejected([scriptblock]$Operation,[string]$Expected,[string]$Name) {
+        $before=Get-ManualInstallSnapshot;$failure=$null
+        try {& $Operation|Out-Null}catch{$failure=$_.Exception.Message}
+        Assert ($failure -ceq $Expected) ($Name+' reports the exact Chinese failure')
+        Assert ((Get-ManualInstallSnapshot) -ceq $before) ($Name+' preserves all installed files, receipts, settings and shortcuts')
+        Assert ($manualState.Running -and $manualState.ForcedStops -eq 0) ($Name+' never force-stops any fixture process')
+    }
+    $result=& $entry @entryPaths @hooks -StopRunning
+    Assert ((Test-Path -LiteralPath $result.InstalledExecutable) -and $result.PayloadChanged) 'manual install with no running process succeeds'
+    Assert ($manualState.PromptCount -eq 0 -and $manualState.InteractiveChecks -eq 0 -and $manualState.ExitCalls -eq 0) 'stopped manual install never asks for confirmation or requests exit'
+    [IO.File]::WriteAllText((Join-Path $manualData 'audio-settings.json'),'{"keep":"manual fixture settings"}')
+    [IO.File]::WriteAllText((Join-Path $manualPackage 'engine\providers\base.py'),'# manual candidate two')
+    $null=New-DeviceBatteryPackageManifest $manualPackage
+    $cancelled="已取消。请先在托盘图标上右键选择‘退出’，再重新运行安装。"
+    $manualState.Running=$true
+    foreach($answer in @('N','other','')) {
+        $manualState.Answer=$answer;$manualState.PromptCount=0
+        Assert-ManualInstallRejected {& $entry @entryPaths @hooks -StopRunning} $cancelled ('manual answer ['+$answer+']')
+        Assert ($manualState.PromptCount -eq 1 -and $manualState.ExitCalls -eq 0) 'declining or invalid confirmation never sends an exit request'
+    }
+    $manualState.Interactive=$false;$manualState.PromptCount=0
+    Assert-ManualInstallRejected {& $entry @entryPaths @hooks -StopRunning} $cancelled 'non-interactive input'
+    Assert ($manualState.PromptCount -eq 0 -and $manualState.ExitCalls -eq 0) 'non-interactive input never prompts or requests exit'
+    $manualState.Interactive=$true;$manualState.Answer='Y';$hooks.StopTimeoutMilliseconds=25
+    $timeoutClock=[Diagnostics.Stopwatch]::StartNew()
+    Assert-ManualInstallRejected {& $entry @entryPaths @hooks -StopRunning} "程序没有在 20 秒内退出。请在任务栏托盘图标上右键选择‘退出’，然后重新运行安装。" 'normal-exit timeout'
+    Assert ($manualState.ExitCalls -eq 1 -and $manualState.ForcedStops -eq 0 -and $timeoutClock.ElapsedMilliseconds -lt 5000) 'injected short timeout sends exactly one normal-exit request without killing'
+    $manualState.PromptCount=0;$manualState.ExitCalls=0;$manualState.InteractiveChecks=0;$manualState.ExitRequested=$false
+    Assert-ManualInstallRejected {& $entry @entryPaths @hooks} "MyFinder 设备电量仍在运行。请在任务栏托盘图标上右键选择‘退出’（读取组件会一并关闭），然后重新运行安装。" 'entry point without StopRunning'
+    Assert ($manualState.PromptCount -eq 0 -and $manualState.ExitCalls -eq 0 -and $manualState.InteractiveChecks -eq 0) 'programmatic update entry preserves its non-interactive running-process rejection'
+    # Verify the default input guard in a real redirected host, with and without -NonInteractive.
+    $probePath=Join-Path $manualRoot 'noninteractive.ps1'
+    [IO.File]::WriteAllText($probePath,@'
+param($Package,$InstallDirectory,$DataDirectory,$StartupDirectory,$ProgramsDirectory)
+$ErrorActionPreference='Stop'
+$manualState=[pscustomobject]@{InstallDirectory=$InstallDirectory;Running=$true;ExitRequested=$false;ExitSucceeds=$false;PromptCount=0;ExitCalls=0;ForcedStops=0}
+$failure=$null
+try {
+    & (Join-Path $Package 'scripts\Install-Startup.ps1') -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -StartupDirectory $StartupDirectory -ProgramsDirectory $ProgramsDirectory -StopRunning -ConfirmStopRunning {$manualState.PromptCount++;return 'Y'}|Out-Null
+}catch{$failure=$_.Exception.Message}
+if($failure -cne "已取消。请先在托盘图标上右键选择‘退出’，再重新运行安装。" -or
+    $manualState.PromptCount -ne 0 -or $manualState.ExitCalls -ne 0 -or $manualState.ForcedStops -ne 0){throw ('FAIL non-interactive host: '+$failure)}
+'@,(New-Object Text.UTF8Encoding($true)))
+    foreach($nonInteractive in @($false,$true)) {
+        $before=Get-ManualInstallSnapshot
+        $info=New-Object Diagnostics.ProcessStartInfo
+        $info.FileName=(Get-Process -Id $PID).Path
+        $probeArguments=@('-NoProfile','-ExecutionPolicy','Bypass')
+        if($nonInteractive){$probeArguments+='-NonInteractive'}
+        $probeArguments+=@('-File',$probePath,$manualPackage,$manualTarget,$manualData,$manualStartup,$manualPrograms)
+        $info.Arguments=(@($probeArguments|ForEach-Object {'"'+$_+'"'}) -join ' ')
+        $info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.WindowStyle='Hidden'
+        $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+        $probe=[Diagnostics.Process]::Start($info)
+        try {
+            $probe.StandardInput.Close();$output=$probe.StandardOutput.ReadToEndAsync();$errors=$probe.StandardError.ReadToEndAsync()
+            $finished=$probe.WaitForExit(30000)
+            Assert ($finished -and $probe.ExitCode -eq 0) ('default input guard cancels without prompting; NonInteractive='+$nonInteractive+'; '+$errors.Result)
+        }finally{$probe.Dispose()}
+        Assert ((Get-ManualInstallSnapshot) -ceq $before) 'default redirected-host rejection leaves all installed files unchanged'
+    }
+    $hooks.StopTimeoutMilliseconds=2000
+    foreach($answer in @('Y','y')) {
+        [IO.File]::WriteAllText((Join-Path $manualPackage 'engine\providers\base.py'),('# confirmed candidate '+$answer))
+        $null=New-DeviceBatteryPackageManifest $manualPackage
+        $manualState.Running=$true;$manualState.Answer=$answer;$manualState.ExitSucceeds=$true;$manualState.ExitRequested=$false
+        $manualState.PromptCount=0;$manualState.ExitCalls=0;$manualState.ExitPolls=0
+        # A canonical alias and a receipt-selected root must request exit from the same owned installation.
+        if($answer -ceq 'Y'){$entryPaths.InstallDirectory=$manualTarget+'\.'}else{$entryPaths.Remove('InstallDirectory')}
+        $result=& $entry @entryPaths @hooks -StopRunning
+        Assert ($result.PayloadChanged -and -not $manualState.Running -and $manualState.ExitPolls -ge 2) ('answer '+$answer+' waits for both fake UIs and the portable reader before installing')
+        Assert ($manualState.PromptCount -eq 1 -and $manualState.ExitCalls -eq 1 -and $manualState.ExitPath -ceq (Join-Path $manualTarget 'outputs\AtkMouseBattery.exe') -and $manualState.ExitArguments -ceq '--exit') 'normal exit runs only the canonical installed executable once'
+        Assert ($manualState.Prompt -ceq '检测到 MyFinder 设备电量正在运行，安装需要先关闭它。是否自动关闭并继续安装？[Y/N]') 'manual confirmation uses the requested Chinese prompt'
+        Assert ((Get-DeviceBatteryFileHash (Join-Path $manualTarget 'engine\providers\base.py')) -ceq (Get-DeviceBatteryFileHash (Join-Path $manualPackage 'engine\providers\base.py'))) 'confirmed normal exit allows the changed payload to install'
+        Assert ($manualState.ForcedStops -eq 0) 'confirmed normal exit never force-stops a process'
+    }
+}
 $fixtureRoot=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) ('installer-'+$PSVersionTable.PSVersion.Major+'-'+[Guid]::NewGuid().ToString('N'))
 # Exercise Unicode and spaces without making script decoding depend on host encoding.
 $unicode=([string][char]0x4e2d)+[char]0x6587+' package'
@@ -88,6 +224,7 @@ try {
     $script:disabledForTest=$false;$script:unknownForTest=$true
     Assert ((Get-DeviceBatteryStartupState $startup $installed.InstalledExecutable).Status -ceq 'unknown') 'unrecognized StartupApproved state stays unknown'
     $script:unknownForTest=$false
+    Test-ManualInstallerStop
     $uiProcess=Start-Process -FilePath $installed.InstalledExecutable -WindowStyle Hidden -PassThru
     Assert (-not $uiProcess.HasExited) 'isolated real process fixture is running'
     $script:failIconRefresh=$true
