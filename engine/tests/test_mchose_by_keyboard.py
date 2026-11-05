@@ -89,7 +89,7 @@ class MchoseByKeyboardTests(unittest.TestCase):
                 self.assertEqual(len(P().poll()), 1)
 
     def test_synthetic_battery_boundaries_and_little_endian_nibbles(self):
-        for level in (0, 1, 63, 99, 100):
+        for level in (1, 63, 99, 100):
             for full in (0, 1):
                 for charge in (0, 1):
                     with self.subTest(level=level, full=full, charge=charge):
@@ -97,6 +97,8 @@ class MchoseByKeyboardTests(unittest.TestCase):
                                          (level, charge == 1 and level < 100, ""))
         for flags in (2, 0x20, 0xF0, 0xFF):
             self.assertIsNone(M.parse_reply(reply(63, flags)))
+        # A sleeping keyboard may report zero; that is no reading, not 0 %.
+        self.assertIsNone(M.parse_reply(reply(0, 0)))
         for level in (101, 255):
             self.assertIsNone(M.parse_reply(reply(level)))
         self.assertIsNone(M.parse_reply(M.make_request()))
@@ -143,14 +145,48 @@ class MchoseByKeyboardTests(unittest.TestCase):
                     self.assertIn(frame, (M.identity_request(), M.make_request()))
                     self.assertNotIn(frame[1], (0x01, 0x02, 0x03, 0x04, 0x06, 0x09))
 
-    def test_model_is_rechecked_after_repairing_or_sleep(self):
+    def test_identify_once_per_plug_in_and_remember_unknown_models(self):
+        # Recognized: later polls send only the battery query.
         provider = P()
         with fixture([identity(), reply()]):
             self.assertEqual(len(provider.poll()), 1)
-        with fixture([identity("000000000000"), reply()]) as bus:
+        with fixture([reply(70)]) as bus:
+            self.assertEqual(provider.poll()[0].level, 70)
+            self.assertEqual([frame for _, frame in bus.writes], [M.make_request()])
+        # Unrecognized: one identity frame, then nothing until the receiver leaves.
+        provider = P()
+        with fixture([identity("000000000000")]) as bus:
             self.assertEqual(provider.poll(), [])
             self.assertEqual([frame for _, frame in bus.writes], [M.identity_request()])
+        with fixture([identity(), reply()]) as bus:
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(bus.writes, [])
+        # Receiver absent for one poll: the next plug-in is identified afresh.
+        with fixture([], inventory=[]):
+            self.assertEqual(provider.poll(), [])
+        with fixture([identity(), reply()]) as bus:
+            self.assertEqual(len(provider.poll()), 1)
+            self.assertEqual([frame for _, frame in bus.writes], [M.identity_request(), M.make_request()])
 
+    def test_silent_identity_backs_off_exponentially(self):
+        provider = P()
+
+        def poll_at(now, frames):
+            with fixture(frames) as bus:
+                bus.now = now
+                found = provider.poll()
+            return found, [frame for _, frame in bus.writes]
+
+        ask = [M.identity_request()]
+        self.assertEqual(poll_at(0, []), ([], ask))              # 1st silence
+        self.assertEqual(poll_at(5, []), ([], ask))              # retried once at once
+        self.assertEqual(poll_at(60, [identity(), reply()]), ([], []))   # 60 s back-off
+        self.assertEqual(poll_at(66, []), ([], ask))             # 3rd silence: 120 s
+        self.assertEqual(poll_at(180, [identity(), reply()]), ([], []))
+        found, writes = poll_at(187, [identity(), reply()])      # keyboard awake
+        self.assertEqual(len(found), 1)
+        self.assertEqual(writes, ask + [M.make_request()])
+        self.assertEqual(P.IDENTIFY_BACKOFF_SECONDS, (60, 1800))   # cap: 30 minutes
 
 if __name__ == "__main__":
     unittest.main()
