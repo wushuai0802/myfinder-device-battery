@@ -3,7 +3,7 @@
 MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matching
 (协议族匹配，未实测; level C). Only FF02:0002 with a known output length of exactly
 17 bytes receives the existing power query. FF04/FF05 alone and unknown lengths
-are not sufficient. No model catalog or DPI commands are added; the server keeps
+are not sufficient. DPI uses a separate exact allow-list below; the server keeps
 native 373B:1278 excluded. Scyrox 3554:F517, VGN F2 Master+ 3554:FB56 and
 VXE R1 SE 1K 3554:F58E also require FF02:0002 and exactly 17 output bytes;
 they are pending hardware verification in this project. VGN Dragonfly 4K
@@ -78,8 +78,12 @@ both check out, the command is the one we asked for, and the level is 0..100.
 from __future__ import annotations
 
 import ctypes
+import hashlib
+import json
+import re
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 import hid
@@ -194,6 +198,221 @@ PIDS: Dict[int, Dict[int, str]] = {
 STRICT_COMPX_IDS = frozenset({(0x3554, 0xF517), (0x3554, 0xFB56), (0x3554, 0xF58E),
                              (0x3554, 0xF505)})
 
+# Exact USB + live CID/MID gates, never the broad battery protocol-family gate.
+# OpenMouse 30d6ad37d0ecc9fff53f86d5058d67a88e07150d; see upstream-protocols.md.
+# (CID/MID, codec, stage base, row length, maximum stages)
+DPI_MODELS = {
+    (0x373B, 0x12A7): ((1, 62), "paw3955", 0x1B00, 6, 6),
+    (0x3554, 0xF58C): ((2, 27), "step50", 0x000C, 4, 8),
+    (0x3554, 0xF58F): ((2, 32), "paw3395se", 0x000C, 4, 8),
+}
+_SE_INVALID = frozenset((7, 13, 20, 26, 33, 40, 46, 53, 60, 66, 73, 80, 86, 93,
+                       100, 106, 113, 120, 126, 133, 140, 146, 153, 160, 166,
+                       173, 180, 186, 193, 200, 206, 213, 220, 226, 233))
+_SE_CODES = tuple(code for code in range(1, 236) if code not in _SE_INVALID)
+
+
+def _dpi_frame(command, address=0, length=0, data=()):
+    frame = [0x08, command, 0, address >> 8, address & 0xFF, length, *data]
+    frame += [0] * (16 - len(frame))
+    return frame + [checksum(frame)]
+
+
+def _dpi_exchange(dev, command, address=0, length=2):
+    # Flush stale replies/events, send this read once, then bound the receive loop.
+    for _ in range(4):
+        if not dev.read(PAYLOAD_LEN, FLUSH_TIMEOUT_MS):
+            break
+    frame = _dpi_frame(command, address, length if command == 0x08 else 0)
+    if dev.write(frame) != PAYLOAD_LEN:
+        raise ValueError("dpi_read_failed")
+    deadline = time.monotonic() + .5
+    for _ in range(16):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        reply = list(dev.read(PAYLOAD_LEN, max(1, int(remaining * 1000))))
+        commands = (0x07, 0x08) if command == 0x08 else (command,)
+        if (len(reply) == PAYLOAD_LEN and reply[0] == 0x08 and reply[1] in commands
+                and reply[2] == 0 and reply[16] == checksum(reply[:16])
+                and reply[3:5] == [address >> 8, address & 0xFF]
+                and length <= reply[5] <= 10):
+            return reply[6:6 + length]
+        if not reply:
+            break
+    raise ValueError("dpi_invalid_reply")
+
+
+def _dpi_system(data, maximum):
+    if (len(data) != 6 or any((data[i] + data[i + 1]) % 256 != 0x55 for i in (0, 2, 4))
+            or not 1 <= data[2] <= maximum or not 0 <= data[4] < data[2]):
+        raise ValueError("dpi_invalid_system")
+    return data[2], data[4]
+
+
+def _dpi_stage(data, codec):
+    length = 6 if codec == "paw3955" else 4
+    if len(data) != length or sum(data) % 256 != 0x55:
+        raise ValueError("dpi_invalid_stage")
+    if codec == "paw3955":
+        axes = [(data[0] + (data[1] << 8) + 1) * (2 if data[4] & 1 else 1),
+                (data[2] + (data[3] << 8) + 1) * (2 if data[4] & 0x10 else 1)]
+        maximum = 40000
+    else:
+        axes = []
+        for byte, nibble in ((data[0], data[2] & 15), (data[1], data[2] >> 4)):
+            if codec == "paw3395se":
+                if nibble & ~2 or byte not in _SE_CODES:
+                    raise ValueError("dpi_invalid_stage")
+                value = (_SE_CODES.index(byte) + 1) * 50
+                if nibble & 2:
+                    if value <= 5000:
+                        raise ValueError("dpi_invalid_stage")
+                    value *= 2
+            else:
+                value = (byte + (((nibble >> 2) & 3) << 8) + 1) * 50
+                if nibble & 1:
+                    value *= 2
+            axes.append(value)
+        maximum = 18000 if codec == "paw3395se" else 30000
+    if any(not 50 <= value <= maximum for value in axes):
+        raise ValueError("dpi_invalid_stage")
+    return axes
+
+
+def _dpi_eligible(info):
+    return ((info.get("vendor_id"), info.get("product_id")) in DPI_MODELS
+            and info.get("modelSource", info.get("model_source")) != "pack"
+            and (info.get("usage_page"), info.get("usage")) == CONTROL_USAGE
+            and isinstance(info.get("physical_id"), str) and bool(info["physical_id"])
+            and not re.search(r"\b(?:nearlink|nk)\b", info.get("product_string") or "", re.I)
+            and (info["vendor_id"] != 0x3554 or not re.search(
+                r"receiver|dongle", info.get("product_string") or "", re.I)))
+
+
+def _dpi_token(target):
+    identity = dict(target)
+    path = identity.get("path")
+    if isinstance(path, bytes):
+        identity["path"] = path.hex()
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _dpi_view(target, active, error=None):
+    axes = target["stages"]
+    stages = [pair[0] for pair in axes]
+    # The generic value-based UI cannot distinguish duplicate X values or XY pairs.
+    writable = not error and len(set(stages)) == len(stages) and all(x == y for x, y in axes)
+    return {"supported": True, "canSet": writable, "current": stages[active],
+            "stages": stages, "stageSource": "onboard",
+            "checkedAtUtc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "targetToken": _dpi_token(target) if writable else None,
+            "error": error or (None if writable else "dpi_ambiguous_stages")}
+
+
+def _dpi_state(dev, info):
+    identity, codec, base, length, maximum = DPI_MODELS[(info["vendor_id"], info["product_id"])]
+    if tuple(_dpi_exchange(dev, 0x10)) != identity:
+        raise ValueError("dpi_identity_unconfirmed")
+    system = _dpi_exchange(dev, 0x08, 0, 6)
+    count, active = _dpi_system(system, maximum)
+    axes = [_dpi_stage(_dpi_exchange(dev, 0x08, base + index * length, length), codec)
+            for index in range(count)]
+    if _dpi_exchange(dev, 0x08, 0, 6) != system:
+        raise ValueError("dpi_current_changed")
+    target = {key: info.get(key) for key in ("vendor_id", "product_id", "physical_id", "path", "serial_number")}
+    target.update(provider="pulsar", identity=list(identity), stages=axes)
+    return _dpi_view(target, active), target, system
+
+
+def _capture_dpi(info):
+    if not _dpi_eligible(info) or output_length(info["path"]) != PAYLOAD_LEN:
+        return None, None
+    dev = None
+    try:
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, target, _ = _dpi_state(dev, info)
+        return view, target if view["canSet"] else None
+    except Exception:
+        # A failed DPI read cannot invalidate the independent battery reply.
+        return None, None
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token):
+    """Switch one existing stage with one two-byte write at 0x0004; never retry."""
+    view, dev, attempted = None, None, False
+
+    def result(error=None, success=False, unknown=False):
+        answer = dict(view) if view else None
+        if answer and error:
+            answer.update(canSet=False, targetToken=None, error=error)
+        if answer and unknown:
+            answer.update(current=None, checkedAtUtc=None)
+        return {"dpi": answer, "success": success, "outcomeUnknown": unknown, "error": error,
+                "confirmedDpi": answer["current"] if answer and not unknown else None}
+
+    try:
+        if (not isinstance(target, dict) or target.get("provider") != "pulsar"
+                or not isinstance(inventory, (list, tuple))):
+            return result("dpi_invalid_target")
+        if not isinstance(target_token, str) or _dpi_token(target) != target_token:
+            return result("dpi_stale_target")
+        if type(value) is not int or type(expected_dpi) is not int:
+            return result("dpi_invalid_value")
+        offered = [pair[0] for pair in target["stages"]]
+        if value not in offered or expected_dpi not in offered:
+            return result("dpi_unsupported_value")
+        matches = [info for info in inventory if isinstance(info, dict) and _dpi_eligible(info)
+                   and all(info.get(key) == target.get(key) for key in
+                           ("vendor_id", "product_id", "physical_id", "path", "serial_number"))]
+        if len(matches) != 1 or output_length(matches[0]["path"]) != PAYLOAD_LEN:
+            return result("dpi_target_changed")
+        info = matches[0]
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, fresh, system = _dpi_state(dev, info)
+        if not view["canSet"] or view["targetToken"] != target_token:
+            return result("dpi_target_changed")
+        if view["current"] != expected_dpi:
+            return result("dpi_current_changed")
+        index = offered.index(value)
+        if value == expected_dpi:
+            return result(success=True)
+        # Recheck identity and the complete system immediately before mutation.
+        if (_dpi_exchange(dev, 0x10) != fresh["identity"]
+                or _dpi_exchange(dev, 0x08, 0, 6) != system):
+            return result("dpi_current_changed")
+        frame = _dpi_frame(0x07, 4, 2, [index, (0x55 - index) & 0xFF])
+        attempted = True  # Even a driver error/short write may have reached hardware.
+        if dev.write(frame) != PAYLOAD_LEN:
+            return result("dpi_readback_unconfirmed", unknown=True)
+        time.sleep(.01)  # OpenMouse WRITE_SETTLE_MS, not a resend.
+        confirmed = _dpi_exchange(dev, 0x08, 0, 6)
+        spec = DPI_MODELS[(info["vendor_id"], info["product_id"])]
+        _count, active = _dpi_system(confirmed, spec[4])
+        if confirmed[:4] != system[:4] or active != index:
+            return result("dpi_readback_mismatch", unknown=True)
+        if (_dpi_stage(_dpi_exchange(dev, 0x08, spec[2] + index * spec[3], spec[3]), spec[1])
+                != fresh["stages"][index] or _dpi_exchange(dev, 0x10) != fresh["identity"]):
+            return result("dpi_readback_mismatch", unknown=True)
+        view = _dpi_view(fresh, active)
+        return result(success=True)
+    except Exception:
+        return result("dpi_readback_unconfirmed" if attempted else "dpi_read_failed", unknown=attempted)
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
 
 def checksum(payload: List[int]) -> int:
     return (CHECKSUM_BASE - sum(payload)) % 256
@@ -229,10 +448,14 @@ def voltage_mv(r) -> Optional[int]:
 class PulsarProvider(Provider):
     name = "pulsar"
 
-    def __init__(self):
+    def __init__(self, device_pack=None):
         self._diag: List[str] = []
+        self.configure_pack(device_pack)
         # key -> (name, level, charging, when it was last read)
         self._last: Dict[str, Tuple[str, int, bool, float]] = {}
+
+    def configure_pack(self, device_pack):
+        self._device_pack = device_pack
 
     def _pick(self, infos: List[dict]) -> Optional[dict]:
         """The collection to open.
@@ -369,8 +592,13 @@ class PulsarProvider(Provider):
                     self._diag.append(f"  {mv} mV")
                 self._last[key] = (name, level, on_cable, now)
                 found.add(key)
+                pack = self._device_pack
+                pack_model = bool(pack and pack.loaded and any(
+                    entry.provider == self.name and entry.match.matches(d) for entry in pack.entries))
+                dpi, target = (None, None) if pack_model else _capture_dpi(d)
                 out.append(DeviceStatus(key, name, level, on_cable, True, "pulsar",
-                                        kind="mouse"))
+                                        kind="mouse", dpi=dpi, dpi_target=target,
+                                        model_source="pack" if pack_model else "builtin"))
         # A mouse that stopped answering is not necessarily a mouse that went away
         # (idle it stops answering - see the docstring), so its last reading stays
         # greyed out for as long as its receiver is still in the USB tree, however

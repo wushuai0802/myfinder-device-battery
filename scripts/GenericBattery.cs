@@ -115,7 +115,7 @@ namespace AtkBattery {
             DateTime time=CheckedTime,now=DateTime.UtcNow;
             if(Stages==null||Stages.Length==0||Stages.Length>8)return false;
             var seen=new HashSet<int>();foreach(int stage in Stages)if(!ValidValue(stage)||!seen.Add(stage))return false;
-            return device!=null&&device.Kind=="mouse"&&device.Provider=="logitech"&&device.Online&&device.ConnectionState=="connected"&&Supported&&CanSet&&Current.HasValue&&ValidValue(Current.Value)&&String.IsNullOrEmpty(Error)&&ValidToken(token)&&String.Equals(TargetToken,token,StringComparison.Ordinal)&&(StageSource=="onboard"||StageSource=="quick")&&time!=DateTime.MinValue&&time<=now.AddSeconds(5)&&(now-time).TotalSeconds<=90;
+            return device!=null&&device.Kind=="mouse"&&(device.Provider=="logitech"||device.Provider=="pulsar"&&StageSource=="onboard")&&device.ModelSource!="pack"&&device.Online&&device.ConnectionState=="connected"&&Supported&&CanSet&&Current.HasValue&&ValidValue(Current.Value)&&String.IsNullOrEmpty(Error)&&ValidToken(token)&&String.Equals(TargetToken,token,StringComparison.Ordinal)&&(StageSource=="onboard"||StageSource=="quick")&&time!=DateTime.MinValue&&time<=now.AddSeconds(5)&&(now-time).TotalSeconds<=90;
         }
         public string Key {get{return Supported+"|"+CanSet+"|"+Current+"|"+String.Join(",",Stages??new int[0])+"|"+StageSource+"|"+CheckedAtUtc+"|"+TargetToken+"|"+Error;}}
     }
@@ -245,7 +245,7 @@ namespace AtkBattery {
         DevicePackManager packManager;
         readonly string explicitPackPath;readonly long explicitPackVersion;
         long loadedPackVersion;int failedPackGeneration=-1;
-        sealed class DpiLease {internal string Token;internal int Current;internal int[] Stages;internal DateTime Checked;internal int Generation;}
+        sealed class DpiLease {internal string Token,Provider;internal int Current;internal int[] Stages;internal DateTime Checked;internal int Generation;}
         readonly Dictionary<string,DpiLease> dpiLeases=new Dictionary<string,DpiLease>(StringComparer.Ordinal);
         internal GenericBatteryWorker(string engineRoot=null,bool packageSmoke=false,int timeoutMilliseconds=45000,Func<Process,bool> terminateProcess=null,string devicePackPath=null,long devicePackVersion=0){root=engineRoot??Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","engine"));smoke=packageSmoke;queryBudget=Math.Max(100,Math.Min(45000,timeoutMilliseconds));terminate=terminateProcess??TryTerminate;explicitPackPath=devicePackPath;explicitPackVersion=devicePackVersion;}
         internal void UseDevicePacks(DevicePackManager manager){lock(query){if(process!=null)throw new InvalidOperationException("Attach device packs before starting the worker.");packManager=manager;}}
@@ -320,19 +320,19 @@ namespace AtkBattery {
             var write=new WirelessDpiResult {DeviceId=deviceId,TargetToken=targetToken,RequestedDpi=dpi};bool attempted=false;
             if(!Regex.IsMatch(deviceId??"",@"^device-[a-f0-9]{24}$")||!WirelessDpi.ValidToken(targetToken)||!WirelessDpi.ValidValue(dpi)||!WirelessDpi.ValidValue(expectedDpi))return DpiFailure(write,"无效的DPI控制目标。",false);
             try {
-                Process child;int currentGeneration;
+                Process child;int currentGeneration;string expectedProvider;
                 lock(lifecycle){
                     DpiLease lease;child=process;currentGeneration=generation;
                     if(disposed||quarantined||child==null||child.HasExited||generation!=submittedGeneration||!dpiLeases.TryGetValue(deviceId,out lease)||lease.Generation!=submittedGeneration||lease.Token!=targetToken||lease.Current!=expectedDpi||Array.IndexOf(lease.Stages,dpi)<0||(DateTime.UtcNow-lease.Checked).TotalSeconds>90||lease.Checked>DateTime.UtcNow.AddSeconds(5))return DpiFailure(write,"DPI状态或设备已改变，请先同步。",false);
-                    dpiLeases.Remove(deviceId);
+                    expectedProvider=lease.Provider;dpiLeases.Remove(deviceId);
                 }
                 long request=Interlocked.Increment(ref sequence);
                 attempted=true;
                 child.StandardInput.WriteLine("{\"command\":\"set_dpi\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"deviceId\":\""+deviceId+"\",\"dpi\":"+dpi+",\"targetToken\":\""+targetToken+"\",\"expectedDpi\":"+expectedDpi+"}");child.StandardInput.Flush();
-                var result=Receive(child,request,currentGeneration,null,write);if(!String.IsNullOrEmpty(result.Error))ReportPackFailure();return result;
+                var result=Receive(child,request,currentGeneration,null,write,expectedProvider:expectedProvider);if(!String.IsNullOrEmpty(result.Error))ReportPackFailure();return result;
             }catch(Exception){Stop();if(attempted)ReportPackFailure();return DpiFailure(write,attempted?"DPI操作结果未确认，请先同步；未自动重试。":"DPI控制暂不可用，请先同步。",attempted);}
         }}
-        WirelessSnapshot Receive(Process child,long request,int currentGeneration,Action<WirelessSnapshot> progress,WirelessDpiResult write,int timeoutMilliseconds=0,CancellationToken token=default(CancellationToken)){
+        WirelessSnapshot Receive(Process child,long request,int currentGeneration,Action<WirelessSnapshot> progress,WirelessDpiResult write,int timeoutMilliseconds=0,CancellationToken token=default(CancellationToken),string expectedProvider=null){
             int budget=timeoutMilliseconds>0?timeoutMilliseconds:queryBudget;
             var clock=Stopwatch.StartNew();var reader=child.StandardOutput;
             for(int frames=0;frames<128;frames++){
@@ -351,7 +351,7 @@ namespace AtkBattery {
                             var device=Array.Find(snapshot.Devices,delegate(WirelessDevice value){return value.Id==write.DeviceId;});
                             DateTime checkedTime;
                             bool resultFresh=DateTime.TryParse(result.CheckedAtUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out checkedTime)&&FreshDpiTime(checkedTime.ToUniversalTime());
-                            if(result.OutcomeUnknown||!String.IsNullOrEmpty(result.Error)||!resultFresh||result.ConfirmedDpi!=write.RequestedDpi||device==null||device.Provider!="logitech"||device.Kind!="mouse"||device.Dpi==null||device.Dpi.Current!=write.RequestedDpi||device.Dpi.TargetToken!=write.TargetToken||!device.Dpi.CanWrite(device,write.TargetToken)||!device.Dpi.HasStage(write.RequestedDpi)){Stop();return DpiFailure(write,"DPI重新读取未能确认目标值。",true);}
+                            if(result.OutcomeUnknown||!String.IsNullOrEmpty(result.Error)||!resultFresh||result.ConfirmedDpi!=write.RequestedDpi||device==null||device.Provider!=expectedProvider||device.Kind!="mouse"||device.Dpi==null||device.Dpi.Current!=write.RequestedDpi||device.Dpi.TargetToken!=write.TargetToken||!device.Dpi.CanWrite(device,write.TargetToken)||!device.Dpi.HasStage(write.RequestedDpi)){Stop();return DpiFailure(write,"DPI重新读取未能确认目标值。",true);}
                         }else foreach(var device in snapshot.Devices)if(device.Id==write.DeviceId)DisableDpi(device.Dpi);
                     }
                     RememberDpi(snapshot,child,currentGeneration);return snapshot;
@@ -363,7 +363,7 @@ namespace AtkBattery {
         }
         void RememberDpi(WirelessSnapshot snapshot,Process child,int currentGeneration){lock(lifecycle){
             dpiLeases.Clear();if(disposed||process!=child||generation!=currentGeneration||snapshot.Schema!=2)return;
-            foreach(var device in snapshot.Devices??new WirelessDevice[0])if(device.Dpi!=null&&device.Dpi.CanWrite(device,device.Dpi.TargetToken))dpiLeases[device.Id]=new DpiLease {Token=device.Dpi.TargetToken,Current=device.Dpi.Current.Value,Stages=(int[])device.Dpi.Stages.Clone(),Checked=device.Dpi.CheckedTime,Generation=currentGeneration};
+            foreach(var device in snapshot.Devices??new WirelessDevice[0])if(device.Dpi!=null&&device.Dpi.CanWrite(device,device.Dpi.TargetToken))dpiLeases[device.Id]=new DpiLease {Token=device.Dpi.TargetToken,Provider=device.Provider,Current=device.Dpi.Current.Value,Stages=(int[])device.Dpi.Stages.Clone(),Checked=device.Dpi.CheckedTime,Generation=currentGeneration};
         }}
         static WirelessSnapshot DpiFailure(WirelessDpiResult write,string message,bool unknown){return new WirelessSnapshot {Schema=2,Complete=true,Error=message,DpiResult=new WirelessDpiResult {DeviceId=write.DeviceId,TargetToken=write.TargetToken,RequestedDpi=write.RequestedDpi,Success=false,OutcomeUnknown=unknown,Error=message,CheckedAtUtc=DateTime.UtcNow.ToString("o")}};}
         static bool FreshDpiTime(DateTime time){var now=DateTime.UtcNow;return time!=DateTime.MinValue&&time<=now.AddSeconds(5)&&(now-time).TotalSeconds<=90;}

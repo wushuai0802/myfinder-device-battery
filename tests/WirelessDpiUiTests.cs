@@ -79,6 +79,9 @@ static class WirelessDpiUiTests {
         for(int page=0;page<8;page++){var part=PopupPages.Build(owner,navigation,false);details.AddRange(part);if(!part.Exists(delegate(PopupControl row){return row.Id==8;}))break;navigation.Offset+=navigation.VisibleChoices;}
         Check(details.Exists(delegate(PopupControl row){return row.Information&&row.Text=="快捷DPI"&&row.Value=="上次 800";})&&details.Exists(delegate(PopupControl row){return row.Information&&row.Text=="DPI来源"&&row.Value=="快捷值，非板载";}),"device details expose stale current value and the true shortcut source");
         Check(details.Exists(delegate(PopupControl row){return row.Information&&row.Text=="DPI最近确认"&&!String.IsNullOrEmpty(row.Value);}),"DPI confirmation time is distinct from the battery timestamp");
+        var compx=Device("c");compx.Provider="pulsar";owner.WirelessDevices=new[]{compx};
+        Check(Stage(Controls(owner),compx.Id,1600).Enabled&&Stage(Controls(owner),compx.Id,800).Selected&&WirelessLayout.DpiSubtitle(compx,null,null).StartsWith("DPI ·"),"pulsar uses the existing onboard row, selection and switch controls");
+        compx.ModelSource="pack";Check(!Stage(Controls(owner),compx.Id,1600).Enabled,"pack-origin pulsar cannot activate a DPI stage");
     }
     static void IdentityAndAccessibility(TrayContext owner) {
         var a=Device("a");var b=Device("b");owner.WirelessDevices=new[]{a,b};var rows=Controls(owner);var pressed=Stage(rows,a.Id,1600);string identity=pressed.StableKey;

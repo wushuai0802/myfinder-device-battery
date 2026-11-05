@@ -191,6 +191,108 @@ The same `b0` exchange as the other Nova headsets, asked for with report id `06`
 
 ## Mice
 
+### CompX onboard DPI selection (2026-11-05)
+
+**Project verification: C, fake devices only; hardware acceptance pending.**
+This extension to `providers/pulsar.py` reads existing onboard stages and switches
+the active stage. It never edits DPI values/counts, polling rate, colours, lights,
+LOD, profiles or other settings. Battery protocol-family matching does not grant
+DPI capability. `stageSource` is always `onboard`.
+
+Source, retrieved using `gh api repos/OpenMouse-Project/mouse-protocol/contents/<path>?ref=<commit>`:
+OpenMouse `mouse-protocol`, commit **`30d6ad37d0ecc9fff53f86d5058d67a88e07150d`**,
+licensed **AGPL-3.0-or-later** in its `package.json`. The implementation adapts:
+
+- [`src/drivers/atk/hid.ts`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/atk/hid.ts):
+  `REGISTER`, `readDpiStage`, `dpiAddress`, `setActiveDpiStage`, `read`, `write`,
+  `identify` and the R1 transport predicates.
+- [`src/atk/index.ts`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/atk/index.ts):
+  `atkDpiStageLength`, `atkUnpackDpiStageForSensor`, PAW3395/SE and PAW3955 codecs.
+- [`src/endgame-gear/wireless.ts`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/endgame-gear/wireless.ts):
+  `weBuildCmdPayload`, `weReportChecksum`, `wePackScalarPair`, `weUnpackScalarPair`.
+- [`products.ts`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/atk/products.ts)
+  and [`device-catalog.generated.ts`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/atk/device-catalog.generated.ts):
+  exact USB IDs, live CID/MID identities, sensor and transport selection.
+
+The complete allow-list is deliberately small. All three IDs already reach this
+project's battery reader. DPI additionally requires a proven physical instance,
+the exact `FF02:0002` collection, output length 17, a successful battery reply in
+this poll, and the live CID/MID below. Unknown lengths, other IDs/identities and
+model-pack definitions grant no DPI capability. NearLink names are excluded;
+R1 wired IDs also reject product strings identifying a receiver/dongle.
+
+| USB ID | Required CID,MID | Evidence and DPI map |
+|---|---|---|
+| `373B:12A7` | `1,62` | Catalog explicitly identifies **ATK F1 V3 ULTIMATE +**, PAW3955Master; ATK `isSupported` accepts its FF02 collection. `dpiAddress` selects **0x1B00 + index * 6**, at most 6 stages. Each row is X low/high, Y low/high, flags, checksum; decode each little-endian axis + 1, doubled by flag 0/4 respectively. Existing battery support uses the strict 373B family gate; this is the only such family ID granted DPI here. |
+| `3554:F58C` | `2,27` | `ATK_COMPX_PRODUCT_IDS` plus `ATK_PRODUCTS["2,27"]` and `usesVerifiedR1WiredTransport` explicitly allow wired R1 Pro Max. **0x000C + index * 4**, up to 8 stages, PAW3395 50-DPI codec with high count bits and the doubling bit. Other F58C identities, including R1 PRO `2,7`, remain excluded. |
+| `3554:F58F` | `2,32` | `ATK_COMPX_PRODUCT_IDS` plus `ATK_PRODUCTS["2,32"]` and `usesVerifiedR1WiredTransport` explicitly allow wired R1 SE+. **0x000C + index * 4**, up to 8 stages, PAW3395SE skipped-code table and high-range flag, copied from the codec. This PID is shared: all other CID/MID replies remain excluded, even if the catalog names them R1/SE/SE+. |
+
+Excluded branches: `3554:F58A` + `2,27` requires OpenMouse's **complete 10-byte
+system-row write** to switch a stage. That would write other EEPROM addresses,
+so this task does not enable it. `373B:1085` / `3554:F58E` use R1 live-settings
+transport (`0x0070`); upstream explicitly refuses active-stage selection on
+those connections. No live-settings write is sent. Native `373B:1278` remains
+owned by the C# A9 reader; generic NearLink, unknown 373B IDs and other PAW3955
+IDs are not added. `3554:F505`, `3554:FB56`, `3554:F517`, the Pulsar and Hitscan
+IDs have battery evidence but are not in this pinned ATK client's exact CompX
+transport list; their battery support alone is insufficient for this DPI map.
+
+Wire format (HIDAPI includes the report ID, unlike WebHID's 16-byte payload):
+`08 cmd 00 addrHi addrLo length data... zero-padding checksum`, **17 bytes**.
+The sum of all bytes, including report ID `08`, is `0x55` modulo 256. `cmd=10`
+reads CID/MID with an otherwise empty payload; `cmd=08` reads EEPROM. Reads
+accept command `08` or `07` replies, matching upstream's firmware compatibility
+branch, but require report ID, success/status byte, address, sufficient bounded
+length and valid frame checksum. `system` is read at `0000`, length 6: polling
+rate, count and zero-based active index are three value/checksum pairs. Every
+pair and every stage row must sum to `55`. Unlike upstream's presentation clamp,
+invalid counts/indices are rejected, not repaired or silently clamped.
+
+The only mutation is `cmd=07`, address **0004**, length **2**, data
+`[index, (55-index) & FF]`. For example, selecting stage index 1 sends exactly:
+
+```text
+08 07 00 00 04 02 01 54 00 00 00 00 00 00 00 00 EB
+```
+
+There is no generic EEPROM writer exposed, no full-row rewrite and no rollback
+or retry. After the upstream 10 ms settle, the implementation rereads the full
+6-byte system block, checks the unchanged rate/count pairs and requested active
+index, then rereads that stage and CID/MID. A mismatch, timeout, short write or
+exception after dispatch is `outcomeUnknown`: current DPI, token and `canSet`
+are cleared. Only a new successful read can grant another write lease. A failed
+DPI read leaves independently confirmed battery evidence intact.
+
+Before dispatch the manager checks online/fresh DPI capability, provider,
+onboard source, non-pack origin, token, expected current DPI and offered value.
+The child restricts inventory to the selected physical receiver and provider,
+rejects pack definitions, and rechecks path, USB ID, physical instance, optional
+serial, live CID/MID and the complete stage table. The opaque SHA-256 token binds
+those fields; raw identity never leaves the private worker. System is reread
+after the stage scan and immediately before the single mutation. Duplicate X
+values and asymmetric X/Y stages are display-only because the existing UI sends
+a DPI value, not a stage index or XY pair. Logitech's provider/codec and original
+tests are unchanged; manager dispatch and C# leases now recognize pulsar onboard
+stages and keep the issuing provider bound through write confirmation.
+
+Verification: `engine/tests/test_compx_dpi.py` exercises exact frames, sensor
+layouts, 8-stage R1, checksums, identity/caps/pack exclusions, state races and
+unknown outcomes. `tests/test_compx_dpi_engine.py` exercises real parent/child
+routing against fake HID, stale token/expected-value rejection without I/O,
+disconnects, pack blocks and read reconciliation. `GenericDpiTests.cs` and
+`WirelessDpiUiTests.cs` cover parsing, onboard leases, provider-bound IPC
+confirmation and existing panel controls with fake workers. No real hardware
+was opened during development or verification.
+
+Maintainer acceptance still needed: an allow-listed F1 V3 ULTIMATE + (or one of
+the exact wired R1 identities) must confirm the displayed stage order/current
+value, a single switch, unchanged other settings, sleep/wake and replug behavior.
+CID/MID identifies a model, not a unique radio unit; this implementation does
+not claim to detect replacement by an indistinguishable same-model unit behind
+the same receiver. The maintainer's **native ATK A9 Air+** should retain native
+DPI behavior. Their **VGN F1 Pro via 3554:F505** should retain battery reads and
+offer no generic DPI controls; it cannot validate the enabled DPI transports.
+
 ### HECATE G3M PRO (320F:706E)
 
 **C — pending this project's hardware validation.** `providers/g3m.py` is an

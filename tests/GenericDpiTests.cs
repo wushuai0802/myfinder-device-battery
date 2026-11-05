@@ -36,6 +36,12 @@ static class GenericDpiTests {
     static void ParserAndCache(string root){
         var device=GenericBatteryWorker.Parse(Frame()).Devices[0];
         Check(device.Dpi.Supported&&device.Dpi.CanSet&&device.Dpi.Current==400&&device.Dpi.TargetToken==TokenA&&device.Dpi.Stages.Length==3,"valid live DPI capability is parsed independently of native ATK state");
+        string compx=Device(IdA,TokenA,provider:"pulsar").Replace("\"stageSource\":\"quick\"","\"stageSource\":\"onboard\"");
+        var onboard=GenericBatteryWorker.Parse(Frame(devices:compx)).Devices[0];
+        Check(onboard.Dpi.Supported&&onboard.Dpi.CanSet&&onboard.Dpi.StageSource=="onboard","pulsar onboard stages survive the generic parser and write gate");
+        var pack=GenericBatteryWorker.Parse(Frame(devices:compx.Replace("\"dpi\":","\"modelSource\":\"pack\",\"dpi\":"))).Devices[0];
+        Check(!pack.Dpi.Supported&&!pack.Dpi.CanSet&&pack.Dpi.TargetToken==null,"pack-origin pulsar devices cannot expose a DPI write lease");
+        Check(!GenericBatteryWorker.Parse(Frame(devices:Device(IdA,TokenA,provider:"pulsar"))).Devices[0].Dpi.CanSet,"pulsar cannot advertise software quick DPI");
         string original=device.Key;device.Dpi.Current=800;Check(device.Key!=original,"DPI changes participate in the wireless presentation key");
         foreach(string body in new[]{Device(IdA,TokenA,400,true,"logitech","mouse","400,400,800"),Device(IdA,TokenA,400,true,"logitech","mouse","0,800"),Device(IdA,TokenA,400,true,"logitech","mouse","50,100,200,400,800,1600,3200,6400,12800"),Device(IdA,"bad"),Device(IdA,TokenA,400,true,"other"),Device(IdA,TokenA,400,true,"logitech","keyboard"),Device(IdA,TokenA,1),Device(IdA,TokenA,400,true,"logitech","mouse","400,800",DateTime.UtcNow.AddMinutes(-2).ToString("o")),Device(IdA,TokenA,400,true,"logitech","mouse","400,800",DateTime.UtcNow.AddMinutes(1).ToString("o"))}){
             var invalid=GenericBatteryWorker.Parse(Frame(1,1,body)).Devices[0];Check(!invalid.Dpi.CanSet&&invalid.Dpi.TargetToken==null,"invalid, stale or unsupported DPI capability loses its write lease");
@@ -82,6 +88,19 @@ static class GenericDpiTests {
                 worker.Reset();Check(worker.Poll().Generation!=first,"fixture restarts its child with the same stable target token and current DPI");
             }finally{Monitor.Exit(gate);}
             Pump(delegate{return caller.Join(0);});Check(result!=null&&!result.DpiResult.Success&&WriteCount(folder)==0,"a queued worker call cannot use a new lifetime's matching-looking lease");
+        }
+    }
+    static void CompXTransport(string root){
+        foreach(string mode in new[]{"compx","compx-swap"}){
+            string folder=MakeWorker(root,mode);using(var worker=new GenericBatteryWorker(folder,false,2000)){
+                var initial=worker.Poll();Check(initial.Devices[0].Dpi.CanSet&&initial.Devices[0].Provider=="pulsar","pulsar poll grants an onboard lease");
+                Check(!worker.SetDpi(IdA,TokenB,800,400).DpiResult.Success&&!worker.SetDpi(IdA,TokenA,800,800).DpiResult.Success&&WriteCount(folder)==0,"pulsar stale token and expected value never dispatch");
+                var result=worker.SetDpi(IdA,TokenA,800,400);
+                if(mode=="compx"){
+                    Check(result.DpiResult.Success&&result.Devices[0].Dpi.Current==800&&WriteCount(folder)==1,"pulsar confirmed onboard switch passes IPC readback validation");
+                    Check(worker.SetDpi(IdA,TokenA,400,800).DpiResult.Success&&WriteCount(folder)==2,"pulsar next user action uses newly confirmed current DPI");
+                }else Check(!result.DpiResult.Success&&result.DpiResult.OutcomeUnknown&&WriteCount(folder)==1,"a supported provider swap cannot confirm the former provider's write");
+            }
         }
     }
     static void UnconfirmedTerminationQuarantines(string root){
@@ -150,6 +169,10 @@ static class GenericDpiTests {
                     if(mode.StartsWith("bad-token"))token=TokenB;if(mode.StartsWith("bad-provider"))provider="other";if(mode.StartsWith("bad-kind"))kind="keyboard";if(mode.StartsWith("bad-cap")||unknown)canSet=false;if(mode.StartsWith("bad-stage"))stages="400,1600";
                 }
                 string devices=Device(IdA,token,a,canSet,provider,kind,stages)+","+Device(IdB,TokenB,b);
+                if(mode.StartsWith("compx")){
+                    devices=devices.Replace("\"provider\":\"logitech\"","\"provider\":\"pulsar\"").Replace("\"stageSource\":\"quick\"","\"stageSource\":\"onboard\"");
+                    if(mode.StartsWith("compx-swap")&&command=="set_dpi")devices=devices.Replace("\"provider\":\"pulsar\"","\"provider\":\"logitech\"");
+                }
                 output.WriteLine(Frame(request+100,generation,devices,result));output.WriteLine(Frame(request,generation,devices,result));
             }
         }
@@ -160,7 +183,7 @@ static class GenericDpiTests {
         try{
             var settings=new AudioBindings {RememberReadings=false};DeviceSettings.UseTransientConfiguration(settings);
             string root=Path.Combine(Path.GetFullPath(args.Length>0?args[0]:"tmp"),"generic-dpi-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
-            ParserAndCache(root);Transport(root);QueryWaitDoesNotCrossLifetime(root);UnconfirmedTerminationQuarantines(root);Controller(root);
+            ParserAndCache(root);Transport(root);CompXTransport(root);QueryWaitDoesNotCrossLifetime(root);UnconfirmedTerminationQuarantines(root);Controller(root);
             Console.WriteLine("PASS "+checks+" generic DPI parser/IPC/lifetime/queue regressions; all hardware and writers are fake");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{current.SetValue(null,previous);}

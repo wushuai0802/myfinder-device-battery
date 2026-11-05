@@ -75,6 +75,7 @@ BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
 KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "vgn_keyboard"}
+DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
 def keyboard_diagnostics(provider):
@@ -352,7 +353,8 @@ def normalise(status, previous, now, cached=False):
             "modelReference": status.model_reference} if pack_model else {}),
         "dpi": None if pack_model else normalise_dpi(getattr(status, "dpi", None) or old.get("dpi"),
                              usable=bool(getattr(status, "dpi", None)) and online and not cached
-                             and status.source == "logitech" and kind_of(status) == "mouse"),
+                             and status.source in DPI_PROVIDERS and kind_of(status) == "mouse"
+                             and (status.source != "pulsar" or status.dpi.get("stageSource") == "onboard")),
     }
 
 
@@ -458,7 +460,7 @@ def reader_child():
                 if key not in instances:
                     if len(instances) >= 128:
                         instances.clear()
-                    instances[key] = (provider_class(name)(device_pack=device_pack) if name == "razer"
+                    instances[key] = (provider_class(name)(device_pack=device_pack) if name in ("razer", "pulsar")
                                       else provider_class(name)())
                 provider = instances[key]
                 if name in SYSTEM_PROVIDERS:
@@ -478,17 +480,17 @@ def reader_child():
                     response["diagnostics"] = keyboard_diagnostics(provider)
             elif action == "set_dpi":
                 # Only the selected physical receiver reaches the provider. The
-                # provider re-reads slot/unit, current value and supported range
-                # immediately before its one volatile write.
-                if command.get("provider") != "logitech":
+                # provider revalidates identity/current/stages before one write.
+                name = command.get("provider")
+                if name not in DPI_PROVIDERS:
                     raise ValueError("invalid dpi provider")
-                from providers.logitech import set_device_dpi
+                set_device_dpi = importlib.import_module("providers." + name).set_device_dpi
                 selected = [d for d in command.get("inventory", [])
                             if d.get("physical_id") == command.get("physicalId")
-                            and d.get("vendor_id") == 0x046D]
-                selected = device_pack.select_inventory("logitech", selected)
+                            and d.get("vendor_id") in DPI_PROVIDERS[name]]
+                selected = device_pack.select_inventory(name, selected)
                 if device_pack.loaded and (not selected or any(
-                        e.provider == "logitech" and any(e.match.matches(d) for d in selected)
+                        e.provider == name and any(e.match.matches(d) for d in selected)
                         for e in device_pack.entries)):
                     raise ValueError("pack writes forbidden")
                 response = set_device_dpi(selected, command.get("target"), command.get("dpi"),
@@ -543,7 +545,7 @@ class BatteryEngine:
         self.device_pack = device_pack or EMPTY_PACK
         if self._direct and self.device_pack.loaded:
             for provider in self.providers:
-                if provider.name == "razer":
+                if provider.name in ("razer", "pulsar"):
                     provider.configure_pack(self.device_pack)
         self.previous = {}
         self.unadapted = []
@@ -752,7 +754,7 @@ class BatteryEngine:
         return True
 
     def set_dpi(self, device_id, value, target_token, expected_dpi, request_id=0, generation=0):
-        """One identity-bound volatile write with readback, never a retry."""
+        """One identity-bound provider write with readback, never a retry."""
         self._collect_bluetooth()
         result = {"deviceId": device_id, "targetToken": target_token,
                   "requestedDpi": value, "confirmedDpi": None, "success": False,
@@ -783,8 +785,10 @@ class BatteryEngine:
         dpi = device.get("dpi") or {}
         target = self.dpi_targets.get(device_id)
         physical = self.physical_by_id.get(device_id)
-        if (self._direct or self.package_smoke or self.provider_by_id.get(device_id) != "logitech"
+        provider = self.provider_by_id.get(device_id)
+        if (self._direct or self.package_smoke or provider not in DPI_PROVIDERS
                 or device.get("modelSource") == "pack"
+                or provider == "pulsar" and dpi.get("stageSource") != "onboard"
                 or not physical or not target or not device.get("online")
                 or dpi.get("canSet") is not True or dpi.get("targetToken") != target_token):
             return finish("stale_target")
@@ -792,7 +796,7 @@ class BatteryEngine:
             return finish("current_changed")
         if value not in dpi.get("stages", []):
             return finish("unsupported_dpi")
-        reader_key = "logitech|" + physical
+        reader_key = provider + "|" + physical
         slot = self._affinity.get(reader_key, 0)
         if slot == self._bluetooth_slot:
             # Reclaim only an unfinished read, before any DPI command. This
@@ -806,14 +810,14 @@ class BatteryEngine:
             if not isinstance(inventory, list) or len(inventory) > 512:
                 return finish("invalid_topology")
             selected = [d for d in inventory if d.get("physical_id") == physical
-                        and d.get("vendor_id") == 0x046D]
-            selected = self.device_pack.select_inventory("logitech", selected)
+                        and d.get("vendor_id") in DPI_PROVIDERS[provider]]
+            selected = self.device_pack.select_inventory(provider, selected)
             if not selected:
                 return finish("disconnected")
         except Exception:
             return finish("topology_unavailable")
         try:
-            response = self._single_reader(slot, {"action": "set_dpi", "provider": "logitech",
+            response = self._single_reader(slot, {"action": "set_dpi", "provider": provider,
                     "physicalId": physical, "inventory": selected, "target": dict(target),
                     "dpi": value, "expectedDpi": expected_dpi, "targetToken": target_token}, 12)
             updated = normalise_dpi(response.get("dpi"), usable=True)
