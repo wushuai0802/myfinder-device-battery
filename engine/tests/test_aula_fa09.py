@@ -74,7 +74,8 @@ class AulaFa09Tests(unittest.TestCase):
             with self.subTest(order=factories), aula_fixture([aula_reply()], [ff02, ff04]) as bus:
                 status, = [s for factory in factories for s in factory().poll()]
                 self.assertEqual((status.name, status.level, status.kind, status.verification_level),
-                                 ("AULA 键盘（3554:FA09）", 64, "keyboard", "C"))
+                                 ("2.4G 无线键盘（3554:FA09）", 64, "keyboard", "C"))
+                self.assertEqual(status.key, "mchose_by_keyboard:receiver-a")
                 self.assertFalse(status.charging_known)
                 self.assertFalse(status.charging)
                 self.assert_feature_only(bus)
@@ -169,7 +170,7 @@ class AulaFa09Tests(unittest.TestCase):
                 frames = [identity(), reply(63, 0x10), aula_reply()]
             with self.subTest(reverse=reverse), aula_fixture(frames, infos) as bus:
                 statuses = {s.physical_id: s for s in P().poll()}
-                self.assertEqual(statuses["aula"].name, "AULA 键盘（3554:FA09）")
+                self.assertEqual(statuses["aula"].name, "2.4G 无线键盘（3554:FA09）")
                 self.assertFalse(statuses["aula"].charging_known)
                 self.assertEqual(statuses["by"].name, "MCHOSE X75 V2")
                 self.assertTrue(statuses["by"].charging)

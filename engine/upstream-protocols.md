@@ -2001,7 +2001,7 @@ does not supply their exact target usage/report descriptor variants or prove
 which named devices take feature vs output transport. They are **recorded only,
 not enabled**. FA07 and other keyboard/mouse identities are also excluded.
 
-#### AULA FA09 feature-only variant: user hardware evidence #224
+#### Shared FA09 feature-only variant: user hardware evidence #224 / #108
 
 **C / 用户实机验证，#224；待本项目实机验证。** The supplied issue
 `.ai/evidence/aula/issue-224.md` reports F87 on Windows 11, six stable 100%
@@ -2010,7 +2010,11 @@ It attributes the query to Aula Hub 2.2.3 `getKeyboardPower()`; that Hub bundle
 was not supplied or independently inspected here. The concrete F87 result is
 user evidence, not a hardware test performed by this task or proof of every F75.
 
-The unified owner remains `mchose_by_keyboard`. The AULA path requires exactly
+Issue #108 also reports a non-AULA SCC100 keyboard reading 100% through this
+Feature 06 path on 1.3.9-beta.3. This user result shows the path is shared across
+brands; it does not identify every compatible model or establish charging semantics.
+
+The unified owner remains `mchose_by_keyboard`. The Feature 06 path requires exactly
 `3554:FA09`, one eligible `FF04:0002` collection, the existing exact generic-name
 gate, descriptor-proven **Feature report 06 of 8 bytes**, and **input/output
 maximum lengths both zero with proven empty input/output report-size maps**.
@@ -2033,7 +2037,12 @@ GET_FEATURE: report ID 06, length 8
 
 Replies must be exactly eight bytes, report ID 06, command 87, and byte 3 in
 0..100. Zero is suppressed consistently with BY; 1..100 produces
-`AULA 键盘（3554:FA09）` with unknown charging. Other reply bytes have no
+`2.4G 无线键盘（3554:FA09）` with unknown charging, matching the unknown-model
+BY path's neutral name. The provider key remains `mchose_by_keyboard:<physical>`
+(or the existing path representation when physical identity is absent); the
+isolated worker retains its existing `:instance:<physical>` suffix and legacy
+key. The display name participates in neither key nor the public-ID hash, so
+the rename preserves history, aliases and hidden settings. Other reply bytes have no
 inferred checksum, charging or connection-bit meanings. Short/failed sends
 do not trigger GET_FEATURE or another request. Silence, exceptions and invalid
 replies produce no new reading or engine error; unsuccessful Feature queries

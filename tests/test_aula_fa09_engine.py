@@ -33,7 +33,9 @@ class AulaFa09BridgeTests(unittest.TestCase):
             result = self.child(infos)
         status, = result["statuses"]
         self.assertEqual((status["name"], status["level"], status["charging_known"]),
-                         ("AULA 键盘（3554:FA09）", 64, False))
+                         ("2.4G 无线键盘（3554:FA09）", 64, False))
+        self.assertEqual(status["key"], "mchose_by_keyboard:one:instance:one")
+        self.assertEqual(status["legacy_key"], "mchose_by_keyboard:one")
         self.assertEqual(result["candidateCount"], 1)
         self.assertFalse(result.get("errorCode"))
         self.assertEqual(bus.opened, [infos[0]["path"]])
@@ -47,13 +49,15 @@ class AulaFa09BridgeTests(unittest.TestCase):
         with aula_fixture([aula_reply()], infos):
             first, = engine.poll()["devices"]
         self.assertEqual((first["name"], first["percent"], first["charging"]),
-                         ("AULA 键盘（3554:FA09）", 64, None))
+                         ("2.4G 无线键盘（3554:FA09）", 64, None))
+        self.assertEqual(first["id"], server.public_id("mchose_by_keyboard:receiver-a"))
         for frames, options in (([aula_reply(0)], {}), ([], {}),
                                 ([aula_reply()], dict(error_at="feature_read")),
                                 ([aula_reply()], {})):
             with self.subTest(frames=frames, options=options), aula_fixture(frames, infos, **options):
                 snapshot = engine.poll()
             stale, = snapshot["devices"]
+            self.assertEqual(stale["id"], first["id"])
             self.assertEqual((stale["percent"], stale["confirmedAtUtc"]), (64, first["confirmedAtUtc"]))
             self.assertFalse(stale["fresh"])
             self.assertEqual(stale["connectionState"], "unconfirmed")

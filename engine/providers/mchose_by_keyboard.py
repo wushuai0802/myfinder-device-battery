@@ -15,7 +15,7 @@ PIDS = {
 }
 RECEIVER_NAMES = frozenset(("2.4G Wireless Receiver", "MCHOSE 2.4G Wireless"))
 AULA_REQUEST = bytes.fromhex("06 87 00 00 01 00 02 00")
-AULA_NAME = "AULA 键盘（3554:FA09）"
+AULA_NAME = "2.4G 无线键盘（3554:FA09）"
 
 # Six-byte model identifiers from M HUB's keyboardPwds table, not credentials.
 # The official generic-receiver path matches this entire table, not just the
