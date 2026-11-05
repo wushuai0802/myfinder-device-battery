@@ -132,7 +132,7 @@ class RapooTests(unittest.TestCase):
             provider = R.RapooProvider()
             self.assertEqual(provider.poll(), [])
             self.assertLessEqual(bus.now - 100, 1.5)
-            self.assertEqual(bus.opened, bus.closed)
+            self.assertEqual(bus.closed, [])        # kept open to queue the next report
             self.assertNotIn("failed", " ".join(provider.diagnostics()))
             engine = server.BatteryEngine(providers=[provider])
             candidates = server.recognized_candidate_count("rapoo", bus.inventory)
@@ -188,6 +188,58 @@ class RapooTests(unittest.TestCase):
             stale, = provider.poll()
             self.assertEqual(stale.measured_at_utc, current.measured_at_utc)
             self.assertEqual(len(provider._last), 1)
+
+    def test_handle_stays_open_and_next_poll_drains_queued_report(self):
+        with fixture() as bus:
+            provider = R.RapooProvider()
+            self.assertEqual(provider.poll(), [])          # first poll: brief listen only
+            reads = len(bus.reads)
+            bus.frames = [report(40), report(report_id=6), report(41, 2)]   # queued while idle
+            status, = provider.poll()
+            self.assertEqual((status.level, status.charging, status.cached), (41, True, False))
+            self.assertEqual(len(bus.opened), 1)
+            self.assertEqual(bus.closed, [])
+            self.assertTrue(all(timeout == R.DRAIN_TIMEOUT_MS for _, timeout in bus.reads[reads:]))
+            stale, = provider.poll()                       # nothing queued: history, no wait
+            self.assertTrue(stale.cached)
+            self.assertLess(bus.now - 100, 1.6)
+            provider.close()
+            self.assertEqual(bus.opened, bus.closed)
+
+    def test_drain_is_bounded_when_reports_keep_arriving(self):
+        with fixture() as bus:
+            provider = R.RapooProvider()
+            provider.poll()
+            bus.frames = [report(report_id=6)] * 1000
+            reads = len(bus.reads)
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(bus.reads) - reads, R.MAX_DRAIN)
+            provider.close()
+
+    def test_failed_read_on_kept_handle_closes_and_reopens_next_poll(self):
+        with fixture() as bus:
+            provider = R.RapooProvider()
+            provider.poll()
+            bus.frames = [OSError("fake private path")]
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(bus.opened, bus.closed)
+            self.assertNotIn("private path", " ".join(provider.diagnostics()))
+            bus.frames = [report(77)]
+            status, = provider.poll()
+            self.assertEqual(status.level, 77)
+            self.assertEqual(len(bus.opened), 2)
+            provider.close()
+
+    def test_unplug_path_change_or_lost_proof_closes_kept_handle(self):
+        for change in ([], [descriptor(path=b"usb:receiver-a:new")], [descriptor(input_report_sizes=None)]):
+            with self.subTest(change=change), fixture() as bus:
+                provider = R.RapooProvider()
+                provider.poll()
+                bus.inventory = change
+                provider.poll()
+                self.assertIn(b"usb:receiver-a:control", bus.closed)
+                provider.close()
+                self.assertEqual(sorted(bus.opened), sorted(bus.closed))
 
     def test_enumeration_failure_does_not_evict_history(self):
         with fixture([report(66)]):

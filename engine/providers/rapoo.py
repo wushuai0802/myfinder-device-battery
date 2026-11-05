@@ -3,6 +3,12 @@
 Only the three wireless IDs below are supported, at evidence level C. The
 official A HUB's Ik/dy parser receives report 07 on the default FF00:0002
 channel. Report length must be proven from that collection's descriptor.
+
+The mouse sends report 07 on its own schedule, about every 30-60 s (measured
+by a user in #120), so one short listen per poll almost always missed it. The
+collection handle therefore stays open between polls: Windows queues input
+reports for an open handle, and each poll drains that queue and keeps the
+newest battery report. The first poll after opening still listens briefly.
 See upstream-protocols.md for the host route, UI flags and remaining unknowns.
 """
 from __future__ import annotations
@@ -26,6 +32,8 @@ COLLECTION = (0xFF00, 0x0002)
 INPUT_ID = 0x07
 READ_WINDOW_MS = 1500
 MAX_READS = 32
+DRAIN_TIMEOUT_MS = 1   # reading what is already queued, not waiting for more
+MAX_DRAIN = 256        # bounded even if other reports keep arriving
 
 
 def parse_battery(raw):
@@ -48,6 +56,7 @@ class RapooProvider(Provider):
         self._diag = []
         self._last = {}  # physical USB parent -> last DeviceStatus and receive time
         self._paths = {}  # keep history if parent resolution temporarily fails
+        self._handles = {}  # physical USB parent -> (collection path, open handle)
 
     def _pick(self, infos):
         candidates = [d for d in infos
@@ -67,6 +76,41 @@ class RapooProvider(Provider):
             self._diag.append("input report 07 length unproven; not opened")
             return None
         return info
+
+    def _drain(self, dev, info):
+        """Newest valid battery report already queued on a handle kept open."""
+        newest = None
+        for _ in range(MAX_DRAIN):
+            raw = dev.read(info["input_report_length"], DRAIN_TIMEOUT_MS)
+            if not raw:
+                break
+            if raw[0] != INPUT_ID or len(raw) != info["input_report_sizes"]["7"]:
+                continue
+            parsed = parse_battery(raw)
+            if parsed is not None:
+                newest = parsed
+        if newest is None:
+            self._diag.append("no queued battery notification; no new measurement")
+        return newest
+
+    def _release(self, physical):
+        entry = self._handles.pop(physical, None)
+        if entry is not None:
+            dev = entry[1]
+            try:
+                dev.close()
+            except OSError:
+                self._diag.append("HID handle close failed")
+
+    def close(self):
+        for physical in list(self._handles):
+            self._release(physical)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _listen(self, dev, info):
         deadline = time.monotonic() + READ_WINDOW_MS / 1000
@@ -116,18 +160,31 @@ class RapooProvider(Provider):
             self._paths[physical] = {d.get("path") for d in infos if d.get("path")}
             reading = None
             info = self._pick(infos)
-            if info is not None:
-                dev = hid.device()
+            if info is None:
+                self._release(physical)
+            else:
+                entry = self._handles.get(physical)
+                if entry is not None and entry[0] != info["path"]:
+                    self._release(physical)
+                    entry = None
                 try:
-                    dev.open_path(info["path"])
-                    reading = self._listen(dev, info)
+                    if entry is None:
+                        dev = hid.device()
+                        try:
+                            dev.open_path(info["path"])
+                        except (OSError, ValueError):
+                            try:
+                                dev.close()
+                            except OSError:
+                                pass
+                            raise
+                        self._handles[physical] = (info["path"], dev)
+                        reading = self._listen(dev, info)
+                    else:
+                        reading = self._drain(entry[1], info)
                 except (OSError, ValueError):
                     self._diag.append("input read failed; no new measurement")
-                finally:
-                    try:
-                        dev.close()
-                    except OSError:
-                        self._diag.append("HID handle close failed")
+                    self._release(physical)
             if reading is not None:
                 level, charging, charging_known = reading
                 received = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -151,6 +208,8 @@ class RapooProvider(Provider):
             else:
                 self._last.pop(physical, None)
                 del self._paths[physical]
+        for physical in [p for p in self._handles if p not in groups]:
+            self._release(physical)
         return result
 
     def diagnostics(self):
