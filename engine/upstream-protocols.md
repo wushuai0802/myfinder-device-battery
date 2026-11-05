@@ -1713,6 +1713,133 @@ both existing paths without duplicate registrations or changes to either file.
 The compatibility catalog now includes this receiver under the C-level Pulsar
 reader and removes its D-level observed-only entry.
 
+### Dareu EM901 260D:1074 / 260D:1090 — static research only
+
+**Not implemented; no compatibility claim.** The supplied official EM901X
+AIM-WL driver does not use the proposed BY `13 / 4A / 20-byte` battery path.
+Its traced battery path uses **17-byte Feature report `08`, command `04`, and
+a separate input handle expecting report `09`**. The exact usagePage/usage of
+those handles and the safety/necessity of its initialization exchange are not
+established. Per the task's evidence gate, neither PID is added to a provider,
+the server, the offline ID index, descriptor discovery, or the compatibility
+catalog. Similar collection lists alone must not route this mouse to a BY
+keyboard reader. Intended kind/grade, if later established, are `mouse` / C.
+
+#### Source identity and analysis boundary
+
+The supplied snapshot came from the official
+[EM901X AIM-WL Driver page](https://www.dareu.com/pages/mice-driver), obtained
+2026-11-06 and extracted with innoextract by the supervisor. This investigation
+did not fetch the page or run the installer. Evidence is under
+`.ai/evidence/dareu-em901x/unpacked/app/`:
+
+| File | SHA-256 |
+| --- | --- |
+| `OemDrv.exe` (2,172,928 bytes, PE32 x86) | `afac433fbd34b67994886a079a917c832c7f5e12cd22189e5fd84b303f56052e` |
+| `InitSetup.dll` (56,320 bytes, PE32 x86) | `72f5cfe575253eaff31e27ce8f70b4caaa079d2c42a4130515eecf7f0967115d` |
+| `Cfg.ini` (GBK) | `34e23f5067f77620c58803ecc243bf7a8fa1a52fdf9d49d63a371f269024c02c` |
+
+Analysis used local Ghidra 12.1.4 disassembly/decompilation and independent PE
+file-byte checks. All addresses below are static preferred VAs, not observed
+runtime addresses; offsets are zero-based original file offsets. For the cited
+EXE `.text` anchors, `file = VA - 0x400C00`; for the cited `.rdata` anchors,
+`file = VA - 0x401400`. Optimized calling conventions confuse some decompiled
+signatures; the byte positions and arguments below were checked against x86
+instructions. No evidence EXE/DLL was executed or loaded as executable code;
+no HID enumeration, device commands, network access, or firmware operation was
+performed. The local analysis project and text extracts remain in ignored
+`tmp/`; this section contains the durable findings.
+
+`Cfg.ini` contains `Title=EM901 Dual Mode Wireless Mouse` at file `0x2F`,
+`VID=0x260d` at `0x207`, `PID=0x1090` at `0x213`, `PID2=0x1074` at `0x21F`,
+and `ptPower=949,110` at `0x26C`. Its `[DEV_1]` also specifies `CID=0x10`,
+`MID=0x04`. The configuration loader at VA `0x443D30` / file `0x43130` reads
+these VID/PID/PID2 keys into the globals used by discovery. This proves both
+IDs are configured for this driver, but does not prove the #81 receiver's
+descriptor, firmware, or connection mode matches this snapshot.
+
+`InitSetup.dll` exports only `SetupInit`, VA `0x10001080` / file `0x480`.
+It checks `PathFileExistsW` and calls recursive filesystem cleanup at
+`0x100010F0` / `0x4F0`: `FindFirstFileW`, `SetFileAttributesW`, `DeleteFileW`,
+`FindNextFileW`, `FindClose`, and nested `RemoveDirectoryW`. Its imports are
+SHLWAPI/KERNEL32, with no HID/SetupAPI imports. The strings at file `0xA9A4`
+(`InitSetup: pszAppdata = NULL.`), `0xAA64` (`Remove Folder OK.`) and `0xAAB0`
+(`DeleteFile %s, err=%d`) corroborate this installation role. It supplies no
+evidence of a battery handshake. The English/Chinese XML has `tc_msg10` for
+the mouse being offline and `tc_msg8` for firmware update; labels alone are
+not protocol evidence.
+
+#### Transport, battery frame and reply
+
+| Question | Static evidence / conclusion |
+| --- | --- |
+| HID transport | `HidD_SetFeature` IAT VA `0x5771F0` / file `0x175DF0`, thunk `0x56365A`. The battery sender reaches it at `0x449D4A` / `0x4914A`. This path does not use `WriteFile` or `HidD_GetFeature` for the request. |
+| Discovery and collections | Enumeration at `0x410900` / `0xFD00` matches the configured VID with either PID, calls `HidD_GetAttributes`, `HidD_GetPreparsedData`, `HidP_GetCaps`, and records usage/page and report lengths. `FindDev` at `0x40C430` / `0xB830` selects input handles with `InputReportByteLength == 17` (`0x40C533` / `0xB933`) and command handles with `FeatureReportByteLength == 17` (`0x40C5D0` / `0xB9D0`). These selectors do **not** test usagePage/usage. Input and command handles need not be the same collection. No `FF04:0002` or `FF02:0002` mapping is established. |
+| Battery constructor | `GetPower` at `0x449BD0` / `0x48FD0`, reached from `0x433F50` / `0x33350`, zeroes a 15-byte command payload and sets its first byte to `04` at `0x449C5B` / `0x4905B`. There is no extra device command within this getter. |
+| Framing/checksum | `SendCommand` at `0x449CE0` / `0x490E0` prepends report ID `08` and copies the 15-byte payload. For the zero-initialized battery buffer it sets raw byte 16 so the complete 17-byte sum is `0x55` modulo 256. The helper also subtracts the previous value of byte 16; the battery caller explicitly initializes that slot to zero. It calls `HidD_SetFeature(..., 17)` with up to three attempts, 50 ms apart on failure. |
+| Input handling | `ServiceThread` at `0x448320` / `0x47720` initializes the input report-ID slot to `09` and calls `ReadFile(..., 17)` at `0x4483DD` / `0x477DD`. It passes the buffer **after the report ID** to `0x448090` / `0x47490`, which queues non-`0A` command replies. `WaitNotify` at `0x448220` / `0x47620` selects command `04`; it sleeps/polls a queue with roughly a one-second empty-queue budget. |
+| Battery fields | `0x449C8D` / `0x4908D` requires status zero; `0x449C93` and `0x449C98` load percentage and the raw charging byte. Including the report ID these are **raw bytes 2, 6, 7**, respectively; raw byte 1 is command `04`. The UI at `0x433F8F` / `0x3338F` accepts percentage `0..100` and treats any nonzero raw charging byte as charging (`0x433F9C`). It does not apply the BY nibble/bit interpretation. |
+| Reply limits | The inspected getter/queue path does not validate a reply checksum, actual returned report ID, or exact received byte count. `09` is the driver's expected input ID, not a captured descriptor/report. No reply checksum rule, charging value enumeration, voltage field, sleep sentinel, or freshness guarantee is established here. |
+
+The statically constructed battery request, including report ID and checksum,
+is exactly:
+
+```text
+08 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 49
+```
+
+This differs from BY in transport, IDs, length, command, field offsets and
+checksum rule. Reusing `by_keyboard.make_request()` or its payload parser would
+send/interpret the wrong protocol even though #81 lists similar vendor pages.
+
+#### Initialization and commands excluded from any battery implementation
+
+Discovery sends `08 03` followed by **15 zero bytes**, via `HidD_SetFeature`
+at `0x40C66E` / `0xBA6E`. It does not use the regular checksum helper for this
+probe (the final byte is zero, not `4A`). Temporary read threads at `0x40C3C0`
+/ `0xB7C0`, using `GetData` at `0x448A40` / `0x47E40`, associate a responding
+input handle with the command handle. This is not proof of physical-parent
+uniqueness or a safe exact-collection selector for this project.
+
+`Psd_Thread` at `0x40BF70` / `0xB370` then calls `GetConnectStatus` at
+`0x4486E0` / `0x47AE0` (regular checksummed command `03`). It normally follows
+with `CheckPsd` at `0x448820` / `0x47C20`: command `01`, length marker `08`,
+four random bytes, and CID/MID processing. The configured model is `10:04`.
+There is a global bypass branch, but no instruction to enable it is inferred.
+The code does not establish that the random exchange has no device side effects,
+or that an uninitialized device answers standalone `04`. The UI's first getter
+occurs after this discovery sequence; later timer calls reuse its handles.
+No additional explicit wake command was identified in the inspected battery
+chain. That bounded finding does not prove one is unnecessary on hardware.
+
+| Operation | Confirmed command / anchor / boundary |
+| --- | --- |
+| Driver/session status | Command `02` with a one-byte value; `TellDrvStatus` at `0x448DC0` / `0x481C0` sets the generic sender's command to `02` at `0x448DDB`. Show/minimize/exit callers send 1/0. This changes driver/session status and is excluded. |
+| Write DPI, keys/macros, lighting and other settings | `WriteEEPROM` at `0x449100` / `0x48500` sends command `07`, address and payload. The apply worker `0x40FB60` / `0xEF60` has explicit `Set Key`, `Set LED`, `Set DPI`, `Set DPI Color` paths into it. DPI uses `0x4496F0` / `0x48AF0` (addresses starting at `0C`), key mapping uses `0x449930` / `0x48D30` (starting at `60`), and lighting writes include addresses `A0`, `4C`, `54`, `58`. These are settings writes, never battery initialization. |
+| Restore / apply completion | The restore-confirmation text `tc_msg5` is loaded into `0x603270` at `0x4314AA`; the restore UI at `0x436A20` / `0x35E20` uses it, then queues an all-settings apply (`EAX=FFFF` at `0x436D00`, `0x409220` / `0x8620`). The apply worker's flag-`0100` branch sets command `09` at `0x410765` / `0xFB65` and calls the generic sender at `0x41076C` / `0xFB6C`, after the enabled `07` writes. Exclude this entire restore/apply path. A standalone hardware factory-reset meaning for `09` is not established. |
+| Active profile | `SetCurProfile` caller `0x412B00` / `0x11F00` reaches `0x449020` / `0x48420`, which sends command `10` with the selected profile byte. Excluded. |
+| Identification / status / EEPROM read | Commands `01` (random `CheckPsd`), `03` (connection status), `08` (EEPROM read at `0x449460` / `0x48860`), `0E` (current-profile read at `0x448E80` / `0x48280`) and `0F` (getter at `0x449AD0` / `0x48ED0`) are distinct from battery `04`. Their presence does not authorize copying the initialization sequence. |
+| Pairing and firmware | No exact pairing, bootloader or firmware-write frame was recovered in the inspected HID senders/callers. `tc_msg8=Firmware Update` and the `ShowFWUpdate` configuration key are UI evidence only; the latter defaults to zero and is absent from this Cfg.ini. Do not borrow presumed `05`/`0D`/`B0`/`B1` meanings from other drivers, run the updater, or infer these operations are absent from every version. |
+
+#### Remaining evidence gate and verification
+
+Before implementation, obtain passive report descriptors for both exact PIDs
+and establish the command/input usagePage/usage, report IDs and individual
+17-byte report sizes, their physical-parent relationship, and a documented
+safe standalone battery/identification sequence. A separate authorized hardware
+acceptance would need request/reply captures, charging transitions, and
+sleep/wake/freshness checks. The current task forbids hardware access, and the
+supplied collection list does not fill those gaps. Neither a BY fallback nor
+blind probing of every 17-byte collection is enabled.
+
+The two required offline suites passed (684 engine tests and 332 repository
+Python tests). They validate the unchanged implementation; they are **not**
+EM901 protocol or hardware acceptance. No synthetic provider tests were added
+because no provider or parser was implemented. The repository suite emits its
+existing `issue_digest.py` unclosed-file ResourceWarnings; no unrelated test or
+framework was changed. Only this protocol record is changed among tracked
+files; registration and generated compatibility documentation stay unchanged.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver
