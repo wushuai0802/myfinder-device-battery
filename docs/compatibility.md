@@ -2,9 +2,9 @@
 
 目标是让兼容清单内的设备接上就用：自动枚举、匹配内置读取器并生成卡片，不让最终用户填写协议参数、安装Python或录制USB数据。
 
-当前设备范围为27个通用读取器，加上原有ATK A9 Air+与HyperX Cloud Alpha Wireless专用读取。没有统一协议能覆盖所有2.4G外设；以下是协议/型号族范围，不是市场占有率统计，也不等于每个变体均已实测。
+当前设备范围以文末自动生成的读取器目录为准，另有原有ATK A9 Air+与HyperX Cloud Alpha Wireless专用读取。没有统一协议能覆盖所有2.4G外设；以下是协议/型号族范围，不是市场占有率统计，也不等于每个变体均已实测。
 
-机器可读验证来源为[兼容目录](../engine/compatibility.json)，详情页使用同一来源。本项目已经取得历史实机证据的确切原生配置标A；通用读取器统一保守标C，表示协议已接入、仍需本项目按型号实测，上游记录不会自动升级为本项目实测。INFI75标D，当前不宣称兼容。
+机器可读验证来源为[兼容目录](../engine/compatibility.json)，详情页使用同一来源。本项目已经取得历史实机证据的确切原生配置标A；通用读取器整体保守标C，按型号另列证据。F505接收器有本项目维护者单次实机对照（A级历史证据），不升级同族其他型号；充电/休眠仍未测。上游记录不会自动升级为本项目实测。INFI75标D，当前不宣称兼容。
 
 | 范围 | 设备类型 | 自动读取条件 |
 | --- | --- | --- |
@@ -21,10 +21,11 @@
 | ATK FF02 协议族（C，协议族匹配，未实测） | 鼠标 | 表外 `373B` 设备必须具有 `FF02:0002` 集合且输出报告长度恰好17字节；仅发送现有电量查询 |
 | WLmouse、MCHOSE、G-Wolves、LAMZU | 鼠标 | 已内置的型号及接收器变体 |
 | Keychron、NZXT、Angry Miao | 鼠标 | M5/Ultra-Link已列明设备、Lift Elite、AM Infinity 8K等；不扩称支持全品牌键盘 |
-| Windows蓝牙电量 | 鼠标、耳机、键盘及其他设备 | 已在Windows连接，系统能提供电量属性；不会自动配对设备 |
+| Windows蓝牙电量 | 鼠标、耳机、键盘、手柄及其他设备 | 已在Windows连接，系统能提供电量属性；不会自动配对设备 |
+| Xbox / XInput | 手柄 | Windows系统XInput接口，四档约略电量5/30/65/100%；有线/未知类型不显示百分比，充电未知；蓝牙Xbox优先，按slot升序跳过相同数量的无线档位，此去重为启发式 |
 | 标准HID电量字段 | 鼠标、键盘及其他HID设备 | HID描述符明确声明电量字段；只用GetFeature读取，不写入或抢占键鼠输入 |
 
-更细的上游型号与“上游实机验证/未经实机验证”区分见[上游清单](https://github.com/HeyOkay/HaloBattery/blob/2251f0534a8e886c9692ead42056059b4f69d8c0/docs/devices.md)。本项目未启用其手柄模式切换及手柄专用读取器；本批仅新增独立的 APEX5 GET_INFO 只读读取器（C，分档电量），不要直接把上游整张表视为本项目承诺。
+更细的上游型号与“上游实机验证/未经实机验证”区分见[上游清单](https://github.com/HeyOkay/HaloBattery/blob/2251f0534a8e886c9692ead42056059b4f69d8c0/docs/devices.md)。本项目使用独立的 APEX5 GET_INFO 只读读取器（C，分档电量）及Windows蓝牙/XInput系统电量，不启用上游手柄模式切换；不要直接把上游整张表视为本项目承诺。
 
 本机INFI75的有线与2.4G接口已分别检查，但均未取得可用电量，仍不宣称兼容。2.4G接收器为`2.4G Wireless Keyboard / FFB5:0001`，Input/Output各8字节，Feature为0；本地官方驱动的`INFI75-1.1 / 65字节Feature`路径不能直接套用。即使其他HFD键盘共享VID/PID，也不向INFI75发送未经该型号证实的命令。用户无需刷固件、改键位或修改接收器设置。
 
@@ -72,7 +73,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | HyperX Cloud III 与已列明Core变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud II 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Keychron M5 / Ultra-Link 8K | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
-| Pulsar / ATK / VXE / VGN / Scyrox / Hitscan 已列明型号及 ATK FF02 协议族 | mouse | C | 协议已接入，待本项目实机验证；新增VGN F2 Master+ 3554:FB56、VXE R1 SE 1K 3554:F58E，与Scyrox 3554:F517均仅FF02:0002且输出恰好17字节；待实机验证；不含3554:F505；其余既有表项规则不变，表外373B也须FF02:0002及17字节；排除原生373B:1278，不开放DPI |
+| Pulsar / ATK / VXE / VGN / Scyrox / Hitscan 已列明型号及 ATK FF02 协议族 | mouse | C | 协议已接入，待本项目实机验证；VGN F2 Master+ 3554:FB56、VXE R1 SE 1K 3554:F58E、Scyrox 3554:F517及VGN Dragonfly 4K Receiver 3554:F505均仅FF02:0002且输出恰好17字节；F505为本项目维护者实机确认（单型号A级历史证据）：VGN F1 Pro单次35%、未充电、3766mV，对照VGN HUB 36%，充电/休眠未测；其他型号仍C；表外373B也须FF02:0002及17字节，排除原生373B:1278，不开放DPI |
 | JBL Quantum 910 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Logitech HID++ 与已列明G系列耳机 | mouse, keyboard, headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | SteelSeries 已列明鼠标与耳机 | mouse, headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
@@ -88,10 +89,10 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | Logitech G PRO X 2 LIGHTSPEED | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud III S | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | NZXT Lift Elite Wireless | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
-| Windows 系统蓝牙电量属性 | mouse, keyboard, headset, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| Windows 系统蓝牙电量属性 | mouse, keyboard, headset, gamepad, device | C | 协议已接入，待本项目实机验证；Windows提供电量属性的已连接设备，含蓝牙手柄；Xbox系统百分比优先于XInput四档估算 |
+| Xbox 及兼容 XInput 手柄 | gamepad | C | 协议已接入，待本项目实机验证；Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄 |
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
-| VGN Dragonfly 4K Receiver (3554:F505) | mouse | D | 已发现但未取得电量，不列为兼容 |
 | MCHOSE K99 V3 2.4G (3837:3033) | keyboard | D | 已发现但未取得电量，不列为兼容 |
 
 通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO / V9 Turbo+、G98 V3、G87 V2、G3M PRO、EWEADN S9、Flydigi APEX5 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。

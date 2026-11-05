@@ -95,7 +95,7 @@ class NewBrandsBridgeTests(unittest.TestCase):
     def test_unrelated_controller_paths_remain_excluded(self):
         engine = server.BatteryEngine([], include_native=True)
         self.addCleanup(engine.close)
-        for source in ("xinput", "bluetooth", "fake"):
+        for source in ("pulsar", "g3m", "fake"):
             engine._accept(source, source, [DeviceStatus("pad", "Other controller", 60,
                                                        source=source, kind="gamepad")], T1)
             self.assertEqual(engine.by_provider[source], {})

@@ -62,7 +62,7 @@
     {"provider":"hyperx_cloud3","name":"HyperX Cloud III 与已列明Core变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3.py"},
     {"provider":"hyperx","name":"HyperX Cloud II 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx.py"},
     {"provider":"keychron","name":"Keychron M5 / Ultra-Link 8K","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/keychron.py"},
-    {"provider":"pulsar","name":"Pulsar / ATK / VXE / VGN / Scyrox / Hitscan 已列明型号及 ATK FF02 协议族","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/pulsar.py","matchScope":"新增VGN F2 Master+ 3554:FB56、VXE R1 SE 1K 3554:F58E，与Scyrox 3554:F517均仅FF02:0002且输出恰好17字节；待实机验证；不含3554:F505；其余既有表项规则不变，表外373B也须FF02:0002及17字节；排除原生373B:1278，不开放DPI","reference":"engine/upstream-protocols.md#compx-receiver-batch-fb56-f58e-and-deferred-f505--k99-v3"},
+    {"provider":"pulsar","name":"Pulsar / ATK / VXE / VGN / Scyrox / Hitscan 已列明型号及 ATK FF02 协议族","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/pulsar.py","matchScope":"VGN F2 Master+ 3554:FB56、VXE R1 SE 1K 3554:F58E、Scyrox 3554:F517及VGN Dragonfly 4K Receiver 3554:F505均仅FF02:0002且输出恰好17字节；F505为本项目维护者实机确认（单型号A级历史证据）：VGN F1 Pro单次35%、未充电、3766mV，对照VGN HUB 36%，充电/休眠未测；其他型号仍C；表外373B也须FF02:0002及17字节，排除原生373B:1278，不开放DPI","reference":"engine/upstream-protocols.md#compx-receiver-batch-fb56-f58e-f505-and-deferred-k99-v3","modelEvidence":[{"vendorId":"3554","productId":"F505","verificationLevel":"A","verifiedBy":"本项目维护者","checkedOn":"2026-11-05","notes":"VGN F1 Pro；单次读数35%/未充电/3766mV，对照VGN HUB 36%；充电转换、休眠及唤醒未测","reference":".ai/evidence/f505-vgn-f1pro-2026-11-05.md"}]},
     {"provider":"jbl","name":"JBL Quantum 910 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/jbl.py"},
     {"provider":"logitech","name":"Logitech HID++ 与已列明G系列耳机","kinds":["mouse","keyboard","headset"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/logitech.py"},
     {"provider":"steelseries","name":"SteelSeries 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/steelseries.py"},
@@ -78,7 +78,8 @@
     {"provider":"logitech_centurion","name":"Logitech G PRO X 2 LIGHTSPEED","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/logitech_centurion.py"},
     {"provider":"hyperx_cloud3s","name":"HyperX Cloud III S","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3s.py"},
     {"provider":"nzxt","name":"NZXT Lift Elite Wireless","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/nzxt.py"},
-    {"provider":"bluetooth","name":"Windows 系统蓝牙电量属性","kinds":["mouse","keyboard","headset","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/bluetooth.py","precision":"系统提供的属性，未知设备测量时间"},
+    {"provider":"bluetooth","name":"Windows 系统蓝牙电量属性","kinds":["mouse","keyboard","headset","gamepad","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/bluetooth.py","matchScope":"Windows提供电量属性的已连接设备，含蓝牙手柄；Xbox系统百分比优先于XInput四档估算","precision":"系统提供的属性，未知设备测量时间"},
+    {"provider":"xinput","name":"Xbox 及兼容 XInput 手柄","kinds":["gamepad"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/xinput.py","matchScope":"Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄","reference":"engine/upstream-protocols.md#windows-xinput-gamepad-battery","precision":"EMPTY/LOW/MEDIUM/FULL是四档估算，不是精确百分比；无设备测量时间"},
     {"provider":"standard_hid","name":"描述符声明的标准HID电量Feature字段","kinds":["mouse","keyboard","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/standardhid.py","reference":"https://www.usb.org/hid","precision":"依据字段逻辑范围；无充电字段时充电未知"}
   ],
   "observedUnsupported": [
@@ -97,17 +98,6 @@
         {"connection":"2.4G","productName":"2.4G Wireless Keyboard","usagePage":"FFB5","usage":"0001","inputBytes":8,"outputBytes":8,"featureBytes":0,"standardBatteryCandidates":0,"checkedOn":"2026-10-18"}
       ],
       "notes": "2.4G缺少现有标准电量字段，官方驱动产品匹配和65字节Feature通道也不适用。共享VID/PID不是其他键盘命令可用的证据；不发送未经验证的私有命令，不刷固件或屏幕Flash。"
-    },
-    {
-      "id": "vgn_f505_observed",
-      "name": "VGN Dragonfly 4K Receiver (3554:F505)",
-      "kind": "mouse",
-      "verificationLevel": "D",
-      "compatible": false,
-      "match": {"vendorId":"3554","productId":"F505","productName":"VGN Dragonfly 4K Receiver"},
-      "capabilities": [],
-      "reference": "engine/upstream-protocols.md#compx-receiver-batch-fb56-f58e-and-deferred-f505--k99-v3",
-      "notes": "#49仅有枚举；现有本地参考及调研未把F505明确对应到CompX电量协议，暂不接入。待精确ID的协议证据、描述符及实机验证，不按相邻PID或FF02集合推断。"
     },
     {
       "id": "mchose_k99_v3_observed",

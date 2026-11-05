@@ -378,22 +378,24 @@ Sources above were read on **2026-11-04**. OpenMouse mouse-protocol commit
 vendor driver code or protocol is imported in this batch; Scyrox reuses the
 existing battery exchange.
 
-### CompX receiver batch: FB56, F58E and deferred F505 / K99 V3
+### CompX receiver batch: FB56, F58E, F505 and deferred K99 V3
 
 Reviewed on **2026-11-04**. The original reports #55, #47, #49 and #43 are
 preserved in `engine/tests/fixtures/feedback/issue*-body.txt`. They establish
 USB IDs, product strings and collections only; they contain no report lengths
-or battery responses. All caps, replies, paths and interface placeholders used
-by `test_compx_batch.py` are synthetic, not captures from these devices.
+or battery responses. FB56/F58E test caps and replies, and all test paths and
+interface placeholders, are synthetic. F505 was subsequently checked on the
+project maintainer's VGN F1 Pro on **2026-11-05**; its battery fixture replays
+the captured response described below.
 
 | Device | Decision and exact-ID evidence |
 | --- | --- |
 | VGN Dragonfly F2 Master+ `3554:FB56` (#55) | Added, **C / 待实机验证**. [Batch 3 §5.6](research/batch3-protocols.md#56-dragonfly-3-se-391d1a01) explicitly records that OpenMouse's VGN transport accepts `3554:FB56/FB57`, `FF02`, report `08` with 16 payload bytes, and its VGN codec defines battery command `04` and `sum=55`. Only the requested `FB56` is added. |
 | VXE R1 SE 1K receiver `3554:F58E` (#47) | Added, **C / 待实机验证**. The supplied [OpenMouse ATK client](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/atk/hid.ts) explicitly defines `VXE_R1_COMPX_RECEIVER_PID = 0xf58e`; its CompX transport uses `FF02:0002`, report `08` plus 16 payload bytes. `readBattery()` uses `04`, with percentage/charging at payload offsets 5/6 (raw offsets 6/7), followed by big-endian millivolts. |
-| VGN Dragonfly 4K Receiver `3554:F505` (#49; reporter calls the mouse ATK F1 Pro Max) | **Not added; D / observed, unsupported.** No exact-ID battery-protocol evidence was found in the supplied OpenMouse reference files or local research. The product name and `FF02:0002` enumeration alone do not prove CompX command `04` or its reply layout. |
+| VGN Dragonfly 4K Receiver `3554:F505` (#49) | **Added; 本项目维护者实机确认, model-specific A / historical hardware evidence.** The maintainer's VGN F1 Pro has `FF02:0002`, input/output 17 bytes. The existing `08 04 … 49` query returned `08 04 00 00 00 02 23 00 0e b6 … 60`: valid checksum, **35%, not charging, 3766 mV**, while VGN HUB showed **36%**. This single comparison does not verify charging transitions or sleep/wake. It does not establish the reporter's differently named mouse or upgrade other Pulsar models. |
 | MCHOSE K99 V3 `3837:3033`, product `MCHOSE K99 V3 2.4G` (#43) | **Not added; D / observed, unsupported.** [Batch 2 §1](research/batch2-protocols.md#1-g87-v2可实现使用-glw-键盘协议) records the shared PID but warns that the community K99 trace uses `55 03 ...` and reply byte 8, whereas the official G87 GLW path uses `05` and configuration `D[32]`. That does not establish that K99 can reuse the G87 battery field. G87's exact product-name match remains unchanged. |
 
-The two added IDs use the existing `pulsar` battery exchange, sharing Scyrox's
+The three added IDs use the existing `pulsar` battery exchange, sharing Scyrox's
 strict selection: exact VID/PID, `FF02:0002`, and a known output report length
 of **exactly 17 bytes** before opening for IO. Unknown or other lengths and all
 sibling collections receive no query. Only `08 04` plus zero arguments and the
@@ -403,9 +405,10 @@ collection or protocol. Other pre-existing IDs retain their matching rules.
 
 For FB56/F58E, still needed: each receiver's actual descriptor, successful
 standalone reads compared with the vendor display, charging transitions and
-sleep/wake behavior. For F505, first obtain a driver implementation or capture
-explicitly mapping that ID to the battery command, response fields and checksum,
-then confirm its report lengths. For K99, obtain exact product/firmware evidence
+sleep/wake behavior. For F505, the maintainer's descriptor and one successful
+comparison are recorded in `.ai/evidence/f505-vgn-f1pro-2026-11-05.md`;
+charging transitions and repeatable sleep/wake behavior still need confirmation.
+For K99, obtain exact product/firmware evidence
 for the GLW configuration offset and charging bit (or a separately documented
 protocol), plus report IDs/lengths and correlated battery/charging captures.
 No speculative `03` query or alternate K99 reader is introduced in this batch.
@@ -418,6 +421,32 @@ and [VGN codec](https://github.com/OpenMouse-Project/mouse-protocol/blob/main/sr
 links are mutable `main` references, not the supplied pinned ATK snapshot.
 The K99 community source has no confirmed reuse licence in the research and
 is not copied. No vendor driver code, settings writes or DPI commands are added.
+
+### Windows XInput gamepad battery
+
+Independent read-only use of Microsoft's public
+[XInputGetState](https://learn.microsoft.com/en-us/windows/win32/api/xinput/nf-xinput-xinputgetstate),
+[XInputGetBatteryInformation](https://learn.microsoft.com/en-us/windows/win32/api/xinput/nf-xinput-xinputgetbatteryinformation)
+and [XINPUT_BATTERY_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/xinput/ns-xinput-xinput_battery_information).
+Only `xinput1_4.dll` from System32 is loaded; missing DLL/functions disable the
+reader without an error. There is no fallback DLL, HID exchange or vibration.
+Slots 0–3 require a successful state read before requesting gamepad battery data.
+Disconnected slots/types are omitted. WIRED and UNKNOWN have no percentage;
+ALKALINE/NIMH EMPTY/LOW/MEDIUM/FULL map to **about 5/30/65/100%**, with charging
+unknown. Data quality is `system_property`, not a device measurement timestamp.
+The maintainer observed an Xbox One controller through the Xbox wireless adapter
+(`045E:02E6` / `045E:0B00`), slot 0, NIMH/FULL; the integrated reader remains C
+pending end-to-end hardware verification.
+
+Windows Bluetooth gamepad battery properties are also accepted. For every
+online Bluetooth gamepad whose name contains `Xbox` (case-insensitive) and
+which has a percentage, presentation suppresses one XInput wireless battery
+tier, in ascending slot order. XInput cannot reliably map a slot to a Bluetooth
+identity: this is a count-based heuristic that favors the system percentage,
+and can choose the wrong slot in a mixed Bluetooth/adapter setup. Wired and
+unknown battery types remain visible. Filtering runs after history is merged,
+so suppressed slots do not return as cached duplicates. Real mixed-controller
+Bluetooth deduplication and charging behavior still need hardware checks.
 
 ### MCHOSE A7 V3 Pro (3837:1018)
 

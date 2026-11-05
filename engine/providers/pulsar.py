@@ -1,4 +1,4 @@
-"""Pulsar, ATK, VXE and Hitscan wireless mice over USB/HID, without vendor software.
+"""Pulsar, ATK, VXE, VGN and Hitscan mice over USB/HID, without vendor software.
 
 MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matching
 (协议族匹配，未实测; level C). Only FF02:0002 with a known output length of exactly
@@ -6,8 +6,11 @@ MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matchi
 are not sufficient. No model catalog or DPI commands are added; the server keeps
 native 373B:1278 excluded. Scyrox 3554:F517, VGN F2 Master+ 3554:FB56 and
 VXE R1 SE 1K 3554:F58E also require FF02:0002 and exactly 17 output bytes;
-they are pending hardware verification in this project. Other listed models
-retain their original selection rules. See upstream-protocols.md for ID evidence.
+they are pending hardware verification in this project. VGN Dragonfly 4K
+3554:F505 uses the same strict collection/length guards; the project maintainer
+read 35%, not charging, 3766 mV on a VGN F1 Pro (VGN HUB: 36%) on 2026-11-05.
+Charging transitions and sleep/wake remain untested. Other listed models retain
+their original selection rules. See upstream-protocols.md for ID evidence.
 
 Protocol from andrewrabert/python-pulsar-mouse-tool, which also backs the
 "HID: pulsar" driver in review for the Linux kernel and lists these ids:
@@ -171,6 +174,7 @@ PIDS: Dict[int, Dict[int, str]] = {
         0xF517: "Scyrox 8K 接收器",  # 待实机验证; OpenMouse Scyrox report-8 family
         0xFB56: "VGN Dragonfly F2 Master+",  # 待实机验证; batch3 V2/V3
         0xF58E: "VXE R1 SE 1K 接收器",  # 待实机验证; OpenMouse ATK CompX PID
+        0xF505: "VGN Dragonfly 4K Receiver",  # maintainer's VGN F1 Pro, 2026-11-05
     },
     0x373B: {
         0x1085: "ATK VXE R1 SE+ (2.4 GHz)",
@@ -185,9 +189,10 @@ PIDS: Dict[int, Dict[int, str]] = {
     },
 }
 
-# Exact IDs with protocol evidence but no project hardware validation. Unlike
-# legacy entries, these must never fall back to a sibling or unknown-length path.
-STRICT_COMPX_IDS = frozenset({(0x3554, 0xF517), (0x3554, 0xFB56), (0x3554, 0xF58E)})
+# Exact IDs with strict descriptor guards, including the maintainer-tested F505.
+# Unlike legacy entries, never fall back to a sibling or unknown-length path.
+STRICT_COMPX_IDS = frozenset({(0x3554, 0xF517), (0x3554, 0xFB56), (0x3554, 0xF58E),
+                             (0x3554, 0xF505)})
 
 
 def checksum(payload: List[int]) -> int:
@@ -321,7 +326,8 @@ class PulsarProvider(Provider):
                     continue
                 key = f"pulsar:{vid:04x}{pid:04x}"
                 if (vid, pid) in STRICT_COMPX_IDS:
-                    # Feedback #19/#47/#55 omits report sizes.
+                    # Feedback #19/#47/#55 omits report sizes; F505's maintainer
+                    # capture confirms the same strict collection and length.
                     # Require descriptor evidence before sending the one known protocol;
                     # unknown length and sibling collections are never fallbacks.
                     d = next((d for d in mine if (d.get("usage_page"), d.get("usage")) == CONTROL_USAGE
@@ -331,7 +337,9 @@ class PulsarProvider(Provider):
                     name = next((str(info.get("product_string") or "").strip()
                                  for info in ([d] if d is not None else []) + mine
                                  if str(info.get("product_string") or "").strip()), pids[pid])
-                    self._diag.append(f"  {pids[pid]} {vid:04x}:{pid:04x}: 待实机验证; "
+                    evidence = ("本项目维护者实机确认（单次读数；充电/休眠未测）"
+                                if (vid, pid) == (0x3554, 0xF505) else "待实机验证")
+                    self._diag.append(f"  {pids[pid]} {vid:04x}:{pid:04x}: {evidence}; "
                                       "requires FF02:0002 / output=17")
                 elif pid in pids:
                     present.add(key)

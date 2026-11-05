@@ -321,7 +321,8 @@ class PulsarTest(unittest.TestCase):
                     bus = FakeBus(vid, pid, [reply(33)])
                     # Newly admitted CompX IDs require descriptor evidence; legacy models still
                     # exercise the established unknown-length allowance here.
-                    strict = (vid, pid) in ((0x3554, 0xF517), (0x3554, 0xFB56), (0x3554, 0xF58E))
+                    strict = (vid, pid) in ((0x3554, 0xF517), (0x3554, 0xFB56),
+                                            (0x3554, 0xF58E), (0x3554, 0xF505))
                     length = 17 if strict else None
                     P.output_length = lambda path: length
                     P.hidlist = types.SimpleNamespace(enumerate=bus.enumerate)

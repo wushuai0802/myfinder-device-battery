@@ -42,6 +42,7 @@ PROVIDERS = (
     ("logitech_centurion", "LogitechCenturionProvider"),
     ("hyperx_cloud3s", "HyperXCloud3SProvider"), ("nzxt", "NzxtProvider"),
     ("bluetooth", "BluetoothProvider"),
+    ("xinput", "XInputProvider"),
 )
 PROVIDER_VIDS = {
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
@@ -66,7 +67,8 @@ MAX_READER_TASKS = 96
 BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
-NO_CHARGING_EVIDENCE = {"bluetooth", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
+SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
+NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
 KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard"}
 
 
@@ -89,6 +91,24 @@ def clean_name(value):
 
 def public_id(key):
     return "device-" + hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:24]
+
+
+def suppress_bluetooth_xinput(devices):
+    """Prefer Windows Bluetooth percentages over duplicate XInput tiers."""
+    count = sum(v.get("provider") == "bluetooth" and v.get("kind") == "gamepad"
+                and v.get("online") and v.get("percent") is not None
+                and "xbox" in v.get("name", "").casefold() for v in devices.values())
+    hidden = set()
+    # XInput provides no Bluetooth identity. This is a heuristic: skip the
+    # lowest connected wireless slots, one per Bluetooth Xbox gamepad. Only
+    # ALKALINE/NIMH tiers have approximate=True; wired/unknown slots are kept.
+    for slot in range(4):
+        key = public_id(f"xinput:{slot}")
+        value = devices.get(key, {})
+        if count and value.get("provider") == "xinput" and value.get("online") and value.get("approximate"):
+            hidden.add(key)
+            count -= 1
+    return {key: value for key, value in devices.items() if key not in hidden}
 
 
 def suppress_old_connections(devices):
@@ -274,8 +294,9 @@ def normalise(status, previous, now, cached=False):
     connection_known = online if status.connection_known is None else bool(status.connection_known)
     # A current explicit state (e.g. plugged-in V9 with a frozen percentage)
     # invalidates history without pretending to have measured a new level.
-    unavailable = (status.level_unavailable and not cached and not system
-                   and status.source_quality == "device_reply" and status.connection_known is True)
+    unavailable = (status.level_unavailable and not cached and status.connection_known is True
+                   and ((status.source_quality == "device_reply" and not system)
+                        or (status.source == "xinput" and system)))
     if unavailable:
         value = None
     acquired = online and value is not None and not cached
@@ -293,7 +314,9 @@ def normalise(status, previous, now, cached=False):
     charging_known = (status.charging_known if status.charging_known is not None
                       else status.source not in NO_CHARGING_EVIDENCE and isinstance(status.charging, bool))
     charging = bool(status.charging) if (fresh or unavailable and online) and charging_known else None
-    quality = "device_reply" if unavailable else "cached" if not acquired else "system_property" if system else "device_reply"
+    quality = "system_property" if system else "device_reply"
+    if not unavailable and not acquired:
+        quality = "cached"
     from catalog import verification_for
     verification_level, verification_label = verification_for(status.source)
     pack_model = status.model_source == "pack"
@@ -309,7 +332,7 @@ def normalise(status, previous, now, cached=False):
         "charging": charging, "chargingKnown": charging is not None,
         "online": online, "connectionState": ("connected" if online else "disconnected") if connection_known else "unconfirmed",
         "fresh": fresh, "approximate": bool(status.approx), "provider": status.source or "unknown",
-        "transport": "Bluetooth" if status.via == "bluetooth" or system else "USB / 2.4G",
+        "transport": "Bluetooth" if status.via == "bluetooth" or system and status.source != "xinput" else "USB / 2.4G",
         "confirmedAtUtc": confirmed, "measuredAtUtc": measured if not system else None,
         "queriedAtUtc": queried,
         "connectionCheckedAtUtc": now if connection_known else old.get("connectionCheckedAtUtc"),
@@ -413,7 +436,7 @@ def reader_child():
                     # A partial discovery cannot replace the full topology cache
                     # or evict another receiver's provider/identity instance.
                     instances = {k: v for k, v in instances.items()
-                                 if k[0] == "bluetooth" or public_id(k[1]) != physical or k[1] in present}
+                                 if k[0] in SYSTEM_PROVIDERS or public_id(k[1]) != physical or k[1] in present}
                     response = {"inventory": selected}
                 else:
                     # Retry inaccessible descriptors at a bounded rate. Ordinary
@@ -422,7 +445,7 @@ def reader_child():
                         inventory = discover(current, NATIVE, full=True)
                         topology_paths, topology_at = current, time.monotonic()
                     present = {d["physical_id"] for d in inventory}
-                    instances = {k: v for k, v in instances.items() if k[1] in present or k[0] == "bluetooth"}
+                    instances = {k: v for k, v in instances.items() if k[1] in present or k[0] in SYSTEM_PROVIDERS}
                     response = {"inventory": inventory}
             elif action == "query":
                 name, physical = command["provider"], command.get("physicalId", "")
@@ -433,7 +456,7 @@ def reader_child():
                     instances[key] = (provider_class(name)(device_pack=device_pack) if name == "razer"
                                       else provider_class(name)())
                 provider = instances[key]
-                if name == "bluetooth":
+                if name in SYSTEM_PROVIDERS:
                     statuses = provider.poll()
                     misses = getattr(provider, "_misses", {})
                     statuses = [replace(s, cached=s.cached or bool(misses.get(s.key, 0))) for s in statuses]
@@ -479,7 +502,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     Unknown PID within a brand is not a broken supported device. This affects
     health text only; the existing provider retains its command-match guards.
     """
-    if name in ("bluetooth", "standard_hid"):
+    if name in SYSTEM_PROVIDERS or name == "standard_hid":
         return 0
     module = importlib.import_module("providers." + name)
     inventory = device_pack.select_inventory(name, inventory)
@@ -587,7 +610,10 @@ class BatteryEngine:
         self.provider_by_id = {key: value for key, value in self.provider_by_id.items() if key in self.previous}
         self.physical_by_id = {key: value for key, value in self.physical_by_id.items() if key in self.previous}
         self.dpi_targets = {key: value for key, value in self.dpi_targets.items() if key in self.previous}
-        devices = sorted(self.previous.values(), key=lambda d: ({"mouse": 0, "keyboard": 1, "headset": 2}.get(d["kind"], 3), d["name"], d["id"]))
+        # Presentation only, after history is merged: no cached duplicate, and
+        # retain refresh routing if the Bluetooth counterpart later disappears.
+        visible = suppress_bluetooth_xinput(self.previous)
+        devices = sorted(visible.values(), key=lambda d: ({"mouse": 0, "keyboard": 1, "headset": 2}.get(d["kind"], 3), d["name"], d["id"]))
         # Metadata is derived only from the already discovered inventory, and
         # added to outgoing copies. Ambiguous models have no public VID:PID.
         public_devices = []
@@ -622,9 +648,9 @@ class BatteryEngine:
         for key in self.by_provider.get(reader_key, {}):
             self.dpi_targets.pop(key, None)
         for status in statuses:
-            # Only the exact APEX5 reader is enabled; legacy controller paths
-            # (including mode switches) remain outside the selected providers.
-            if status.kind == "gamepad" and (name != "flydigi" or status.source != "flydigi"):
+            # Accept only the exact APEX5 reader and read-only system readers;
+            # the reporting provider and source must agree.
+            if status.kind == "gamepad" and (name not in ("flydigi", "bluetooth", "xinput") or status.source != name):
                 continue
             status = replace(status, name=inventory_safe_name(status.name, self._inventory_groups.get(physical, [])))
             key = public_id(status.key)
@@ -896,11 +922,13 @@ class BatteryEngine:
             self.imported_provider_count = 0
             pending.append(("smoke", "package", "", {"action": "smoke"}, 5))
         else:
-            if not device_id or target_name != "bluetooth":
+            if not device_id or target_name not in SYSTEM_PROVIDERS:
                 command = {"action": "topology", "paths": sorted(paths) if paths is not None else None}
                 if physical_id is not None:
                     command["physicalId"] = physical_id
                 pending.append(("topology", "topology", "", command, 6))
+            if "xinput" in self.providers and physical_id is None and (not device_id or target_name == "xinput"):
+                pending.append(("query", "xinput", "", {"action": "query", "provider": "xinput"}, 5))
             if self._bluetooth_slot is None and physical_id is None and (not device_id or target_name == "bluetooth"):
                 pending.append(("query", "bluetooth", "", {"action": "query", "provider": "bluetooth"}, 14))
         while pending or active or wait_bluetooth and self._bluetooth_slot is not None:
@@ -999,9 +1027,9 @@ class BatteryEngine:
                                 for key in list(state):
                                     if key.startswith("topology:device-"):
                                         state.pop(key, None)
-                        live_readers = {"bluetooth"}
+                        live_readers = set(SYSTEM_PROVIDERS)
                         for provider_name in self.providers:
-                            if provider_name == "bluetooth" or (target_name and provider_name != target_name):
+                            if provider_name in SYSTEM_PROVIDERS or (target_name and provider_name != target_name):
                                 continue
                             matches = []
                             for group_id, infos in groups.items():

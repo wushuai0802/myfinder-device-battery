@@ -60,7 +60,7 @@ def fake_razer(inventory, devices):
 
 class ValidationTests(unittest.TestCase):
     def test_disable_scope_matches_engine_brand_providers(self):
-        self.assertEqual(BRAND_PROVIDERS, {name for name, _ in server.PROVIDERS} - {"bluetooth"})
+        self.assertEqual(BRAND_PROVIDERS, {name for name, _ in server.PROVIDERS} - {"bluetooth", "xinput"})
 
     def assert_rejected(self, data):
         result = pack(data)

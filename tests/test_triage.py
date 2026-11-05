@@ -530,7 +530,7 @@ class KnownIdsTests(unittest.TestCase):
             with self.subTest(provider=provider, pid=pid):
                 row = entries[(provider, vid, pid)]
                 self.assertEqual((row["name"], row["kind"]), (name, kind))
-        self.assertEqual(first["unparsed"], ["bluetooth"])
+        self.assertEqual(first["unparsed"], ["bluetooth", "xinput"])
         self.assertEqual(set(first["partial"]), {"logitech", "mchose"})
         for module, reason in first["partial"].items():
             self.assertTrue(reason.strip())
