@@ -125,6 +125,22 @@ namespace AtkBatteryTray {
             update(input,EventArgs.Empty);
         }
         static RectangleRect TextRect(TextBox input){var rect=new RectangleRect();SendMessage(input.Handle,0x00B2,IntPtr.Zero,ref rect);return rect;}
+        // A wrapped text can need a vertical scrollbar only because the bar narrows it:
+        // without the bar it fits, with the bar it does not. Each ScrollBars change
+        // recreates the EDIT handle and runs Update again, so such a boundary text
+        // toggled forever on the UI thread (#87, "我的反馈" Not Responding). Once the
+        // decision has flipped for the same text, font and outer size, keep the
+        // vertical bar: with it the text is always fully reachable.
+        sealed class ScrollState {internal string Key;internal int Flips;}
+        static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextBox,ScrollState> scrollStates=new System.Runtime.CompilerServices.ConditionalWeakTable<TextBox,ScrollState>();
+        static void SetScrollBars(TextBox input,ScrollBars wanted){
+            if(input.ScrollBars==wanted)return;
+            var state=scrollStates.GetOrCreateValue(input);
+            string key=input.TextLength+":"+input.Text.GetHashCode()+":"+input.Font.GetHashCode()+":"+input.Width+"x"+input.Height+":"+input.WordWrap;
+            if(state.Key!=key){state.Key=key;state.Flips=0;}
+            if(state.Flips>=2){wanted|=ScrollBars.Vertical;if(input.ScrollBars==wanted)return;}
+            state.Flips++;input.ScrollBars=wanted;
+        }
         static void Update(TextBox input){
             var rect=TextRect(input);bool hadVertical=(input.ScrollBars&ScrollBars.Vertical)!=0,hadHorizontal=(input.ScrollBars&ScrollBars.Horizontal)!=0;
             int width=Math.Max(1,rect.Right-rect.Left+(hadVertical?SystemInformation.VerticalScrollBarWidth:0));
@@ -144,11 +160,11 @@ namespace AtkBatteryTray {
                 vertical=textHeight>height-(horizontal?SystemInformation.HorizontalScrollBarHeight:0);
             }
             var wanted=(vertical?ScrollBars.Vertical:ScrollBars.None)|(horizontal?ScrollBars.Horizontal:ScrollBars.None);
-            if(input.ScrollBars!=wanted)input.ScrollBars=wanted;
+            SetScrollBars(input,wanted);
             // The native EDIT control is authoritative for wrapped lines and trailing newlines.
             rect=TextRect(input);int lines=SendMessage(input.Handle,0x00BA,IntPtr.Zero,IntPtr.Zero).ToInt32();
             bool actualVertical=(long)lines*input.Font.Height>rect.Bottom-rect.Top;
-            if(actualVertical!=vertical){wanted=(actualVertical?ScrollBars.Vertical:ScrollBars.None)|(horizontal?ScrollBars.Horizontal:ScrollBars.None);if(input.ScrollBars!=wanted)input.ScrollBars=wanted;}
+            if(actualVertical!=vertical){wanted=(actualVertical?ScrollBars.Vertical:ScrollBars.None)|(horizontal?ScrollBars.Horizontal:ScrollBars.None);SetScrollBars(input,wanted);}
         }
     }
 

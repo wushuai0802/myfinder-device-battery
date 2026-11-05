@@ -319,6 +319,46 @@ static class FeedbackRepliesTests {
     static void DrawRecord(ListBox list,Bitmap bitmap,int index,DrawItemState state){
         using(var graphics=Graphics.FromImage(bitmap))list.GetType().GetMethod("OnDrawItem",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(list,new object[]{new DrawItemEventArgs(graphics,list.Font,new Rectangle(Point.Empty,bitmap.Size),index,state)});
     }
+    // #87: two real maintainer replies made the reply box toggle its vertical
+    // scrollbar forever at 1366x728 / YaHei / 96 DPI, freezing My Feedback.
+    static void HistoryLongReplies() {
+        string[] texts=new[]{@"感谢反馈！VGN S99 的接收器（320F:5088）在 rainy75（#23）和 VGN N75 PRO 的反馈里也出现过：同一个 ID 下有多款不同设备，我们需要先确认读取命令不会误发给别的设备，会单独研究，有进展在这里回复。
+
+如果 VGN 官方驱动能显示 S99 的电量，请告诉我们驱动名称和版本。在程序里打开“我的反馈”，选中这条后点“补充资料”就能回复，不需要 GitHub 账号。",@"测试版 1.3.8-beta.2 已支持 VGN 2.4G 键盘接收器（320F:5088）：https://github.com/wushuai0802/myfinder-device-battery/releases/tag/v1.3.8-beta.2
+
+这是按 VGN 官方驱动的读电量方式实现的，维护者用自己的 VGN 键盘实测读到 93%（VGN HUB 显示 94%）。键盘休眠时会保留上次读数，按任意键后刷新。欢迎试用并对照 VGN HUB 的读数，在程序“我的反馈”里选中这条点“补充资料”告诉我们是否一致。
+
+正式版用户的程序内更新只推送正式版，试用测试版请下载 zip 解压后运行“一键安装自启.bat”，设置会保留。",@"感谢反馈和截图！很高兴 VGN S99 的电量已经能读到了。
+
+“我的反馈”窗口卡死（Not Responding）我们正在排查。截图显示窗口在第一次排版时就卡住了，但在维护者的测试环境里还没有复现。想请你帮忙确认几点：
+
+1. 是不是每次点“我的反馈”都会卡？卡住后等一两分钟会不会恢复？
+2. 你当前用的版本（状态与诊断页顶部，例如 1.3.8-beta.2 或 beta.3）。
+3. Windows 的显示缩放比例（设置 → 显示 → 缩放，例如 100% / 125% / 150%）和屏幕分辨率。
+4. 大概在程序里提交过几条反馈。
+
+卡住时可以在任务栏托盘图标上右键退出，或在任务管理器里结束 MyFinder 设备电量。谢谢！
+"};
+        var previousArea=ThemedDialog.WorkingAreaProvider;var previousDpi=DialogDpi.DeviceDpiReader;
+        Exception failure=null;bool finished=false;string current="";DateTime caseStarted=DateTime.UtcNow;int done=0;
+        var worker=new Thread(delegate(){
+            try{
+                foreach(Size area in new[]{new Size(1366,728),new Size(1920,1040)})foreach(string face in new[]{"Microsoft YaHei UI","Segoe UI","Microsoft Sans Serif"})foreach(int dpi in new[]{96,120,144})foreach(int count in new[]{1,2})foreach(int replies in new[]{1,2,3}){
+                    ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(Point.Empty,area);};DialogDpi.DeviceDpiReader=delegate{return dpi;};
+                    current=area.Width+"x"+area.Height+" "+face+" "+dpi+"dpi records="+count+" replies="+replies;caseStarted=DateTime.UtcNow;done++;
+                    var store=Store();store.Change(delegate(FeedbackData data){for(int i=1;i<=count;i++){var record=Record(80+i);record.Summary="设备不识别：设备不识别，设备名称 vgn s99 ,使用2.4g无线连接。".Substring(0,30);record.CreatedAt=Start.AddMinutes(-i);for(int r=0;r<replies;r++)record.Comments.Add(Comment((i*100+r+1).ToString(),r%2==0?"maintainer":"automation",texts[r%texts.Length]));data.Records.Add(record);}});
+                    using(var dialog=new MyFeedbackDialog(Service(store,new Http()),Report(),false,delegate{}))using(var systemFont=new Font(face,9f*dpi/96f,FontStyle.Regular,GraphicsUnit.Point)){
+                        dialog.Font=systemFont;dialog.Opacity=0;dialog.Show();for(int pump=0;pump<8;pump++)Application.DoEvents();dialog.Close();
+                    }
+                }
+                finished=true;
+            }catch(Exception error){failure=error;}
+        });
+        worker.SetApartmentState(ApartmentState.STA);worker.IsBackground=true;worker.Start();
+        while(!worker.Join(1000)){if((DateTime.UtcNow-caseStarted).TotalSeconds>15)throw new Exception("FAIL history dialog hangs: "+current+" (after "+done+" cases)");}
+        ThemedDialog.WorkingAreaProvider=previousArea;DialogDpi.DeviceDpiReader=previousDpi;
+        if(failure!=null)throw failure;Check(finished,"long-reply history sweep completed");
+    }
     static void HistoryAppearance(){
         var previousArea=ThemedDialog.WorkingAreaProvider;var previousDpi=DialogDpi.DeviceDpiReader;var previousSettings=DeviceSettings.Current.Clone();var previousContrast=VisualDesign.HighContrastOverride;
         try{
@@ -451,7 +491,7 @@ static class FeedbackRepliesTests {
     }
     [STAThread] static int Main(string[] args){
         output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
-        Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history themes, adaptive rows and DPI",HistoryAppearance);Run("history and supplement layout",Layouts);Run("native balloon and unread routing",NativeBalloonRouting);
+        Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history themes, adaptive rows and DPI",HistoryAppearance);Run("history and supplement layout",Layouts);Run("history with long real replies settles",HistoryLongReplies);Run("native balloon and unread routing",NativeBalloonRouting);
         Console.WriteLine(checks+" feedback reply checks, "+failures+" failed groups; fake transport only");return failures==0?0:1;
     }
 }
