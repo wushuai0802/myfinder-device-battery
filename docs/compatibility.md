@@ -88,6 +88,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | Logitech G PRO X 2 LIGHTSPEED | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud III S | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | NZXT Lift Elite Wireless | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| Xiaomi 无线鼠标 4 Pro（2.4G 接收器） | mouse | C | 协议已接入，待本项目实机验证；仅 2717:50FC 的 MI_02 集合（FF03:0000，33字节输入/输出）；发送官方网页驱动同款电量查询后读取回复；2026-11-05 实机读数 85% 与官方网页一致；鼠标关闭或休眠时回复 0 视为未知；不含蓝牙模式 |
 | Windows 系统蓝牙电量属性 | mouse, keyboard, headset, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |

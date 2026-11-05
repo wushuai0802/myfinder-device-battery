@@ -41,6 +41,7 @@ PROVIDERS = (
     ("steelseries_elite", "SteelSeriesEliteProvider"),
     ("logitech_centurion", "LogitechCenturionProvider"),
     ("hyperx_cloud3s", "HyperXCloud3SProvider"), ("nzxt", "NzxtProvider"),
+    ("xiaomi_mouse", "XiaomiMouseProvider"),
     ("bluetooth", "BluetoothProvider"),
 )
 PROVIDER_VIDS = {
@@ -56,6 +57,7 @@ PROVIDER_VIDS = {
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
     "am_infinity": (0x3151,), "steelseries_elite": (0x1038,),
     "logitech_centurion": (0x046D,), "hyperx_cloud3s": (0x03F0,), "nzxt": (0x1E71,),
+    "xiaomi_mouse": (0x2717,),
 }
 NATIVE = {(0x373B, 0x1278), (0x03F0, 0x098D)}
 MAX_DEVICES = 64
@@ -66,7 +68,8 @@ MAX_READER_TASKS = 96
 BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
-NO_CHARGING_EVIDENCE = {"bluetooth", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
+NO_CHARGING_EVIDENCE = {"bluetooth", "standard_hid", "lofree", "keychron", "am_infinity", "astro",
+                        "xiaomi_mouse"}
 KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard"}
 
 
