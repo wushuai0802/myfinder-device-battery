@@ -651,6 +651,13 @@ class BatteryEngine:
                        and valid_public_target(key[len("topology:"):]) else None)
                   for key, value in self.health.items()][:128]
         errors = [h["provider"] + ": " + h["errorCode"] for h in health if h.get("errorCode")]
+        # The existing UI renders errorCode in reader health. Project the fixed
+        # diagnostic only onto outgoing copies, after collecting real errors;
+        # reader state, retries and the errors list must not treat it as failure.
+        for item in health:
+            summary = item.pop("diagnosticSummary", "")
+            if item["provider"] == "mchose_by_keyboard" and summary and not item.get("errorCode"):
+                item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
         return {"schema": 2, "requestId": request_id, "generation": generation, "complete": complete,
@@ -700,6 +707,20 @@ class BatteryEngine:
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in KEYBOARD_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:200] for line in diagnostics[-16:]]
+            if name == "mchose_by_keyboard" and not measured:
+                # Feedback needs a short, fixed reason. Keep it separate from
+                # errorCode, which would also populate snapshot errors.
+                for messages, summary in (
+                    (("report IDs/lengths unknown or incompatible: nothing sent",
+                      "single byte-array report not proven: nothing sent"), "report sizes unproven"),
+                    (("unrecognized wireless receiver name: nothing sent",), "receiver name unrecognized"),
+                    (("physical parent unresolved; uniqueness unknown: nothing sent",), "physical parent unresolved"),
+                    (("missing or ambiguous eligible collection: nothing sent",), "collection missing or ambiguous"),
+                    (("battery I/O failed; connection unknown",), "battery I/O failed"),
+                ):
+                    if any(message in diagnostics for message in messages):
+                        self.health[reader_key]["diagnosticSummary"] = summary
+                        break
         # The feedback UI already displays errorCode (up to 48 characters).
         # Never export the provider's legacy log, raw exceptions or HID identity.
         if (name == "razer" and not any(s.online for s in statuses)

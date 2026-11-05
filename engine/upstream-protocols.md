@@ -1630,7 +1630,7 @@ X75_V2/GX87/GX87_V2/K87/G75_Pro variants, but that alone does not prove they use
 the wireless rather than wired transport.
 
 This implementation supports **only those two exact generic wireless names**.
-It identifies each receiver once per observed plug-in. A complete unknown
+The BY branch identifies each receiver once per observed plug-in. A complete unknown
 identity is cached: FA09 continues with a neutral battery read as described
 below; `41E4:2001` still sends nothing further until removal. Silent
 identification is retried on the next poll, then backs off from 60 seconds to
@@ -1656,7 +1656,7 @@ model/PID cross-product filter. These are eligible identification results, **not
 18 hardware-verified FA09 models**. Named AULA/狼蛛, NEWMEN/新盟, XUNSHE/迅蛇,
 SCC100, bare MCHOSE G75, unknown names and all suffixed product strings receive
 no commands here. A generic name shared by another brand receives the same
-read-only identity query M HUB issues. For FA09 only, an unknown code enables
+read-only identity query M HUB issues when the BY descriptor is proven. For FA09 only, an unknown code enables
 the generic `4A` battery read below. Sharing FA09 is not a hardware compatibility claim for
 #22/#25/#53/#99/#108/#110/#115/#128/#129/#133 or another brand. If another brand
 reuses a recognized code, these published fields cannot distinguish it; this
@@ -1668,10 +1668,11 @@ is an unverified firmware-identity boundary, not proof of its compatibility.
 device index and worker routing. `vgn_beiying` excludes the pair entirely, so
 the receiver's FF02 collection cannot start a second query or create a VXE
 card alongside the FF04 card. The existing generic-name, unique FF04:0002,
-single report-ID `13` / 20-byte input/output descriptor gates remain in place.
+single report-ID `13` / 20-byte input/output descriptor gates remain in place for BY.
+The feature-only AULA variant is selected separately as documented below.
 An FF02-only or otherwise ineligible FA09 is not queried by either reader.
 
-The first query is always the fixed read-only `05` identification frame.
+The first BY query is always the fixed read-only `05` identification frame.
 A complete accepted `05` reply matching `keyboardPwds` retains the existing
 `MCHOSE <model>` name and M HUB battery/charging interpretation. A complete
 accepted identity reply that cannot match that table, including an unknown
@@ -1707,7 +1708,7 @@ remain required. A zero or invalid battery reply creates no new reading and
 does not refresh a previous reading.
 
 `05` is identification only, never authentication, pairing, unlock or a
-settings write. This provider sends **only `05` and `4A`**, with no other
+settings write. This BY branch sends **only `05` and `4A`**, with no other
 commands or feature operations. The recorded M HUB/VGN HUB read paths contain
 no evidence of `4A` state-changing side effects on non-MCHOSE/non-VGN devices;
 that is a bounded static finding, not a hardware safety result. Synthetic
@@ -1763,7 +1764,7 @@ do not replace percentage with 100 based on `fullStatus`. Reject literal request
 echoes, wrong commands/IDs, malformed lengths and out-of-order packets.
 
 The source input handler itself does **not** inspect `event.reportId` or enforce
-input length. Consequently this reader deliberately accepts only the descriptor
+input length. Consequently this BY branch deliberately accepts only the descriptor
 variant with **one input and one output report, ID 13, 20 bytes each**, each
 proven as a raw byte array by `battery_caps` (including the single byte-selector
 array case). This is a conservative local acceptance boundary, not a claim that
@@ -1799,7 +1800,7 @@ No pairing or firmware command is present in that class's command map. This is
 a bounded finding about the BY class, not a claim that the whole M HUB bundle
 has no updater or pairing logic. Those other paths, wired feature operations,
 streaming RGB commands, and every read except identity `05` and battery `4A`
-are absent from this provider. Fake handles provide no feature API and tests
+are absent from this BY branch. Its fake handles provide no feature API and tests
 assert the entire allowed send trace, including failure and unknown-model paths.
 
 `258A:010C / FF00` is selected by the same upstream predicate; `05AC:024F`
@@ -1807,6 +1808,110 @@ appears with FF00/FF04 in the filter table and K99/K87 naming logic. The evidenc
 does not supply their exact target usage/report descriptor variants or prove
 which named devices take feature vs output transport. They are **recorded only,
 not enabled**. FA07 and other keyboard/mouse identities are also excluded.
+
+#### AULA FA09 feature-only variant: user hardware evidence #224
+
+**C / 用户实机验证，#224；待本项目实机验证。** The supplied issue
+`.ai/evidence/aula/issue-224.md` reports F87 on Windows 11, six stable 100%
+reads matching Aula Hub, with the same generic product string for F75/F87.
+It attributes the query to Aula Hub 2.2.3 `getKeyboardPower()`; that Hub bundle
+was not supplied or independently inspected here. The concrete F87 result is
+user evidence, not a hardware test performed by this task or proof of every F75.
+
+The unified owner remains `mchose_by_keyboard`. The AULA path requires exactly
+`3554:FA09`, one eligible `FF04:0002` collection, the existing exact generic-name
+gate, descriptor-proven **Feature report 06 of 8 bytes**, and **input/output
+maximum lengths both zero with proven empty input/output report-size maps**.
+Topology requires zero field counts as well as zero lengths to prove absence;
+failed proofs (`None`) and unknown lengths are not absence. This deliberately accepts only #224's feature-only
+shape, not arbitrary additional reports. A proven 20-byte BY input/output pair
+continues down the unchanged BY path even if Feature 06 also exists. Ambiguous
+collections or failed proofs cause no query handle open or send; neither path
+falls back to the other following an I/O failure. Topology collects both forms
+of report-size evidence from preparsed data without any device command, and
+does not cache a failed feature-only proof as successful discovery.
+
+Only one complete Feature request is allowed:
+
+```text
+SET_FEATURE: 06 87 00 00 01 00 02 00
+GET_FEATURE: report ID 06, length 8
+#224 reply: 06 87 02 64 64 64 AB 82
+```
+
+Replies must be exactly eight bytes, report ID 06, command 87, and byte 3 in
+0..100. Zero is suppressed consistently with BY; 1..100 produces
+`AULA 键盘（3554:FA09）` with unknown charging. Other reply bytes have no
+inferred checksum, charging or connection-bit meanings. Short/failed sends
+do not trigger GET_FEATURE or another request. Silence, exceptions and invalid
+replies produce no new reading or engine error; unsuccessful Feature queries
+reuse the existing first immediate retry, then 60-second exponential back-off
+capped at 30 minutes, per physical receiver/path and cleared on removal or
+successful recovery. Historical readings retain their confirmation timestamp
+and become unconfirmed. The existing isolated worker bounds blocking Feature
+I/O; this code adds no claim of native synchronous-call cancellation.
+
+For #231 feedback, fixed rejection text such as `report sizes unproven`,
+`receiver name unrecognized` or `collection missing or ambiguous` is carried
+internally as `diagnosticSummary`. After collecting actual engine errors, the
+snapshot projects that text onto the outgoing health row's existing `errorCode`
+field, which the unchanged feedback UI already displays. The internal health
+record is not mutated; health state/reason, engine errors, retry decisions and
+history behavior remain unchanged. Actual errors retain priority over the
+summary. No raw device path, serial,
+product name or backend exception is exported as the summary.
+
+##### Official F-NB98 1.0.0.2 static cross-check (not protocol corroboration)
+
+The supplied `.ai/evidence/aula/unpacked/app/DeviceDriver.exe` is native x86 PE,
+1,805,824 bytes, SHA-256
+`e31575f5d1b5fed7f277226dac379202d72da4ddea02b41e4810a47d0e30f6b3`.
+Offline disassembly with existing Capstone 5.0.6 and configuration inspection
+found a different battery path; no evidence executable or DLL was executed.
+Addresses below are virtual addresses; the cited `.text` file offsets are
+`VA - 0x400c00`.
+
+| Evidence | Static observation |
+| --- | --- |
+| `app/config.xml:4-8` | F-NB98 uses `05AC:024F "KB98 Dongle"`, `MI_03`, mode 2. The same pair also has wired `"XS75T"`, `MI_00`. No usage page/usage or report descriptor is declared. |
+| Battery routine `0x435eb0`; request at `0x435f42` (file `0x35342`) | Mode 2, approximately 15-second query interval, request begins `00 20 01`; calls `0x4501c0`. This is not the requested `06 87` frame. |
+| `0x435f64` (file `0x35364`), `0x435f81` | After reply byte 0 equals `20`, reads byte 3, skips zero, caps at 100 and calls `MUI::BatteryCtrl::SetBatteryInfo`. A shared byte offset alone does not establish the same protocol. |
+| `0x4501c0` -> `0x451df0` / `0x451ed0` | Appends a checksum at offset `20`, passes length `21` to a `WriteFile` wrapper (which may pad to HID caps), then uses `ReadFile`. |
+| Feature sender `0x452010`, length at `0x452023` (file `0x51423`) | Calls dynamically resolved `HidD_SetFeature` with length `41` (65 bytes), not eight. `HidD_GetFeature` / `HidD_SetFeature` names occur at file offsets `0x16f1f4` / `0x16f204`. |
+
+The exact eight-byte AULA request literal was not found in this binary. That
+bounded search does not prove no other routine can construct it. The identified
+official battery path and configuration **do not prove Feature 06/87 or the
+required collection for 05AC:024F**, so that pair remains disabled. FA09 support
+rests on #224 at level C, not an invented official-driver confirmation.
+
+State-changing operations are present in the official package and excluded:
+
+- Configuration/lighting write paths at `0x4346d3`, `0x4346f2`, `0x43474e`,
+  `0x434778` construct prefixes `04 18`, `04 13`, `04 02`, `04 F0` and use
+  `0x44faa0` -> the 65-byte Feature sender. Individual prefix semantics have
+  not all been recovered; none is permitted by the AULA request whitelist.
+- `language/1033.lan:34-36,87-106` contains lighting, Reset Keyboard, Factory
+  Reset, clear-all-data confirmation and Firmware Update UI. Reset branch
+  `0x414450` schedules internal operations 6/13 by mode; factory-reset branch
+  `0x4146c0` schedules operation 14. These are internal queue values, **not
+  established wire opcodes**.
+- `app/firmware/` contains the 2,234,368-byte
+  `SI-2195-1.14 F98 Pro 5040135单节4000mAh_HFD80CP100_V1.20_20240111_0x4ACA.exe`.
+  Main-program strings also name `FirmwareUpdateTool.exe/.zip` (file offsets
+  `0x16ddb0` / `0x16dd70`). No updater or firmware payload was executed.
+- No explicit pairing command was established in this bounded inspection.
+  Pairing, firmware, reset, lighting, settings and every other Feature request
+  are excluded by allowing only the full eight-byte battery query above.
+
+Synthetic tests cover descriptor selection and rejection, mixed BY/Feature
+capabilities, exact send traces, malformed/zero/out-of-range replies, silence
+back-off/recovery, independent receiver state, one FA09 card in either provider
+order, worker serialization, stale history and diagnostic summaries. This task
+did not access hardware or network. Actual F75 firmware, repeated standalone
+polling, delayed/cached replies, charging transitions, sleep/wake and coexistence
+with Aula Hub remain unverified by this project; native feedback rendering was
+not exercised by the prescribed Python-only test suites.
 
 #### MCHOSE 41E4:2001 and other 41E4 identities
 

@@ -212,7 +212,6 @@ def discover(paths, excluded=(), *, full=False):
                                     for key in ("input_report_ids", "output_report_ids"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3710, 0x5501, 0xFF02, 0x0002),
-                    (0x3554, 0xFA09, 0xFF04, 0x0002),
                     (0x41E4, 0x2001, 0xFF04, 0x0002),
                     (0x320F, 0x706E, 0xFF1C, 0x0092),
                     (0x320F, 0x5088, 0xFF1C, 0x0092),
@@ -223,6 +222,25 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x3554, 0xFA09, 0xFF04, 0x0002):
+                from battery_hid import battery_caps, byte_report_sizes
+                info.update(battery_caps(hid, data, caps))
+                info.update(feature_report_length=caps.feature,
+                            feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
+                # Distinguish proven absence ({}) from failed/unknown proof
+                # (None); contradictory nonzero field counts remain unproven.
+                for direction, maximum, buttons, values in (
+                        ("input", caps.input, caps.ib, caps.iv),
+                        ("output", caps.output, caps.ob, caps.ov)):
+                    if not any((maximum, buttons, values)):
+                        info[direction + "_report_sizes"] = {}
+                # Either proven BY input/output or a feature-only descriptor.
+                # A failed proof stays uncached so later discovery can retry.
+                caps_complete = (all(bool(info.get(key))
+                                     for key in ("input_report_sizes", "output_report_sizes"))
+                                 or (not any((caps.input, caps.output, caps.ib, caps.iv, caps.ob, caps.ov))
+                                     and info["feature_report_sizes"] is not None))
             # Fixed-usage arrays are enabled only for VGN HUB's exact beiying
             # receiver pairs/collection, never for M HUB's FF04 BY endpoint.
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (

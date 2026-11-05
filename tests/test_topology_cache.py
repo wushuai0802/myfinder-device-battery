@@ -387,6 +387,110 @@ class DescriptorCacheTests(unittest.TestCase):
     def test_fa09_single_byte_selector_arrays_are_proven_without_device_commands(self):
         self.by_single_byte_selector_arrays((0x3554, 0xFA09))
 
+    def aula_descriptor(self, identity=(0x3554, 0xFA09), collection=(0xFF04, 2), by=False):
+        self.identities[PATH_A] = identity
+        self.products[PATH_A] = "2.4G Wireless Receiver"
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.feature, value.fv = 8, 1
+            if by:
+                value.input = value.output = 20
+                value.iv = value.ov = 1
+            return 0x00110000
+
+        def fields(report_type, values, length, data):
+            values[0].report, values[0].bits, values[0].count = (6, 8, 7) if report_type == 2 else (19, 8, 19)
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetValueCaps.side_effect = fields
+
+    def test_aula_feature_proof_coexists_with_by_and_is_cached_without_commands(self):
+        from providers.mchose_by_keyboard import MchoseByKeyboardProvider
+        for by in (False, True):
+            with self.subTest(by=by):
+                self.cache.clear()
+                self.aula_descriptor(by=by)
+                info, = self.scan([PATH_A])
+                self.assertEqual(info["feature_report_sizes"], {"6": 8})
+                self.assertEqual(info["feature_report_length"], 8)
+                self.assertEqual(info["input_report_sizes"], {"19": 20} if by else {})
+                self.assertEqual(info["output_report_sizes"], {"19": 20} if by else {})
+                provider = MchoseByKeyboardProvider()
+                self.assertEqual(provider._pick([info]), info)
+                self.assertEqual(provider._aula, not by)
+                self.kernel.CreateFileW.reset_mock()
+                self.assertEqual(self.scan([PATH_A]), [info])
+                self.kernel.CreateFileW.assert_not_called()
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
+    def test_aula_failed_feature_proof_stays_uncached_and_recovers(self):
+        from providers.mchose_by_keyboard import MchoseByKeyboardProvider
+        for defect in ("failure", "nonbyte", "alias", "partial", "padding"):
+            with self.subTest(defect=defect):
+                self.cache.clear()
+                self.aula_descriptor()
+                original = self.hid.HidP_GetValueCaps.side_effect
+
+                def fields(report_type, values, length, data):
+                    result = original(report_type, values, length, data)
+                    if defect == "failure":
+                        return 0
+                    if defect == "nonbyte":
+                        values[0].bits = 16
+                    elif defect == "alias":
+                        values[0].alias = 1
+                    elif defect == "partial":
+                        ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+                    elif defect == "padding":
+                        values[0].count = 6
+                    return result
+
+                self.hid.HidP_GetValueCaps.side_effect = fields
+                info, = self.scan([PATH_A])
+                self.assertIsNone(info["feature_report_sizes"])
+                self.assertIsNone(MchoseByKeyboardProvider()._pick([info]))
+                self.assertNotIn(PATH_A, self.cache)
+                self.aula_descriptor()
+                recovered, = self.scan([PATH_A])
+                self.assertEqual(MchoseByKeyboardProvider()._pick([recovered]), recovered)
+
+    def test_aula_zero_io_length_with_nonzero_field_counts_is_not_absence(self):
+        from providers.mchose_by_keyboard import MchoseByKeyboardProvider
+        for field in ("ib", "iv", "ob", "ov"):
+            with self.subTest(field=field):
+                self.cache.clear()
+                self.aula_descriptor()
+                original = self.hid.HidP_GetCaps.side_effect
+
+                def caps(data, pointer):
+                    result = original(data, pointer)
+                    setattr(ctypes.cast(pointer, ctypes.POINTER(Caps)).contents, field, 1)
+                    return result
+
+                self.hid.HidP_GetCaps.side_effect = caps
+                info, = self.scan([PATH_A])
+                self.assertIsNone(MchoseByKeyboardProvider()._pick([info]))
+                self.assertNotIn(PATH_A, self.cache)
+
+    def test_aula_feature_proof_is_not_enabled_for_other_ids_or_collections(self):
+        for identity, collection in (((0x05AC, 0x024F), (0xFF04, 2)),
+                                     ((0x41E4, 0x2001), (0xFF04, 2)),
+                                     ((0x3554, 0xFA09), (0xFF02, 2)),
+                                     ((0x3554, 0xFA09), (0xFF04, 1))):
+            with self.subTest(identity=identity, collection=collection):
+                self.cache.clear()
+                self.aula_descriptor(identity, collection)
+                self.hid.HidP_GetValueCaps.reset_mock()
+                info, = self.scan([PATH_A])
+                self.assertNotIn("feature_report_sizes", info)
+                self.assertNotIn(2, [c.args[0] for c in self.hid.HidP_GetValueCaps.call_args_list])
+
     def test_41e4_single_byte_selector_arrays_are_proven_without_device_commands(self):
         self.by_single_byte_selector_arrays((0x41E4, 0x2001))
 
