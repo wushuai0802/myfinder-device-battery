@@ -61,6 +61,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | --- | --- | --- | --- |
 | ATK A9 Air+ / 用户已验证接收器变体 | mouse | A | `373B:1278` / `FF02:0002` / 17字节；固件版本未记录 |
 | HyperX Cloud Alpha Wireless | headset | A | `03F0:098D` / `FF43:0202` / 31字节；固件版本未记录 |
+| ROG Strix Scope II 96 Wireless / Omni | keyboard | C | 协议已接入，待本项目实机验证；仅0B05:1ACE接收器 MI_02 FF02/FF00、64字节且描述符匹配；配对列表必须唯一包含1AB0键盘于report 2；只读A0 00与12 01；一次46%读数与用户约40%相近，未有精确对照；充电、休眠、断连和其他型号未实测 |
 | Razer 已列明鼠标、耳机与键盘 | mouse, headset, keyboard | C | 协议已接入，待本项目实机验证；限代码内既有匹配表；含 Viper V3 Pro SE（1532:00DE / 00DF，transaction 0x1F），待实机验证 |
 | Audeze Maxwell 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | WLmouse 已列明型号 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |

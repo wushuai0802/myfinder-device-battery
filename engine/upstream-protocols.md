@@ -616,6 +616,26 @@ last value on a greyed icon, so live readings want CAM closed.
 
 ## Mice and keyboards
 
+### ROG Strix Scope II 96 Wireless via Omni
+
+The only supported receiver is `0B05:1ACE`, interface 2, with the exact
+64-byte `FF02:0001` report 1 and `FF00:0001` report 2 descriptors observed on
+the tested receiver. The read-only receiver request `01 A0 00` must report a
+single keyboard `1AB0` on channel 2 and type 4, with no conflicting channel 2
+entry. Only then is `02 12 01` sent to the keyboard collection. Both requests
+are padded to 64 bytes; only 64-byte matching, non-echo replies are accepted.
+Keyboard reply byte 6 is the 1–100 percentage. Zero, invalid values, missing
+replies and ambiguous identities produce no new reading. Charging is unknown.
+
+On 2026-11-05 one user's keyboard returned 46%, with the user reporting about
+40%; this is one approximate comparison, not an independent exact reference.
+Charging, zero, sleep/wake, firmware changes and other channels or models have
+not been validated. ROG Omni is a shared receiver ID: do not generalize the
+result to other paired devices. Protocol reference: [RIGStats OmniMouse,
+AsusKeyboardDevice and Battery](https://github.com/dvalfrid/rigstats/tree/main/sensor-sidecar/Control/Lighting)
+(MIT; license in `engine/licenses/RIGStats-MIT.txt`).
+
+
 ### VGN 2.4G keyboard receiver (320F:5088)
 
 **A — one historical project-maintainer hardware reading (2026-11-05).**

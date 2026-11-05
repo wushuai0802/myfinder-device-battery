@@ -24,6 +24,12 @@ Upstream protocol references and model verification notes are retained in
 `engine/upstream-credits.md`. A protocol implementation or a listed USB ID does
 not by itself establish hardware validation.
 
+The read-only ROG Omni keyboard exchange references
+[RIGStats](https://github.com/dvalfrid/rigstats) (MIT); its license is retained
+in `engine/licenses/RIGStats-MIT.txt`. The provider independently implements
+the paired-device and keyboard-battery queries and does not include lighting
+or configuration commands.
+
 The Windows distribution bundles the official CPython embeddable runtime and
 the `hidapi` Python wheel, with their original license files. Versions, original
 download URLs and SHA256 hashes are pinned in `engine/dependencies.lock.json`.
