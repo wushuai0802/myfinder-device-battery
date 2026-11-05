@@ -1065,10 +1065,10 @@ receiver/firmware's matching collection, descriptor-proven input/output or
 feature IDs and lengths, and a battery request/reply tied to that precise
 variant. Further N75 implementation remains deferred under the revised brief.
 
-### Deferred Rapoo 24AE:1412, 1421, 14A1, 1601
+### Rapoo VT nrf54L passive input 24AE:1412, 1421, 14A1
 
-**Not implemented; D — user-reported identities, no battery reading from this
-project.** Each PID was checked independently against the official
+**C / 被动接收，待实机验证.** Only these three wireless PIDs are implemented;
+`24AE:1601` remains **D / not implemented**. Each PID was checked independently against the official
 [Rapoo A HUB](https://hub.rapoo.cn/) bundle supplied at
 `.ai/evidence/rapoohub/index-cgGQw9wn.js`, retrieved 2026-11-05 from
 `https://hid.rapoo.cn/AHUB_WEB/dist/assets/js/index-cgGQw9wn.js`. SHA256:
@@ -1078,9 +1078,9 @@ No redistribution licence or source commit was supplied for this artifact.
 
 | Target / task diagnosis | Exact official identity and dispatch | Decision |
 | --- | --- | --- |
-| `24AE:1412`, #120 VT3 dual 8K | `model:"VT3"`, `mainControl:"VT3"`, product IDs `[17938,5138]` (`4612,1412`); `dongleModel:"Dongle_NordicL5"`, `driver:"VT_nrf54L"`, MCU `N54L15` | Deferred: passive report fields identified, complete battery exchange not established. |
-| `24AE:1421`, #86 VT3S MAX | `model:"VT3S MAX"`, `mainControl:"VT3S MAX"`, product IDs `[17953,5153]` (`4621,1421`); same dongle/driver/MCU | Deferred independently for the same protocol gaps. |
-| `24AE:14A1`, #54 | `model:"VT0 Air MAX"`, `mainControl:"VT0Air MAX"`, product IDs `[18081,5281]` (`46A1,14A1`); same dongle/driver/MCU | Deferred independently for the same protocol gaps. The exact official name corrects the older batch4 note's shorthand "VT0". |
+| `24AE:1412`, #120 VT3 dual 8K | `model:"VT3"`, `mainControl:"VT3"`, product IDs `[17938,5138]` (`4612,1412`); `dongleModel:"Dongle_NordicL5"`, `driver:"VT_nrf54L"`, MCU `N54L15` | C / passive input only, pending hardware verification. |
+| `24AE:1421`, #86 VT3S MAX | `model:"VT3S MAX"`, `mainControl:"VT3S MAX"`, product IDs `[17953,5153]` (`4621,1421`); same dongle/driver/MCU | C / passive input only, independently matched to this driver. |
+| `24AE:14A1`, #54 | `model:"VT0 Air MAX"`, `mainControl:"VT0Air MAX"`, product IDs `[18081,5281]` (`46A1,14A1`); same dongle/driver/MCU | C / passive input only. The exact official name corrects the older batch4 note's shorthand "VT0". |
 | `24AE:1601`, #36 user-reported VT9 PRO | No matching device manifest in this supplied bundle; official class, `mainControl`, `dongleModel` and filters unknown | Deferred: identity-to-protocol mapping and the entire battery exchange remain unproven. |
 
 The first three identities each occur in exactly one product-ID declaration.
@@ -1093,15 +1093,25 @@ fallback. Factory dispatch uses the manifest's `driver`, with
 a different battery class. Each target is the second product ID and selects
 wireless command routing byte `A5`; the paired wired IDs are outside this task.
 
-#### Confirmed Nordic facts and missing exchange evidence
+The input channel is the same default channel, not a firmware-update channel:
+`Ul.scan` matches `usagePage` and `usage`, `Ul.open` opens that exact path,
+and `Ul.onInputReport` splits the first byte as the ID before delivering its
+remaining bytes. `Dl` subscribes `this.channel.onInputReport(this.handleReport.bind(this))`
+on the primary channel; `Ik.handleReport` consumes ID `7` there. The WebHID
+equivalent (`Po`) forwards `event.reportId` and `event.data` from the selected
+device. This source route supports `FF00:0002`; it is not a hardware capture
+proving the contents of a receiver's actual descriptor.
+
+#### Confirmed Nordic facts and passive-reader boundaries
 
 | Item | Observation in the supplied artifact / unresolved boundary |
 | --- | --- |
 | Battery delivery | `Ik.handleReport` handles **Input report ID `07`**, passes the body (excluding report ID) to `Ok`/`dy`, and publishes battery changes. These three manifests use the default retail parser, not the cybercafe wrapper. |
 | Fields | Body `[0]` low nibble is connection protocol, high nibble sensor; `[6]` is `batStatus`, `[7]` is `batPercent`. Thus hidapi's numbered input would place the battery fields at full-report `[7]` and `[8]`. These are status notifications, not proven replies to a battery query. |
+| Charging UI | `le` passes the stored `batStatus` to `batteryStatus`; `Hr` accepts `1/2/3` as battery states, and `Ii` shows charging for `2/3` (also for wired transport, excluded here). Thus `1` maps to not charging and `2/3` to charging, following the official wireless UI. The inspected parser/UI does not distinguish full from charging for `2` versus `3`. `Jm` treats `0` as unavailable; other values have no established mapping. The reader keeps an in-range reported percentage but sets `charging_known=False` for `0`/unknown values; it never invents a full-state flag. |
 | Length / integrity | `dy` uses defaults for missing bytes and conditionally parses fields through body `[17]`. This proves field offsets, **not** an 8-, 18-, 31- or 63-byte fixed payload. No checksum validation is present in this parser; that does not prove the firmware has no integrity fields. The task diagnostics provide top-level collections, not per-report byte-array descriptors. |
 | Request | No standalone battery query or battery EEPROM address is established for this class. `Ik` installs config/DPI/keys/performance/firmware/pairing features, but no battery feature. Its connection callback reads configuration and DPI; those operations are not documented as battery requests. No request bytes, response correlation, request length or response deadline can therefore be specified. |
-| Host session | WebHID/NodeHID channel open/close only open/close host handles and register/remove input listeners. The base connection session calls the class callback. No Nordic battery-specific enter/exit command was found in these paths. This does not establish when an otherwise idle receiver will emit a fresh status report. |
+| Host session | WebHID/NodeHID channel open/close only open/close host handles and register/remove input listeners. The base connection session calls the class callback, which reads configuration/DPI. This passive implementation does not reproduce those operations or report backfill. No battery-specific enter/exit command was found. This does not establish whether/when an otherwise idle receiver will emit a status report without setup. |
 | Excluded command families | The AP/Telink3228C `getBatteryLevel:173` / `readBatteryStatus()` and the CH315 `batteryPercent:t[9]` parser belong to other classes. Telink8273's `BB` status path also has no dispatch link to these targets. They cannot supply the missing Nordic exchange. |
 
 In particular, Nordic `en.init_default_flash` is **`AD`**, and
@@ -1136,34 +1146,49 @@ The following strings are unique within this exact supplied bundle:
 | `141295` | `const Dl=class Dl` | Base host connection lifecycle |
 | `123291` | `class Po{` | WebHID host handles and input listeners |
 | `126440` | `class Ul{` | NodeHID host handles and numbered input splitting |
+| `1788098` | `const Hr=(n,t)=>` | UI valid battery states and adjacent `Ii` charging mapping / `Jm` validation |
 | `1795166` | `function J(K){const te=K.features.battery,me=g.get(K.id);if(!te||!me||!S(K))return` | UI battery query requires a battery feature, absent from `Ik` |
 | `150137` | `yn={outputReportId:6` | Nordic general command IDs and adjacent command table |
 | `162287` | `async initAllConfigs(){const t=en.init_default_flash` | `AD` is factory reset in this class |
 | `620900` | `getBatteryLevel:173` | Different AP command family, not target evidence |
 
 REA static inventory Evidence
-`ev_c916928de743ac34d1ba6c176b1431508231b32d2cd196517037b4dbb558d83a`
+`ev_94a2e7e23216b9728fd6bd2dcea9f3cdffb8eda7420faeb33ebd74d2ba8ee99c`
 parsed the single supplied JS file without execution or parse errors. Its
 semantic graph reached its node ceiling and is partial; the identity and
 protocol facts above were checked directly in the source. Static analysis
 does not establish firmware behavior or battery accuracy.
 
-To unblock the first three PIDs, obtain their exact collection's per-report
-descriptor (including byte-array proof of ID `07` and its length), a complete
-read-only battery request/reply if one exists, or evidence that passive
-notifications alone provide fresh battery status without setup commands.
-Confirm validity/charging states and sleep/disconnect behavior against actual
-reports; do not turn missing fields or silence into 0%. For `1601`, first obtain
-an exact official device/class/filter mapping, then the corresponding exchange
-and descriptors. A session command, if required, needs evidence of read-only
-semantics and a matching exit before any implementation.
+`providers/rapoo.py` **only receives and never sends**: open, bounded input
+reads, close. There is no `write`, `send_feature_report` or `get_feature_report`
+(Windows GET_FEATURE also sends a request). Nordic `AD`, Output `06`, Feature
+`08`, connection/configuration/DPI reads and guessed setup are never used.
+The receiver must have one uniquely selected `FF00:0002` collection under a
+proven USB parent. `topology` enables input-only `battery_hid.byte_report_sizes`
+proof for exactly these three IDs and this collection: either numeric byte
+arrays or a lone byte-selector array. Collection maxima alone do not suffice;
+without a proven `"7"` input length, the provider does not open the device.
+The descriptor supplies the length (9..4096 full-report bytes); no fixed
+payload length is inferred from the optional parser fields. Only exact-length
+ID `07` input with percentage `0..100` is accepted; other reports are ignored.
 
-No Rapoo provider, known-ID support registration, device-pack extension or
-topology probing was added. All four are explicitly `compatible:false` in the
-observed-unsupported catalog, not grade C readers. There are no request-byte or
-synthetic-reply tests because no exchange is implemented or invented. No
-hardware was accessed; actual descriptors, freshness, sleep behavior, charging
-and coexistence with the official driver remain unverified.
+Each opened poll listens for at most **1500 ms**, also bounded to 32 reads.
+**Notification frequency is unknown**: the receiver may report only on changes,
+and a fresh launch may initially have no battery reading. Silence is normal
+`no_measurement`, including after a previous reading, and the UI can show
+“休眠中，动一下即可刷新”. It never fabricates 0% or renews a historical timestamp.
+The provider instance retains each receiver's last reading/receive time as
+`cached`, with unknown current connection/charging, until that receiver leaves
+the USB inventory. No configuration, output or feature descriptor is required
+for this passive path. No device-pack extension is added.
+
+Synthetic fake-device tests raise on every attempted write or feature request,
+cover parsing, other report IDs, silence/history, deadlines, collection and
+descriptor rejection, exact PID scope and descriptor-only discovery. No
+hardware was accessed. Actual descriptors, notification frequency/freshness,
+standalone operation, sleep/wake, charging transitions and coexistence with the
+official driver remain unverified. For `1601`, an exact official
+device/class/filter mapping is still needed before any implementation.
 
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 

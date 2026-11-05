@@ -80,6 +80,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | Keychron M5 / Ultra-Link 8K | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Pulsar / ATK / VXE / VGN / Scyrox / Hitscan 已列明型号及 ATK FF02 协议族 | mouse | C | 协议已接入，待本项目实机验证；VGN F2 Master+ 3554:FB56、VXE R1 SE 1K 3554:F58E、Scyrox 3554:F517及VGN Dragonfly 4K Receiver 3554:F505均仅FF02:0002且输出恰好17字节；F505为本项目维护者实机确认（单型号A级历史证据）：VGN F1 Pro单次35%、未充电、3766mV，对照VGN HUB 36%，充电/休眠未测；其他型号仍C；表外373B也须FF02:0002及17字节，排除原生373B:1278，不开放DPI |
 | JBL Quantum 910 已列明变体 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| Rapoo VT3 / VT3S MAX / VT0 Air MAX（被动接收，待实机验证） | mouse | C | 协议已接入，待本项目实机验证；仅24AE:1412（#120）、1421（#86）、14A1（#54）无线PID；唯一FF00:0002集合且描述符证明Input 07长度后，最多监听1500ms，只接收不发送（也不GET_FEATURE）；上报频率未知，可能只在变化时上报，刚启动可能暂无读数；静默为no_measurement并保留历史至接收器移除；UI状态1未充电、2/3充电，其他值充电未知；1601仍未实现 |
 | Logitech HID++ 与已列明G系列耳机 | mouse, keyboard, headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | SteelSeries 已列明鼠标与耳机 | mouse, headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Razer Barracuda Pro | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
@@ -99,9 +100,6 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 | MCHOSE K99 V3 2.4G (3837:3033) | keyboard | D | 已发现但未取得电量，不列为兼容 |
-| Rapoo VT3 (24AE:1412) | mouse | D | 已发现但未取得电量，不列为兼容 |
-| Rapoo VT3S MAX (24AE:1421) | mouse | D | 已发现但未取得电量，不列为兼容 |
-| Rapoo VT0 Air MAX (24AE:14A1) | mouse | D | 已发现但未取得电量，不列为兼容 |
 | Rapoo VT9 PRO（用户报告，24AE:1601） | mouse | D | 已发现但未取得电量，不列为兼容 |
 
 通用读取器基础来源为 HaloBattery `2251f0534a8e886c9692ead42056059b4f69d8c0`；标准HID字段及 MCHOSE V9 PRO / V9 Turbo+、G98 V3、G87 V2、G3M PRO、EWEADN S9、Flydigi APEX5 读取为本项目实现，协议来源与许可证见 engine/upstream-protocols.md。

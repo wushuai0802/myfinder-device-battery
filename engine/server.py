@@ -36,6 +36,7 @@ PROVIDERS = (
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
     ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
+    ("rapoo", "RapooProvider"),
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
     ("barracuda", "BarracudaProvider"), ("asus", "AsusProvider"),
     ("gwolves", "GWolvesProvider"), ("lofree", "LofreeProvider"),
@@ -57,6 +58,7 @@ PROVIDER_VIDS = {
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
+    "rapoo": (0x24AE,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
@@ -680,9 +682,13 @@ class BatteryEngine:
         self.last_poll[reader_key] = time.monotonic()
         self.failures.pop(reader_key, None)
         self.retry_after.pop(reader_key, None)
+        # A passive Rapoo poll can return history without a new notification.
+        # Keep the card, but expose the same idle health as a first silent poll.
+        measured = bool(group) and (name != "rapoo" or any(
+            s.online and not s.cached and s.level is not None for s in statuses))
         self.health[reader_key] = {"provider": name, "readerId": public_id(reader_key),
-                                   "state": "ok" if group else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),
-                                   "reason": "" if group else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
+                                   "state": "ok" if measured else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),
+                                   "reason": "" if measured else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in KEYBOARD_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:200] for line in diagnostics[-16:]]

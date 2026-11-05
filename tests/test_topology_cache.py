@@ -309,6 +309,90 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.assertNotIn("input_report_sizes", info)
                 self.hid.HidP_GetValueCaps.assert_not_called()
 
+    def test_rapoo_input_proof_is_descriptor_only_numeric_or_single_byte_array(self):
+        for pid in (0x1412, 0x1421, 0x14A1):
+            for array in (False, True):
+                with self.subTest(pid=pid, array=array):
+                    self.cache.clear()
+                    self.hid.HidP_GetValueCaps.reset_mock()
+                    self.hid.HidP_GetButtonCaps.reset_mock()
+                    self.batch3_descriptor((0x24AE, pid), (0xFF00, 2), {7: 19}, {6: 65})
+                    if array:
+                        original = self.hid.HidP_GetCaps.side_effect
+
+                        def caps(data, pointer):
+                            result = original(data, pointer)
+                            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                            value.iv, value.ib = 0, 1
+                            return result
+
+                        def buttons(report_type, values, length, data):
+                            self.assertEqual(report_type, 0)
+                            values[0].report, values[0].is_range = 7, 1
+                            values[0].usage_min, values[0].usage_max = 0, 255
+                            return 0x00110000
+
+                        self.hid.HidP_GetCaps.side_effect = caps
+                        self.hid.HidP_GetButtonCaps.side_effect = buttons
+                    first, = self.scan([PATH_A])
+                    self.assertEqual(first["input_report_sizes"], {"7": 19})
+                    self.assertNotIn("output_report_sizes", first)
+                    self.assertNotIn("feature_report_sizes", first)
+                    calls = (self.hid.HidP_GetButtonCaps if array else self.hid.HidP_GetValueCaps).call_args_list
+                    self.assertEqual([call.args[0] for call in calls], [0])
+                    self.kernel.CreateFileW.reset_mock()
+                    self.assertEqual(self.scan([PATH_A]), [first])
+                    self.kernel.CreateFileW.assert_not_called()
+                    self.hid.HidD_GetFeature.assert_not_called()
+                    self.hid.HidD_SetFeature.assert_not_called()
+                    self.kernel.ReadFile.assert_not_called()
+                    self.kernel.WriteFile.assert_not_called()
+
+    def test_rapoo_unproven_input_is_retried_and_nearby_devices_are_not_probed(self):
+        for pid in (0x1412, 0x1421, 0x14A1):
+            for defect in ("no_07", "not_bytes", "alias", "partial", "failure"):
+                with self.subTest(pid=pid, defect=defect):
+                    self.cache.clear()
+                    self.batch3_descriptor((0x24AE, pid), (0xFF00, 2), {7: 19}, {6: 65})
+                    original = self.hid.HidP_GetValueCaps.side_effect
+
+                    def fields(report_type, values, length, data):
+                        result = original(report_type, values, length, data)
+                        self.assertEqual(report_type, 0)
+                        if defect == "no_07":
+                            values[0].report = 6
+                        elif defect == "not_bytes":
+                            values[0].bits = 16
+                        elif defect == "alias":
+                            values[0].alias = 1
+                        elif defect == "partial":
+                            ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+                        elif defect == "failure":
+                            return 0
+                        return result
+
+                    self.hid.HidP_GetValueCaps.side_effect = fields
+                    info, = self.scan([PATH_A])
+                    self.assertNotIn(PATH_A, self.cache)
+                    self.assertNotIn("7", info["input_report_sizes"] or {})
+                    self.batch3_descriptor((0x24AE, pid), (0xFF00, 2), {7: 19}, {6: 65})
+                    recovered, = self.scan([PATH_A])
+                    self.assertEqual(recovered["input_report_sizes"], {"7": 19})
+        for identity, collection in (((0x24AE, 0x1601), (0xFF00, 2)),
+                                     ((0x24AE, 0x4612), (0xFF00, 2)),
+                                     ((0x24AE, 0x1412), (0xFF00, 1)),
+                                     ((0x24AE, 0x1421), (0xFF00, 14)),
+                                     ((0x24AF, 0x14A1), (0xFF00, 2))):
+            with self.subTest(identity=identity, collection=collection):
+                self.cache.clear()
+                self.hid.HidP_GetValueCaps.reset_mock()
+                self.hid.HidP_GetButtonCaps.reset_mock()
+                self.batch3_descriptor(identity, collection, {7: 19}, {6: 65})
+                info, = self.scan([PATH_A])
+                self.assertNotIn("input_report_sizes", info)
+                self.hid.HidP_GetValueCaps.assert_not_called()
+                self.hid.HidP_GetButtonCaps.assert_not_called()
+
     def test_reordered_full_path_set_uses_cache(self):
         first = self.scan([PATH_A, PATH_B])
         self.kernel.CreateFileW.reset_mock()

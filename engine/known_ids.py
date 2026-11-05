@@ -40,6 +40,7 @@ TABLES = {
     "mchose_qhw_keyboard": ("PIDS",), "mchose_glw_keyboard": ("PIDS",),
     "g3m": ("PIDS",), "eweadn": ("PIDS",), "flydigi": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
+    "rapoo": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),

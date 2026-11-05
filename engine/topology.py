@@ -220,6 +220,12 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if caps_complete and attrs.vendor == 0x24AE and attrs.product in (0x1412, 0x1421, 0x14A1) and (
+                    caps.page, caps.usage) == (0xFF00, 0x0002):
+                # Passive Rapoo input only: never query feature/output reports.
+                from battery_hid import byte_report_sizes
+                info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0)
+                caps_complete = bool(info["input_report_sizes"] and "7" in info["input_report_sizes"])
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
                     0x1915, 0xAE1C, 0xFFA0, 0x0001):
                 from battery_hid import byte_report_sizes
