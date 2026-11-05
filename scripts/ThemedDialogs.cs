@@ -218,7 +218,7 @@ namespace AtkBatteryTray {
         internal ThemedDialog(bool dark){
             Theme=new DialogTheme(dark);
             bodyFont=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize,FontStyle.Regular,GraphicsUnit.Pixel);
-            titleFont=new Font("Microsoft YaHei UI",15,FontStyle.Bold,GraphicsUnit.Pixel);
+            titleFont=new Font("Microsoft YaHei UI",VisualDesign.DialogTitleFontSize,FontStyle.Bold,GraphicsUnit.Pixel);
             cardTitleFont=new Font("Microsoft YaHei UI",VisualDesign.DeviceNameFontSize,FontStyle.Bold,GraphicsUnit.Pixel);
             descriptionFont=new Font("Microsoft YaHei UI",VisualDesign.SubtitleFontSize,FontStyle.Regular,GraphicsUnit.Pixel);
             AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;Font=bodyFont;
@@ -230,6 +230,7 @@ namespace AtkBatteryTray {
         internal void ConfigureLayout(TableLayoutPanel body,Control buttonBar,Func<int,int> minimum,Func<int,int> preferred=null){
             var accept=AcceptButton;var cancel=CancelButton;var active=ActiveControl;
             content=body;buttons=buttonBar;minimumContentHeight=minimum;preferredContentHeight=preferred;
+            if(VisualDesign.LargeFont)ClientSize=new Size((int)Math.Round(ClientSize.Width*VisualDesign.DialogScale),(int)Math.Round(ClientSize.Height*VisualDesign.DialogScale));
             preferredClientSize=ClientSize;StartPosition=FormStartPosition.Manual;
             content.Controls.Remove(buttons);content.RowStyles.RemoveAt(content.RowStyles.Count-1);content.RowCount--;
             Controls.Remove(content);content.Dock=DockStyle.None;content.Anchor=AnchorStyles.Top|AnchorStyles.Left;
@@ -375,7 +376,7 @@ namespace AtkBatteryTray {
         }
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}
-            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;e.Graphics.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             var rect=new RectangleF(0,0,Width/scale,Height/scale);
             if(kind!=ThemedButtonKind.Text){
                 CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
@@ -493,7 +494,7 @@ namespace AtkBatteryTray {
         protected override void OnPaint(PaintEventArgs e){
             base.OnPaint(e);float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.SetClip(ClientRectangle,CombineMode.Intersect);
             if(!theme.HighContrast){
-                e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+                e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;e.Graphics.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
                 for(int row=0;row<Rows(columns);row++)CompactRenderer.Fill(e.Graphics,new RectangleF(0,row*(RowHeight+Gap)/scale,Width/scale,RowHeight/scale),theme.Track,VisualDesign.SelectionRadius);
             }
             for(int i=0;i<options.Count;i++){
@@ -576,7 +577,7 @@ namespace AtkBatteryTray {
         protected override void OnPaintBackground(PaintEventArgs e){if(theme.HighContrast)base.OnPaintBackground(e);else DialogPaint.Background(this,e,BackColor);}
         protected override void OnPaint(PaintEventArgs e){
             if(theme.HighContrast){base.OnPaint(e);return;}
-            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+            float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;e.Graphics.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             var rect=new RectangleF(0,0,Width/scale,Height/scale);
             InteractionLayout.Paint(e.Graphics,DialogInteraction.Card(this,scale,rect),rect,0,Enabled?new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1,KeyboardFocus=Focused&&ShowFocusCues?0:-1}:null,theme.Dark,false,delegate{
             CompactRenderer.DrawLabel(e.Graphics,Text,new RectangleF(6,0,rect.Width-51,rect.Height),VisualDesign.DeviceNameFontSize,false,Enabled?theme.Foreground:theme.Muted,StringAlignment.Near);

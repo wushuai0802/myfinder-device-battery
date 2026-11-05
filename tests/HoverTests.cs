@@ -67,7 +67,7 @@ static class HoverTests {
         var headset=new HeadsetReading {Connected=true,ConnectionVerified=true,Percent=80,TimestampUtc=DateTime.UtcNow,BatteryTimestampUtc=DateTime.UtcNow};
         scenes.Add(new Scene {Name="主面板",Size=VisualDesign.PanelSizeFor(true,owner.Dpi),Paint=delegate(Graphics g,PanelFeedback f,bool dark){Collapsed(false);CompactRenderer.Paint(g,owner.Current,null,null,false,owner.Dpi,null,false,dark,headset,owner.Audio,1,-1,false,1,-1,f);}});
         scenes.Add(new Scene {Name="音源卡",Size=VisualDesign.PanelSizeFor(true,owner.Dpi),Paint=delegate(Graphics g,PanelFeedback f,bool dark){Collapsed(false);CompactRenderer.Paint(g,owner.Current,null,null,false,owner.Dpi,null,false,dark,null,owner.Audio,1,-1,false,1,-1,f);}});
-        scenes.Add(new Scene {Name="收起音量",Size=new Size(260,32),Paint=delegate(Graphics g,PanelFeedback f,bool dark){Collapsed(true);CompactRenderer.SystemVolume(g,new RectangleF(0,0,260,32),owner.Audio,dark,f);Collapsed(false);}});
+        scenes.Add(new Scene {Name="收起音量",Size=new Size(VisualDesign.PanelWidth,VisualDesign.SystemVolumeHeightFor(true)),Paint=delegate(Graphics g,PanelFeedback f,bool dark){Collapsed(true);CompactRenderer.SystemVolume(g,new RectangleF(0,0,VisualDesign.PanelWidth,VisualDesign.SystemVolumeHeightFor(true)),owner.Audio,dark,f);Collapsed(false);}});
         var layout=WirelessLayout.Build(owner,1,380);
         scenes.Add(new Scene {Name="多设备 / 翻页",Size=layout.Size,Offset=delegate(int id){return NativeOffset(layout,id);},Paint=delegate(Graphics g,PanelFeedback f,bool dark){CompactRenderer.PaintWireless(g,owner,layout,dark,f);}});
         var all=WirelessLayout.Build(owner,0,1000);
@@ -78,8 +78,9 @@ static class HoverTests {
         }
         for(int kind=0;kind<5;kind++){
             int variant=kind;
-            scenes.Add(new Scene {Name=new[]{"弹窗 / 按钮","弹窗 / 主按钮","弹窗 / 文本按钮","弹窗 / 类型分段","弹窗 / 开关"}[kind],Size=new Size(260,64),Paint=delegate(Graphics g,PanelFeedback f,bool dark){
-                var card=new RectangleF(.5f,.5f,259,63);var rect=new RectangleF(16,17,228,30);CompactRenderer.DrawSurface(g,card,dark);
+            int width=VisualDesign.PanelWidth,height=VisualDesign.SelectionHeight+34;
+            scenes.Add(new Scene {Name=new[]{"弹窗 / 按钮","弹窗 / 主按钮","弹窗 / 文本按钮","弹窗 / 类型分段","弹窗 / 开关"}[kind],Size=new Size(width,height),Paint=delegate(Graphics g,PanelFeedback f,bool dark){
+                var card=new RectangleF(.5f,.5f,width-1,height-1);var rect=new RectangleF(16,17,width-32,VisualDesign.SelectionHeight);CompactRenderer.DrawSurface(g,card,dark);
                 if(variant==0||variant==1||variant==3){CompactRenderer.Fill(g,rect,ThemePalette.Current(dark).Track,VisualDesign.SelectionRadius);CompactRenderer.Selection(g,rect,variant==3?"问题反馈":"确认",null,variant==1,true,f.HoverAction==0,f.PressedAction==0,false,dark,f.KeyboardFocus==0,card);}
                 else InteractionLayout.Paint(g,card,rect,0,f,dark,false,delegate{CompactRenderer.DrawLabel(g,variant==2?"查看详情":"附带诊断信息",variant==2?rect:new RectangleF(rect.X+6,rect.Y,rect.Width-51,rect.Height),VisualDesign.DeviceNameFontSize,false,variant==2?ThemePalette.Current(dark).Accent:ThemePalette.Current(dark).Foreground,variant==2?StringAlignment.Center:StringAlignment.Near);if(variant==4)PopupPages.DrawToggle(g,rect,true,true,dark);});
             }});
@@ -106,8 +107,17 @@ static class HoverTests {
         float gap=Math.Min(Math.Min(r.Bounds.Left-r.Card.Left,r.Card.Right-r.Bounds.Right),Math.Min(r.Bounds.Top-r.Card.Top,r.Card.Bottom-r.Bounds.Bottom));
         Check(Math.Abs(r.Radius-(r.Bounds.Height>=r.Card.Height/2?Math.Max(0,VisualDesign.PanelRadius-gap):8))<.001,name+" concentric or 8px corner radius");
     }
-    static void AllRegions(){using(var fixture=new Fixture())foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})foreach(var scene in Scenes(fixture.Owner)){
+    static bool IsInteger(float value){return Math.Abs(value-(float)Math.Round(value))<.001f;}
+    static void AllRegions(){using(var fixture=new Fixture())foreach(string fontSize in new[]{"normal","large"}){
+        var pref=DeviceSettings.Current;pref.FontSize=fontSize;DeviceSettings.UseTransientConfiguration(pref);
+        foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})foreach(var scene in Scenes(fixture.Owner)){
+        var labels=scale==1f?new List<DrawnLabel>():null;CompactRenderer.LabelObserver=labels==null?(Action<DrawnLabel>)null:labels.Add;
         var baseline=Regions(scene,scale,false,new PanelFeedback());Check(baseline.Count>0,scene.Name+" has measured controls");
+        CompactRenderer.LabelObserver=null;
+        if(labels!=null){
+            Check(labels.Count>0,scene.Name+" records 96 DPI drawn labels in "+fontSize);
+            foreach(var label in labels)Check(IsInteger(label.FontSize)&&IsInteger(label.DeviceRect.X)&&IsInteger(label.DeviceRect.Y)&&IsInteger(label.DeviceRect.Width)&&IsInteger(label.DeviceRect.Height),scene.Name+" 96 DPI integer label "+label.Text+": "+label.DeviceRect+" font="+label.FontSize);
+        }
         if(scene.Name=="主面板")Check(baseline.Exists(delegate(InteractionRegion r){return r.Id==240;}),"expanded main volume is included in the state matrix");
         foreach(var r in baseline){Geometry(r,scale,scene.Name+" "+r.Id);if(r.Id<0)continue;
             foreach(int state in new[]{1,2,3,4}){var f=new PanelFeedback {HoverAction=state==1||state==4?r.Id:-1,PressedAction=state==2?r.Id:-1,KeyboardFocus=state>=3?r.Id:-1};var outlines=new List<RectangleF>();CompactRenderer.InteractionOutlineObserver=outlines.Add;
@@ -116,6 +126,8 @@ static class HoverTests {
                 Check(outlines.Count==(state>=3&&r.Enabled?1:0),scene.Name+" "+r.Id+" only enabled keyboard focus draws an outline (state "+state+")");
             }
         }
+    }
+    pref=DeviceSettings.Current;pref.FontSize="normal";DeviceSettings.UseTransientConfiguration(pref);
     }}
     static void SelectionStates(){
         foreach(string style in ThemePalette.Keys)foreach(float scale in new[]{1f,1.5f,2f})foreach(bool dark in new[]{false,true}){
@@ -161,5 +173,5 @@ static class HoverTests {
             }
         }
     }
-    [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{DeviceSettings.UseTransientConfiguration(new AudioBindings());VisualDesign.HighContrastOverride=false;if(args.Length==2&&args[0]=="--render"){RenderSheets(args[1]);return 0;}Run("fill-only hover and press",Feedback);Run("independent keyboard focus",Focus);Run("glyph bounds match rendered content",InkBounds);Run("all regions: geometry and outline recording at 96/120/144/168/192 DPI",AllRegions);Run("selected segments suppress hover and press",SelectionStates);Run("high contrast system outlines",HighContrast);Console.WriteLine(checks+" checks, "+failures+" failed groups");return failures==0?0:1;}finally{InteractionLayout.Observer=null;CompactRenderer.InteractionOutlineObserver=null;DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}}
+    [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{DeviceSettings.UseTransientConfiguration(new AudioBindings());VisualDesign.HighContrastOverride=false;if(args.Length==2&&args[0]=="--render"){RenderSheets(args[1]);return 0;}Run("fill-only hover and press",Feedback);Run("independent keyboard focus",Focus);Run("glyph bounds match rendered content",InkBounds);Run("all regions: geometry and outline recording at 96/120/144/168/192 DPI",AllRegions);Run("selected segments suppress hover and press",SelectionStates);Run("high contrast system outlines",HighContrast);Console.WriteLine(checks+" checks, "+failures+" failed groups");return failures==0?0:1;}finally{InteractionLayout.Observer=null;CompactRenderer.InteractionOutlineObserver=null;CompactRenderer.LabelObserver=null;DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}}
 }

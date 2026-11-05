@@ -13,6 +13,7 @@ namespace AtkBatteryTray {
         internal readonly string Version;
         readonly ThemedButton install,skip,cancel;
         readonly Label status;readonly ThemedProgress progress;readonly ThemedSection statusArea;
+        readonly ThemedSection versionCard;readonly Label title,current,next;readonly FlowLayoutPanel versions;
         bool downloading,handedOff,progressShown;
         internal event Action InstallRequested,SkipRequested,CancelRequested;
         internal UpdateDialog(UpdateRelease release,bool stable){
@@ -21,14 +22,14 @@ namespace AtkBatteryTray {
             ClientSize=new Size(380,340);
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var versionCard=new ThemedSection(Theme) {Name="VersionCard",Dock=DockStyle.Fill,Height=54};
+            versionCard=new ThemedSection(Theme) {Name="VersionCard",Dock=DockStyle.Fill,Height=54};
             var versionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             bool beta=release.Prerelease||UpdateVersion.Parse(release.Version).IsBeta;
-            var title=Caption(beta?"发现新测试版":"发现新版本",true);title.Name="UpdateTitle";title.Margin=Padding.Empty;versionLayout.Controls.Add(title,0,0);
-            var versions=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,Margin=new Padding(0,4,0,0)};
-            var current=Caption("当前 "+AppRuntime.Version+" → ");current.Margin=Padding.Empty;
-            var next=Caption(release.Version);next.Name="NewVersion";next.ForeColor=Theme.Accent;next.Margin=Padding.Empty;
+            title=Caption(beta?"发现新测试版":"发现新版本",true);title.Name="UpdateTitle";title.Margin=Padding.Empty;versionLayout.Controls.Add(title,0,0);
+            versions=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,Margin=new Padding(0,4,0,0)};
+            current=Caption("当前 "+AppRuntime.Version+" → ");current.Margin=Padding.Empty;
+            next=Caption(release.Version);next.Name="NewVersion";next.ForeColor=Theme.Accent;next.Margin=Padding.Empty;
             versions.Controls.AddRange(new Control[]{current,next});versionLayout.Controls.Add(versions,0,1);versionCard.Controls.Add(versionLayout);layout.Controls.Add(versionCard,0,0);
             var notes=new ThemedReleaseNotes(Theme) {Name="ReleaseNotes",AccessibleName="发布说明",Text=Notes(release.Body),TabStop=true,Dock=DockStyle.Fill};
             var section=new ThemedTextBox(Theme,notes) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};layout.Controls.Add(section,0,1);
@@ -67,6 +68,7 @@ namespace AtkBatteryTray {
             return String.Join(Environment.NewLine,lines);
         }
         void SizeStatus(){
+            versionCard.Height=Math.Max(54,versionCard.Padding.Vertical+title.PreferredHeight+versions.Margin.Vertical+Math.Max(current.PreferredHeight,next.PreferredHeight));
             int gap=progressShown?(int)Math.Round(12*DialogDpi.Scale(this)):0;
             status.Padding=new Padding(0,0,0,gap);
             statusArea.Height=statusArea.Padding.Vertical+status.Font.Height+(progressShown?progress.Height+gap:0);

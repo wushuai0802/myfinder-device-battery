@@ -20,7 +20,7 @@ namespace AtkBatteryTray {
         public SettingsForm(TrayContext context) {
             owner=context;Text="设备电量 · 设置";ShowInTaskbar=false;StartPosition=FormStartPosition.CenterScreen;
             AutoScaleMode=AutoScaleMode.Dpi;AutoScaleDimensions=new SizeF(96,96);
-            Font=new Font("Microsoft YaHei UI",9f);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
+            Font=new Font("Microsoft YaHei UI",VisualDesign.LargeFont?10.5f:9f);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
             ClientSize=new Size(484,480);Padding=new Padding(20);AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;MinimumSize=new Size(500,490);
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=9,AutoSize=true};
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,94));layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
