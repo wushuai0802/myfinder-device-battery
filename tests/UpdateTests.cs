@@ -182,6 +182,13 @@ static class UpdateTests {
             var disguised=Release("1.3.5-beta.2",false);Check(UpdateCatalog.Select(new[]{disguised},"1.3.4",null)==null,"beta tag cannot enter stable channel");
             Check(UpdateCatalog.Select(new[]{Release("1.3.5",true)},"1.3.4",null)==null,"prerelease flag excludes even a stable tag");
             Check(UpdateCatalog.Select(new[]{stable},"1.3.5-beta.9",null)==stable,"beta upgrades to same stable version");
+            Check(UpdateCatalog.Select(new[]{stable,beta},"1.3.4",null,true)==beta,"stable install that opts in to betas sees the greatest beta");
+            Check(UpdateCatalog.Select(new[]{Release("1.3.5",true)},"1.3.4",null,true)!=null,"opted-in stable install accepts a prerelease");
+            Check(UpdateCatalog.Select(new[]{stable,beta},"1.3.5-beta.1",null,false)==stable,"beta install that opts out follows stable releases only");
+            Check(UpdateCatalog.Select(new[]{beta},"1.3.4",null,false)==null,"opted-out stable install never sees betas");
+            Check(UpdateCatalog.Select(new[]{stable,beta},"1.3.4","1.3.6-beta.1",true)==stable,"skipping a beta still offers the lower stable release");
+            Check(UpdateDialog.Notes("**测试版**：说明\n## 新增支持的硬件\n- 迈从 `3554:FA09`\n  - 子项")=="测试版：说明"+Environment.NewLine+"【新增支持的硬件】"+Environment.NewLine+"• 迈从 3554:FA09"+Environment.NewLine+"  • 子项","release-note Markdown marks render as plain readable text");
+            Check(UpdateDialog.Notes("#123 和 C# 保持原样")=="#123 和 C# 保持原样","issue numbers are not mistaken for headings");
             var foreign=Release("1.3.5");foreign.Assets[0].Url="https://github.com/other/repo/releases/download/v1.3.5/"+UpdateTrust.ZipName("1.3.5");
             Reject(()=>UpdateCatalog.ValidateAssets(foreign,"1.3.5"),"foreign repository asset");
             var renamed=Release("1.3.5");renamed.Assets[0].Name="MyFinder-device-battery-v1.3.5-windows-x64.zip";Reject(()=>UpdateCatalog.ValidateAssets(renamed,"1.3.5"),"asset filename is case exact");
@@ -229,6 +236,8 @@ static class UpdateTests {
                 foreach(byte[] badZip in new[]{Zip("1.3.5"),Zip("1.3.6","another-app"),Zip("1.3.6",badHash:true)}){
                     File.WriteAllBytes(file,badZip);Reject(()=>UpdatePackageVerifier.ExtractAndValidate(file,Path.Combine(root,Guid.NewGuid().ToString("N")),"1.3.6",CancellationToken.None),"package metadata/hash mismatch");
                 }
+                {var optedOut=new Installer();var channelPipe=new UpdateDownload(new Http(),optedOut,"1.3.4",Path.Combine(root,"channel-install"),Path.Combine(root,"channel")) {AllowBeta=false};
+                Reject(()=>channelPipe.InstallForTests(Release("1.3.6-beta.1",true),CancellationToken.None,null,key.ToXmlString(false)),"opted-out stable install refuses a beta package");Check(optedOut.Starts==0,"no helper for a refused beta");}
                 var release=Release("1.3.6");string installRoot=Path.Combine(root,"中文 稳定安装");
                 for(int failure=0;failure<5;failure++){
                     http=new Http();Signed(http,key,zip,"1.3.6",failure==4?"wrong.zip":null,failure==0,failure==1,failure==3);

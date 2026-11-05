@@ -24,14 +24,15 @@ namespace AtkBatteryTray {
             var versionCard=new ThemedSection(Theme) {Name="VersionCard",Dock=DockStyle.Fill,Height=54};
             var versionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var title=Caption("发现新版本",true);title.Name="UpdateTitle";title.Margin=Padding.Empty;versionLayout.Controls.Add(title,0,0);
+            bool beta=release.Prerelease||UpdateVersion.Parse(release.Version).IsBeta;
+            var title=Caption(beta?"发现新测试版":"发现新版本",true);title.Name="UpdateTitle";title.Margin=Padding.Empty;versionLayout.Controls.Add(title,0,0);
             var versions=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,Margin=new Padding(0,4,0,0)};
             var current=Caption("当前 "+AppRuntime.Version+" → ");current.Margin=Padding.Empty;
             var next=Caption(release.Version);next.Name="NewVersion";next.ForeColor=Theme.Accent;next.Margin=Padding.Empty;
             versions.Controls.AddRange(new Control[]{current,next});versionLayout.Controls.Add(versions,0,1);versionCard.Controls.Add(versionLayout);layout.Controls.Add(versionCard,0,0);
             var notes=new ThemedReleaseNotes(Theme) {Name="ReleaseNotes",AccessibleName="发布说明",Text=Notes(release.Body),TabStop=true,Dock=DockStyle.Fill};
             var section=new ThemedTextBox(Theme,notes) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};layout.Controls.Add(section,0,1);
-            status=Caption(stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。",false,true);
+            status=Caption(stable&&beta?"测试版含待实机验证的功能，不想试用可跳过此版本。":stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。",false,true);
             status.Name="UpdateStatus";status.AutoSize=false;status.AutoEllipsis=true;status.Dock=DockStyle.Fill;status.Margin=Padding.Empty;
             statusArea=new ThemedSection(Theme) {Name="UpdateStatusCard",Dock=DockStyle.Fill};
             progress=new ThemedProgress(Theme) {Name="UpdateProgress",Dock=DockStyle.Bottom,Visible=false};
@@ -52,9 +53,17 @@ namespace AtkBatteryTray {
             cancel.Click+=delegate{if(downloading){if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";FocusAction(null);cancel.Enabled=false;}else Close();};
             FormClosing+=delegate(object sender,FormClosingEventArgs e){if(downloading&&!handedOff){e.Cancel=true;if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";}};
         }
-        static string Notes(string text){
+        // The notes box is plain text: show GitHub's Markdown headings, bold and code marks as
+        // readable text instead of raw symbols.
+        internal static string Notes(string text){
             var lines=UpdateText.Notes(text).Replace("\r\n","\n").Replace('\r','\n').Split('\n');
-            for(int i=0;i<lines.Length;i++)if(lines[i].StartsWith("- ",StringComparison.Ordinal))lines[i]="• "+lines[i].Substring(2);
+            for(int i=0;i<lines.Length;i++){
+                string line=lines[i].Replace("**","").Replace("`","");
+                string heading=line.TrimStart('#');
+                if(heading.Length<line.Length&&heading.StartsWith(" ",StringComparison.Ordinal))line="【"+heading.Trim()+"】";
+                else{int indent=line.Length-line.TrimStart(' ').Length;if(line.Substring(indent).StartsWith("- ",StringComparison.Ordinal))line=line.Substring(0,indent)+"• "+line.Substring(indent+2);}
+                lines[i]=line;
+            }
             return String.Join(Environment.NewLine,lines);
         }
         void SizeStatus(){
@@ -91,7 +100,7 @@ namespace AtkBatteryTray {
         readonly UpdateProcess installer;readonly IUpdateTransport http;readonly string data;
         readonly DateTime started=DateTime.UtcNow;readonly object gate=new object();
         readonly System.Threading.Timer timer;
-        UpdateChecker checker;UpdateRelease available;UpdateDialog dialog;
+        volatile UpdateChecker checker;bool? betaChoice;UpdateRelease available;UpdateDialog dialog;
         CancellationTokenSource checkCancel,downloadCancel;bool automaticInFlight,downloadCommitted;
         volatile bool disposed;int checking,installing;
         string status="尚未检查";
@@ -101,14 +110,14 @@ namespace AtkBatteryTray {
         internal string Version {get{return available==null?null:available.Version;}}
         internal bool BadgeVisible {get{return Available&&checker!=null&&checker.BadgeVisible(DeviceSettings.Current.ShowUpdateBadge,DeviceSettings.Current.AutoCheckUpdates);}}
         internal UpdateController(Control control,Action refresh,Action<string,string,bool> notify,IUpdateTransport transport=null,string dataDirectory=null,string executablePath=null,bool runTimer=true){
-            dispatch=control;changed=refresh;balloon=notify;data=dataDirectory??DeviceSettings.DataDirectory;
+            dispatch=control;changed=refresh;balloon=notify;data=dataDirectory??DeviceSettings.DataDirectory;betaChoice=DeviceSettings.Current.IncludeBetaUpdates;
             installer=new UpdateProcess(executablePath??Application.ExecutablePath,data);http=transport??new UpdateHttp(AppRuntime.Version);
             timer=new System.Threading.Timer(delegate{Check(true);},null,runTimer?0:Timeout.Infinite,60000);
         }
         void Post(Action action){if(disposed)return;try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});}catch(InvalidOperationException){}}
         void Initialize(){
             if(checker!=null)return;
-            checker=new UpdateChecker(http,Path.Combine(data,"update-state.json"),AppRuntime.Version,started);
+            checker=new UpdateChecker(http,Path.Combine(data,"update-state.json"),AppRuntime.Version,started) {IncludeBeta=delegate{return DeviceSettings.Current.IncludeBetaUpdates;}};
             var cached=checker.CachedRelease;if(cached!=null)Post(delegate{available=cached;changed();});
             try{UpdateDownload.CleanStale(Path.Combine(data,"updates"),DateTime.UtcNow);}catch(Exception){SafeDiagnostic.Transition("updates","update_cleanup_failed");}
             string path=Path.Combine(data,"update-result.json");
@@ -132,13 +141,14 @@ namespace AtkBatteryTray {
                     if(checker.ErrorCode!=null)SafeDiagnostic.Transition("updates",checker.ErrorCode);
                     if(release!=null){
                         bool notify=checker.MarkNotified(release.Version);
-                        Post(delegate{available=checker.CachedRelease;status="有新版本 "+release.Version;changed();if(automatic){if(notify&&available!=null)balloon("MyFinder 设备电量更新",status,true);}else ShowAvailable(true);});
+                        Post(delegate{available=checker.CachedRelease;if(available==null){if(!automatic)status="未发现新版本或检查已暂缓";changed();return;}status="有新版本 "+available.Version;changed();if(automatic){if(notify&&available!=null)balloon("MyFinder 设备电量更新",status,true);}else ShowAvailable(true);});
                     }else Post(delegate{var cached=checker.CachedRelease;if(automatic&&available==cached)return;available=cached;if(!automatic)status=checker.ErrorCode==null?"未发现新版本或检查已暂缓":"检查未完成，详情已记入诊断";changed();});
                 }catch(Exception){SafeDiagnostic.Transition("updates","update_check_failed");if(!automatic)Post(delegate{status="检查未完成，详情已记入诊断";changed();});}
                 finally{lock(gate){if(checkCancel==cancellation)checkCancel=null;}cancellation.Dispose();Interlocked.Exchange(ref checking,0);}
             });
         }
-        internal void ConfigurationChanged(){lock(gate){if(!DeviceSettings.Current.AutoCheckUpdates&&automaticInFlight&&checkCancel!=null)checkCancel.Cancel();}changed();}
+        internal void ConfigurationChanged(){lock(gate){if(!DeviceSettings.Current.AutoCheckUpdates&&automaticInFlight&&checkCancel!=null)checkCancel.Cancel();}var current=checker;bool betas=DeviceSettings.Current.IncludeBetaUpdates;
+            if(current!=null){available=current.CachedRelease;if(betaChoice.HasValue&&betaChoice.Value!=betas){current.ForgetLastCheck();betaChoice=betas;Check(true);}}betaChoice=betas;changed();}
         internal void Open(){if(available!=null)ShowAvailable(true);else Check(false);}
         void Viewed(UpdateDialog form,bool userInitiated){
             if(!userInitiated||form.IsDisposed||!form.Visible)return;
@@ -172,7 +182,7 @@ namespace AtkBatteryTray {
             ThreadPool.QueueUserWorkItem(delegate{
                 try{
                     if(!checker.DownloadsAllowed(DateTime.UtcNow))throw new InvalidOperationException("GitHub 暂时限制更新请求，请稍后再试。");
-                    var download=new UpdateDownload(http,installer,AppRuntime.Version,installer.InstallDirectory,Path.Combine(data,"updates"));
+                    var download=new UpdateDownload(http,installer,AppRuntime.Version,installer.InstallDirectory,Path.Combine(data,"updates")) {AllowBeta=DeviceSettings.Current.IncludeBetaUpdates};
                     long lastProgress=0;
                     download.Install(release,cancellation.Token,delegate(long bytes,long total){long now=Stopwatch.GetTimestamp();if(now-lastProgress<Stopwatch.Frequency/5&&bytes!=total)return;lastProgress=now;Post(delegate{if(!form.IsDisposed)form.Progress(bytes,total);});},delegate{
                         if(disposed)throw new OperationCanceledException();

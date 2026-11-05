@@ -55,14 +55,17 @@ namespace AtkBattery {
         internal string PageUrl {get{UpdateVersion.Parse(Version);return UpdateTrust.Repository+"/releases/tag/"+Uri.EscapeDataString(Tag);}}
     }
     internal static class UpdateCatalog {
-        internal static UpdateRelease Select(IEnumerable<UpdateRelease> releases,string current,string skipped){
+        // includeBeta is the user's "提醒测试版更新" choice; null keeps the installed channel
+        // (betas only for beta installs).
+        internal static UpdateRelease Select(IEnumerable<UpdateRelease> releases,string current,string skipped,bool? includeBeta=null){
             UpdateVersion installed;if(!UpdateVersion.TryParse(current,out installed))return null;
-            UpdateRelease best=null;UpdateVersion bestVersion=installed;
+            UpdateRelease best=null;UpdateVersion bestVersion=installed;bool betas=includeBeta??installed.IsBeta;
             foreach(var item in releases??new UpdateRelease[0]){
-                UpdateVersion candidate;if(item==null||item.Draft||!UpdateVersion.TryParse(item.Version,out candidate)||!installed.IsBeta&&(item.Prerelease||candidate.IsBeta)||candidate.CompareTo(bestVersion)<=0)continue;
+                UpdateVersion candidate;if(item==null||item.Draft||!UpdateVersion.TryParse(item.Version,out candidate)||!betas&&(item.Prerelease||candidate.IsBeta)||item.Version==skipped||candidate.CompareTo(bestVersion)<=0)continue;
                 best=item;bestVersion=candidate;
             }
-            return best!=null&&best.Version!=skipped?best:null;
+            // A skipped version is excluded above, so skipping a beta still offers a lower stable.
+            return best;
         }
         internal static Dictionary<string,UpdateAsset> ValidateAssets(UpdateRelease release,string version){
             if(release==null||release.Draft||release.Version!=version)throw new InvalidDataException("Release identity mismatch.");

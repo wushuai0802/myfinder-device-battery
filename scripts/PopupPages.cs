@@ -129,6 +129,7 @@ namespace AtkBatteryTray {
                 var clear=Row(217,"清除历史读数",null,"refresh");clear.Detail="关闭保留不删除历史，清除需单独操作";rows.Add(clear);
                 rows.Add(Section("更新"));rows.Add(Toggle(219,"自动检查更新",pref.AutoCheckUpdates));
                 rows.Add(Toggle(225,"托盘图标显示更新角标",pref.ShowUpdateBadge));
+                rows.Add(Toggle(227,"提醒测试版更新",pref.IncludeBetaUpdates));
                 rows.Add(Toggle(226,"自动检查反馈回复",pref.CheckFeedbackReplies));
             }else if(nav.Page==PopupPage.TrayIcons){
                 var firstGroup=GroupRow("group",TrayConfiguration.FirstName,TrayConfiguration.FirstId,TrayRule(owner,pref.TraySource,pref.TrayDeviceId));firstGroup.Id=600;rows.Add(firstGroup);

@@ -286,6 +286,7 @@ namespace AtkBatteryTray {
                 else if(id==219)pref.AutoCheckUpdates=!pref.AutoCheckUpdates;
                 else if(id==225)pref.ShowUpdateBadge=!pref.ShowUpdateBadge;
                 else if(id==226)pref.CheckFeedbackReplies=!pref.CheckFeedbackReplies;
+                else if(id==227)pref.IncludeBetaUpdates=!pref.IncludeBetaUpdates;
                 else if(id==217){owner.ClearReadingHistory();navigation.Notice="正在清除历史读数…";Invalidate();return;}
                 else if(id==218){pref.TrayDeviceId=pref.TrayDeviceId==control.DeviceKey?null:control.DeviceKey;}
                 else if(id>=252&&id<=255) {
@@ -600,7 +601,7 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(navigation.AudioDeviceKey).Append('|').Append(navigation.AudioDeviceName);
             visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.ThemeStyle).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.TrayDeviceId).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
             visible.Append('|').Append(preferences.VolumeCollapsed);
-            visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb()).Append('|').Append(preferences.CheckFeedbackReplies).Append('|').Append(owner.FeedbackReplies.Store.Unread);
+            visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(preferences.IncludeBetaUpdates).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb()).Append('|').Append(preferences.CheckFeedbackReplies).Append('|').Append(owner.FeedbackReplies.Store.Unread);
             visible.Append('|').Append(preferences.TrayIconStyle).Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint);
             foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId);foreach(string id in group.Members)visible.Append('|').Append(id);}
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);

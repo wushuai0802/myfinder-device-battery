@@ -100,6 +100,8 @@ namespace AtkBattery {
         readonly IUpdateTransport transport;readonly string path,current;readonly DateTime started;
         readonly object gate=new object();readonly UpdateState state;
         internal string ErrorCode {get;private set;}
+        internal Func<bool> IncludeBeta;
+        bool? Betas {get{var include=IncludeBeta;return include==null?(bool?)null:include();}}
         internal UpdateChecker(IUpdateTransport http,string statePath,string version,DateTime startedAt){
             transport=http;path=statePath;current=version;started=startedAt;
             if(File.Exists(path)){
@@ -110,7 +112,7 @@ namespace AtkBattery {
         void Save(){UpdatePaths.NoLinks(path);AtomicText.Write(path,UpdateJson.Text(state));}
         internal UpdateRelease CachedRelease {get{lock(gate){
             try{
-                var release=UpdateCatalog.Select(new[]{state.AvailableRelease},current,state.SkippedVersion);
+                var release=UpdateCatalog.Select(new[]{state.AvailableRelease},current,state.SkippedVersion,Betas);
                 if(release!=null)UpdateCatalog.ValidateAssets(release,release.Version);return release;
             }catch(Exception){return null;}
         }}}
@@ -127,7 +129,7 @@ namespace AtkBattery {
             try {
                 var bytes=UpdateNetwork.Fetch(transport,new Uri(UpdateTrust.ApiUrl+"?per_page=100"),2097152,token,null);
                 var releases=UpdateJson.Read<UpdateRelease[]>(bytes);UpdateRelease candidate;
-                lock(gate)candidate=UpdateCatalog.Select(releases,current,state.SkippedVersion);
+                bool? betas=Betas;lock(gate)candidate=UpdateCatalog.Select(releases,current,state.SkippedVersion,betas);
                 if(candidate!=null){
                     var assets=UpdateCatalog.ValidateAssets(candidate,candidate.Version);
                     // Bound the cached metadata just like the dialog notes; retain only required assets.
@@ -149,6 +151,9 @@ namespace AtkBattery {
             return date>until?date:until;
         }
         internal bool MarkNotified(string version){lock(gate){if(state.SkippedVersion==version)return false;UpdateVersion previous;if(UpdateVersion.TryParse(state.NotifiedVersion,out previous)&&UpdateVersion.Parse(version).CompareTo(previous)<=0)return false;state.NotifiedVersion=version;Save();return true;}}
+        // The cache holds one release chosen under the previous beta choice; let the next
+        // automatic check run now (still honouring any server back-off).
+        internal void ForgetLastCheck(){lock(gate){state.LastCheckUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);try{Save();}catch(Exception){}}}
         internal void Skip(string version){UpdateVersion.Parse(version);lock(gate){state.SkippedVersion=version;Save();}}
     }
     internal interface IUpdateInstaller {
@@ -161,6 +166,7 @@ namespace AtkBattery {
     internal sealed class UpdateDownload {
         readonly IUpdateTransport transport;readonly IUpdateInstaller installer;readonly string current,installDirectory;
         internal readonly string UpdatesDirectory;
+        internal bool? AllowBeta;
         internal UpdateDownload(IUpdateTransport http,IUpdateInstaller runner,string version,string target,string updatesDirectory){transport=http;installer=runner;current=version;installDirectory=target;UpdatesDirectory=Path.GetFullPath(updatesDirectory);}
         internal void Install(UpdateRelease release,CancellationToken token,Action<long,long> progress,Action commit=null){InstallSigned(release,token,progress,UpdateTrust.PublicKeyXml,commit);}
 #if UPDATE_TESTS
@@ -179,7 +185,7 @@ namespace AtkBattery {
         void InstallSigned(UpdateRelease release,CancellationToken token,Action<long,long> progress,string key,Action commit){
             token.ThrowIfCancellationRequested();if(!installer.IsStable(token))throw new InvalidOperationException("Portable copies cannot be updated in place.");
             string version=release.Version;var targetVersion=UpdateVersion.Parse(version);var installedVersion=UpdateVersion.Parse(current);
-            if(targetVersion.CompareTo(installedVersion)<=0||!installedVersion.IsBeta&&(release.Prerelease||targetVersion.IsBeta))throw new InvalidDataException("Update downgrade or channel mismatch refused.");
+            if(targetVersion.CompareTo(installedVersion)<=0||!(AllowBeta??installedVersion.IsBeta)&&(release.Prerelease||targetVersion.IsBeta))throw new InvalidDataException("Update downgrade or channel mismatch refused.");
             var assets=UpdateCatalog.ValidateAssets(release,version);
             CheckSpace();
             string versionDirectory=UpdatePaths.Resolve(UpdatesDirectory,version);UpdatePaths.NoLinks(versionDirectory);
