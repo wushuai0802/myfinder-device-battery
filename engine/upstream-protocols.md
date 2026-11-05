@@ -2571,6 +2571,96 @@ and behaves correctly through charging and sleep/wake remains unverified.
 Actual report captures and authorized hardware acceptance are still needed;
 the implementation fails closed if runtime descriptor proof is unavailable.
 
+### MOONDROP GM01 Pro (35D8:0133)
+
+**Evidence and identity.** Static inspection of the supplied official MOONDROP
+Hub snapshot `.ai/evidence/moondrophub/index-BJe6cqeQ.js`, SHA256
+`5385b8f8a65643aa5cb65f54e865aa87cef91474db1669743a86904406698f13`.
+`oj=13784`, `ij/pR`, `iy=Qp` map VID `35D8`, PID `307` (`0133`) to `Qp.config`:
+`GM01 Pro`, `HEADPHONE`, report ID `75` (`4B`), feature `zP()`. This is a
+headset, not a CompX mouse. Provider `moondrop` exposes only this exact pair,
+name `MOONDROP GM01 Pro`, kind `headset`, level **C**. No vendor code is copied
+or executed; the local implementation uses protocol facts from static text.
+REA analyzed 15 JavaScript files without parse failures; its semantic graph
+was partial at its node ceiling, so the following anchors were also inspected
+directly. Analysis evidence:
+`ev_26296df6304414d418feebf35f8902c5e7976c091a19f2a0832228a5378bb7f9`.
+
+**Request and reply.** `et.OP_READ=128`, `zP.command=39`, `UG` and
+`em.buildCommand/queryCommand` establish WebHID output report `4B` with exactly
+three payload bytes `80 27 00` (OP, CMD, zero request payload length).
+`Xj` calls `sendReport`, then accepts an input event with the same report ID;
+this is not a feature-report protocol. The hidapi frame is
+`4B 80 27 00` plus zeros to the runtime-proven output length. No checksum is
+present in this request builder. No fixed 17/64/65-byte report size is inferred.
+`Sc.PAYLOAD=Lt=3`, `UG` calls the decoder with `Lt`, and `zP.decode` reads
+`Yt(reply, Lt+4) !== 0 ? Yt(reply, Lt+5) : 0`. Thus WebHID indices 7 and 8
+are the validity gate and raw percentage; hidapi indices are **8 and 9**.
+`Yt` reads an unsigned byte (0..255); this reader accepts only **0..100** and
+does not clamp or invent a scale. Gate zero or a truncated response yields
+no reading, rather than the Hub helper's fallback zero. A valid gate and a
+genuine zero percentage remain representable. The ancillary UI snapshot
+`chunks/index-B-KWtA3L.js`, `A9/DeviceBattery`, displays this value as percent
+and does not pass charging state. No charging field was found in this path;
+`charging_known=False` keeps the public value unknown.
+
+The reader additionally requires exact runtime-proven input length, report
+ID `4B`, CMD `27` and a declared payload length of at least 6, no larger than
+the available report. CMD/LEN use the shared three-byte framing (`Sc`, `Lt`,
+`tb.readFirmwareVersion`, `iR`); **battery CMD echo and LEN values are a local
+conservative correlation guard, not an observed GM01 reply capture**. The
+Hub transport itself only correlates report ID, excluding OTA `iR` frames.
+No response OP, checksum, charging, voltage or percentage resolution is
+assumed. Command `4F` OTA/control replies, other commands and request echoes
+cannot become readings under the local guard. The actual response header
+must still be checked on hardware; a different header fails closed.
+
+**Preflight and descriptor boundary.** `jp/F8/N8` wrap async device methods;
+`Qp.beforeHook/pingDevice` query `OP_READ/DONGLE_STATUS` (`80 31 00`) and delay
+50 ms before checking the returned flag. This is a read-only reachability
+guard, with no flash/EQ/initialization write. `UG`'s battery getter directly
+calls `queryCommand`; its settle object only waits. The implementation sends
+only the battery query and omits even that status read. Static analysis does
+not prove a cold receiver answers the standalone battery query; silence is
+accepted as no measurement, with no fallback initialization or retry.
+
+The task's #126 diagnostic identifies `35D8:0133 "MOONDROP GM01 Pro"` and
+includes `FF02:0002`, but does **not** establish its report lengths or prove
+that this collection owns `4B`. The Hub's `tf/vg` selects by output report ID
+and input capability, not a hard-coded usage. Locally, only a **unique
+FF02:0002** collection per resolved physical receiver is a candidate. Passive
+Windows preparsed-data inspection must prove input and output `4B` byte-array
+sizes before any query handle opens. Input must hold at least 10 bytes and
+output at least 4, both at most 4096 including ID; `4B` must equal the
+collection maximum in each direction. Unknown, inconsistent, non-byte,
+ambiguous, or shorter-than-maximum `4B` descriptors are rejected. Other
+collections are never tried. This is a runtime condition, not a claim that
+#126 or the web snapshot supplies a full descriptor. Unsupported descriptor
+shapes remain disabled rather than guessed.
+
+**Commands never sent.** `et.OP_WRITE=01`: EQ flash save (`01`), offset flash
+save (`04`), flash clear (`05`, target ALL=`04`), active EQ (`0F`), PEQ update
+(`09`), EQ coefficients (`0A`), DAC offset/global gain (`03`), pre-gain (`23`),
+and control-panel writes (ANC `25/33`, gain `26`, LED `28`, prompt tone `2B`,
+dual-mic ENC `34`). No generic command API is exposed. OTA command `4F`
+(`oR`, `zd/cW/bW/EW`) and its subcommands, including START_OTA `02`,
+ENTER_OTA_MODE `03`, BLOCK_RESP `05`, FINISH `08`, REBOOT `09`, CANCEL `0B`
+and LINK_MODE `0C`, are never sent. Nor are status, identity, firmware-version,
+pairing or wake requests. One battery write is followed by at most 32 reads
+within one second; short writes, silence, invalid data and ordinary HID I/O
+failure produce no new reading or provider error. Existing engine history
+can remain unconfirmed; it is not refreshed as a new observation.
+
+Registration includes server dispatch, the offline ID index, descriptor
+discovery, the compatibility catalog and its generated documentation. The
+brand-disable registry in `device_pack.py` adds only `moondrop`, preserving
+the existing required equality with registered brand readers. Synthetic
+tests cover wire bytes, offsets/ranges, guards before opening, no other
+commands, deadlines, cleanup, child isolation, history, and fake Windows
+descriptor discovery/caching. No hardware, network or vendor script is used.
+Actual collection/lengths, response headers, standalone cold-start queries,
+freshness while off, charging and sleep/wake remain unverified.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

@@ -27,6 +27,7 @@ PROVIDERS = (
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
     ("mchose_headset", "MchoseHeadsetProvider"),
     ("atk_headset", "AtkHeadsetProvider"),
+    ("moondrop", "MoondropProvider"),
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
     ("eweadn_s9pro", "EweadnS9ProProvider"),
     ("vgn_keyboard", "VgnKeyboardProvider"),
@@ -58,6 +59,7 @@ PROVIDER_VIDS = {
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D, 0x3837),
     "atk_headset": (0x373B,),
+    "moondrop": (0x35D8,),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "eweadn_s9pro": (0x372E,),
     "vgn_keyboard": (0x320F,),
@@ -529,6 +531,9 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     inventory = device_pack.select_inventory(name, inventory)
     if name == "atk_headset":
         return len({d.get("product_id") for d in inventory
+                    if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
+    if name == "moondrop":
+        return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory

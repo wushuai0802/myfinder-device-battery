@@ -42,6 +42,7 @@ TABLES = {
     "mchose": ("A5_PIDS",), "mchose_headset": ("PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS",),
     "mchose_qhw_keyboard": ("PIDS",), "mchose_glw_keyboard": ("PIDS",),
     "mchose_by_keyboard": ("PIDS",),
+    "moondrop": ("PIDS",),
     "g3m": ("PIDS",), "eweadn": ("PIDS",), "flydigi": ("PIDS",),
     "eweadn_s9pro": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
