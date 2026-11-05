@@ -20,6 +20,7 @@ from providers.profiles import builtin_ids, profiles
 MAX_BYTES = 256 * 1024
 MAX_ENTRIES = 2000
 BRAND_PROVIDERS = frozenset((
+    "atk_headset",
     "razer", "audeze", "wlmouse", "mchose", "mchose_headset", "hyperx_alpha2", "hyperx_cloud3",
     "mchose_qhw_keyboard", "mchose_glw_keyboard",
     "mchose_by_keyboard",
