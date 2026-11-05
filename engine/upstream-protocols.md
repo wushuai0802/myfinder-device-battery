@@ -1713,17 +1713,29 @@ both existing paths without duplicate registrations or changes to either file.
 The compatibility catalog now includes this receiver under the C-level Pulsar
 reader and removes its D-level observed-only entry.
 
-### Dareu EM901 260D:1074 / 260D:1090 — static research only
+### Dareu EM901 260D:1074
 
-**Not implemented; no compatibility claim.** The supplied official EM901X
-AIM-WL driver does not use the proposed BY `13 / 4A / 20-byte` battery path.
-Its traced battery path uses **17-byte Feature report `08`, command `04`, and
-a separate input handle expecting report `09`**. The exact usagePage/usage of
-those handles and the safety/necessity of its initialization exchange are not
-established. Per the task's evidence gate, neither PID is added to a provider,
-the server, the offline ID index, descriptor discovery, or the compatibility
-catalog. Similar collection lists alone must not route this mouse to a BY
-keyboard reader. Intended kind/grade, if later established, are `mouse` / C.
+**2026-11-06: integrated, C / 待实机验证; 260D:1090 remains disabled.** The
+third-round brief supplies #81's `FF02:0002` control collection and authorizes
+the official driver's **17-byte Feature report `08`, command `04`, followed
+by input report `09`** as a separate CompX transport. `providers/dareu.py`
+reuses only Pulsar's fixed power-frame/checksum constructor, not its output
+transport, input-08 parser, identification or DPI paths. The displayed name
+is `Dareu EM901`, kind `mouse`. This is not the BY `13 / 4A / 20-byte` path.
+
+Only exact `260D:1074` and a unique `FF02:0002` collection per physical group
+are eligible. Before opening a query handle, runtime descriptor evidence must
+prove Feature `08` is 17 bytes (also the collection's feature maximum) and
+Input `09` exists with a known length of at least 8 bytes. Input lengths are
+bounded at 4096 bytes; the collection maximum must agree with the per-ID map.
+`topology.py` enables `battery_hid.byte_report_sizes` only for this exact
+identity/collection, for feature and input directions. Its descriptor handles
+have zero access and send nothing. Missing/unsupported descriptors, wrong IDs,
+wrong lengths or ambiguous collections never open a battery query handle.
+The feature and input proofs must belong to the same collection; no sibling
+fallback or active collection-association probe is used. `260D:1090` appears
+in the configuration below but lacks the supplied #81 collection evidence,
+so it is not registered or enabled for descriptor proof.
 
 #### Source identity and analysis boundary
 
@@ -1821,24 +1833,41 @@ chain. That bounded finding does not prove one is unnecessary on hardware.
 | Identification / status / EEPROM read | Commands `01` (random `CheckPsd`), `03` (connection status), `08` (EEPROM read at `0x449460` / `0x48860`), `0E` (current-profile read at `0x448E80` / `0x48280`) and `0F` (getter at `0x449AD0` / `0x48ED0`) are distinct from battery `04`. Their presence does not authorize copying the initialization sequence. |
 | Pairing and firmware | No exact pairing, bootloader or firmware-write frame was recovered in the inspected HID senders/callers. `tc_msg8=Firmware Update` and the `ShowFWUpdate` configuration key are UI evidence only; the latter defaults to zero and is absent from this Cfg.ini. Do not borrow presumed `05`/`0D`/`B0`/`B1` meanings from other drivers, run the updater, or infer these operations are absent from every version. |
 
-#### Remaining evidence gate and verification
+#### Battery-only implementation, validation and remaining boundaries
 
-Before implementation, obtain passive report descriptors for both exact PIDs
-and establish the command/input usagePage/usage, report IDs and individual
-17-byte report sizes, their physical-parent relationship, and a documented
-safe standalone battery/identification sequence. A separate authorized hardware
-acceptance would need request/reply captures, charging transitions, and
-sleep/wake/freshness checks. The current task forbids hardware access, and the
-supplied collection list does not fill those gaps. Neither a BY fallback nor
-blind probing of every 17-byte collection is enabled.
+Each eligible poll sends exactly one `send_feature_report` (`HidD_SetFeature`)
+with the 17 bytes above, then reads input reports for at most one second and
+32 reads. It never uses output `write` or `get_feature_report`; a failed/short
+send is not retried. The receive buffer uses the descriptor's input maximum,
+and an accepted reply must have Input `09`'s exact proven length, report ID
+`09`, command `04`, status byte 2 equal to zero and byte 6 in `0..100`.
+Byte 7 is charging whenever nonzero. Command correlation follows the driver's
+`WaitNotify`; report ID and length checks are additional local safeguards.
+The inspected getter/queue path does **not** validate a reply checksum, so
+this reader does not impose Pulsar's unproven reply-checksum rule. No voltage
+or other fields are inferred. Silence/sleep or invalid replies produce no new
+reading and no error; there is no setup, retry, wake, pairing or firmware
+fallback. In particular, commands `02`, `07`, `09` and `10` are never sent.
 
-The two required offline suites passed (684 engine tests and 332 repository
-Python tests). They validate the unchanged implementation; they are **not**
-EM901 protocol or hardware acceptance. No synthetic provider tests were added
-because no provider or parser was implemented. The repository suite emits its
-existing `issue_digest.py` unclosed-file ResourceWarnings; no unrelated test or
-framework was changed. Only this protocol record is changed among tracked
-files; registration and generated compatibility documentation stay unchanged.
+The server, offline ID index and C-level compatibility catalog register only
+`260D:1074`; `device_pack.py` also registers the reader in its brand-disable
+allow-list, preserving the existing provider/disable registry invariant.
+The marked generated documentation reflects that same catalog.
+Synthetic provider tests cover the exact request bytes, feature-only send,
+input-09 parser, status/range/ID/length rejection, nonzero charging, deliberately
+unchecked checksum bytes, descriptor/collection rejection before opening,
+bounded silence, handle cleanup and absence of all non-battery commands.
+Fake Windows descriptor tests cover feature/input proof, caching and recovery
+from incomplete proof without device I/O. The required offline suites also
+retain the existing Pulsar tests; synthetic success is not hardware acceptance.
+
+The prior static driver findings above are reused; no evidence EXE/DLL is run
+and no hardware or network is accessed in this implementation. Whether the
+real receiver exposes both reports on the required collection, answers a
+standalone `04` without the vendor's initialization, reports fresh percentages,
+and behaves correctly through charging and sleep/wake remains unverified.
+Actual report captures and authorized hardware acceptance are still needed;
+the implementation fails closed if runtime descriptor proof is unavailable.
 
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
