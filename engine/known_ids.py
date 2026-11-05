@@ -46,6 +46,7 @@ TABLES = {
     "vgn_keyboard": ("PIDS",),
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
+    "dareu": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),

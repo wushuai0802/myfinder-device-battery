@@ -250,6 +250,14 @@ def discover(paths, excluded=(), *, full=False):
                 from battery_hid import byte_report_sizes
                 info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
                 caps_complete = bool(info["input_report_sizes"] and "7" in info["input_report_sizes"])
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x260D, 0x1074, 0xFF02, 0x0002):
+                from battery_hid import byte_report_sizes
+                info.update(feature_report_length=caps.feature,
+                            feature_report_sizes=byte_report_sizes(hid, data, caps, 2),
+                            input_report_sizes=byte_report_sizes(hid, data, caps, 0))
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("feature_report_sizes", "input_report_sizes"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x1915, 0xAE1C, 0xFFA0, 0x0001),
                     (0x372E, 0x1026, 0xFF00, 0x0001),

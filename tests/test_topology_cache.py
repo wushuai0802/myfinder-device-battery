@@ -231,6 +231,93 @@ class DescriptorCacheTests(unittest.TestCase):
         self.hid.HidP_GetCaps.side_effect = caps
         self.hid.HidP_GetValueCaps.side_effect = fields
 
+    def dareu_descriptor(self, identity=(0x260D, 0x1074), collection=(0xFF02, 2)):
+        self.identities[PATH_A] = identity
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.input, value.feature = 17, 17
+            value.iv, value.fv = 1, 1
+            return 0x00110000
+
+        def fields(report_type, values, length, data):
+            self.assertIn(report_type, (0, 2))  # Never inspect output reports.
+            values[0].report = 9 if report_type == 0 else 8
+            values[0].bits, values[0].count = 8, 16
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetValueCaps.side_effect = fields
+
+    def test_dareu_feature_and_input_proof_is_descriptor_only_and_cached(self):
+        from providers import dareu
+        self.dareu_descriptor()
+        first, = self.scan([PATH_A])
+        self.assertEqual(first["feature_report_sizes"], {"8": 17})
+        self.assertEqual(first["input_report_sizes"], {"9": 17})
+        self.assertEqual((first["feature_report_length"], first["input_report_length"]), (17, 17))
+        self.assertEqual(dareu.DareuProvider()._pick([first]), first)
+        self.assertEqual([call.args[0] for call in self.hid.HidP_GetValueCaps.call_args_list], [2, 0])
+        # Only a zero-access descriptor handle is opened, never a query handle.
+        self.assertEqual(self.kernel.CreateFileW.call_args.args[1], 0)
+        self.kernel.CreateFileW.reset_mock()
+        self.assertEqual(self.scan([PATH_A]), [first])
+        self.kernel.CreateFileW.assert_not_called()
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
+    def test_dareu_incomplete_feature_or_input_proof_is_retried_without_query(self):
+        from providers import dareu
+        for failed_type in (0, 2):
+            for defect in ("failure", "nonbyte", "alias", "partial"):
+                with self.subTest(report_type=failed_type, defect=defect):
+                    self.cache.clear()
+                    self.dareu_descriptor()
+                    original = self.hid.HidP_GetValueCaps.side_effect
+
+                    def fields(report_type, values, length, data):
+                        result = original(report_type, values, length, data)
+                        if report_type == failed_type:
+                            if defect == "failure":
+                                return 0
+                            if defect == "nonbyte":
+                                values[0].bits = 16
+                            elif defect == "alias":
+                                values[0].alias = 1
+                            elif defect == "partial":
+                                ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+                        return result
+
+                    self.hid.HidP_GetValueCaps.side_effect = fields
+                    info, = self.scan([PATH_A])
+                    self.assertIsNone(dareu.DareuProvider()._pick([info]))
+                    self.assertNotIn(PATH_A, self.cache)
+                    self.dareu_descriptor()
+                    recovered, = self.scan([PATH_A])
+                    self.assertEqual(dareu.DareuProvider()._pick([recovered]), recovered)
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
+    def test_dareu_descriptor_proof_is_not_enabled_for_other_ids_or_collections(self):
+        for identity, collection in (((0x260D, 0x1090), (0xFF02, 2)),
+                                     ((0x260D, 0x1075), (0xFF02, 2)),
+                                     ((0x3554, 0x1074), (0xFF02, 2)),
+                                     ((0x260D, 0x1074), (0xFF04, 2)),
+                                     ((0x260D, 0x1074), (0xFF02, 1))):
+            with self.subTest(identity=identity, collection=collection):
+                self.cache.clear()
+                self.hid.HidP_GetValueCaps.reset_mock()
+                self.dareu_descriptor(identity, collection)
+                info, = self.scan([PATH_A])
+                self.assertNotIn("feature_report_sizes", info)
+                self.assertNotIn("input_report_sizes", info)
+                self.hid.HidP_GetValueCaps.assert_not_called()
+
     def test_pulsar_link8k_report_proof_is_descriptor_only_and_cached(self):
         self.batch3_descriptor((0x3710, 0x5501), (0xFF02, 2), {8: 17}, {8: 17})
         first, = self.scan([PATH_A])
