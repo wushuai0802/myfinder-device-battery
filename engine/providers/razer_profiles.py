@@ -11,6 +11,8 @@ RAZER_VID = 0x1532
 # 0x00CB Basilisk V3 35K (a wired-only mouse) and 0x0095 Orochi V2 over Bluetooth
 # (Windows' own Bluetooth battery value already covers it). tests/test_razer.py holds a
 # copy of that OpenRazer list and checks this table against it.
+# The Viper V3 Pro SE pair below additionally follows OpenRazer's mouse driver
+# IDs and charge-level cases; see upstream-protocols.md for the source facts.
 KNOWN = {
     0x0528: ("Razer BlackShark V2 Pro (2020)", 0x3F),
     0x0555: ("Razer BlackShark V2 Pro (2023)", 0x3F),
@@ -94,6 +96,8 @@ KNOWN = {
     0x00D4: ("Razer Basilisk Mobile", 0x1F),
     0x00D6: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
     0x00D7: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
+    0x00DE: ("Razer Viper V3 Pro SE", 0x1F),
+    0x00DF: ("Razer Viper V3 Pro SE", 0x1F),
 
     # Keyboards with a battery. OpenRazer's RazerBlackWidowV3ProWired (0x025A) lists
     # get_battery/is_charging, and the wireless model (0x025C) inherits that class.

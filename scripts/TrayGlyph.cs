@@ -60,7 +60,7 @@ namespace AtkBatteryTray {
                     Color gray=LevelColor(null,dark),foreground=VisualDesign.HighContrast?SystemColors.WindowText:dark?Color.FromArgb(244,246,248):Color.FromArgb(27,36,48);
                     Color symbol=percent.HasValue&&!stale?foreground:gray;
                     if(updateBadge.HasValue)g.TranslateTransform(-4,0);
-                    if(kind=="mouse"||kind=="keyboard"||kind=="headset")CompactRenderer.DrawSymbol(g,kind,new RectangleF(4,1,24,19),symbol);
+                    if(kind=="mouse"||kind=="keyboard"||kind=="headset"||kind=="gamepad")CompactRenderer.DrawSymbol(g,kind,new RectangleF(4,1,24,19),symbol);
                     else {
                         using(var pen=new Pen(symbol,1.9f))using(var shape=VisualDesign.RoundRect(7,2,18,17,3)){
                             g.DrawPath(pen,shape);g.DrawLine(pen,12,6,20,6);g.DrawLine(pen,12,10,20,10);g.DrawEllipse(pen,14.5f,13,3,3);

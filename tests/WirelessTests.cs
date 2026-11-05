@@ -16,12 +16,44 @@ static class WirelessTests {
     static WirelessDevice Device(string suffix,string kind,int level,bool approximate=false) {
         return new WirelessDevice {Id="device-"+suffix.PadLeft(24,'0'),Name=kind=="keyboard"?"Lofree Hyzen":kind=="headset"?"Razer Headset":"Logitech Mouse",Kind=kind,Percent=level,Fresh=true,Online=true,Provider="fixture",Transport="USB / 2.4G",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),Approximate=approximate};
     }
-    static Bitmap Scene(TrayContext owner,WirelessLayout layout,PanelFeedback feedback) {
+    static Bitmap Scene(TrayContext owner,WirelessLayout layout,PanelFeedback feedback,bool dark=false) {
         var image=new Bitmap(layout.Size.Width,layout.Size.Height,PixelFormat.Format32bppPArgb);
-        using(var drawing=Graphics.FromImage(image)){drawing.Clear(Color.Transparent);CompactRenderer.PaintWireless(drawing,owner,layout,false,feedback);}return image;
+        using(var drawing=Graphics.FromImage(image)){drawing.Clear(Color.Transparent);CompactRenderer.PaintWireless(drawing,owner,layout,dark,feedback);}return image;
     }
     static bool Changed(Bitmap left,Bitmap right,RectangleF rect) {
         for(int y=(int)rect.Top;y<Math.Min(left.Height,rect.Bottom);y++)for(int x=(int)rect.Left;x<Math.Min(left.Width,rect.Right);x++)if(left.GetPixel(x,y)!=right.GetPixel(x,y))return true;return false;
+    }
+    static void GamepadPresentation(TrayContext owner,string output) {
+        var previous=DeviceSettings.Current;
+        try {
+            foreach(string style in new[]{"ocean","native","amber","mist"})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true}) {
+                var pref=previous.Clone();pref.ThemeStyle=style;DeviceSettings.UseTransientConfiguration(pref);VisualDesign.HighContrastOverride=contrast;
+                foreach(string kind in new[]{"gamepad","unknown","info"}) {
+                    var device=Device("pad",kind,65);device.Name="Flydigi APEX5";owner.WirelessDevices=new[]{device};
+                    var layout=WirelessLayout.Build(owner,0,1000);
+                    using(var card=Scene(owner,layout,new PanelFeedback(),dark))using(var expected=new Bitmap(14,19,PixelFormat.Format32bppPArgb)) {
+                        using(var g=Graphics.FromImage(expected)) {
+                            g.Clear(card.GetPixel(22,15));g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                            CompactRenderer.DrawSymbol(g,kind=="gamepad"?"gamepad":"info",new RectangleF(0,0,14,19),ThemePalette.Current(dark).Foreground);
+                        }
+                        using(var actual=card.Clone(new Rectangle(15,17,14,19),PixelFormat.Format32bppPArgb))
+                            Check(!Changed(actual,expected,new RectangleF(0,0,14,19)),kind+" card uses its symbol and theme foreground in "+style+" / "+dark+" / "+contrast);
+                        if(kind=="gamepad")card.Save(Path.Combine(output,"gamepad-"+style+"-"+(dark?"dark":"light")+(contrast?"-contrast":"")+".png"));
+                    }
+                    var rows=PopupPages.Build(owner,new PopupNavigation {Page=PopupPage.Device,SelectedDeviceKey=device.Id,SelectedDeviceName=device.Name},false);
+                    Check(rows.Exists(delegate(PopupControl row){return row.Information&&row.Text=="类型"&&row.Value==(kind=="gamepad"?"手柄":"无线设备");}),kind+" detail type label");
+                }
+                using(var pad=new Bitmap(40,40))using(var info=new Bitmap(40,40)) {
+                    using(var g=Graphics.FromImage(pad))CompactRenderer.DrawSymbol(g,"gamepad",new RectangleF(0,0,40,40),ThemePalette.Current(dark).Foreground);
+                    using(var g=Graphics.FromImage(info))CompactRenderer.DrawSymbol(g,"info",new RectangleF(0,0,40,40),ThemePalette.Current(dark).Foreground);
+                    Check(Changed(pad,info,new RectangleF(0,0,40,40)),"gamepad has a distinct silhouette from info");
+                }
+                foreach(int size in new[]{16,20,24,32})using(var pad=TrayGlyph.RenderDevice(65,false,dark,false,size,"gamepad"))using(var unknown=TrayGlyph.RenderDevice(65,false,dark,false,size,"unknown"))using(var legacy=TrayGlyph.RenderDevice(65,false,dark,false,size,"device")) {
+                    Check(Changed(pad,unknown,new RectangleF(0,0,size,size*.62f)),"gamepad tray symbol differs from the generic device at "+size);
+                    Check(!Changed(unknown,legacy,new RectangleF(0,0,size,size)),"unknown tray types keep the existing fallback at "+size);
+                }
+            }
+        }finally {VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
     }
     [STAThread] static int Main(string[] args) {
         if(args.Length>0&&args[0]=="-I") {
@@ -42,6 +74,7 @@ static class WirelessTests {
             var cache=Path.Combine(output,"wireless-cache.json");ReadingCache.SaveWireless(cache,snapshot.Devices);var restored=ReadingCache.LoadWireless(cache);
             Check(restored.Length==1&&restored[0].Percent==42&&!restored[0].Fresh&&!restored[0].Online,"disk cache cannot claim a connected device");
             owner=new TrayContext(false,delegate(bool include){return new MouseSnapshot();},delegate(int stage){return null;});
+            owner.NativeMousePresent=false;owner.GenericReady=true;GamepadPresentation(owner,output);
             owner.NativeMousePresent=false;owner.GenericReady=true;owner.WirelessDevices=new[]{Device("1","mouse",75),Device("2","keyboard",42,true),Device("3","headset",19)};
             var navigation=new PopupNavigation();var layout=WirelessLayout.Build(owner,0,500);
             Check(layout.Cards.Count==3&&layout.Size==new Size(260,282),"three generic cards retain their compact geometry above one shared volume row");

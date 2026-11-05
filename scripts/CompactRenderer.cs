@@ -52,6 +52,20 @@ namespace AtkBatteryTray {
                     using(var shape=VisualDesign.RoundRect(1,4,18,13,2.5f))g.DrawPath(pen,shape);
                     for(int row=0;row<2;row++)for(int column=0;column<4;column++)g.DrawLine(pen,4+column*4,7+row*3,4.5f+column*4,7+row*3);
                     g.DrawLine(pen,6,13,14,13);
+                }else if(name=="gamepad") {
+                    using(var shape=new GraphicsPath()) {
+                        shape.AddBezier(6,5,3.5f,5,3,7,2.5f,9);
+                        shape.AddBezier(2.5f,9,1,14,1.5f,16,3.5f,16);
+                        shape.AddBezier(3.5f,16,5,16,6,13,7.5f,13);
+                        shape.AddLine(7.5f,13,12.5f,13);
+                        shape.AddBezier(12.5f,13,14,13,15,16,16.5f,16);
+                        shape.AddBezier(16.5f,16,18.5f,16,19,14,17.5f,9);
+                        shape.AddBezier(17.5f,9,17,7,16.5f,5,14,5);
+                        shape.AddBezier(14,5,11,5.8f,9,5.8f,6,5);
+                        shape.CloseFigure();g.DrawPath(pen,shape);
+                    }
+                    g.DrawLine(pen,4.5f,9,8.5f,9);g.DrawLine(pen,6.5f,7,6.5f,11);
+                    g.DrawEllipse(pen,12,9,1.4f,1.4f);g.DrawEllipse(pen,14.5f,7,1.4f,1.4f);
                 }else if(name=="chevron"||name=="back") {
                     g.DrawLines(pen,name=="back"?new[]{new PointF(12,4),new PointF(6,10),new PointF(12,16)}:new[]{new PointF(7,4),new PointF(13,10),new PointF(7,16)});
                 }else if(name=="collapse"||name=="expand") {
@@ -267,7 +281,7 @@ namespace AtkBatteryTray {
                     if(subtitle==null)subtitle=WirelessLayout.Subtitle(card.Device,card.Battery);
                     int dpiCount=WirelessLayout.DpiStageCount(card.Device);
                     if(dpiCount>0)subtitle=WirelessLayout.DpiSubtitle(card.Device,owner.DesiredWirelessDpi(card.Id,card.Device.Dpi.TargetToken),owner.WirelessDpiFailure(card.Id,card.Device.Dpi.TargetToken)??card.Device.Dpi.Error);
-                    string icon=card.Kind=="keyboard"?"keyboard":card.Kind=="headset"?"headset":card.Kind=="mouse"?"mouse":"info";
+                    string icon=card.Kind=="keyboard"?"keyboard":card.Kind=="headset"?"headset":card.Kind=="mouse"?"mouse":card.Kind=="gamepad"?"gamepad":"info";
                     Header(g,card.Name,subtitle,icon,card.Top,card.Height,dark,feedback,1000+index);Meter(g,card.Battery,card.Top,card.Height,dark,feedback,2000+index);
                     if(dpiCount>0) {
                         var dpi=card.Device.Dpi;bool enabled=owner.CanSetWirelessDpi(card.Id,dpi.TargetToken);int? pending=owner.DesiredWirelessDpi(card.Id,dpi.TargetToken);bool confirmed=WirelessLayout.DpiFresh(card.Device)&&String.IsNullOrEmpty(owner.WirelessDpiFailure(card.Id,dpi.TargetToken));

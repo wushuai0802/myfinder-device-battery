@@ -3,7 +3,8 @@
 The table must agree with OpenRazer, the Linux driver that reads the battery of
 these mice. OPENRAZER_CHARGE_LEVEL below is a copy of the PID -> transaction id
 list in OpenRazer's razer_attr_read_charge_level() (driver/razermouse_driver.c,
-commit 6820f9da16). The poll tests replace the HID layer with a fake mouse that
+commit 6820f9da16), extended with its Viper V3 Pro SE wired/wireless cases.
+The poll tests replace the HID layer with a fake mouse that
 answers the 90-byte feature report the way the provider expects.
 
 Run from the repository root:
@@ -87,6 +88,8 @@ OPENRAZER_CHARGE_LEVEL = {
     0x00D4: 0x1F,   # BASILISK_MOBILE_RECEIVER
     0x00D6: 0x1F,   # BASILISK_V3_PRO_35K_PHANTOM_GREEN_EDITION_WIRED
     0x00D7: 0x1F,   # BASILISK_V3_PRO_35K_PHANTOM_GREEN_EDITION_WIRELESS
+    0x00DE: 0x1F,   # VIPER_V3_PRO_SE_WIRED
+    0x00DF: 0x1F,   # VIPER_V3_PRO_SE_WIRELESS
 }
 
 # In OpenRazer's list, but not in the app's table on purpose (see providers/razer.py).
@@ -229,6 +232,23 @@ class TableTest(unittest.TestCase):
 
 
 class PollRazerTest(PollTest):
+    def test_viper_v3_pro_se_uses_1f_on_both_transports(self):
+        for pid in (0x00DE, 0x00DF):
+            with self.subTest(pid=f"{pid:04X}"):
+                self.assertEqual(R.KNOWN[pid], ("Razer Viper V3 Pro SE", 0x1F))
+                mouse = FakeMouse(tid=0x1F, raw_level=0x80, charging=1)
+                res = self.poll([entry(pid, b"se", "Razer Viper V3 Pro SE")], {b"se": mouse})
+                self.assertEqual([(r.name, r.level, r.charging) for r in res],
+                                 [("Razer Viper V3 Pro SE", 50, True)])
+                self.assertEqual(mouse.tids, [0x1F, 0x1F])
+
+    def test_unknown_pid_does_not_gain_requests_from_the_se_name(self):
+        mouse = FakeMouse(tid=0x1F)
+        res = self.poll([entry(0xFFFE, b"unknown", "Razer Viper V3 Pro SE")],
+                        {b"unknown": mouse})
+        self.assertEqual(res, [])
+        self.assertEqual(mouse.tids, [])
+
     def test_pro_click_v2_vertical_issue_58(self):
         # The interfaces are the ones in the diagnostics report of issue #58.
         name = "Razer Pro Click V2 Vertical Edition"

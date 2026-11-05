@@ -48,7 +48,7 @@
     }
   ],
   "readers": [
-    {"provider":"razer","name":"Razer 已列明鼠标、耳机与键盘","kinds":["mouse","headset","keyboard"],"verificationLevel":"C","source":"engine/providers/razer.py"},
+    {"provider":"razer","name":"Razer 已列明鼠标、耳机与键盘","kinds":["mouse","headset","keyboard"],"verificationLevel":"C","source":"engine/providers/razer.py","matchScope":"限代码内既有匹配表；含 Viper V3 Pro SE（1532:00DE / 00DF，transaction 0x1F），待实机验证","reference":"engine/upstream-protocols.md#razer-viper-v3-pro-se"},
     {"provider":"audeze","name":"Audeze Maxwell 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/audeze.py"},
     {"provider":"wlmouse","name":"WLmouse 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/wlmouse.py"},
     {"provider":"g3m","name":"HECATE G3M PRO","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/g3m.py","matchScope":"仅320F:706E / FF1C:0092，输入/输出ID 04各64字节且描述符确认字节数组；只读1A 06百分比，充电未知；不含Rainy75 320F:5088；未知长度或集合不唯一不发送","reference":"engine/upstream-protocols.md#hecate-g3m-pro-320f706e"},

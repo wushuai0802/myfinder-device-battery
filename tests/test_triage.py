@@ -239,6 +239,45 @@ class TriageTests(unittest.TestCase):
             result = self.classify(body, "needs-info")
             self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.NEEDS_INFO)
 
+    def test_keyed_needs_info_guides_to_my_feedback_supplement(self):
+        marker = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
+        expected = ("自动回复：这次反馈没有带上设备信息，我们没法判断是哪款设备。"
+                    "请在程序里打开‘我的反馈’，选中这条后点‘补充资料’，勾选‘附带诊断信息’提交即可，"
+                    "不需要重新提交，也不需要 GitHub 账号。维护者会尽快查看。")
+        for ending in ("", "\n", "\n\n", "\r\n"):
+            with self.subTest(ending=ending):
+                result = self.classify(in_app() + "\n\n" + marker + ending, "needs-info")
+                self.assertEqual(result["reply"], triage.MARKER + "\n" + expected)
+
+    def test_keyed_supported_reply_guides_to_supplement(self):
+        body = in_app(report(unknown='373B:1278 "ATK" FF02:0002'))
+        marker = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
+        legacy = self.classify(body, "supported")["reply"]
+        keyed = self.classify(body + "\n\n" + marker, "supported")["reply"]
+        self.assertIn("在程序里重新提交反馈，并在描述里写上本条编号", legacy)
+        self.assertIn("我的反馈", keyed)
+        self.assertIn("补充资料", keyed)
+        self.assertIn("附带诊断信息", keyed)
+        self.assertNotIn("重新提交反馈", keyed)
+        self.assertNotIn("写上本条编号", keyed)
+        self.assertTrue(keyed.startswith(triage.MARKER + "\n自动回复：报告里的 ATK A9 Air+"))
+
+    def test_reply_credential_requires_a_complete_marker_in_the_body_tail(self):
+        marker = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
+        for invalid in (marker.replace("ab" * 32, "ab" * 31),
+                        marker.replace("ab" * 32, "gg" * 32),
+                        marker.replace("v1", "v2"),
+                        "prefix " + marker, marker + " suffix"):
+            with self.subTest(marker=invalid):
+                result = self.classify(in_app() + "\n\n" + invalid, "needs-info")
+                self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.NEEDS_INFO)
+        for body in (in_app(description=marker),
+                     in_app() + "\n" + marker + "\nordinary\ntrailing\ntext"):
+            result = self.classify(body, "needs-info")
+            self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.NEEDS_INFO)
+        result = self.classify(in_app(), "needs-info", comments=[comment(marker)])
+        self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.NEEDS_INFO)
+
     def test_pack_candidate_requires_unknown_pid_and_same_row_vendor_page(self):
         self.classify(template(report(unknown='373B:EEEE "unknown" 0001:0002 FF00:0001')), "pack-candidate")
         self.classify(template(report(unknown='373B:1278 "known" FF00:0001')), "supported")
@@ -503,13 +542,15 @@ class KnownIdsTests(unittest.TestCase):
         self.assertFalse(any(d["vendorId"] == 0x05AC and d["productId"] == 0x024F for d in first["devices"]))
         self.assertGreater(len(entries), 250)
 
-    def test_razer_registry_preserves_80_builtin_ids(self):
+    def test_razer_registry_preserves_builtin_ids_and_adds_viper_v3_pro_se(self):
         result = known_ids.build_index()
         rows = {d["productId"]: d for d in result["devices"] if d["provider"] == "razer"}
-        self.assertEqual(len(rows), 80)
+        self.assertEqual(len(rows), 82)
         for pid, name, kind in (
             (0x001F, "Razer Naga Epic", "mouse"),
             (0x00D7, "Razer Basilisk V3 Pro 35K Phantom Green", "mouse"),
+            (0x00DE, "Razer Viper V3 Pro SE", "mouse"),
+            (0x00DF, "Razer Viper V3 Pro SE", "mouse"),
             (0x025A, "Razer BlackWidow V3 Pro", "keyboard"),
             (0x025C, "Razer BlackWidow V3 Pro", "keyboard"),
             (0x0528, "Razer BlackShark V2 Pro (2020)", "headset"),

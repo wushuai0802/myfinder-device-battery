@@ -15,6 +15,9 @@ import re
 MARKER = "<!-- myfinder-triage:v1 -->"
 NEEDS_INFO = ("自动回复：这次反馈没有带上设备信息，我们没法判断是哪款设备。请在程序里打开‘反馈问题’，"
               "勾选‘附带诊断信息’后重新提交，并在描述里写上本条编号；也可以在这里粘贴完整的反馈报告。维护者会尽快查看。")
+SUPPLEMENT_GUIDANCE = "请在程序里打开‘我的反馈’，选中这条后点‘补充资料’，勾选‘附带诊断信息’提交即可，不需要重新提交，也不需要 GitHub 账号。"
+NEEDS_INFO_WITH_REPLY = ("自动回复：这次反馈没有带上设备信息，我们没法判断是哪款设备。"
+                         + SUPPLEMENT_GUIDANCE + "维护者会尽快查看。")
 SUPPORTED = ("自动回复：报告里的 {models} 在支持列表中。如果还是没有电量，请依次试试："
              "1）唤醒设备后在程序里点重新同步；2）暂时关闭厂商驱动后再试；3）拔插接收器。"
              "仍不行的话，请在这里补充一次新的反馈报告；没有 GitHub 账号的话，可以在程序里重新提交反馈，并在描述里写上本条编号。维护者会尽快查看。")
@@ -29,6 +32,16 @@ HEADINGS = {"有卡片的设备": "card", "未取得电量的设备": "unadapted
 LEGACY_CARD = re.compile(r"^(?:mouse|keyboard|headset|鼠标|键盘|耳机)[ \t]*[：:][ \t]*\S(?:.*\S)?[ \t]+\d{1,3}%",
                          re.IGNORECASE)
 NOISE_NAME = re.compile(r"HIDI2C|Touchpad|Multitouch|Precision|Motherboard", re.IGNORECASE)
+REPLY_CREDENTIAL = re.compile(r"<!-- myfinder-reply:v1 sha256=[0-9a-f]{64} -->")
+
+
+def has_reply_credential(body):
+    # Only a complete footer line counts, within the last three lines. Text in
+    # descriptions, quoted examples or comments must not activate this route.
+    tail = body.splitlines()[-3:]
+    while tail and not tail[-1].strip():
+        tail.pop()
+    return bool(tail and REPLY_CREDENTIAL.fullmatch(tail[-1]))
 
 
 def comments_list(value):
@@ -189,6 +202,10 @@ def decide(issue, known, comments=None, known_next=None):
     result["remove_labels"] = [old for old in labels if old.startswith("triage:") and old != result["label"]]
     if reply and not any((comment.get("user") or {}).get("login") == "github-actions[bot]"
                          and MARKER in (comment.get("body") or "") for comment in comments):
+        if has_reply_credential(body):
+            reply = (NEEDS_INFO_WITH_REPLY if label == "needs-info" else reply.replace(
+                "请在这里补充一次新的反馈报告；没有 GitHub 账号的话，可以在程序里重新提交反馈，并在描述里写上本条编号。",
+                SUPPLEMENT_GUIDANCE))
         result["reply"] = MARKER + "\n" + reply
     return result
 

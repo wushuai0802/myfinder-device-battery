@@ -507,6 +507,25 @@ The standard Razer 90-byte feature report, as used by Synapse and OpenRazer: pow
 
 Same mice protocol: transaction id 0x1F, command class 0x07, command 0x80 answers `02 1f 00 00 00 02 07 80 00 ab`, and raw 0xAB = 171/255 = 67%, stable across polls and unchanged while Synapse runs. Idle, the mouse answers status 04 and keeps its last level on a greyed icon
 
+### Razer Viper V3 Pro SE
+
+**Connection:** USB cable (1532:00DE), 2.4 GHz receiver (1532:00DF)
+
+**Project verification: C, pending hardware validation.** Both IDs use the same
+existing battery/charging feature-report reader as Viper V3 Pro (00C0/00C1),
+with preferred transaction ID `0x1F`. No other model's handling changes.
+The diagnostic report in #78 identifies `1532:00DF "Razer Viper V3 Pro SE"`;
+it does not verify battery or charging readings on this project.
+
+Sources: OpenRazer's [mouse IDs](https://github.com/openrazer/openrazer/blob/master/driver/razermouse_driver.h)
+define `USB_DEVICE_ID_RAZER_VIPER_V3_PRO_SE_WIRED` / `..._WIRELESS` as `0x00DE` /
+`0x00DF`. Its [mouse driver](https://github.com/openrazer/openrazer/blob/master/driver/razermouse_driver.c)
+groups them with `VIPER_V3_PRO_WIRELESS` in the charge-level cases and selects
+`transaction_id.id = 0x1f`. The [daemon mouse model](https://github.com/openrazer/openrazer/blob/master/daemon/openrazer_daemon/hardware/mouse.py)
+with `USB_PID = 0x00DF` exposes `get_battery` and `is_charging`.
+OpenRazer is GPL-2.0; only device IDs, transaction values and capability facts
+are cited here, with no driver implementation copied.
+
 ### Razer wireless mice (other OpenRazer models)
 
 **Connection:** 2.4 GHz receiver or USB cable

@@ -318,11 +318,14 @@ class RazerPackTests(unittest.TestCase):
         self.assertEqual(normalized["modelSource"], "pack")
         self.assertEqual(normalized["verificationLevel"], "C")
 
-    def test_builtin_tables_are_byte_for_byte_equivalent_as_data(self):
+    def test_builtin_tables_preserve_historical_data_with_se_additions(self):
         # Captured from the unmodified worktree before moving the 80-row table.
         old_digest = "dd1e3a2112d861c70bced5408bad19322be85a152e3c16645db7aaeeb85ffe67"
-        tables = {"KNOWN": R.KNOWN, "KEYBOARD_INTERFACE": R.KEYBOARD_INTERFACE}
+        legacy_known = {pid: value for pid, value in R.KNOWN.items() if pid not in (0x00DE, 0x00DF)}
+        tables = {"KNOWN": legacy_known, "KEYBOARD_INTERFACE": R.KEYBOARD_INTERFACE}
         self.assertEqual(hashlib.sha256(json.dumps(tables, sort_keys=True).encode()).hexdigest(), old_digest)
+        self.assertEqual({pid: R.KNOWN[pid] for pid in (0x00DE, 0x00DF)},
+                         {pid: ("Razer Viper V3 Pro SE", 0x1F) for pid in (0x00DE, 0x00DF)})
         self.assertEqual(R.RazerProvider()._known, R.KNOWN)
         for pid in list(R.KNOWN) + [0, 0x053A, 0xFE01, 0xFFFF]:
             for name in ("", "wired keyboard", "Wireless Mouse", "HyperSpeed", "BlackShark"):
@@ -332,11 +335,11 @@ class RazerPackTests(unittest.TestCase):
     def test_offline_registry_never_imports_hidapi(self):
         code = ("import sys; sys.path.insert(0, " + repr(str(ENGINE)) + "); "
                 "sys.modules['hid'] = None; from providers.profiles import registered_ids; "
-                "rows=registered_ids(); assert len(rows)==80; "
+                "rows=registered_ids(); assert len(rows)==82; "
                 "assert 'providers.razer' not in sys.modules; print(len(rows))")
         result = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "80")
+        self.assertEqual(result.stdout.strip(), "82")
 
 
 class EngineIntegrationTests(unittest.TestCase):

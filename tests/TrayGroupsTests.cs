@@ -253,7 +253,7 @@ static class TrayGroupsTests {
     }
     static void DeviceRendering(){
         VisualDesign.HighContrastOverride=false;
-        foreach(int size in new[]{16,20,24,32})foreach(bool dark in new[]{false,true})foreach(string kind in new[]{"mouse","keyboard","headset","device"}){
+        foreach(int size in new[]{16,20,24,32})foreach(bool dark in new[]{false,true})foreach(string kind in new[]{"mouse","keyboard","headset","gamepad","device"}){
             foreach(int? percent in new int?[]{0,1,15,46,80,100,null})using(var bitmap=TrayGlyph.RenderDevice(percent,false,dark,false,size,kind)){
                 Check(bitmap.Width==size&&bitmap.Height==size,"device icon has the requested native size");
                 Check(bitmap.GetPixel(0,0).A==0&&bitmap.GetPixel(size-1,size-1).A==0,"glyphs preserve transparent corners");
