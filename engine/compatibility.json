@@ -78,6 +78,7 @@
     {"provider":"logitech_centurion","name":"Logitech G PRO X 2 LIGHTSPEED","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/logitech_centurion.py"},
     {"provider":"hyperx_cloud3s","name":"HyperX Cloud III S","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/hyperx_cloud3s.py"},
     {"provider":"nzxt","name":"NZXT Lift Elite Wireless","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/nzxt.py"},
+    {"provider":"xiaomi_mouse","name":"Xiaomi 无线鼠标 4 Pro（2.4G 接收器）","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/xiaomi_mouse.py","matchScope":"仅 2717:50FC 的 MI_02 集合（FF03:0000，33字节输入/输出）；发送官方网页驱动同款电量查询后读取回复；2026-11-05 实机读数 85% 与官方网页一致；鼠标关闭或休眠时回复 0 视为未知；不含蓝牙模式","reference":"https://web.mieco.net/yuemi--manual/mouse/h/p/index.html#/M001/home","precision":"设备回复的百分比"},
     {"provider":"bluetooth","name":"Windows 系统蓝牙电量属性","kinds":["mouse","keyboard","headset","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/bluetooth.py","precision":"系统提供的属性，未知设备测量时间"},
     {"provider":"standard_hid","name":"描述符声明的标准HID电量Feature字段","kinds":["mouse","keyboard","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/standardhid.py","reference":"https://www.usb.org/hid","precision":"依据字段逻辑范围；无充电字段时充电未知"}
   ],

@@ -41,6 +41,7 @@ TABLES = {
     "g3m": ("PIDS",), "eweadn": ("PIDS",), "flydigi": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
+    "xiaomi_mouse": ("KNOWN",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
 HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles"}
