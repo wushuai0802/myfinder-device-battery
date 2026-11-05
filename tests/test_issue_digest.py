@@ -83,7 +83,7 @@ class DigestTests(unittest.TestCase):
         issue = {"number": 1, "title": "Synthetic feedback", "body": BODY, "state": "open",
                  "created_at": "2026-11-05T01:00:00Z", "html_url": "https://example.invalid/1"}
         known = self.read_index(fake_index())
-        with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as folder:
+        with tempfile.TemporaryDirectory() as folder:
             with patch.object(sys, "argv", ["issue_digest.py", "--dir", folder,
                                            "--since", "2026-11-05T00:00:00Z"]), \
                     patch.object(digest, "known_ids", return_value=known), \
@@ -103,7 +103,7 @@ class DigestTests(unittest.TestCase):
 
 class IndexGateTests(unittest.TestCase):
     def test_static_metadata_gates_arbitrary_ids_without_executing_providers(self):
-        with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as folder:
+        with tempfile.TemporaryDirectory() as folder:
             engine = Path(folder) / "engine"
             providers = engine / "providers"
             providers.mkdir(parents=True)
