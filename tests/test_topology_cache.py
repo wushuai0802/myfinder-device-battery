@@ -231,6 +231,49 @@ class DescriptorCacheTests(unittest.TestCase):
         self.hid.HidP_GetCaps.side_effect = caps
         self.hid.HidP_GetValueCaps.side_effect = fields
 
+    def test_pulsar_link8k_report_proof_is_descriptor_only_and_cached(self):
+        self.batch3_descriptor((0x3710, 0x5501), (0xFF02, 2), {8: 17}, {8: 17})
+        first, = self.scan([PATH_A])
+        self.assertEqual(first["input_report_sizes"], {"8": 17})
+        self.assertEqual(first["output_report_sizes"], {"8": 17})
+        self.assertEqual((first["input_report_length"], first["output_report_length"]), (17, 17))
+        self.assertEqual([call.args[0] for call in self.hid.HidP_GetValueCaps.call_args_list], [0, 1])
+        self.kernel.CreateFileW.reset_mock()
+        self.assertEqual(self.scan([PATH_A]), [first])
+        self.kernel.CreateFileW.assert_not_called()
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
+    def test_pulsar_link8k_failed_report_proof_is_not_cached_and_recovers(self):
+        from providers import pulsar
+        self.batch3_descriptor((0x3710, 0x5501), (0xFF02, 2), {8: 17}, {8: 17})
+        self.hid.HidP_GetValueCaps.side_effect = lambda *args: 0
+        info, = self.scan([PATH_A])
+        self.assertIsNone(info["input_report_sizes"])
+        self.assertIsNone(info["output_report_sizes"])
+        self.assertNotIn(PATH_A, self.cache)
+        provider = pulsar.PulsarProvider()
+        self.assertIsNone(provider._pick_link8k([info]))
+        self.batch3_descriptor((0x3710, 0x5501), (0xFF02, 2), {8: 17}, {8: 17})
+        recovered, = self.scan([PATH_A])
+        self.assertEqual(provider._pick_link8k([recovered]), recovered)
+
+    def test_pulsar_link8k_proof_does_not_expand_to_siblings_or_other_ids(self):
+        for identity, collection in (((0x3710, 0x5501), (0xFF04, 2)),
+                                     ((0x3710, 0x5501), (0xFF02, 1)),
+                                     ((0x3710, 0x5502), (0xFF02, 2)),
+                                     ((0x3554, 0x5501), (0xFF02, 2))):
+            with self.subTest(identity=identity, collection=collection):
+                self.cache.clear()
+                self.hid.HidP_GetValueCaps.reset_mock()
+                self.batch3_descriptor(identity, collection, {8: 17}, {8: 17})
+                info, = self.scan([PATH_A])
+                self.assertNotIn("input_report_sizes", info)
+                self.assertNotIn("output_report_sizes", info)
+                self.hid.HidP_GetValueCaps.assert_not_called()
+
     def test_batch3_report_sizes_are_per_id_cached_and_descriptor_only(self):
         cases = (((0x320F, 0x706E), (0xFF1C, 0x92), {4: 64}, {4: 64}),
                  ((0x3554, 0xFA09), (0xFF04, 2), {19: 20}, {19: 20}),

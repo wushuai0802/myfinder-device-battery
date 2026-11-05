@@ -11,6 +11,9 @@ they are pending hardware verification in this project. VGN Dragonfly 4K
 read 35%, not charging, 3766 mV on a VGN F1 Pro (VGN HUB: 36%) on 2026-11-05.
 Charging transitions and sleep/wake remain untested. Other listed models retain
 their original selection rules. See upstream-protocols.md for ID evidence.
+Pulsar Link 8K 3710:5501 additionally requires descriptor-proven input/output
+report 8, each exactly 17 bytes, on FF02:0002. Its web-driver parser requires
+status zero and treats charging as exactly 1; only battery reads are enabled (C).
 
 Protocol from andrewrabert/python-pulsar-mouse-tool, which also backs the
 "HID: pulsar" driver in review for the Linux kernel and lists these ids:
@@ -102,6 +105,7 @@ VOLTAGE_SLICE = (8, 10)
 
 CONTROL_INTERFACE = 1           # the tool reads its 17-byte replies on interface 1
 CONTROL_USAGE = (0xFF02, 0x0002)   # the collection the OpenMouse ATK/VXE panel opens
+LINK8K_ID = (0x3710, 0x5501)
 
 
 class _HIDP_CAPS(ctypes.Structure):
@@ -190,6 +194,7 @@ PIDS: Dict[int, Dict[int, str]] = {
     0x3710: {
         0x5406: "Pulsar X2 CrazyLight Mini (2.4 GHz)",
         0x3414: "Pulsar X2 CrazyLight Mini (wired)",
+        0x5501: "Pulsar Link 8K Dongle",  # #134 + Pulsar web snapshot; 待实机验证
     },
 }
 
@@ -463,6 +468,14 @@ def parse_power(r) -> Optional[Tuple[int, bool]]:
     return level, frame[POWER_INDEX] != 0
 
 
+def parse_link8k_power(r) -> Optional[Tuple[int, bool]]:
+    """5501 web-driver fields; retain checksum/range guards, never smooth level."""
+    if not r or len(r) != PAYLOAD_LEN or r[2] != 0:
+        return None
+    parsed = parse_power(r)
+    return (parsed[0], r[POWER_INDEX] == 1) if parsed is not None else None
+
+
 def voltage_mv(r) -> Optional[int]:
     if not r or len(r) < VOLTAGE_SLICE[1]:
         return None
@@ -488,6 +501,21 @@ class PulsarProvider(Provider):
         if response["success"] or response["outcomeUnknown"]:
             self._dpi_cache.pop(_dpi_cache_key(target), None)
         return response
+
+    def _pick_link8k(self, infos: List[dict]) -> Optional[dict]:
+        """#134's control collection plus per-report proof from topology/battery_hid."""
+        candidates = [d for d in infos
+                      if (d.get("vendor_id"), d.get("product_id")) == LINK8K_ID
+                      and (d.get("usage_page"), d.get("usage")) == CONTROL_USAGE]
+        if len(candidates) == 1 and candidates[0].get("path"):
+            info = candidates[0]
+            if all(type(info.get(direction + "_report_length")) is int
+                   and info[direction + "_report_length"] == PAYLOAD_LEN
+                   and info.get(direction + "_report_sizes") == {"8": PAYLOAD_LEN}
+                   for direction in ("input", "output")):
+                return info
+        self._diag.append("  Link 8K: missing/ambiguous FF02:0002 or unproven report-8 lengths; nothing sent")
+        return None
 
     def _pick(self, infos: List[dict]) -> Optional[dict]:
         """The collection to open.
@@ -526,7 +554,7 @@ class PulsarProvider(Provider):
                           f"falling back to the first of {len(infos)}")
         return infos[0] if infos else None
 
-    def _query(self, path: bytes) -> Optional[List[int]]:
+    def _query(self, path: bytes, parse_reply=parse_power) -> Optional[List[int]]:
         dev = hid.device()
         try:
             dev.open_path(path)
@@ -541,7 +569,7 @@ class PulsarProvider(Provider):
                 if not r:
                     break
                 self._diag.append(f"  reply {attempt + 1}: {hexdump(r)}")
-                if parse_power(r) is not None:
+                if parse_reply(r) is not None:
                     return list(r)
                 time.sleep(0.02)
             self._diag.append("  no power reply (events and short frames are ignored)")
@@ -580,7 +608,16 @@ class PulsarProvider(Provider):
                 if not mine:
                     continue
                 key = f"pulsar:{vid:04x}{pid:04x}"
-                if (vid, pid) in STRICT_COMPX_IDS:
+                link8k = (vid, pid) == LINK8K_ID
+                parse_reply = parse_link8k_power if link8k else parse_power
+                if link8k:
+                    d = self._pick_link8k(mine)
+                    if d is not None:
+                        present.add(key)
+                    name = pids[pid]
+                    self._diag.append("  Pulsar Link 8K 3710:5501: 待实机验证; "
+                                      "requires FF02:0002 / input/output report 8 = 17 bytes")
+                elif (vid, pid) in STRICT_COMPX_IDS:
                     # Feedback #19/#47/#55 omits report sizes; F505's maintainer
                     # capture confirms the same strict collection and length.
                     # Require descriptor evidence before sending the one known protocol;
@@ -608,12 +645,13 @@ class PulsarProvider(Provider):
                     name = (d.get("product_string") or "ATK Mouse") if d is not None else "ATK Mouse"
                 if d is None:
                     continue
+                out_length = d["output_report_length"] if link8k else output_length(d["path"])
                 self._diag.append(f"[Pulsar] pid={vid:04x}:{pid:04x} '{name}' "
                                   f"iface={d.get('interface_number')} "
                                   f"{d.get('usage_page', 0):04x}:{d.get('usage', 0):04x}"
-                                  f" output={output_length(d['path'])}")
-                reply = self._query(d["path"])
-                parsed = parse_power(reply)
+                                  f" output={out_length}")
+                reply = self._query(d["path"], parse_reply)
+                parsed = parse_reply(reply)
                 if parsed is None:
                     if not reply:
                         self._diag.append("    no reply (asleep, or the mouse is idle)")
@@ -627,7 +665,7 @@ class PulsarProvider(Provider):
                 pack = self._device_pack
                 pack_model = bool(pack and pack.loaded and any(
                     entry.provider == self.name and entry.match.matches(d) for entry in pack.entries))
-                dpi, target = (None, None) if pack_model else _capture_dpi(d, self._dpi_cache)
+                dpi, target = (None, None) if pack_model or link8k else _capture_dpi(d, self._dpi_cache)
                 out.append(DeviceStatus(key, name, level, on_cable, True, "pulsar",
                                         kind="mouse", dpi=dpi, dpi_target=target,
                                         model_source="pack" if pack_model else "builtin"))
