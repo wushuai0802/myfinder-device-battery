@@ -368,6 +368,120 @@ Still needs actual input caps/full frames, 70%/69% or other multi-level comparis
 sleep/wake, removal/reconnect, independent polling and a charging/unplugged
 comparison. Other connection-state values are intentionally unaccepted.
 
+### EWEADN S9 PRO / S9 MAX 8K (372E:1026) — evidence incomplete
+
+**Not implemented; not a grade-C supported device.** The supplied snapshot of
+[EWEADN Hub](https://new-hub.eweadn.cn/), supplied as retrieved on 2026-11-06,
+identifies this receiver but omits the dynamically loaded mouse SDK. It does not
+establish a safe battery transaction. This investigation used only the five
+local files in `.ai/evidence/eweadnhub/`: no vendor JavaScript execution, hardware
+access or network retrieval. REA's static application analysis timed out without
+returning evidence; the findings below come from independent local text analysis
+and a bounded offline string-table decoder, not from a successful REA report.
+The HTML declares build `3.3.5-20261104025216275`, version `3.3.5`.
+
+Snapshot identity (SHA-256 of the original bytes):
+
+| Local file | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `index.html` | 1411 | `844fd2d92ed9713d8100ec1e666f46bdf529d8522a7b0fb70b4808c088977e81` |
+| `main.0d125cb779cf4c8408a8.js` (runtime) | 7072 | `dc38f4b97d5de7bfd73c21f053bbbc62229471ac7e6ed130e265f801b6c855b2` |
+| `main.59124dce33c280445fd9.js` (shared) | 1178843 | `38600cd494f8e505b100379db9d3b3217bfe834fc88804d15c566cf9972a5235` |
+| `main.6a3b1fe4700c6a5bd57e.js` (app) | 1404935 | `02ae29b557b435d9d502289aa71f72becd9933fe9aee03ebc02e38be5539cc2f` |
+| `main.f8e5777ff051023749db.js` | 333032 | `0263501996a75358d7d7491b321a388baae1d2f30d5913f400b16eb55cfbbbe0` |
+
+All offsets below are **zero-based UTF-8 byte offsets in those original files**,
+not character positions in a prettified or decoded copy.
+
+**Observed identity, not a proved transport.** The app's mouse catalog at
+1375074 records decimal VID/PID `14126:4134` (`372E:1026`), product `EWEADN S9`,
+display name `S9 Pro`, `deviceId: s9pro`, `is4G: true`, UUID `9895604649998`,
+`solutionRovider: beiying` (the vendor's spelling), and `hidReportId: 3`.
+At 1374397 the same receiver is listed for `S9 Max`, UUID `9895604650026`.
+Other rows share that VID/PID: S7 Max (1372432), S7 Pro (1373092), S7 Ultra
+(1373964), S9 Ultra (1375735), and S9 Ultra+ (1376404). Consequently VID/PID
+alone does not distinguish these mouse models. The UUID metadata does not prove
+how to read the UUID safely.
+
+The task's diagnostic reports identify `FF00:0001` and `FF06:0001` collections;
+the catalog rows do not choose one. The configured report ID `03` does not prove
+its direction (input/output/feature), payload length, Windows/hidapi length or
+the battery command. In particular, the shared file's `Wo` filter at 248141 is
+`vendorId:14126, usage:97, usagePage:65376, productId:0` (`FF60:0061`) in the
+keyboard module `68572`, which starts at 48272. It is not evidence for choosing
+either S9 diagnostic collection.
+
+**Missing implementation boundary.** The runtime's chunk-name/hash maps identify
+the following absent files; none is among the four supplied JavaScript files:
+
+| Chunk | Required local artifact | Runtime map offsets |
+| --- | --- | --- |
+| 8056 | `main.sdk-mouse-beiying.b4ffbeadbe8c318936bb.js` | 1507, 3108 |
+| 8886 | `main.sdk-api.b41e96c5c2fd148df1b7.js` | 1577, 3304 |
+| 3143 | `main.3143.cdf1094d4146c975c1d5.js` | 2436 |
+
+The app explicitly loads chunk 8886 / module 5122 at 21069, then chunk 3143 /
+module 83143 at 21292 to call `ensureCurrentMouseProviderLoaded`. Neither module
+definition is present in this snapshot. The app's mouse service metadata at
+22148 names `beiying` and `./beiying/basic`, but does not supply its transport.
+The runtime mapping establishes the missing mouse SDK artifact's filename;
+without the loader, the complete dependency/call path is still unresolved.
+These are follow-up evidence targets, not downloads performed by this task;
+their further dependencies may also be needed.
+
+**Decoded false lead.** The shared file contains a `getBatteryStatus()` method
+at 150853 inside keyboard module `68572`. To reproduce the limited decoding,
+parse the 72 plain strings from `function xn()` as JSON data, try the 72 possible
+left rotations, and evaluate only the numeric `parseInt` checksum expression
+following `function _n()` with ordinary integer-prefix parsing and rational
+arithmetic. Exactly rotation 39 satisfies target `446656`. Resolve `Sn(k)` as
+the rotated table at `k - 206` (`Sn` aliases `_n`). This yields `Sn(208)=send`,
+`Sn(241)=decode`, `Sn(251)=transport`, `Sn(253)=protocol`, `Sn(271)=encode`,
+`Sn(228)=getSupportedSwitches`, and `Sn(269)=getKeyboardType`. No vendor function,
+bootstrap or module is executed by this procedure.
+
+That **keyboard** method encodes command 135 (`87`), sends it, and interprets
+decoded payload values as a level and an argument to `rt`. Its neighboring
+methods and keyboard exports establish its scope. This is not an S9 battery
+frame: neither `87`, the keyboard filter, its charging decoder, nor the existing
+`089D:062F` reader's `00 30 ...` / `M156` format is authorized for `372E:1026` by
+these artifacts. **Target request bytes, reply fields/checksum, charging states,
+report lengths, sleep/offline replies and session/handshake requirements remain
+unknown.** In particular, a read-only cold-start path has not been proved.
+
+**State-changing operations to exclude.** The app contains mouse-facing UI
+labels for the following operations. These are observed feature categories,
+not recovered S9 opcodes or a complete command inventory:
+
+| Operation | App evidence anchor | Target command bytes |
+| --- | --- | --- |
+| Factory reset / reset all settings | `reset.button`, `reset.confirmMsg` at 975028 | Unknown; never send |
+| Configuration writes, including button debounce | `debounceDelay`, `debounceDelayDescBeiying` at 975325 | Unknown; never send |
+| Receiver pairing | `pairing.clickToStart` at 974197 | Unknown; never send |
+| Firmware upgrade authorization / transfer | `otaAuthFailed`, `otaTransferError` near 973987 | Unknown; never send |
+
+No new provider or device registration is added, and this task introduces no
+request path for the receiver. The safety decision is to send nothing rather
+than guess an allowlist from those UI labels. Proving that reading needs no
+state-changing initialization requires the missing SDK and its dependencies.
+
+**Other candidates, also deferred.** The same mouse catalog records wireless
+`372E:103D` (decimal PID 4157; S9 Pro at 1375285, S9 Max at 1374608, plus other
+S7/S9 variants) and `372E:106E` (PID 4206; S7 Max at 1372218 and S7 Ultra at
+1373744), with `beiying` and report ID 3. They are absent from the current
+provider registrations, but a shared SDK name/report ID does not establish
+identical battery frames. None is added without the same missing protocol
+evidence. Wired catalog entries are not receiver candidates.
+
+Acceptance remains blocked on the complete matching SDK snapshot, exact
+collection/report semantics, battery and charging frame definitions, and proof
+of a read-only initialization path. A future implementation must then gate I/O
+on runtime descriptor-backed per-report lengths and test exact request bytes,
+malformed replies, sleep/silence, wrong collections/caps and exclusion of every
+non-read command. No synthetic target protocol tests are invented here because
+there is no established target frame to test. Hardware percentage, charging,
+sleep/wake, independent polling and final UI behavior remain unverified.
+
 ### AM Infinity 8K (Angry Miao)
 
 **Connection:** 2.4 GHz receiver (3151:5007)
