@@ -8,6 +8,8 @@ does not use the current checkout's builtin profile IDs.
 Rejected packs/rows and unrecognised modules are reported in unparsed.
 For provider sources, unparsed lists modules with no indexed IDs; partial maps
 modules with indexed IDs but incomplete coverage to an explanatory reason.
+Device rows with a model-identification or product-name gate include
+requiresModelMatch: true; absence means false (the legacy row shape is kept).
 """
 from __future__ import annotations
 
@@ -243,8 +245,18 @@ def build_index(root=None, *, engine_root=None):
     # Disables win over every source, including legacy tables and other files.
     devices = {row for row in devices if row[:3] not in disabled}
     fields = ("provider", "vendorId", "productId", "name", "kind", "source")
+    indexed = []
+    for row in sorted(devices):
+        entry = dict(zip(fields, row))
+        # These are explicit identity limits in existing provider/catalog data,
+        # not generic mentions of model lists or descriptor/collection gates.
+        scope = readers.get(entry["provider"], {}).get("matchScope", "")
+        if (entry["name"].casefold().endswith("(model identification required)")
+                or "产品全名" in scope or "产品名" in scope):
+            entry["requiresModelMatch"] = True
+        indexed.append(entry)
     return {"vendors": {key: sorted(value) for key, value in sorted(vendors.items())},
-            "devices": [dict(zip(fields, row)) for row in sorted(devices)],
+            "devices": indexed,
             "unparsed": sorted(unparsed), "partial": dict(sorted(partial.items()))}
 
 
