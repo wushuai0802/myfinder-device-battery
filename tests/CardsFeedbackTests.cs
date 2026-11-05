@@ -27,6 +27,8 @@ static class CardsFeedbackTests {
             var cache=(Dictionary<string,WirelessDevice>)typeof(TrayContext).GetField("wirelessCache",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(owner);
             var snapshot=GenericBatteryWorker.Parse("{\"schema\":2,\"devices\":[],\"suppressed\":[{\"name\":\"Old Mouse\",\"kind\":\"mouse\"}]}");
             snapshot.Devices=new[]{a};Apply(owner,snapshot);
+            var pads=GenericBatteryWorker.Parse("{\"schema\":2,\"devices\":[{\"id\":\""+A+"\",\"name\":\"Xbox Wireless Controller\",\"kind\":\"gamepad\"},{\"id\":\""+B+"\",\"name\":\"Odd\",\"kind\":\"toaster\"}],\"suppressed\":[{\"name\":\"Pad\",\"kind\":\"gamepad\"}]}");
+            Check(pads.Devices[0].Kind=="gamepad"&&pads.Devices[1].Kind=="device"&&pads.Suppressed[0].Kind=="gamepad","parsed snapshots keep gamepad kind and still reduce unknown kinds to device");
             Check(owner.WirelessDevices.Length==1&&cache.ContainsKey(B),"suppression does not delete cached readings");
             var tray=(TrayView)Call(owner,"WirelessTray","auto");Check(tray.Battery.Percent==10&&tray.Tooltip.Contains("PRIVATE-CARD-ALIAS"),"hidden pinned device falls back to surviving card");
             Check(!owner.CanSetWirelessDpi(B,new string('a',64)),"hidden card cannot target DPI");

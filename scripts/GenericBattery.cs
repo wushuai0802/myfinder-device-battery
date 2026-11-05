@@ -382,7 +382,7 @@ namespace AtkBattery {
                 value.Name=Clean(value.Name,80,"无线设备");value.Provider=Clean(value.Provider,48,"");value.Transport=Clean(value.Transport,32,"");
                 value.ModelSource=value.ModelSource=="pack"?"pack":null;
                 if(!value.VendorId.HasValue||!value.ProductId.HasValue||!UnadaptedDevice.Word(value.VendorId.Value)||!UnadaptedDevice.Word(value.ProductId.Value)){value.VendorId=null;value.ProductId=null;}
-                if(value.Kind!="mouse"&&value.Kind!="headset"&&value.Kind!="keyboard")value.Kind="device";
+                if(value.Kind!="mouse"&&value.Kind!="headset"&&value.Kind!="keyboard"&&value.Kind!="gamepad")value.Kind="device";
                 if(value.Percent<0||value.Percent>100)value.Percent=null;
                 DateTime time=value.ConfirmedTime;
                 if(time==DateTime.MinValue||time>DateTime.UtcNow.AddSeconds(5)){value.Percent=null;value.Fresh=false;value.ConfirmedAtUtc=null;}
@@ -407,7 +407,7 @@ namespace AtkBattery {
                 foreach(var item in snapshot.Suppressed){
                     if(suppressed.Count>=16)break;if(item==null)continue;
                     item.Name=FeedbackReport.CleanField(item.Name);
-                    if(item.Kind!="mouse"&&item.Kind!="keyboard"&&item.Kind!="headset")item.Kind="device";
+                    if(item.Kind!="mouse"&&item.Kind!="keyboard"&&item.Kind!="headset"&&item.Kind!="gamepad")item.Kind="device";
                     suppressed.Add(item);
                 }
                 snapshot.Suppressed=suppressed.ToArray();
