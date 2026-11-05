@@ -44,7 +44,28 @@ def known_ids():
     py = py if os.path.exists(py) else sys.executable
     out = subprocess.run([py, "-I", "-B", os.path.join(ROOT, "engine", "known_ids.py"), "--json"],
                          capture_output=True, text=True, encoding="utf-8", check=True).stdout
-    return {(d["vendorId"], d["productId"]): d.get("name", "") for d in json.loads(out).get("devices", [])}
+    index = {}
+    for device in json.loads(out).get("devices", []):
+        key = (device["vendorId"], device["productId"])
+        # Preserve a gate if multiple providers/sources share the same USB ID.
+        gated = device.get("requiresModelMatch", False) or index.get(key, {}).get("requiresModelMatch", False)
+        index[key] = {"name": device.get("name", ""), "requiresModelMatch": bool(gated)}
+    return index
+
+
+def annotate_unknown(unknown, known):
+    for device in unknown:
+        key = tuple(int(value, 16) for value in device["id"].split(":"))
+        match = known.get(key, {})
+        device["knownInMain"] = match.get("name")
+        device["requiresModelMatch"] = match.get("requiresModelMatch", False)
+
+
+def support_tag(device):
+    if not device["knownInMain"]:
+        return "未支持"
+    label = "仅部分型号" if device["requiresModelMatch"] else "已支持"
+    return f"{label}（{device['knownInMain']}）"
 
 
 def parse_body(body):
@@ -90,9 +111,7 @@ def main():
     new_issues = []
     for i in sorted(created, key=lambda x: x["number"]):
         info = parse_body(i.get("body"))
-        for u in info["unknown"]:
-            vid, pid = (int(x, 16) for x in u["id"].split(":"))
-            u["knownInMain"] = known.get((vid, pid))
+        annotate_unknown(info["unknown"], known)
         new_issues.append({"number": i["number"], "title": i["title"], "state": i["state"],
                            "labels": [l["name"] for l in i.get("labels", [])], "url": i["html_url"], **info})
 
@@ -125,7 +144,7 @@ def main():
         for c in n["cards"]:
             lines.append(f"  - 卡片：{c}")
         for u in n["unknown"][:8]:
-            tag = f"已支持（{u['knownInMain']}）" if u["knownInMain"] else "未支持"
+            tag = support_tag(u)
             lines.append(f"  - {u['id']} \"{u['name']}\" {' '.join(u['vendor'])} — {tag}")
     lines += ["", f"## 用户评论（{len(user_comments)}）"]
     lines += [f"- #{c['number']} @{c['user']}: {c['text'][:300].replace(chr(10), ' / ')}" for c in user_comments]
