@@ -3,6 +3,7 @@
 No model query: VGN HUB routes these exact pairs directly to getBatteryInternal.
 258A:024F was user-verified in #190; siblings have static protocol evidence only.
 Wired beiying endpoints use different feature protocols and are excluded.
+Shared 3554:FA09 receivers belong exclusively to mchose_by_keyboard.
 """
 import battery_hid as H
 from by_keyboard import make_request, payload
@@ -12,7 +13,6 @@ PIDS = {
     (0x258A, 0x024F): "VGN V98 Pro V3 2.4G receiver",
     (0x258A, 0x027F): "VGN V98 Pro V3 2.4G receiver",
     (0x258A, 0x027B): "VGN V87 V2 2.4G receiver",
-    (0x3554, 0xFA09): "VXE V87 Pro 2.4G receiver",
     (0x391D, 0x2A01): "VGN N75 V2 2.4G receiver",
     (0x391D, 0x2A02): "VGN V108 2.4G receiver",
 }

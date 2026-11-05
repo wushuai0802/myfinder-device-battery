@@ -92,6 +92,7 @@ class VgnBeiyingTests(unittest.TestCase):
         defects = [dict(vendor_id=0x05AC), dict(product_id=0x024E), dict(product_id=0x027E),
                    dict(product_id=0x010C), dict(vendor_id=0x391D, product_id=0x2003),
                    dict(vendor_id=0x258A, product_id=0xFA09),
+                   dict(vendor_id=0x3554, product_id=0xFA09),
                    dict(vendor_id=0x3554, product_id=0x024F),
                    dict(usage_page=0xFF00), dict(usage_page=0xFF04), dict(usage=1),
                    dict(path=b""), dict(physical_id="collection:unknown")]

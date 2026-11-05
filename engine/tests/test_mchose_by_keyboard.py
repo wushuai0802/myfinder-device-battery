@@ -6,6 +6,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _hidstub  # noqa: F401
 from providers import mchose_by_keyboard as M
+from providers.vgn_beiying import VgnBeiyingProvider
 from test_new_brands import entry as hid_entry, fixture as hid_fixture
 
 P = M.MchoseByKeyboardProvider
@@ -38,6 +39,7 @@ def fixture(frames=(), inventory=None, **kwargs):
 
 class MchoseByKeyboardTests(unittest.TestCase):
     receiver = {}
+    unknown_battery = True
 
     def entry(self, physical="receiver-a", **changes):
         return entry(physical, **(self.receiver | changes))
@@ -72,13 +74,27 @@ class MchoseByKeyboardTests(unittest.TestCase):
                 status, = P().poll()
                 self.assertEqual(status.name, "MCHOSE " + name)
 
-    def test_unknown_model_and_identity_silence_never_send_battery(self):
-        for frames in ([], [identity("000000000000")],
-                       [identity("0300000001c5"), identity(), reply()],
-                       [M.identity_request()], [reply()]):
+    def test_silent_invalid_or_echoed_identity_never_sends_battery(self):
+        for frames in ([], [identity()[:-1]], [identity() + [0]],
+                       [[0] * 20], [M.identity_request()], [reply()]):
             with self.subTest(frames=frames), self.fixture(frames) as bus:
                 self.assertEqual(P().poll(), [])
                 self.assertEqual([frame for _, frame in bus.writes], [M.identity_request()])
+                self.assertEqual(bus.opened, bus.closed)
+
+    def test_unknown_model_uses_generic_read_only_on_fa09(self):
+        for frames in ([identity("000000000000"), reply()],
+                       [identity("0300000001c5"), identity(), reply()]):
+            with self.subTest(frames=frames), self.fixture(frames) as bus:
+                statuses = P().poll()
+                self.assertEqual(len(statuses), int(self.unknown_battery))
+                if self.unknown_battery:
+                    status, = statuses
+                    self.assertEqual((status.name, status.level, status.kind),
+                                     ("2.4G 无线键盘（3554:FA09）", 63, "keyboard"))
+                    self.assertFalse(status.charging_known)
+                expected = [M.identity_request()] + ([M.make_request()] if self.unknown_battery else [])
+                self.assertEqual([frame for _, frame in bus.writes], expected)
                 self.assertEqual(bus.opened, bus.closed)
 
     def test_non_mchose_unknown_and_wired_names_never_open_or_send(self):
@@ -161,14 +177,19 @@ class MchoseByKeyboardTests(unittest.TestCase):
         with self.fixture([reply(70)]) as bus:
             self.assertEqual(provider.poll()[0].level, 70)
             self.assertEqual([frame for _, frame in bus.writes], [M.make_request()])
-        # Unrecognized: one identity frame, then nothing until the receiver leaves.
+        # Unrecognized: cache the identity result; only FA09 keeps reading battery.
         provider = P()
         with self.fixture([identity("000000000000")]) as bus:
             self.assertEqual(provider.poll(), [])
-            self.assertEqual([frame for _, frame in bus.writes], [M.identity_request()])
-        with self.fixture([identity(), reply()]) as bus:
-            self.assertEqual(provider.poll(), [])
-            self.assertEqual(bus.writes, [])
+            battery = [M.make_request()] if self.unknown_battery else []
+            self.assertEqual([frame for _, frame in bus.writes], [M.identity_request()] + battery)
+        with self.fixture([identity(), reply(70)]) as bus:
+            statuses = provider.poll()
+            self.assertEqual(len(statuses), int(self.unknown_battery))
+            if self.unknown_battery:
+                self.assertEqual((statuses[0].name, statuses[0].level),
+                                 ("2.4G 无线键盘（3554:FA09）", 70))
+            self.assertEqual([frame for _, frame in bus.writes], battery)
         # Receiver absent for one poll: the next plug-in is identified afresh.
         with self.fixture([], inventory=[]):
             self.assertEqual(provider.poll(), [])
@@ -201,6 +222,7 @@ class Mchose41e4KeyboardTests(MchoseByKeyboardTests):
     """Run the complete FA09 safety suite on a synthetic #169-like receiver."""
     receiver = dict(vendor_id=0x41E4, product_id=0x2001,
                     product_string="MCHOSE 2.4G Wireless")
+    unknown_battery = False
 
     def test_g87_and_g75_v2_use_device_model_not_pid_default(self):
         for code, name in (("03000000021c", "G87"), ("030000000335", "G75 V2")):
@@ -247,6 +269,51 @@ class Mchose41e4KeyboardTests(MchoseByKeyboardTests):
                 bus.now = now
                 self.assertEqual(len(provider.poll()), 1)
                 self.assertEqual(len(bus.writes), expected)
+
+
+class SharedFa09Tests(unittest.TestCase):
+    def test_both_collections_and_provider_orders_open_once_and_return_at_most_one_card(self):
+        ff04 = entry(path=b"fa09-ff04")
+        ff02 = entry(path=b"fa09-ff02", usage_page=0xFF02)
+        cases = (([identity(), reply()], "MCHOSE X75 V2", True),
+                 ([identity("000000000000"), reply()], "2.4G 无线键盘（3554:FA09）", True),
+                 ([], None, False), ([identity(), reply(0)], None, True),
+                 ([identity("000000000000"), reply(0)], None, True))
+        for factories in ((P, VgnBeiyingProvider), (VgnBeiyingProvider, P)):
+            for frames, name, battery in cases:
+                with self.subTest(order=factories, name=name, frames=frames), fixture(
+                        frames, [ff02, ff04]) as bus:
+                    statuses = [status for factory in factories for status in factory().poll()]
+                    self.assertEqual([status.name for status in statuses], [] if name is None else [name])
+                    self.assertEqual(bus.opened, [ff04["path"]])
+                    self.assertEqual(bus.opened, bus.closed)
+                    self.assertEqual([frame for _, frame in bus.writes],
+                                     [M.identity_request()] + ([M.make_request()] if battery else []))
+
+    def test_generic_percentage_does_not_assume_mchose_flags(self):
+        for level in (0, 1, 63, 100, 101, 255):
+            with self.subTest(level=level), fixture([identity("000000000000"), reply(level, 0xFF)]) as bus:
+                statuses = P().poll()
+                self.assertEqual([status.level for status in statuses], [level] if 1 <= level <= 100 else [])
+                if statuses:
+                    self.assertFalse(statuses[0].charging_known)
+                self.assertEqual([frame for _, frame in bus.writes], [M.identity_request(), M.make_request()])
+        for frame in ([], reply()[:-1], reply() + [0], identity(), M.make_request(), [0] * 20):
+            with self.subTest(frame=frame):
+                self.assertIsNone(M.parse_generic_reply(frame))
+
+    def test_generic_and_known_receivers_keep_names_and_charging_separate(self):
+        for first, second in (("000000000000", "0300000001c6"),
+                              ("0300000001c6", "000000000000")):
+            with self.subTest(first=first), fixture(
+                    [identity(first), reply(63, 0x10), identity(second), reply(70, 0x10)],
+                    [entry("one"), entry("two")]):
+                statuses = P().poll()
+            for status, code in zip(statuses, (first, second)):
+                known = code != "000000000000"
+                self.assertEqual(status.charging_known, known)
+                self.assertEqual(status.name, "MCHOSE X75 V2" if known else "2.4G 无线键盘（3554:FA09）")
+            self.assertEqual(len(statuses), 2)
 
 if __name__ == "__main__":
     unittest.main()

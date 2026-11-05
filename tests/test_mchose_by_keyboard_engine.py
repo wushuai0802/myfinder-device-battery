@@ -11,6 +11,7 @@ ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
 sys.path.insert(0, str(ENGINE / "tests"))
 from test_mchose_by_keyboard import P, entry, fixture, identity, reply
+from providers.vgn_beiying import VgnBeiyingProvider
 from catalog import verification_for
 from device_pack import BRAND_PROVIDERS
 from isolation import wire_encode
@@ -20,6 +21,7 @@ import server
 
 class MchoseByKeyboardBridgeTests(unittest.TestCase):
     receiver = {}
+    unknown_battery = True
 
     def entry(self, physical="receiver-a", **changes):
         return entry(physical, **(self.receiver | changes))
@@ -40,13 +42,15 @@ class MchoseByKeyboardBridgeTests(unittest.TestCase):
             self.assertEqual({(row["vendorId"], row["productId"], row["kind"]) for row in rows},
                              {(0x3554, 0xFA09, "keyboard"), (0x41E4, 0x2001, "keyboard")})
             self.assertEqual(index["vendors"][P.name], [0x3554, 0x41E4])
+            self.assertEqual([row["provider"] for row in index["devices"]
+                              if (row["vendorId"], row["productId"]) == (0x3554, 0xFA09)], [P.name])
         rejected = [entry(vendor_id=0x3554, product_id=0x2001),
                     entry(vendor_id=0x41E4, product_id=0xFA09),
                     entry(vendor_id=0x41E4, product_id=0x2201)]
         self.assertEqual(server.recognized_candidate_count(P.name, rejected), 0)
         self.assertEqual(server.recognized_candidate_count(P.name, rejected + [self.entry()]), 1)
 
-    def test_silence_or_unknown_model_never_creates_or_refreshes_a_reading(self):
+    def test_silence_or_identity_instead_of_battery_never_refreshes_a_reading(self):
         engine = server.BatteryEngine([P()], include_native=True)
         self.addCleanup(engine.close)
         with self.fixture():
@@ -73,8 +77,11 @@ class MchoseByKeyboardBridgeTests(unittest.TestCase):
         request = dict(action="query", sequence=1, provider=P.name,
                        physicalId="one", inventory=infos)
         data = (json.dumps(request, default=wire_encode) + "\n").encode()
-        for frames, count in (([identity(), reply()], 1),
-                              ([identity("000000000000")], 0), ([], 0)):
+        for frames, name in (([identity(), reply()], "MCHOSE X75 V2"),
+                             ([identity("000000000000"), reply()],
+                              "2.4G 无线键盘（3554:FA09）" if self.unknown_battery else None),
+                             ([identity("000000000000")], None), ([], None)):
+            count = int(name is not None)
             with self.subTest(count=count), self.fixture(frames, infos) as bus, \
                     patch.object(server.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data))), \
                     patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
@@ -86,12 +93,38 @@ class MchoseByKeyboardBridgeTests(unittest.TestCase):
             self.assertEqual(bus.opened, [infos[0]["path"]])
             self.assertEqual(bus.opened, bus.closed)
             if count:
-                self.assertEqual(response["statuses"][0]["name"], "MCHOSE X75 V2")
+                self.assertEqual(response["statuses"][0]["name"], name)
 
 
 class Mchose41e4KeyboardBridgeTests(MchoseByKeyboardBridgeTests):
     receiver = dict(vendor_id=0x41E4, product_id=0x2001,
                     product_string="MCHOSE 2.4G Wireless")
+    unknown_battery = False
+
+
+class SharedFa09BridgeTests(unittest.TestCase):
+    def test_one_neutral_card_and_zero_reply_preserves_unconfirmed_history(self):
+        infos = [entry(path=b"fa09-ff04"), entry(path=b"fa09-ff02", usage_page=0xFF02)]
+        engine = server.BatteryEngine([VgnBeiyingProvider(), P()], include_native=True)
+        self.addCleanup(engine.close)
+        with fixture([identity("000000000000"), reply(63, 0xFF)], infos) as bus:
+            snapshot = engine.poll()
+        first, = snapshot["devices"]
+        self.assertEqual((first["name"], first["percent"], first["charging"]),
+                         ("2.4G 无线键盘（3554:FA09）", 63, None))
+        self.assertEqual(snapshot["errors"], [])
+        self.assertEqual(bus.opened, [infos[0]["path"]])
+        self.assertEqual(bus.opened, bus.closed)
+        for frames in ([], [reply(0)]):
+            with self.subTest(frames=frames), fixture(frames, infos) as bus:
+                snapshot = engine.poll()
+            stale, = snapshot["devices"]
+            self.assertEqual((stale["name"], stale["percent"], stale["confirmedAtUtc"]),
+                             (first["name"], 63, first["confirmedAtUtc"]))
+            self.assertFalse(stale["fresh"])
+            self.assertEqual(stale["connectionState"], "unconfirmed")
+            self.assertEqual(snapshot["errors"], [])
+            self.assertEqual(bus.opened, [infos[0]["path"]])
 
 
 if __name__ == "__main__":

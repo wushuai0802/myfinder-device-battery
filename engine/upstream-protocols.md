@@ -463,8 +463,8 @@ and battery / charging captures from the exact Pro model are still needed;
 the upstream hardware evidence describes an Ultra+ sibling. Existing V2 behavior
 is preserved.
 
-**CompX keyboard receiver `3554:FA09`: MCHOSE-only identification/battery path
-added on 2026-11-05, C / unverified; see the [M HUB evidence below](#mchose-by-keyboard-receiver-3554fa09).
+**CompX keyboard receiver `3554:FA09`: unified identification/battery path
+added on 2026-11-05, C / unverified; see the [M HUB/VGN HUB evidence below](#mchose-by-keyboard-receiver-3554fa09).
 `3554:FA07` remains unimplemented.** `FF02:0002` is transport shape, not evidence
 that a keyboard answers a mouse battery command. The reviewed OpenMouse mouse package `0.49.0` and
 [keyboard package `1.6.1`](https://www.npmjs.com/package/@openmouse/keyboard-protocol/v/1.6.1)
@@ -473,7 +473,8 @@ repository's existing `pulsar.py`, `gwolves.py` and G-Wolves Compx notes describ
 mouse framing and mouse battery reads only. They do not justify a keyboard
 command or reply offsets. Neither ID receives a mouse query. The FA09 reader
 uses the official BY keyboard protocol on `FF04:0002`, not those mouse readers;
-non-MCHOSE models sharing FA09 remain unsupported. Hardware captures of the exact
+unknown identities use a neutral generic battery read, without claiming a
+particular brand/model. Hardware captures of the exact
 descriptor, responses, charging transitions and sleep/wake behavior are still needed.
 
 Sources above were read on **2026-11-04**. OpenMouse mouse-protocol commit
@@ -1224,9 +1225,11 @@ X75_V2/GX87/GX87_V2/K87/G75_Pro variants, but that alone does not prove they use
 the wireless rather than wired transport.
 
 This implementation supports **only those two exact generic wireless names**.
-It identifies a recognized model once per observed plug-in; an unknown model
-is remembered without further sends until removal. Silent identification is
-retried on the next poll, then backs off from 60 seconds to at most 30 minutes.
+It identifies each receiver once per observed plug-in. A complete unknown
+identity is cached: FA09 continues with a neutral battery read as described
+below; `41E4:2001` still sends nothing further until removal. Silent
+identification is retried on the next poll, then backs off from 60 seconds to
+at most 30 minutes; silence never enables the generic battery path.
 It never trusts an injected/cached `realName`,
 a substring such as `X75`, the manufacturer string, or the USB ID alone. The
 following source-table codes are protocol facts, not passwords or credentials:
@@ -1247,12 +1250,66 @@ The generic-receiver branch uses the whole table, without an additional
 model/PID cross-product filter. These are eligible identification results, **not
 18 hardware-verified FA09 models**. Named AULA/狼蛛, NEWMEN/新盟, XUNSHE/迅蛇,
 SCC100, bare MCHOSE G75, unknown names and all suffixed product strings receive
-no commands here. A generic name shared by another brand may receive the same
-read-only identity query M HUB issues, but an unknown code stops there: **no
-battery query and no reading**. Sharing FA09 is not a compatibility claim for
+no commands here. A generic name shared by another brand receives the same
+read-only identity query M HUB issues. For FA09 only, an unknown code enables
+the generic `4A` battery read below. Sharing FA09 is not a hardware compatibility claim for
 #22/#25/#53/#99/#108/#110/#115/#128/#129/#133 or another brand. If another brand
 reuses a recognized code, these published fields cannot distinguish it; this
 is an unverified firmware-identity boundary, not proof of its compatibility.
+
+#### Shared FA09: one owner, identification before the generic battery read
+
+`3554:FA09` belongs exclusively to `mchose_by_keyboard`, including its offline
+device index and worker routing. `vgn_beiying` excludes the pair entirely, so
+the receiver's FF02 collection cannot start a second query or create a VXE
+card alongside the FF04 card. The existing generic-name, unique FF04:0002,
+single report-ID `13` / 20-byte input/output descriptor gates remain in place.
+An FF02-only or otherwise ineligible FA09 is not queried by either reader.
+
+The first query is always the fixed read-only `05` identification frame.
+A complete accepted `05` reply matching `keyboardPwds` retains the existing
+`MCHOSE <model>` name and M HUB battery/charging interpretation. A complete
+accepted identity reply that cannot match that table, including an unknown
+six-byte code, instead sends the same fixed `4A` battery frame and uses
+**`2.4G 无线键盘（3554:FA09）`**. It never infers VXE, AULA, NEWMEN, XUNSHE or
+another brand from the shared VID/PID. Both identity outcomes are cached until
+observed removal; subsequent polls send only `4A`. Silent identification keeps
+the existing retry/back-off state and sends no `4A`; malformed frames, request
+echoes and unrelated commands do not count as an identity response.
+
+Basis for this deliberate extension beyond M HUB's model gate: the recorded
+[VGN HUB beiying evidence](#vgn-beiying-keyboard-receivers) uses bundle
+`index-ZngoA_qG.js` / SHA-256
+`53adfab22f478249bdb9117bb26cedf8a7d3c6c561f2f2eb735e7d86e943be63`.
+The `3554:FA09` receiver row is in the table starting at UTF-16 offset
+`1715479`; `isBeiyingDongle` (`2873695`) explicitly includes it. The branch at
+`2878686` selects `ds` for V87pro and calls `getDeviceInfo` ->
+`getBatteryInternal` without a product-name or model query/gate. `ds`
+(`2168848`) sends report `13`, command `4A`, using the same 20-byte BY frame.
+That is evidence for a receiver-level percentage read, not evidence that
+every FA09 keyboard is a VXE V87 Pro. We retain M HUB's FF04 identification
+endpoint and apply this ungated battery-read policy only after an unknown
+identity response, rather than probing its second endpoint.
+
+For an unknown model, the generic parser follows VGN HUB's percentage-only
+interpretation: full-frame byte 5, 1..100 accepted here, zero suppressed as
+for the existing FA09 reader. It does not apply MCHOSE's flag-nibble meanings
+to another brand, and exposes charging as unknown. Both HUB input handlers
+discard the reply trailer; this FA09 path retains the existing no-checksum
+validation policy, rather than extending #190's 258A:024F checksum evidence
+to unknown FA09 firmware. Complete single-packet framing and echo rejection
+remain required. A zero or invalid battery reply creates no new reading and
+does not refresh a previous reading.
+
+`05` is identification only, never authentication, pairing, unlock or a
+settings write. This provider sends **only `05` and `4A`**, with no other
+commands or feature operations. The recorded M HUB/VGN HUB read paths contain
+no evidence of `4A` state-changing side effects on non-MCHOSE/non-VGN devices;
+that is a bounded static finding, not a hardware safety result. Synthetic
+tests cover both provider orders, both FA09 collections, one open/one card,
+known/unknown names, silent back-off, zero suppression and stale history.
+Other-brand firmware, FF04/FF02 equivalence in practice, cold starts, delayed
+or cached replies, charging and coexistence with either HUB remain unverified.
 
 #### Complete exchanges and session requirements
 
@@ -1293,7 +1350,7 @@ then appends data `[4:-1]`. `getPassWordParserWireless` takes its first six byte
 | 6 | LOW nibble `fullStatus`, HIGH nibble `chargeStatus` |
 | 19 | Trailer discarded by upstream; response checksum not established |
 
-The nibble order follows the bundled `Parser.generateBit` little-endian branch,
+For identified MCHOSE models, the nibble order follows the bundled `Parser.generateBit` little-endian branch,
 not the textual field order. `resolveBatteryIcon` and the home battery status
 use `chargeStatus === 1 && battery < 100`. Accept only 0/1 for each flag; other
 nibble values have no established semantics and produce no reading. Like M HUB,
@@ -1311,8 +1368,9 @@ cause zero opens/sends. Topology uses preparsed descriptor data only; no feature
 request or output query is used to discover capabilities.
 
 Each exchange sends once and reads at most 32 packets/2200 ms (M HUB's
-`retryTime:2` budget). A silent/asleep receiver, an invalid reply or unknown model
-creates no new reading and no engine error. There is no invented sleep byte or
+`retryTime:2` budget). A silent/asleep receiver or invalid battery reply creates
+no new reading and no engine error; unknown FA09 identities use the generic
+path above, while unknown `41E4:2001` identities remain blocked. There is no invented sleep byte or
 offline 0%. The protocol has no nonce; cached receiver replies, delayed packets,
 sleep freshness, charge transitions and concurrent M HUB ownership are untested.
 All new reply fixtures are **synthetic**, including their trailer values.
@@ -1378,7 +1436,8 @@ the selected names/IDs, not complete bundle coverage or device execution.
 
 The provider adds only the exact pair `41E4:2001`, retaining `3554:FA09`;
 `3554:2001` and `41E4:FA09` are not accepted. It shares the existing codec,
-model gate, bounded reads and zero-percent rejection. Model/unknown/silent
+M HUB model gate, bounded reads and zero-percent rejection. The later generic
+unknown-model fallback applies only to FA09, not `41E4:2001`. Model/unknown/silent
 back-off caches remain per physical receiver and path across both vendor
 inventories, and are pruned only after both have been polled. No model name is
 guessed from PID 2001. The **state-changing commands excluded** are the same
@@ -1410,7 +1469,7 @@ configuration and other firmware versions are outside this static snapshot.
 
 ### VGN beiying keyboard receivers
 
-**C / 258A:024F 用户实机验证，#190；其余五条仅官方静态协议证据，待本项目实机验证。**
+**C / 258A:024F 用户实机验证，#190；本读取器其余四条仅官方静态协议证据，待本项目实机验证。FA09 已统一到 MCHOSE BY 读取器。**
 Thanks to **shijiu599** for issue **#190**, the V98 Pro V3 receiver readout,
 the 99% plugged/unplugged comparison, and the fixed-usage descriptor proof
 proposal. The supplied issue is `.ai/evidence/issue-190.md`; its saved Chinese
@@ -1432,7 +1491,8 @@ Offsets below are zero-based UTF-16 character offsets in this exact bundle.
 
 All 14 `customDeviceType:"beiying"` rows use `deviceKeyboard`. IDs, collections
 and report IDs below are hexadecimal. The table starts at offset 1715479;
-the last row starts at 1721391. Only the six `receiver:true` rows are enabled.
+the last row starts at 1721391. Five `receiver:true` rows use this reader;
+shared FA09 uses the single-owner flow documented above.
 
 | VID:PID | Official product | Collection | Report | Decision |
 | --- | --- | --- | --- | --- |
@@ -1441,7 +1501,7 @@ the last row starts at 1721391. Only the six `receiver:true` rows are enabled.
 | `258A:027E` | VGN V98pro V3 | `FF00:0001` | `09` | Wired; excluded |
 | `258A:027F` | VGN V98pro V3 | `FF02:0002` | `13` | Enabled; static evidence only |
 | `258A:010C` | VXE V87pro | `FF00:0001` | `06` | Wired; excluded |
-| `3554:FA09` | VXE V87pro | `FF02:0002` | `13` | Enabled; static evidence only |
+| `3554:FA09` | VXE V87pro (upstream label only) | `FF02:0002` | `13` | Excluded here; owned solely by `mchose_by_keyboard` on FF04, neutral name for unknown models |
 | `258A:026A` | VGN V87 V2 | `FF00:0001` | `09` | Wired; excluded |
 | `258A:027B` | VGN V87 V2 | `FF02:0002` | `13` | Enabled; static evidence only |
 | `391D:2003` | VGN N75 V2 | `FF00:0001` | `09` | Wired; excluded |
@@ -1479,15 +1539,17 @@ was reported silently discarded. This is user-reported hardware evidence,
 not a capture made by this task.
 
 `by_keyboard.py` now holds the existing fixed BY read frames and single-packet
-payload parser. MCHOSE retains its FF04 collection, generic-name/model gate,
-identity caching/back-off, zero-percent refusal, nibble semantics and lack of
-reply-checksum validation. `providers/vgn_beiying.py` instead reads directly,
+payload parser. The unified FA09 reader retains its FF04 collection, generic-name
+gate, identity caching/back-off and zero-percent refusal; recognized MCHOSE
+models retain their nibble semantics. Unknown FA09 models use the neutral
+percentage-only path above. `providers/vgn_beiying.py` reads its five pairs directly,
 requires the reply checksum, rejects echo/bad header/length/out-of-range
 percentage, and accepts 0..100 without inventing MCHOSE's zero-asleep policy.
 Only `258A:024F` reports charging as known; other IDs leave it unknown. At
 100%, bit 4 is not forced off: full-on-external-power semantics remain untested.
-`3554:FA09 / FF02:0002` and MCHOSE's `FF04:0002` remain separate endpoints;
-neither this row nor the PID alone proves compatibility with other brands.
+`3554:FA09 / FF02:0002` is no longer queried by this provider; only the unified
+FF04 path may produce its card. Neither the upstream label nor the PID alone
+proves a brand/model or hardware compatibility with other brands.
 
 #### Descriptor gate and excluded state changes
 
@@ -1499,7 +1561,8 @@ and 0..255-selector proofs remain supported. The additional
 `battery_hid.fixed_usage_report_size` proof requires one non-aliased button cap,
 Data/Array flags, non-range repeated fixed usage, no value caps, and
 `report_count == maximum - 1`. Topology opts into this fallback only for the
-six exact pairs and FF02:0002, never for wired devices or MCHOSE's FF04 path.
+five remaining exact pairs and FF02:0002, never for FA09, wired devices or
+MCHOSE's FF04 path.
 It uses cached preparsed descriptors only; no input/output/feature transfers.
 Failed proof is not cached as success and can be retried at later discovery.
 
@@ -1523,7 +1586,7 @@ firmware, pairing or reset entry point is implemented. Synthetic write traces
 assert the entire packet, so any command other than this battery request fails.
 
 Tests cover both #190 charging frames, checksum corruption, percentage limits,
-echo rejection, all six pairs, crossed/wired IDs, descriptor positive/negative
+echo rejection, all five remaining pairs, FA09 exclusion, crossed/wired IDs, descriptor positive/negative
 cases, isolation/JSON preservation, history on silence and existing MCHOSE BY
 behavior. **This task did not access hardware or the network.** Remaining
 unknowns: sibling descriptors/reply checksums and firmware behavior in practice,

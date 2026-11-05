@@ -26,16 +26,17 @@ P = V.P
 class VgnBeiyingBridgeTests(unittest.TestCase):
     def test_registration_and_offline_index_use_exact_pairs(self):
         self.assertIn((P.name, "VgnBeiyingProvider"), server.PROVIDERS)
-        self.assertEqual(server.PROVIDER_VIDS[P.name], (0x258A, 0x3554, 0x391D))
+        self.assertEqual(server.PROVIDER_VIDS[P.name], (0x258A, 0x391D))
         self.assertIn(P.name, BRAND_PROVIDERS)
         self.assertEqual(verification_for(P.name)[0], "C")
-        pairs = set(V.V.PIDS)
+        pairs = {(0x258A, 0x024F), (0x258A, 0x027F), (0x258A, 0x027B),
+                 (0x391D, 0x2A01), (0x391D, 0x2A02)}
         for index in (build_index(), build_index(engine_root=ENGINE)):
             self.assertNotIn(P.name, index["unparsed"])
             self.assertNotIn(P.name, index["partial"])
             self.assertEqual({(r["vendorId"], r["productId"]) for r in index["devices"]
                               if r["provider"] == P.name}, pairs)
-            self.assertEqual(index["vendors"][P.name], [0x258A, 0x3554, 0x391D])
+            self.assertEqual(index["vendors"][P.name], [0x258A, 0x391D])
         for vid in (0x258A, 0x3554, 0x391D, 0x41E4):
             for pid in (0x024F, 0x027B, 0x027F, 0xFA09, 0x2A01, 0x2A02, 0x024E):
                 self.assertEqual(server.recognized_candidate_count(P.name, [
@@ -110,7 +111,7 @@ class VgnBeiyingBridgeTests(unittest.TestCase):
         case.hid.HidP_GetValueCaps.side_effect = fields
         return case
 
-    def test_all_six_descriptors_are_proven_passively_and_cached(self):
+    def test_all_five_descriptors_are_proven_passively_and_cached(self):
         for identity in V.V.PIDS:
             for fixed in (True, False):
                 with self.subTest(identity=identity, fixed=fixed):
@@ -152,6 +153,7 @@ class VgnBeiyingBridgeTests(unittest.TestCase):
                                      ((0x258A, 0x024F), (0xFF04, 2)),
                                      ((0x258A, 0x024F), (0xFF02, 1)),
                                      ((0x3554, 0x024F), (0xFF02, 2)),
+                                     ((0x3554, 0xFA09), (0xFF02, 2)),
                                      ((0x3554, 0xFA09), (0xFF04, 2)),
                                      ((0x41E4, 0x2001), (0xFF04, 2))):
             with self.subTest(identity=identity, collection=collection):

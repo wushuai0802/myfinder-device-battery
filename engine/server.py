@@ -56,7 +56,7 @@ PROVIDER_VIDS = {
     "mchose_headset": (0x291D, 0x3837),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "vgn_keyboard": (0x320F,),
-    "vgn_beiying": (0x258A, 0x3554, 0x391D),
+    "vgn_beiying": (0x258A, 0x391D),
     "vgn_dragonfly3": (0x391D,), "ninjutso_legacy": (0x1915,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),

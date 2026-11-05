@@ -1,7 +1,7 @@
-"""M HUB BY keyboard receivers: model-gated 3554:FA09 / 41E4:2001 reads.
+"""BY keyboard receivers: shared 3554:FA09 / model-gated 41E4:2001 reads.
 
-Protocol facts independently implemented from main-DCRwBIvm.js, not vendor
-code. See upstream-protocols.md for framing, identification and untested limits.
+Protocol facts independently implemented from M HUB / VGN HUB, not vendor code.
+See upstream-protocols.md for framing, identification and untested limits.
 Only generic receiver names take this wireless path; no substring brand guesses.
 """
 import battery_hid as H
@@ -10,7 +10,7 @@ from by_keyboard import identity_request, make_request, payload as _payload
 VID = 0x3554
 # Exact pairs, never a cross product of vendor and product IDs.
 PIDS = {
-    (0x3554, 0xFA09): "MCHOSE BY keyboard (model identification required)",
+    (0x3554, 0xFA09): "2.4G 无线键盘（3554:FA09）",
     (0x41E4, 0x2001): "MCHOSE BY keyboard (model identification required)",
 }
 RECEIVER_NAMES = frozenset(("2.4G Wireless Receiver", "MCHOSE 2.4G Wireless"))
@@ -54,6 +54,15 @@ def parse_reply(reply):
     return level, charge == 1 and level < 100, ""
 
 
+def parse_generic_reply(reply):
+    # VGN HUB reads the same 4A percentage without a model gate. Unknown FA09
+    # firmware has no proven M HUB flag semantics; leave charging unknown.
+    payload = _payload(reply, 0x4A)
+    if payload is None or not 1 <= payload[0] <= 100:
+        return None
+    return payload[0], False, ""
+
+
 class MchoseByKeyboardProvider(H.BatteryHidProvider):
     name = "mchose_by_keyboard"
     vid = VID
@@ -65,11 +74,10 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
     kind = "keyboard"
     charging_known = True
     read_timeout_ms = 2200  # M HUB's retryTime:2 response budget, per query.
-    # FA09 + "2.4G Wireless Receiver" is shared by many brands whose firmware may
-    # give 0x05 another meaning. Remember each receiver's answer for as long as it
-    # stays plugged in: a recognized model is never re-identified, an unrecognized
-    # one is never probed again. A silent receiver (keyboard asleep, or firmware
-    # that ignores 0x05) is retried once on the next poll, then with exponential
+    # Remember each receiver's identity until removal. Unknown FA09 models use
+    # VGN HUB's direct 4A read with a neutral name; unknown 41E4:2001 models stay
+    # blocked. Neither is re-identified. A silent receiver (keyboard asleep, or
+    # firmware that ignores 0x05) is retried once on the next poll, then with exponential
     # back-off from 1 minute doubling to at most 30 minutes, so a sleeping MCHOSE
     # keyboard is still found later while other brands are probed rarely.
     IDENTIFY_BACKOFF_SECONDS = (60, 1800)
@@ -118,6 +126,8 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
         return info
 
     def device_name(self, info):
+        if self._model is False:
+            return PIDS[(info["vendor_id"], info["product_id"])]
         return "MCHOSE " + self._model.replace("_", " ")
 
     def _exchange(self, dev, request, parse):
@@ -135,10 +145,11 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
             parsed = parse(raw)
             if parsed is not None:
                 return parsed
-            # A complete unknown identity is a terminal refusal, even if a
-            # previously queued recognized identity follows it.
+            # A complete unknown identity ends identification, even if a
+            # previously queued recognized identity follows it. The query state
+            # machine decides whether this exact receiver allows a generic read.
             if request == identity_request() and _payload(raw, 0x05) is not None:
-                self._diag.append("model not in M HUB table: no battery query")
+                self._diag.append("model not in M HUB table")
                 self._unknown = True
                 return None
         self._diag.append("no valid reply; no new reading; connection unknown")
@@ -147,9 +158,6 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
     def _query(self, dev, info):
         key = self._key
         model = self._models.get(key)
-        if model is False:
-            self._diag.append("unrecognized model remembered: nothing sent until re-plug")
-            return None
         if model is None:
             silent, next_try = self._attempts.get(key, (0, 0.0))
             now = H.time.monotonic()
@@ -160,14 +168,17 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
             model = self._exchange(dev, identity_request(), parse_model)
             if model is None:
                 if self._unknown:
-                    self._models[key] = False
-                    self._attempts.pop(key, None)
+                    model = False
                 else:
                     first, ceiling = self.IDENTIFY_BACKOFF_SECONDS
                     delay = 0 if silent == 0 else min(ceiling, first * 2 ** (silent - 1))
                     self._attempts[key] = (silent + 1, now + delay)
-                return None
+                    return None
             self._models[key] = model
             self._attempts.pop(key, None)
+        if model is False and (info["vendor_id"], info["product_id"]) != (0x3554, 0xFA09):
+            self._diag.append("unrecognized model remembered: nothing sent until re-plug")
+            return None
         self._model = model
-        return self._exchange(dev, make_request(), parse_reply)
+        self.charging_known = model is not False
+        return self._exchange(dev, make_request(), parse_reply if self.charging_known else parse_generic_reply)

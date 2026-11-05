@@ -129,15 +129,13 @@ class FeedbackProtocolTests(unittest.TestCase):
                          ("pulsar", "Scyrox 8K 接收器", "mouse"))
         v3 = entries[(0x3837, 0x1018)]
         self.assertEqual((v3["provider"], v3["kind"]), ("mchose", "mouse"))
-        # FA09 now has separate FF04 M HUB and FF02 VGN HUB readers. Do not
-        # collapse their provider identity just because the USB pair is shared.
+        # Shared FA09 belongs to one reader, regardless of its two collections.
         keyboards = {d["provider"]: d for d in rows
                      if (d["vendorId"], d["productId"]) == (0x3554, 0xFA09)}
-        self.assertEqual(set(keyboards), {"mchose_by_keyboard", "vgn_beiying"})
-        self.assertEqual(keyboards["vgn_beiying"]["kind"], "keyboard")
+        self.assertEqual(set(keyboards), {"mchose_by_keyboard"})
         keyboard = keyboards["mchose_by_keyboard"]
         self.assertEqual((keyboard["provider"], keyboard["kind"]), ("mchose_by_keyboard", "keyboard"))
-        self.assertIn("model identification required", keyboard["name"])
+        self.assertEqual(keyboard["name"], "2.4G 无线键盘（3554:FA09）")
         self.assertNotIn((0x3554, 0xFA07), entries)
 
 
