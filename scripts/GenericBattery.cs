@@ -19,7 +19,7 @@ namespace AtkBattery {
         const int UrlLimit=6000;
         readonly List<string> devices=new List<string>(),suppressed=new List<string>(),unadapted=new List<string>(),health=new List<string>();
         readonly string header;
-        internal FeedbackReport(string version,string windows,IEnumerable<WirelessDevice> cards,IEnumerable<SuppressedDevice> hidden,IEnumerable<UnadaptedDevice> unknown,IEnumerable<ReaderHealth> readers,IEnumerable<string> privateValues,string devicePack="未使用型号数据包"){
+        internal FeedbackReport(string version,string windows,IEnumerable<WirelessDevice> cards,IEnumerable<SuppressedDevice> hidden,IEnumerable<UnadaptedDevice> unknown,IEnumerable<ReaderHealth> readers,IEnumerable<string> privateValues,string devicePack=DevicePackManager.NotUsedDiagnostic){
             var secrets=new List<string>();foreach(string value in privateValues)if(!String.IsNullOrEmpty(value))secrets.Add(value);
             secrets.Sort(delegate(string a,string b){return b.Length.CompareTo(a.Length);});
             Func<string,string> clean=delegate(string value){

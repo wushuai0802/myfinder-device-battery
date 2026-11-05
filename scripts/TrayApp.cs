@@ -668,7 +668,7 @@ namespace AtkBatteryTray {
         UpdateController updates;
         DevicePackManager devicePacks;
         DevicePackController devicePackChecks;
-        internal string DevicePackDiagnostic {get{return devicePacks==null?"未使用型号数据包":devicePacks.Diagnostic;}}
+        internal string DevicePackDiagnostic {get{return devicePacks==null?DevicePackManager.NotUsedDiagnostic:devicePacks.Diagnostic;}}
         readonly TrayBalloonRoute balloonRoute=new TrayBalloonRoute();
         internal FeedbackReplies FeedbackReplies=new FeedbackReplies(new FeedbackStore(null),new FeedbackHttp());
         FeedbackReplyController feedbackChecks;MyFeedbackDialog feedbackDialog;

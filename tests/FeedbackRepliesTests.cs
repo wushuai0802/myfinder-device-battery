@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -15,6 +16,7 @@ static class FeedbackRepliesTests {
     const string Relay="https://feedback.invalid/service";
     static readonly DateTime Start=new DateTime(2026,11,5,0,0,0,DateTimeKind.Utc);
     static int checks,failures;static string output;
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
     static void Check(bool value,string text){if(!value)throw new Exception(text);checks++;}
     static void Run(string name,Action action){try{action();Console.WriteLine("PASS "+name);}catch(Exception e){failures++;Console.Error.WriteLine("FAIL "+name+": "+e);}}
     static UpdateResponse Response(int code,string body,string retry=null,long? length=null){var bytes=Encoding.UTF8.GetBytes(body);return new UpdateResponse(code,new MemoryStream(bytes),length??bytes.Length,null,retry);}
@@ -314,6 +316,79 @@ static class FeedbackRepliesTests {
         route.Set(TrayBalloonKind.LowBattery);click();Check(update==1&&low==1&&feedback==42,"low battery still routes to device details");
         route.Set(TrayBalloonKind.Feedback,43);route.Set(TrayBalloonKind.Update);click();Check(update==2&&feedback==42,"latest displayed balloon replaces the previous route");
     }
+    static void DrawRecord(ListBox list,Bitmap bitmap,int index,DrawItemState state){
+        using(var graphics=Graphics.FromImage(bitmap))list.GetType().GetMethod("OnDrawItem",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(list,new object[]{new DrawItemEventArgs(graphics,list.Font,new Rectangle(Point.Empty,bitmap.Size),index,state)});
+    }
+    static void HistoryAppearance(){
+        var previousArea=ThemedDialog.WorkingAreaProvider;var previousDpi=DialogDpi.DeviceDpiReader;var previousSettings=DeviceSettings.Current.Clone();var previousContrast=VisualDesign.HighContrastOverride;
+        try{
+            VisualDesign.HighContrastOverride=false;ThemedDialog.WorkingAreaProvider=delegate{return new Rectangle(0,0,3200,2400);};
+            foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true})foreach(int dpi in new[]{96,120,144,192})foreach(int count in new[]{0,1,10}){
+                DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle=style,Theme=dark?"dark":"light",RememberReadings=false,ReducedMotion=true});DialogDpi.DeviceDpiReader=delegate{return dpi;};
+                var store=Store();store.Change(delegate(FeedbackData data){for(int i=1;i<=count;i++){var record=Record(i);record.CreatedAt=Start.AddMinutes(-i);record.Comments.Add(Comment(i.ToString()));data.Records.Add(record);}});
+                float scale=dpi/96f;
+                using(var font=new Font("Microsoft YaHei UI",VisualDesign.BodyFontSize*scale,FontStyle.Regular,GraphicsUnit.Pixel))
+                using(var dialog=new MyFeedbackDialog(Service(store,new Http()),Report(),dark,delegate{})){
+                    Check(dialog.FormBorderStyle==FormBorderStyle.FixedDialog&&!dialog.MaximizeBox&&!dialog.MinimizeBox&&dialog.StartPosition==FormStartPosition.CenterParent,"history uses the fixed themed dialog frame");
+                    Check(dialog.ClientSize.Width>=540&&dialog.ClientSize.Width<=620,"history starts at feedback-form width");
+                    dialog.Scale(new SizeF(scale,scale));dialog.Font=font;dialog.Opacity=0;dialog.Show();Application.DoEvents();
+                    var list=Find<ListBox>(dialog,"FeedbackRecords");var close=Find<ThemedButton>(dialog,"CloseFeedbackHistory");var supplement=Find<ThemedButton>(dialog,"SupplementFeedback");var delete=Find<ThemedButton>(dialog,"DeleteFeedbackRecord");
+                    Check(list.DrawMode==DrawMode.OwnerDrawFixed&&list.AccessibleName=="我的反馈列表","native list keeps accessible selection with owner-drawn rows");
+                    int scrollbar=list.HorizontalExtent>list.ClientSize.Width?SystemInformation.HorizontalScrollBarHeight:0;
+                    Check(list.Height-scrollbar==Math.Max(2,Math.Min(6,count))*list.ItemHeight,"history reserves two to six complete rows at "+dpi+" DPI for "+count+" records");
+                    Check(Math.Abs(list.ItemHeight-list.Font.Height*1.8)<=1,"history row spacing follows the scaled font");
+                    Check(Find<Label>(dialog,"FeedbackHistoryTitle").Text=="我的反馈"&&Find<Label>(dialog,"FeedbackHistoryNotice").Text.Contains("公开显示"),"history has a title and public supplement notice");
+                    Check(Find<Label>(dialog,"FeedbackHistoryEmpty").Visible==(count==0),"empty history has a visible explanation");
+                    Check(close.FillFor(false,false)==dialog.Theme.Track&&delete.FillFor(false,false)==dialog.Theme.Card,"close is ordinary and local deletion is a separate text action");
+                    Check(supplement.Enabled==(count>0)&&supplement.FillFor(false,false)==(count>0?dialog.Theme.Selected:dialog.Theme.Track),"only the available supplement uses primary styling");
+                    var deleteBounds=delete.RectangleToScreen(delete.ClientRectangle);Check(deleteBounds.Right<=supplement.Parent.RectangleToScreen(supplement.Parent.ClientRectangle).Left,"local deletion is separated on the left");
+                    int lastButtonBottom=0;
+                    foreach(string name in new[]{"CloseFeedbackHistory","RefreshFeedbackReplies","OpenFeedbackWeb","SupplementFeedback","DeleteFeedbackRecord"}){
+                        var button=Find<Button>(dialog,name);var bounds=button.RectangleToScreen(button.ClientRectangle);
+                        lastButtonBottom=Math.Max(lastButtonBottom,bounds.Bottom);
+                        for(Control parent=button.Parent;parent!=null;parent=parent.Parent)Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),name+" stays inside its ancestors at "+dpi+" DPI");
+                    }
+                    Check(delete.Parent.RectangleToScreen(delete.Parent.ClientRectangle).Bottom-lastButtonBottom<=4*scale,"button bar does not reserve unused rows: bar="+delete.Parent.Size+", preferred="+delete.Parent.GetPreferredSize(new Size(delete.Parent.Width,0))+", actions="+supplement.Parent.Size+", action preferred="+supplement.Parent.GetPreferredSize(new Size(supplement.Parent.Width,0))+", gap="+(delete.Parent.RectangleToScreen(delete.Parent.ClientRectangle).Bottom-lastButtonBottom));
+                    if(count>0){
+                        Check(list.GetItemText(list.Items[0])==store.Find(1).ListText,"owner drawing preserves ListText exactly");close.Focus();
+                        using(var bitmap=new Bitmap(list.Width,list.ItemHeight)){
+                            DrawRecord(list,bitmap,0,DrawItemState.Selected|DrawItemState.Focus);
+                            Color selected=bitmap.GetPixel(bitmap.Width-8,(int)(bitmap.Height/2));
+                            Check(selected.ToArgb()==dialog.Theme.Interaction(dialog.Theme.Card,false).ToArgb()&&selected.ToArgb()!=SystemColors.Highlight.ToArgb(),"selected history uses the palette's soft panel fill in "+style);
+                            Check(bitmap.GetPixel(0,0).ToArgb()==dialog.Theme.Card.ToArgb(),"selection leaves rounded card-colored corners");
+                            if(count==10){
+                                DrawRecord(list,bitmap,1,DrawItemState.None);Check(bitmap.GetPixel((int)(10*scale),bitmap.Height/2).ToArgb()==dialog.Theme.Accent.ToArgb(),"unread row has a palette accent dot");
+                            }
+                        }
+                    }
+                    if(count==10&&dpi==96){
+                        int outlines=0;var observer=CompactRenderer.InteractionOutlineObserver;
+                        try{
+                            CompactRenderer.InteractionOutlineObserver=delegate{outlines++;};
+                            using(var bitmap=new Bitmap(list.Width,list.ItemHeight)){
+                                DrawRecord(list,bitmap,0,DrawItemState.Selected|DrawItemState.Focus);Check(outlines==0,"unfocused history does not draw a focus ring");
+                                list.Focus();SendMessage(list.Handle,0x0127,(IntPtr)(1|(1<<16)),IntPtr.Zero);outlines=0;
+                                DrawRecord(list,bitmap,0,DrawItemState.Selected|DrawItemState.Focus);Check(outlines==0,"mouse focus keeps keyboard cues hidden");
+                                SendMessage(list.Handle,0x0127,(IntPtr)(2|(1<<16)),IntPtr.Zero);outlines=0;
+                                DrawRecord(list,bitmap,0,DrawItemState.Selected|DrawItemState.Focus);Check(list.Focused&&outlines==1,"keyboard focus draws the panel focus ring");
+                            }
+                        }finally{CompactRenderer.InteractionOutlineObserver=observer;}
+                        SendMessage(list.Handle,0x0100,(IntPtr)Keys.Down,IntPtr.Zero);SendMessage(list.Handle,0x0101,(IntPtr)Keys.Down,IntPtr.Zero);Application.DoEvents();
+                        Check(list.SelectedIndex==1&&store.Find(2).Unread==0,"Down selects the next record and retains read marking");
+                        SendMessage(list.Handle,0x0100,(IntPtr)Keys.Up,IntPtr.Zero);SendMessage(list.Handle,0x0101,(IntPtr)Keys.Up,IntPtr.Zero);Application.DoEvents();Check(list.SelectedIndex==0,"Up selects the previous record");
+                        store.Change(delegate(FeedbackData data){data.Records.RemoveAll(delegate(FeedbackRecord record){return record.Number>1;});});dialog.Reload();Application.DoEvents();
+                        scrollbar=list.HorizontalExtent>list.ClientSize.Width?SystemInformation.HorizontalScrollBarHeight:0;Check(list.Height-scrollbar==2*list.ItemHeight,"reload shrinks the list after records are deleted");
+                        dialog.ClientSize=new Size(390,580);Application.DoEvents();Check(close.Top!=supplement.Top,"actions wrap when the available width narrows");
+                        foreach(string name in new[]{"CloseFeedbackHistory","RefreshFeedbackReplies","OpenFeedbackWeb","SupplementFeedback","DeleteFeedbackRecord"}){
+                            var button=Find<Button>(dialog,name);var bounds=button.RectangleToScreen(button.ClientRectangle);
+                            for(Control parent=button.Parent;parent!=null;parent=parent.Parent)Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),"wrapped "+name+" stays reachable");
+                        }
+                    }
+                    dialog.Close();
+                }
+            }
+        }finally{ThemedDialog.WorkingAreaProvider=previousArea;DialogDpi.DeviceDpiReader=previousDpi;DeviceSettings.UseTransientConfiguration(previousSettings);VisualDesign.HighContrastOverride=previousContrast;}
+    }
     static void Layouts(){
         var previous=ThemedDialog.WorkingAreaProvider;
         try{
@@ -376,7 +451,7 @@ static class FeedbackRepliesTests {
     }
     [STAThread] static int Main(string[] args){
         output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
-        Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history and supplement layout",Layouts);Run("native balloon and unread routing",NativeBalloonRouting);
+        Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history themes, adaptive rows and DPI",HistoryAppearance);Run("history and supplement layout",Layouts);Run("native balloon and unread routing",NativeBalloonRouting);
         Console.WriteLine(checks+" feedback reply checks, "+failures+" failed groups; fake transport only");return failures==0?0:1;
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -30,7 +31,7 @@ namespace AtkBattery {
         [DataMember] public List<DevicePackRecord> Quarantine=new List<DevicePackRecord>();
         [DataMember] public DevicePackRecord Current,Previous;
         [DataMember] public DateTime LastCheckUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc),LastSuccessUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc),ActivatedUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);
-        [DataMember] public string LastSource,Result,LastRejection;
+        [DataMember] public string LastSource,Result,LastRejection,LastFailure;
         [DataMember] public int Failures;
     }
     // A signed pair remains write/delete locked until the engine's ready reply.
@@ -52,6 +53,17 @@ namespace AtkBattery {
         public void Dispose(){if(json!=null)json.Dispose();if(sig!=null)sig.Dispose();}
     }
     internal sealed class DevicePackManager {
+        internal const string NotUsedDiagnostic="未使用型号数据包";
+        static readonly HashSet<string> RejectionCodes=new HashSet<string>((
+            "pack_const pack_datetime pack_digest_mismatch pack_download_size pack_duplicate_key pack_entry_limit pack_enum pack_file_size pack_integer pack_integer_range "+
+            "pack_json pack_json_escape pack_linked_path pack_local_identity pack_missing_field pack_non_printable pack_previous_invalid pack_profile_revision pack_quarantined "+
+            "pack_ready_rejected pack_redirect pack_rollback_refused pack_schema_missing pack_schema_type pack_signature_format pack_signature_invalid pack_signature_size pack_size "+
+            "pack_source pack_string_format pack_string_length pack_trial_failed pack_trial_path pack_trial_timeout pack_unknown_field pack_unknown_key pack_url pack_version_digest_conflict pack_version_mismatch "+
+            "pointer_fields pointer_format pointer_loader pointer_size pointer_value").Split(' '),StringComparer.Ordinal);
+        static readonly HashSet<string> ResultCodes=new HashSet<string>((
+            "pack_cancelled pack_check_failed pack_checking pack_crash_rollback pack_download_truncated pack_enabled pack_engine_stop_failed pack_network_failed pack_not_found "+
+            "pack_startup_failed pack_startup_rollback pack_state pack_state_active pack_state_duplicate pack_state_field pack_state_floor pack_state_full pack_state_invalid pack_state_missing "+
+            "pack_state_quarantine pack_state_record pack_status_write_failed pack_storage_failed pack_timeout pack_trial_stop_failed pack_unchanged").Split(' '),StringComparer.Ordinal);
         readonly object gate=new object();readonly string root;readonly IUpdateTransport http;readonly IDictionary<string,string> keys;
         readonly Func<string,long,Func<string>,CancellationToken,bool> activate;readonly DateTime started;
         DevicePackState state=new DevicePackState();bool valid=true,checkedThisSession;static int checking;
@@ -66,6 +78,12 @@ namespace AtkBattery {
                     byte[] bytes=UpdateJson.ReadBytes(path,4*1024*1024);var data=PackJson.Object(PackJson.Parse(bytes));
                     foreach(string field in new[]{"Schema","HighestAcceptedVersion","Versions","Quarantine","Current","Previous","LastCheckUtc","LastSuccessUtc","ActivatedUtc","Failures"})if(!data.ContainsKey(field))throw new InvalidDataException("pack_state_field");
                     state=UpdateJson.Read<DevicePackState>(bytes);ValidateState();
+                    // Older clients also stored transport failures as rejections.
+                    if(!String.IsNullOrEmpty(state.LastRejection)&&!RejectionCodes.Contains(state.LastRejection)){
+                        if(state.LastRejection=="pack_http_404"){if(state.Result=="pack_http_404")state.Result="pack_not_found";}
+                        else state.LastFailure=SafeResult(state.LastRejection);
+                        state.LastRejection=null;
+                    }
                 }else if(Directory.Exists(Path.Combine(root,"current"))&&Directory.GetFileSystemEntries(Path.Combine(root,"current")).Length!=0||Directory.Exists(Path.Combine(root,"previous"))&&Directory.GetFileSystemEntries(Path.Combine(root,"previous")).Length!=0)throw new InvalidDataException("pack_state_missing");
             }catch(Exception){state=new DevicePackState {Result="pack_state_invalid"};valid=false;}
         }
@@ -128,13 +146,24 @@ namespace AtkBattery {
         }}
         internal void SetLoaded(long version,int disabled){lock(gate){if(state.Current!=null&&state.Current.Version==version)state.Current.Disabled=Math.Max(0,Math.Min(2000,disabled));}}
         internal string Diagnostic {get{lock(gate){
-            var text=new StringBuilder(state.Current==null||!valid?"未使用型号数据包":"型号数据包："+state.Current.Version+" | 来源："+(state.Current.Source=="mirror"?"镜像":"GitHub")+" | 禁用条目："+state.Current.Disabled);
+            var text=new StringBuilder(state.Current==null||!valid?NotUsedDiagnostic:"型号数据包："+state.Current.Version+" | 来源："+(state.Current.Source=="mirror"?"镜像":"GitHub")+" | 禁用条目："+state.Current.Disabled);
             text.Append(" | 上次成功检查：").Append(state.LastSuccessUtc==DateTime.MinValue?"未成功":state.LastSuccessUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss 'UTC'",CultureInfo.InvariantCulture));
             text.Append(" | 隔离版本：");if(state.Quarantine.Count==0)text.Append("无");else{int count=0;foreach(var item in state.Quarantine){if(count++==6){text.Append(" 等").Append(state.Quarantine.Count).Append("版");break;}if(count>1)text.Append(",");text.Append(item.Version);}}
-            if(!String.IsNullOrEmpty(state.Result))text.Append(" | 结果：").Append(SafeResult(state.Result));
+            if(!String.IsNullOrEmpty(state.Result))text.Append(" | 结果：").Append(state.Result=="pack_not_found"?"远端暂无数据包":SafeResult(state.Result));
+            if(!String.IsNullOrEmpty(state.LastFailure))text.Append(" | 上次失败：").Append(SafeResult(state.LastFailure));
             if(!String.IsNullOrEmpty(state.LastRejection))text.Append(" | 上次拒绝：").Append(SafeResult(state.LastRejection));return text.ToString();
         }}}
-        static string SafeResult(string value){return Regex.IsMatch(value??"",@"\A[a-z0-9_]{1,64}\z")?value:"pack_check_failed";}
+        static string SafeResult(string value){return value!=null&&(RejectionCodes.Contains(value)||ResultCodes.Contains(value)||Regex.IsMatch(value,@"\Apack_http_[1-5][0-9]{2}\z"))?value:"pack_check_failed";}
+        static string FailureCode(Exception error){
+            var network=error as WebException;if(network!=null)return network.Status==WebExceptionStatus.Timeout?"pack_timeout":"pack_network_failed";
+            if(error is OperationCanceledException)return "pack_cancelled";
+            if(error is TimeoutException&&!RejectionCodes.Contains(error.Message))return "pack_timeout";
+            return SafeResult(error.Message);
+        }
+        void RememberFailure(string reason){
+            if(RejectionCodes.Contains(reason))state.LastRejection=reason;
+            else if(reason!="pack_not_found"&&reason!="pack_cancelled")state.LastFailure=reason;
+        }
         bool Candidate(DevicePackPointer pointer){
             var known=state.Versions.Find(delegate(DevicePackRecord item){return item.Version==pointer.Version;});
             if(known!=null&&known.Sha256!=pointer.Hash)throw new InvalidDataException("pack_version_digest_conflict");
@@ -152,9 +181,11 @@ namespace AtkBattery {
                 byte[] raw=null,sig=null;string lastError="pack_check_failed";
                 foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub}){
                     token.ThrowIfCancellationRequested();
+                    bool pointerFetched=false;
                     try{
                         lock(gate)state.LastSource=source==DevicePackTrust.Mirror?"mirror":"github";
                         var pointer=DevicePackPointer.Parse(DevicePackNetwork.Fetch(http,source,"device-pack-v1-latest.json",4096,token));
+                        pointerFetched=true;
                         lock(gate){state.LastSource=source==DevicePackTrust.Mirror?"mirror":"github";if(!Candidate(pointer)){state.LastSuccessUtc=now;state.Result="pack_unchanged";Save();return;}}
                         raw=DevicePackNetwork.Fetch(http,source,pointer.FileName,DevicePackTrust.MaxPackBytes,token);
                         sig=DevicePackNetwork.Fetch(http,source,pointer.FileName+".sig",4096,token);
@@ -162,8 +193,8 @@ namespace AtkBattery {
                         DevicePackTrust.Verify(raw,sig,keys);var document=DevicePackValidation.Validate(raw);
                         if(document.Version!=pointer.Version)throw new InvalidDataException("pack_version_mismatch");
                         candidate=new DevicePackRecord {Version=document.Version,Sha256=pointer.Hash,Source=source==DevicePackTrust.Mirror?"mirror":"github",Disabled=document.Disabled};break;
-                    }catch(OperationCanceledException){token.ThrowIfCancellationRequested();lastError="pack_timeout";}
-                    catch(Exception error){lastError=SafeResult(error.Message);lock(gate)state.LastRejection=lastError;}
+                    }catch(OperationCanceledException){token.ThrowIfCancellationRequested();lastError="pack_timeout";lock(gate)RememberFailure(lastError);}
+                    catch(Exception error){lastError=FailureCode(error);if(!pointerFetched&&lastError=="pack_http_404")lastError="pack_not_found";lock(gate)RememberFailure(lastError);}
                 }
                 if(candidate==null){lock(gate){state.Result=lastError;Save();}return;}
                 lock(gate){
@@ -188,7 +219,7 @@ namespace AtkBattery {
                 if(!activate(stage,candidate.Version,promote,token))throw new InvalidDataException("pack_trial_failed");
                 lock(gate){state.LastSuccessUtc=now;state.Result="pack_enabled";try{Save();}catch(Exception){state.Result="pack_status_write_failed";}}
             }catch(Exception error){lock(gate){
-                string reason=error is OperationCanceledException?"pack_cancelled":SafeResult(error.Message);
+                string reason=FailureCode(error);RememberFailure(reason);
                 try{if(candidate!=null){if(promoted&&state.Current!=null&&state.Current.Version==candidate.Version)Rollback(reason);else Quarantine(candidate,reason);}state.Result=reason;Save();}
                 catch(Exception){valid=false;state.Result="pack_storage_failed";}
             }}finally{

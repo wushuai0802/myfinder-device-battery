@@ -67,6 +67,52 @@ internal static class DevicePackTests {
         http=new Http();http.Add(DevicePackTrust.Mirror+name,delegate(CancellationToken token){token.WaitHandle.WaitOne(18000);token.ThrowIfCancellationRequested();throw new Exception("no timeout");});
         var watch=Stopwatch.StartNew();Reject(()=>DevicePackNetwork.Fetch(http,DevicePackTrust.Mirror,name,4096,CancellationToken.None),"request times out");Check(watch.Elapsed.TotalSeconds>=14&&watch.Elapsed.TotalSeconds<18,"15 second total request deadline reaches transport");
     }
+    static void Diagnostics(string root,RSACryptoServiceProvider key,IDictionary<string,string> keys){
+        foreach(int status in new[]{404,403,429,500}){
+            var http=new Http();var activation=new Activation();string directory=Path.Combine(root,"diagnostic-http-"+status);var manager=Manager(directory,http,activation,keys);
+            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",Bytes("private server response"),status);
+            manager.Check(false,Now,CancellationToken.None);var state=manager.StateForTests;
+            Check(http.Requests.Count==2&&activation.Trials==0&&state.LastRejection==null&&!manager.Diagnostic.Contains("上次拒绝"),"HTTP "+status+" is not a validation rejection");
+            if(status==404)Check(state.Result=="pack_not_found"&&state.LastFailure==null&&state.LastSuccessUtc==DateTime.MinValue&&manager.Diagnostic.Contains("结果：远端暂无数据包")&&!manager.Diagnostic.Contains("pack_http_404")&&!manager.Diagnostic.Contains("上次失败"),"missing pointer is an unpublished pack, without claiming a successful check");
+            else Check(state.LastFailure=="pack_http_"+status&&manager.Diagnostic.Contains("上次失败：pack_http_"+status),"other HTTP failures retain their safe code and failure label");
+            var reload=Manager(directory,new Http(),new Activation(),keys);Check(reload.Diagnostic==manager.Diagnostic,"diagnostic classification survives restart for "+status);
+            var report=new FeedbackReport("fixture","fixture-windows",new WirelessDevice[0],new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0],manager.Diagnostic);
+            Check(report.FullText.Contains(manager.Diagnostic)&&!report.FullText.Contains("private server response"),"feedback preserves the same safe diagnostic wording");
+        }
+        {
+            var http=new Http();var manager=Manager(Path.Combine(root,"diagnostic-asset-404"),http,new Activation(),keys);
+            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub}){
+                http.Add(source+"device-pack-v1-latest.json",Bytes(Pointer(1,Bytes(Pack(1)))));http.Add(source+"device-pack-v1-1.json",new byte[0],404);
+            }
+            manager.Check(false,Now,CancellationToken.None);
+            Check(manager.StateForTests.LastRejection==null&&manager.StateForTests.LastFailure=="pack_http_404"&&manager.Diagnostic.Contains("上次失败：pack_http_404")&&!manager.Diagnostic.Contains("远端暂无数据包"),"missing published asset remains an HTTP failure, distinct from an absent pointer");
+        }
+        foreach(string raw in new[]{"private_exception_text",@"C:\private\pack.json","https://private.invalid/secret"}){
+            var http=new Http();var manager=Manager(Path.Combine(root,"diagnostic-private-"+Guid.NewGuid().ToString("N")),http,new Activation(),keys);
+            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",delegate{throw new IOException(raw);});
+            manager.Check(false,Now,CancellationToken.None);
+            Check(manager.StateForTests.LastFailure=="pack_check_failed"&&!manager.Diagnostic.Contains(raw),"exception text is reduced to a fixed safe code");
+        }
+        foreach(string legacy in new[]{"pack_http_404","pack_http_500","pack_signature_invalid"}){
+            string directory=Path.Combine(root,"diagnostic-legacy-"+legacy);DevicePackManager.Write(Path.Combine(directory,"state.json"),Bytes(UpdateJson.Text(new DevicePackState {Result=legacy,LastRejection=legacy})));
+            var manager=Manager(directory,new Http(),new Activation(),keys);
+            if(legacy=="pack_signature_invalid")Check(manager.StateForTests.LastRejection==legacy&&manager.Diagnostic.Contains("上次拒绝："+legacy),"legacy validation rejection is retained");
+            else Check(manager.StateForTests.LastRejection==null&&!manager.Diagnostic.Contains("上次拒绝")&&manager.Diagnostic.Contains(legacy=="pack_http_404"?"远端暂无数据包":"上次失败：pack_http_500"),"legacy HTTP rejection is reclassified without a download");
+        }
+        {
+            var http=new Http();var manager=Manager(Path.Combine(root,"diagnostic-signature"),http,new Activation(),keys);
+            using(var wrong=new RSACryptoServiceProvider(2048)){
+                wrong.PersistKeyInCsp=false;foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})Feed(http,key,1,source,sig:Sign(Bytes(Pack(1)),wrong));
+                manager.Check(false,Now,CancellationToken.None);
+            }
+            Check(manager.StateForTests.LastRejection=="pack_signature_invalid"&&manager.Diagnostic.Contains("上次拒绝：pack_signature_invalid"),"invalid signature still records a real rejection");
+            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",new byte[0],404);
+            manager.Check(false,Now.AddMinutes(1),CancellationToken.None);
+            Check(manager.StateForTests.LastRejection=="pack_signature_invalid"&&manager.Diagnostic.Contains("远端暂无数据包"),"later missing pointer does not erase a historical validation rejection");
+        }
+        var defaultReport=new FeedbackReport("fixture","fixture-windows",new WirelessDevice[0],new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0]);
+        Check(defaultReport.FullText.Contains("\r\n"+DevicePackManager.NotUsedDiagnostic+"\r\n"),"default feedback uses the shared no-pack wording");
+    }
     static void SecurityAndLifecycle(string root,RSACryptoServiceProvider key,IDictionary<string,string> keys){
         var http=new Http();var activation=new Activation();string directory=Path.Combine(root,"normal");var manager=Manager(directory,http,activation,keys);
         manager.Check(true,Now.AddSeconds(19),CancellationToken.None);Check(http.Requests.Count==0,"startup check waits 20 seconds");
@@ -101,6 +147,7 @@ internal static class DevicePackTests {
         foreach(bool timeout in new[]{false,true}){
             http=new Http();activation=new Activation {Fail=!timeout,Timeout=timeout};manager=Manager(Path.Combine(root,timeout?"trial-timeout":"trial-false"),http,activation,keys);Feed(http,key,1);manager.Check(false,Now,CancellationToken.None);state=manager.StateForTests;
             Check(state.Current==null&&state.Quarantine.Count==1&&state.HighestAcceptedVersion==0&&activation.Commits==0,"failed trial never commits "+timeout);
+            Check(state.LastRejection==(timeout?"pack_trial_timeout":"pack_trial_failed")&&manager.Diagnostic.Contains("上次拒绝"),"trial validation remains a rejection "+timeout);
             Check(Directory.GetFiles(Path.Combine(root,timeout?"trial-timeout":"trial-false","staging")).Length==0,"failed staging discarded");
         }
         http=new Http();activation=new Activation();manager=Manager(Path.Combine(root,"fallback"),http,activation,keys);Feed(http,key,1,DevicePackTrust.GitHub);manager.Check(false,Now,CancellationToken.None);
@@ -261,7 +308,7 @@ internal static class DevicePackTests {
                 Reject(()=>DevicePackTrust.Verify(raw,Bytes(Convert.ToBase64String(key.SignData(raw,CryptoConfig.MapNameToOID("SHA256")))),keys),"unprefixed signature rejected");
                 Reject(()=>DevicePackTrust.Verify(raw,Bytes(" "+Encoding.UTF8.GetString(sig)),keys),"signature is exactly one base64 line");
                 Reject(()=>DevicePackSigning.Verify(raw,sig),"production keyring cannot use injected test key");
-                SecurityAndLifecycle(root,key,keys);SingleFlight(root,key,keys);WorkerInputEncodings(root,key,keys);Workers(root,args[1],key,keys);LinkedPaths(root,key,keys);Signer(root,args[1],key);
+                Diagnostics(root,key,keys);SecurityAndLifecycle(root,key,keys);SingleFlight(root,key,keys);WorkerInputEncodings(root,key,keys);Workers(root,args[1],key,keys);LinkedPaths(root,key,keys);Signer(root,args[1],key);
             }
             var card=new WirelessDevice {Name="Pack mouse",Kind="mouse",Provider="razer",ModelSource="pack"};var report=new FeedbackReport("1.3.6","Windows",new[]{card},new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0],"型号数据包：1 | 来源：镜像");
             Check(report.FullText.Contains("型号数据包：1")&&report.FullText.Contains("来自数据包，待验证"),"feedback includes pack and card provenance");
