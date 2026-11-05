@@ -206,6 +206,7 @@ DPI_MODELS = {
     (0x3554, 0xF58C): ((2, 27), "step50", 0x000C, 4, 8),
     (0x3554, 0xF58F): ((2, 32), "paw3395se", 0x000C, 4, 8),
 }
+DPI_CACHE_SECONDS = 10 * 60
 _SE_INVALID = frozenset((7, 13, 20, 26, 33, 40, 46, 53, 60, 66, 73, 80, 86, 93,
                        100, 106, 113, 120, 126, 133, 140, 146, 153, 160, 166,
                        173, 180, 186, 193, 200, 206, 213, 220, 226, 233))
@@ -213,6 +214,8 @@ _SE_CODES = tuple(code for code in range(1, 236) if code not in _SE_INVALID)
 
 
 def _dpi_frame(command, address=0, length=0, data=()):
+    if len(data) > 10:
+        raise ValueError("dpi_payload_too_long")
     frame = [0x08, command, 0, address >> 8, address & 0xFF, length, *data]
     frame += [0] * (16 - len(frame))
     return frame + [checksum(frame)]
@@ -325,17 +328,38 @@ def _dpi_state(dev, info):
     return _dpi_view(target, active), target, system
 
 
-def _capture_dpi(info):
+def _dpi_cache_key(info):
+    return tuple(info.get(key) for key in
+                 ("vendor_id", "product_id", "physical_id", "path", "serial_number"))
+
+
+def _capture_dpi(info, cache=None):
     if not _dpi_eligible(info) or output_length(info["path"]) != PAYLOAD_LEN:
         return None, None
+    key = _dpi_cache_key(info)
     dev = None
     try:
         dev = hid.device()
         dev.open_path(info["path"])
-        view, target, _ = _dpi_state(dev, info)
+        cached = cache.get(key) if cache is not None else None
+        if cached is not None and time.monotonic() - cached[2] < DPI_CACHE_SECONDS:
+            target, previous_system, _ = cached
+            try:
+                system = _dpi_exchange(dev, 0x08, 0, 6)
+                _, active = _dpi_system(system, DPI_MODELS[(info["vendor_id"], info["product_id"])][4])
+                if system == previous_system:
+                    view = _dpi_view(target, active)
+                    return view, target if view["canSet"] else None
+            except Exception:
+                pass  # A failed cache probe still requires the complete live read.
+        view, target, system = _dpi_state(dev, info)
+        if cache is not None:
+            cache[key] = (target, system, time.monotonic())
         return view, target if view["canSet"] else None
     except Exception:
         # A failed DPI read cannot invalidate the independent battery reply.
+        if cache is not None:
+            cache.pop(key, None)
         return None, None
     finally:
         if dev is not None:
@@ -453,9 +477,17 @@ class PulsarProvider(Provider):
         self.configure_pack(device_pack)
         # key -> (name, level, charging, when it was last read)
         self._last: Dict[str, Tuple[str, int, bool, float]] = {}
+        # Exact device -> (full target including identity/stages, system, monotonic time).
+        self._dpi_cache: Dict[tuple, Tuple[dict, List[int], float]] = {}
 
     def configure_pack(self, device_pack):
         self._device_pack = device_pack
+
+    def set_device_dpi(self, inventory, target, value, expected_dpi, target_token):
+        response = set_device_dpi(inventory, target, value, expected_dpi, target_token)
+        if response["success"] or response["outcomeUnknown"]:
+            self._dpi_cache.pop(_dpi_cache_key(target), None)
+        return response
 
     def _pick(self, infos: List[dict]) -> Optional[dict]:
         """The collection to open.
@@ -595,7 +627,7 @@ class PulsarProvider(Provider):
                 pack = self._device_pack
                 pack_model = bool(pack and pack.loaded and any(
                     entry.provider == self.name and entry.match.matches(d) for entry in pack.entries))
-                dpi, target = (None, None) if pack_model else _capture_dpi(d)
+                dpi, target = (None, None) if pack_model else _capture_dpi(d, self._dpi_cache)
                 out.append(DeviceStatus(key, name, level, on_cable, True, "pulsar",
                                         kind="mouse", dpi=dpi, dpi_target=target,
                                         model_source="pack" if pack_model else "builtin"))

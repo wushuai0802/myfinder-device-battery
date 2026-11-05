@@ -484,7 +484,9 @@ def reader_child():
                 name = command.get("provider")
                 if name not in DPI_PROVIDERS:
                     raise ValueError("invalid dpi provider")
-                set_device_dpi = importlib.import_module("providers." + name).set_device_dpi
+                module = importlib.import_module("providers." + name)
+                provider = instances.get((name, command.get("physicalId", "")))
+                set_device_dpi = getattr(provider, "set_device_dpi", module.set_device_dpi)
                 selected = [d for d in command.get("inventory", [])
                             if d.get("physical_id") == command.get("physicalId")
                             and d.get("vendor_id") in DPI_PROVIDERS[name]]

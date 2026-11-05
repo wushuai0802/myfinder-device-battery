@@ -102,12 +102,19 @@ def fake(mouse, length=17):
         yield mouse
 
 
-def capture(mouse):
-    status, = P.PulsarProvider().poll()
+def capture(mouse, provider=None):
+    status, = (provider or P.PulsarProvider()).poll()
     return status.dpi, status.dpi_target
 
 
 class CompXDpiTests(unittest.TestCase):
+    def test_frame_rejects_more_than_ten_data_bytes(self):
+        frame = P._dpi_frame(7, 4, 10, list(range(10)))
+        self.assertEqual(len(frame), 17)
+        self.assertEqual(sum(frame) % 256, 0x55)
+        with self.assertRaises(ValueError):
+            P._dpi_frame(7, 4, 11, list(range(11)))
+
     def test_allow_list_and_sensor_specific_read_frames(self):
         self.assertEqual(set(P.DPI_MODELS), {(0x373B, 0x12A7), (0x3554, 0xF58C), (0x3554, 0xF58F)})
         for vid, pid in P.DPI_MODELS:
@@ -258,6 +265,186 @@ class CompXDpiTests(unittest.TestCase):
                 self.assertFalse(view["canSet"])
                 self.assertIsNone(target)
                 self.assertEqual(mouse.writes(), [])
+
+
+class CompXDpiCacheTests(unittest.TestCase):
+    def test_hit_reads_only_system_and_expires_from_the_full_read(self):
+        for vid, pid in P.DPI_MODELS:
+            with self.subTest(pid=pid), fake(Mouse(vid, pid)) as mouse, \
+                    patch.object(P.time, "monotonic", return_value=100.0) as clock:
+                provider = P.PulsarProvider()
+                first, target = capture(mouse, provider)
+                mouse.rows.reverse()  # Unchanged system bytes allow the cached table.
+                mouse.frames.clear()
+                clock.return_value = 699.0
+                hit, cached_target = capture(mouse, provider)
+                self.assertEqual(hit["current"], 400)
+                self.assertEqual(hit["stages"], first["stages"])
+                self.assertEqual(hit["targetToken"], first["targetToken"])
+                self.assertIs(cached_target, target)
+                self.assertIsNot(hit, first)
+                self.assertEqual([f[1] for f in mouse.frames], [4, 8])
+                self.assertEqual(mouse.frames[1], list(bytes.fromhex(
+                    "08 08 00 00 00 06 00 00 00 00 00 00 00 00 00 00 3f")))
+                mouse.frames.clear()
+                clock.return_value = 700.0
+                expired, _ = capture(mouse, provider)
+                self.assertEqual(expired["current"], 800)
+                self.assertNotEqual(expired["targetToken"], first["targetToken"])
+                self.assertEqual([f[1] for f in mouse.frames], [4, 0x10, 8, 8, 8, 8])
+                self.assertEqual(mouse.writes(), [])
+                self.assertEqual(mouse.closed, len(mouse.opened))
+
+    def test_every_system_pair_change_triggers_a_complete_refresh(self):
+        for offset in (0, 2, 4):
+            with self.subTest(offset=offset), fake(Mouse()) as mouse:
+                provider = P.PulsarProvider()
+                capture(mouse, provider)
+                mouse.frames.clear()
+                value = 2 if offset == 0 else 1
+                mouse.system[offset:offset + 2] = [value, 0x55 - value]
+                if offset == 2:
+                    mouse.rows = mouse.rows[:1]
+                else:
+                    mouse.rows.reverse()
+                fresh, _ = capture(mouse, provider)
+                self.assertEqual(fresh["stages"], [400] if offset == 2 else [800, 400])
+                self.assertEqual(fresh["current"], 800 if offset == 0 else 400)
+                self.assertEqual([f[1] for f in mouse.frames],
+                                 [4, 8, 0x10] + [8] * (len(mouse.rows) + 2))
+                mouse.frames.clear()
+                self.assertEqual(capture(mouse, provider)[0]["stages"], fresh["stages"])
+                self.assertEqual([f[1] for f in mouse.frames], [4, 8])
+
+    def test_failed_or_invalid_system_probe_falls_back_to_a_full_read(self):
+        for fault in ("timeout", "driver", "short_write", "frame", "system_pair", "count", "active"):
+            with self.subTest(fault=fault), fake(Mouse()) as mouse:
+                provider = P.PulsarProvider()
+                first, _ = capture(mouse, provider)
+                mouse.rows.reverse()
+                mouse.frames.clear()
+                original_write = mouse.write
+                failed = False
+
+                def fail_probe(frame):
+                    nonlocal failed
+                    if not failed and frame[1] == 8:
+                        failed = True
+                        mouse.frames.append(list(frame))
+                        if fault == "driver":
+                            raise OSError("fake probe failure")
+                        if fault in ("timeout", "short_write"):
+                            return 17 if fault == "timeout" else 8
+                        system = list(mouse.system)
+                        if fault == "system_pair":
+                            system[1] ^= 1
+                        elif fault == "count":
+                            system[2:4] = [7, 0x4E]
+                        elif fault == "active":
+                            system[4:6] = [2, 0x53]
+                        reply = response(8, system)
+                        if fault == "frame":
+                            reply[-1] ^= 1
+                        mouse.pending.append(reply)
+                        return 17
+                    return original_write(frame)
+
+                with patch.object(mouse, "write", side_effect=fail_probe):
+                    refreshed, _ = capture(mouse, provider)
+                self.assertTrue(failed)
+                self.assertEqual(refreshed["current"], 800)
+                self.assertNotEqual(refreshed["targetToken"], first["targetToken"])
+                self.assertEqual([f[1] for f in mouse.frames], [4, 8, 0x10, 8, 8, 8, 8])
+                mouse.frames.clear()
+                self.assertEqual(capture(mouse, provider)[0]["current"], 800)
+                self.assertEqual([f[1] for f in mouse.frames], [4, 8])
+                self.assertEqual(mouse.closed, len(mouse.opened))
+
+    def test_failed_complete_refresh_drops_cache_but_preserves_battery(self):
+        with fake(Mouse()) as mouse:
+            provider = P.PulsarProvider()
+            capture(mouse, provider)
+            mouse.system[:2] = [2, 0x53]
+            mouse.cid = [1, 63]
+            status, = provider.poll()
+            self.assertEqual(status.level, 95)
+            self.assertTrue(status.online)
+            self.assertIsNone(status.dpi)
+            self.assertIsNone(status.dpi_target)
+            self.assertEqual(provider._dpi_cache, {})
+            mouse.cid = [1, 62]
+            mouse.frames.clear()
+            self.assertIsNotNone(capture(mouse, provider)[0])
+            self.assertEqual([f[1] for f in mouse.frames], [4, 0x10, 8, 8, 8, 8])
+
+    def test_cache_is_per_instance_and_exact_device(self):
+        for field in ("physical_id", "path", "serial_number"):
+            with self.subTest(field=field), fake(Mouse()) as mouse:
+                provider = P.PulsarProvider()
+                capture(mouse, provider)
+                mouse.info[field] = b"other-path" if field == "path" else "other-identity"
+                mouse.frames.clear()
+                capture(mouse, provider)
+                self.assertEqual([f[1] for f in mouse.frames], [4, 0x10, 8, 8, 8, 8])
+                mouse.frames.clear()
+                capture(mouse, P.PulsarProvider())
+                self.assertEqual([f[1] for f in mouse.frames], [4, 0x10, 8, 8, 8, 8])
+        provider = P.PulsarProvider()
+        for vid, pid in P.DPI_MODELS:
+            with self.subTest(pid=pid), fake(Mouse(vid, pid)) as mouse:
+                capture(mouse, provider)
+                self.assertEqual([f[1] for f in mouse.frames], [4, 0x10, 8, 8, 8, 8])
+
+    def test_cached_read_only_stages_remain_read_only(self):
+        for duplicate in (True, False):
+            with self.subTest(duplicate=duplicate), fake(Mouse()) as mouse:
+                if duplicate:
+                    mouse.rows[1] = list(mouse.rows[0])
+                else:
+                    mouse.rows[0] = [0x8F, 1, 0x1F, 3, 0, 0xA3]
+                provider = P.PulsarProvider()
+                first, _ = capture(mouse, provider)
+                mouse.frames.clear()
+                hit, target = capture(mouse, provider)
+                self.assertEqual(hit["stages"], first["stages"])
+                self.assertFalse(hit["canSet"])
+                self.assertIsNone(hit["targetToken"])
+                self.assertIsNone(target)
+                self.assertEqual([f[1] for f in mouse.frames], [4, 8])
+
+    def test_writes_bypass_cache_and_success_or_unknown_clears_it(self):
+        for fault in (None, "mismatch", "timeout", "write_error", "short_write", "bad_pair", "no_op"):
+            with self.subTest(fault=fault), fake(Mouse()) as mouse:
+                provider = P.PulsarProvider()
+                view, target = capture(mouse, provider)
+                mouse.frames.clear()
+                mouse.fault = fault
+                value = 400 if fault == "no_op" else 800
+                result = provider.set_device_dpi([mouse.info], target, value, 400, view["targetToken"])
+                self.assertEqual(result["success"], fault in (None, "no_op"))
+                self.assertEqual(result["outcomeUnknown"], fault not in (None, "no_op"))
+                self.assertEqual([f[1] for f in mouse.frames[:5]], [0x10, 8, 8, 8, 8])
+                if fault != "no_op":
+                    self.assertEqual([f[1] for f in mouse.frames[5:8]], [0x10, 8, 7])
+                self.assertEqual(len(mouse.writes()), 0 if fault == "no_op" else 1)
+                self.assertEqual(provider._dpi_cache, {})
+                mouse.fault, mouse.after_write = None, False
+                mouse.frames.clear()
+                self.assertIsNotNone(capture(mouse, provider)[0])
+                self.assertEqual([f[1] for f in mouse.frames], [4, 0x10, 8, 8, 8, 8])
+
+    def test_cached_stage_table_cannot_authorize_a_write(self):
+        with fake(Mouse()) as mouse:
+            provider = P.PulsarProvider()
+            view, target = capture(mouse, provider)
+            mouse.rows.reverse()
+            mouse.frames.clear()
+            result = provider.set_device_dpi([mouse.info], target, 800, 400, view["targetToken"])
+            self.assertFalse(result["success"])
+            self.assertFalse(result["outcomeUnknown"])
+            self.assertEqual(result["error"], "dpi_target_changed")
+            self.assertEqual(mouse.writes(), [])
+            self.assertEqual([f[1] for f in mouse.frames], [0x10, 8, 8, 8, 8])
 
 
 if __name__ == "__main__":

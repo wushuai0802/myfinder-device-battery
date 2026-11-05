@@ -17,12 +17,17 @@ from isolation import IsolationError, wire_encode, wire_decode
 import server
 
 
-def child(command):
+def child_sequence(commands):
     output = io.StringIO()
-    incoming = types.SimpleNamespace(buffer=io.BytesIO((json.dumps(command, default=wire_encode) + "\n").encode()))
+    lines = "".join(json.dumps(command, default=wire_encode) + "\n" for command in commands)
+    incoming = types.SimpleNamespace(buffer=io.BytesIO(lines.encode()))
     with patch.object(server.sys, "stdin", incoming), patch.object(server.sys, "stdout", output):
         server.reader_child()
-    return json.loads(output.getvalue(), object_hook=wire_decode)
+    return [json.loads(line, object_hook=wire_decode) for line in output.getvalue().splitlines()]
+
+
+def child(command):
+    return child_sequence([command])[0]
 
 
 class NoReader:
@@ -65,6 +70,31 @@ class Engine(server.BatteryEngine):
 
 
 class CompXDpiEngineTests(unittest.TestCase):
+    def test_child_reuses_cache_and_invalidates_it_after_success_or_unknown(self):
+        for fault in (None, "short_write", "mismatch"):
+            with self.subTest(fault=fault), fake(Mouse()) as mouse:
+                status, = P.PulsarProvider().poll()
+                mouse.frames.clear()
+                mouse.fault = fault
+                query = dict(action="query", provider="pulsar", physicalId=mouse.info["physical_id"],
+                             inventory=[mouse.info])
+                write = dict(query, action="set_dpi", target=status.dpi_target, dpi=800,
+                             expectedDpi=400, targetToken=status.dpi["targetToken"])
+                replies = child_sequence([query, query, write, query, query])
+                self.assertEqual(replies[0]["statuses"][0]["dpi"]["current"], 400)
+                self.assertEqual(replies[1]["statuses"][0]["dpi"]["targetToken"], status.dpi["targetToken"])
+                self.assertEqual(replies[2]["success"], fault is None)
+                self.assertEqual(replies[2]["outcomeUnknown"], fault is not None)
+                self.assertEqual(replies[3]["statuses"][0]["dpi"]["current"], 800 if fault is None else 400)
+                write_commands = [0x10, 8, 8, 8, 8, 0x10, 8, 7]
+                if fault is None:
+                    write_commands += [8, 8, 0x10]
+                elif fault == "mismatch":
+                    write_commands += [8]
+                self.assertEqual([f[1] for f in mouse.frames],
+                                 [4, 0x10, 8, 8, 8, 8] + [4, 8] + write_commands
+                                 + [4, 0x10, 8, 8, 8, 8] + [4, 8])
+
     def test_parent_and_child_dispatch_only_selected_pulsar_instance(self):
         with fake(Mouse()) as mouse:
             engine = Engine(mouse)
