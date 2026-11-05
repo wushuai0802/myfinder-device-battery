@@ -1,4 +1,4 @@
-"""Bounded output/input battery queries for the three batch-3 identities.
+"""Bounded output/input battery queries for exact supported identities.
 
 Lengths include the Windows report-ID slot. Unnumbered hidapi input omits it.
 Only raw byte-array caps are accepted: collection maxima alone cannot prove
@@ -58,9 +58,16 @@ def battery_caps(api, data, caps):
 class BatteryHidProvider(Provider):
     """Each subclass supplies one exact identity and one fixed read request."""
     charging_known = False
+    verification_level = "C"
 
     def __init__(self):
         self._diag = []
+
+    def device_name(self, info):
+        return self.pids[info["product_id"]]
+
+    def no_reading_reply(self, reply):
+        return False
 
     def _pick(self, infos):
         candidates = [info for info in infos
@@ -102,6 +109,9 @@ class BatteryHidProvider(Provider):
             if len(raw) != length:
                 self._diag.append("rejected input report length")
                 continue
+            if self.no_reading_reply(raw):
+                self._diag.append("device asleep/offline; no new reading; connection unknown")
+                return None
             parsed = self.parse_reply(raw)
             if parsed is not None:
                 return parsed
@@ -138,10 +148,10 @@ class BatteryHidProvider(Provider):
                     level, charging, approx = reading
                     result.append(DeviceStatus(
                         f"{self.name}:{physical or repr(info['path'])}",
-                        self.pids[info["product_id"]], level, charging, True, self.name,
+                        self.device_name(info), level, charging, True, self.name,
                         approx=approx, kind=self.kind, physical_id=physical,
                         connection_known=True, charging_known=self.charging_known,
-                        verification_level="C", level_unavailable=level is None))
+                        verification_level=self.verification_level, level_unavailable=level is None))
             except (OSError, ValueError):
                 # Backend exception text can contain private device paths.
                 self._diag.append("battery I/O failed; connection unknown")

@@ -197,8 +197,10 @@ The same `b0` exchange as the other Nova headsets, asked for with report id `06`
 independent battery-only implementation of [batch-3 research §4.1](research/batch3-protocols.md#41-g3m-pro-320f706e).
 Only `320F:706E / FF1C:0092` qualifies. Descriptor byte-array caps must prove
 input/output report `04` are 64 bytes including the ID; unknown caps or more
-than one eligible collection per physical receiver send nothing. Rainy75
-`320F:5088` is excluded even though it shares the collection.
+than one eligible collection per physical receiver send nothing. `320F:5088`
+is excluded from G3M; the separate VGN keyboard reader below now has official
+and maintainer evidence for that ID, with a different request. Rainy75 remains
+unverified despite sharing the ID and collection.
 
 The only query is `04 20 00 1A 06` plus 59 zeroes; `20 00` is the little-endian
 sum of request bytes 3..63. Replies must be exactly 64 bytes, report `04`, command
@@ -613,6 +615,45 @@ itself is open the dongle stops answering this request - the app keeps the
 last value on a greyed icon, so live readings want CAM closed.
 
 ## Mice and keyboards
+
+### VGN 2.4G keyboard receiver (320F:5088)
+
+**A — one historical project-maintainer hardware reading (2026-11-05).**
+The [VGN HUB official driver](https://drive.vgnlab.com.cn/), bundle
+[`assets/index-ZngoA_qG.js`](https://drive.vgnlab.com.cn/assets/index-ZngoA_qG.js)
+(fetched 2026-11-05 in the supplied evidence), lists `320F:5088 / FF1C:0092`,
+report `4`, receiver, type `weisheng`, for VGN S99 / V98 PRO / VXE75 V2 2.4G
+Dongle. Its `getElectricQuantity()` sends `sendReport(4, [0,0,0x1A,6,0,0,0])`;
+the input callback takes `data[7]` when `data[2]==0x1A` (data excludes the ID).
+The vendor bundle has no identified open-source licence; only protocol facts
+are used in the independent `providers/vgn_keyboard.py` implementation.
+
+Only this VID/PID and collection qualify. The same byte-array descriptor checks
+as G3M must prove input/output report `4` are each exactly 64 bytes including
+the ID. Unknown lengths or non-unique eligible collections send nothing. The
+only query is `04 00 00 1A 06` plus 59 zeroes: byte 1 is `00`, not G3M's `20`.
+A reply must be exactly 64 bytes with `r[0]==04`, `r[3]==1A`, `r[4]==06` and
+`r[8]` in 0..100. An exact request echo or a malformed reply is ignored; an
+otherwise identical zero-percent frame cannot be distinguished from an echo.
+
+Maintainer caps: interface 1 `FF1C:0092`, input/output 64 bytes, report `4`.
+While asleep the receiver returned `04 00 00 FF 06 00...` 15 times; after key
+input it returned `04 00 00 1A 06 00 00 00 5D...`, or 93%, while VGN HUB showed
+94%. `r[3]==FF` means asleep/offline and produces no new reading or error;
+the engine retains an unconfirmed grey historical reading as for silence.
+Charging is unknown (`charging_known=False`); no response checksum is guessed.
+The device product string is the display name, or `VGN 2.4G 键盘` if empty.
+
+This revises the earlier blanket prohibition on querying `5088` in
+[batch-3 research](research/batch3-protocols.md#45-vgn-24g-键盘接收器-320f5088-2026-11-05-补充):
+official evidence now names the ID, rather than borrowing G3M's protocol.
+Rainy75 (#23) shares `320F:5088` and the product string `Wireless Gaming Keyboard`
+but is absent from the VGN device table and is **unverified, not claimed
+compatible**. ID, collection, descriptor and product cannot distinguish it, so
+it may receive this read-only query; replies outside the validated format never
+produce a level. Wired `320F:5055` and other IDs are excluded. A single 93%/94%
+comparison and partial sleep/wake observation do not validate every listed VGN
+model or firmware, charging transitions, independent cold starts or final UI.
 
 ### MCHOSE G98 V3 (3837:1015, QHW)
 

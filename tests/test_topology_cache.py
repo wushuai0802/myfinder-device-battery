@@ -233,6 +233,7 @@ class DescriptorCacheTests(unittest.TestCase):
 
     def test_batch3_report_sizes_are_per_id_cached_and_descriptor_only(self):
         cases = (((0x320F, 0x706E), (0xFF1C, 0x92), {4: 64}, {4: 64}),
+                 ((0x320F, 0x5088), (0xFF1C, 0x92), {4: 64}, {4: 64}),
                  ((0x089D, 0x062F), (0xFF01, 0x10), {0: 33}, {0: 33}),
                  ((0x37D7, 0x2501), (0xFFA0, 1), {4: 32}, {3: 32, 8: 13}))
         for identity, collection, inp, out in cases:
@@ -295,7 +296,8 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.assertEqual(recovered["output_report_sizes"], {"3": 32, "8": 13})
 
     def test_batch3_size_discovery_does_not_expand_to_nearby_devices(self):
-        for identity, collection in (((0x320F, 0x5088), (0xFF1C, 0x92)),
+        for identity, collection in (((0x320F, 0x5055), (0xFF1C, 0x92)),
+                                     ((0x320F, 0x5088), (0xFF1C, 0x91)),
                                      ((0x089D, 0x062F), (0xFF00, 0)),
                                      ((0x37D7, 0x2501), (0xFFEE, 1)),
                                      ((0x37D7, 0x6001), (0xFFA0, 1))):

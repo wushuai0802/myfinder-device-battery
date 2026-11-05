@@ -27,6 +27,7 @@ PROVIDERS = (
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
     ("mchose_headset", "MchoseHeadsetProvider"),
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
+    ("vgn_keyboard", "VgnKeyboardProvider"),
     ("flydigi", "FlydigiProvider"),
     ("mchose_qhw_keyboard", "MchoseQhwKeyboardProvider"),
     ("mchose_glw_keyboard", "MchoseGlwKeyboardProvider"),
@@ -49,6 +50,7 @@ PROVIDER_VIDS = {
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D, 0x3837),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
+    "vgn_keyboard": (0x320F,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
@@ -69,7 +71,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard"}
+KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "vgn_keyboard"}
 
 
 def keyboard_diagnostics(provider):
