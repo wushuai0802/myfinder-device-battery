@@ -368,19 +368,27 @@ Still needs actual input caps/full frames, 70%/69% or other multi-level comparis
 sleep/wake, removal/reconnect, independent polling and a charging/unplugged
 comparison. Other connection-state values are intentionally unaccepted.
 
-### EWEADN S9 PRO / S9 MAX 8K (372E:1026) — frames recovered, collection evidence incomplete
+### EWEADN S9 PRO 8K (372E:1026)
 
-**Not implemented; not a grade-C supported device.** The third-pass snapshot of
+**C — implemented, pending this project's hardware validation.** The independent
+`providers/eweadn_s9pro.py` reader sends only the basics/battery request below.
+The fourth-pass brief supplies seven consistent diagnostic inventories with
+vendor collections `FF00:0001` and `FF06:0001`. Within each physical receiver,
+only the unique collection whose runtime descriptor proves Feature report `03`
+has 64 bytes (ID + 63-byte payload) is eligible. Zero or multiple proven matches
+cause no protocol handle to open and no request to be sent. Descriptor discovery
+uses access-zero handles and preparsed caps only, without feature transfers.
+
+The third-pass snapshot of
 [EWEADN Hub](https://new-hub.eweadn.cn/), supplied as retrieved on 2026-11-06,
 contains all 67 supplied chunks, including `vendor-bytech` and its module 74590
 (71 JavaScript files in total). The previous missing-controller finding is
 superseded: battery request bytes, charging parsing and a read-only SDK call
-path are now established. The exact Windows collection carrying feature report
-`03`, its descriptor-backed length and the complete sleep/offline response
-contract are still not established. The brief's evidence-incomplete branch
-therefore applies; no collection is guessed and no provider is registered.
+path are established. Collection ownership and length are now required at
+runtime rather than guessed from a static usage-page preference. Complete real
+replies, cold-start and sleep/offline behavior still need hardware validation.
 
-Analysis used only local text and bounded Python string-table decoding in
+The earlier analysis used only local text and bounded Python string-table decoding in
 `.ai/evidence/eweadnhub/`; no vendor JavaScript, hardware or network was used.
 REA's static-analysis call again timed out after 300 seconds without evidence;
 none of the conclusions below relies on a successful REA result. The HTML
@@ -402,16 +410,17 @@ Snapshot identity (SHA-256 of the original bytes):
 All offsets below are **zero-based UTF-8 byte offsets in those original files**,
 not character positions in a prettified or decoded copy.
 
-**Identity and unresolved collection.** The app's mouse catalog at
+**Identity and runtime collection selection.** The app's mouse catalog at
 1375074 records decimal VID/PID `14126:4134` (`372E:1026`), product `EWEADN S9`,
 display name `S9 Pro`, `deviceId: s9pro`, `is4G: true`, UUID `9895604649998`,
 `solutionRovider: beiying` (the vendor's spelling), and `hidReportId: 3`.
 At 1374397 the same receiver is listed for `S9 Max`, UUID `9895604650026`.
 Other rows share that VID/PID: S7 Max (1372432), S7 Pro (1373092), S7 Ultra
 (1373964), S9 Ultra (1375735), and S9 Ultra+ (1376404). Consequently VID/PID
-alone does not distinguish these mouse models. `base.getUUID()` is now traced
-to a read request, described below; a future VID/PID-only reader must use a
-receiver-family label unless it also performs that identification.
+alone does not distinguish these mouse models. `base.getUUID()` is traced
+to a read request, described below, but is not sent by this reader. The display
+name is `EWEADN S9 PRO 8K` as required by the fourth-pass brief; it is not a
+runtime identification of the paired model or a claim of S7/S9-family coverage.
 
 The task's diagnostic reports identify `FF00:0001` and `FF06:0001` collections;
 neither the catalog nor the mouse wrapper chooses one. The wrapper's filter `L`
@@ -424,6 +433,15 @@ Windows collection paths owns the report. In particular, the shared file's
 `vendorId:14126, usage:97, usagePage:65376, productId:0` (`FF60:0061`) in the
 keyboard module `68572`, which starts at 48272. It is not evidence for choosing
 either S9 diagnostic collection.
+
+`topology.py` enables `battery_hid.byte_report_sizes(..., report_type=2)` only
+for this exact VID/PID and these two vendor collections. The reader requires
+the proven per-report size `3:64`, consistent feature collection capacity and
+a resolved physical parent/path. A collection maximum of 64 alone is not
+proof of report 03; another report may own that capacity. Other report IDs may
+coexist, including a larger feature report, but only report 03 is transferred.
+Selection counts proven matches across both pages before opening either; it
+does not prefer FF00, fall back to FF06 after a failed read, or probe both.
 
 **Resolved loader and controller.** `sdk-api` defines module 5122 at 32786 and module
 83143 at 159951. Its Webpack header registers chunk IDs including 8886 and 3143,
@@ -487,6 +505,9 @@ decodes. Transport `y` (14039) maps those operations to
 This is **not** an output-report `write`/input-report `read` exchange. The
 controller sets a 100 ms receive delay; the SDK's generic retries/timeouts
 are not evidence of an offline frame or permission to copy its retry policy.
+The reader performs one SET_FEATURE of the 64-byte battery request, waits
+100 ms, then performs one GET_FEATURE of report 03 with a 64-byte buffer.
+It stops on a short write or any I/O failure; no retry or other command follows.
 
 `M.responseIndexes` names report ID at 0, command type at 1, ACK at 2, data
 length at 3, encapsulation index at 4, offset at 5 and data at 6. Its validator
@@ -508,6 +529,15 @@ pagination setting, **not** a descriptor length or proof of a fixed 10-byte
 battery reply. A 63-byte outgoing buffer likewise does not prove the incoming
 feature report's complete Windows length.
 
+The implemented parser requires exactly the runtime-proven 64-byte report,
+ID `03`, ACK `00`, encapsulation index `00`, and declared data length 7..58
+so all decoded data fits after index 6. It follows the SDK signature checks;
+TYPE and OFFSET are not assumed to echo request bytes, and no reply checksum
+is invented. Empty, short/oversized, wrong-ID/ACK/index, invalid-length,
+all-zero, request-echo and out-of-range-level replies produce no reading.
+A structurally valid reply may report 0%; an all-zero buffer is not such a
+reply. Synthetic fixtures test these rules, not actual receiver captures.
+
 **Initialization and freshness.** `me`, `tn`, `_`, `y` and basic-service `sn`
 constructors allocate objects, bind handlers and install an `inputreport`
 listener; no HID send/receive occurs on their basic creation path. The wrapper's
@@ -523,8 +553,11 @@ The refresh path (`sdk-mouse-beiying`, 9480, 10294) subsequently calls
 byte equals `01`. The wrapper treats a failed online query as unknown and can
 still display basics. Neither the basic parser nor its generic ACK validator
 establishes whether an asleep receiver returns an error, zeros, a cached level
-or silence. A future reader must reject unknown/offline status and malformed
-or uncorrelated replies rather than copy that UI fallback. Passive bubble
+or silence. This reader sends no separate online query: missing or invalid
+basics yields no new reading and no engine error, leaving history to the
+existing engine retention policy without renewing its timestamp or claiming
+a live connection. It cannot distinguish a structurally valid cached device
+reply from a fresh sample; that remains a hardware acceptance boundary. Passive bubble
 events (`M.decodeBubble`, `ce` at 93002) use main `FA`, subcommand `05` for a
 battery event; the handler returns a byte, and the wrapper at 8832 defaults
 charging to false. That event path is not a substitute for the charged-bit
@@ -577,25 +610,21 @@ report-rate limits for `372E:103D` and wired `372E:1029` (first at 14171), not
 battery protocol definitions for `372E:1026`. None is added while these same
 gaps remain. Wired catalog entries are not receiver candidates.
 
-**Remaining evidence and acceptance boundary.** No more missing-JavaScript
-dependency is claimed for the battery call path. What is needed now is a
-retained target HID descriptor/Windows caps record mapping feature report `03`
-to its exact usage page/usage and proving its full byte-array report length,
-plus complete basics/online replies for awake, asleep and offline states.
-The reports must establish response length, header/offset semantics and whether
-the two reads can expose cached battery data. Synthetic data cannot establish
-those device facts. Do not probe both diagnostic collections or widen the
-allowlist merely because one accepts a 64-byte feature buffer.
+**Remaining evidence and acceptance boundary.** The reader, server registration,
+offline ID index, exact-identity feature descriptor discovery and grade-C
+catalog are now connected. Synthetic tests cover byte-exact requests, response
+bit parsing/validation, unique descriptor-based selection on either page,
+ambiguous/missing proof with zero protocol opens/sends, scope isolation,
+descriptor caching without feature traffic, silence/history and forbidden I/O.
+No hardware or network was accessed for implementation or verification.
 
-After those gaps close, gate opening on exact VID/PID, collection, uniqueness
-and per-report descriptor lengths; send only the reviewed battery and necessary
-read-only status/identification frames. Test byte-exact requests, charged-bit
-parsing, malformed/short/unknown replies, silence/offline behavior, refusal to
-open wrong collections or caps, and exclusion of every non-read operation.
-This pass adds no runnable target protocol or synthetic provider tests;
-`server.py`, `known_ids.py`, `topology.py`, `compatibility.json` and generated
-compatibility documentation stay unchanged. Real percentage/charging,
-sleep/wake, cold-start polling, reconnect and final UI behavior are unverified.
+The retained SDK path shows no state-changing handshake prerequisite; actual
+cold-start device behavior remains untested. Real descriptor shapes may fail
+the conservative byte-array proof, in which case the device stays unopened.
+Complete real replies, TYPE/OFFSET semantics, cached responses during sleep,
+percentage/charging accuracy, wake/reconnect, driver coexistence and final UI
+behavior are unverified. Only `372E:1026` is added; no UUID, online, reset,
+configuration, pairing, macro, display or firmware commands are reachable.
 
 ### AM Infinity 8K (Angry Miao)
 
