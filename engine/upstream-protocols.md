@@ -372,12 +372,15 @@ comparison. Other connection-state values are intentionally unaccepted.
 
 **Not implemented; not a grade-C supported device.** The supplied snapshot of
 [EWEADN Hub](https://new-hub.eweadn.cn/), supplied as retrieved on 2026-11-06,
-identifies this receiver but omits the dynamically loaded mouse SDK. It does not
-establish a safe battery transaction. This investigation used only the five
-local files in `.ai/evidence/eweadnhub/`: no vendor JavaScript execution, hardware
-access or network retrieval. REA's static application analysis timed out without
-returning evidence; the findings below come from independent local text analysis
-and a bounded offline string-table decoder, not from a successful REA report.
+now includes 18 SDK chunks, but still omits the separately loaded `vendor-bytech`
+dependency. The mouse wrapper is present; its controller/transport implementation
+is not. A safe battery transaction still cannot be established. This follow-up
+inspected all 22 local JavaScript files and the HTML in
+`.ai/evidence/eweadnhub/`: no vendor JavaScript execution, hardware access or
+network retrieval. The findings below come from independent static text analysis,
+with the previous pass's bounded string-table decoding retained for the keyboard
+false lead. REA's follow-up static analysis timed out after 300 seconds without
+returning evidence; no successful REA analysis result is used as evidence.
 The HTML declares build `3.3.5-20261104025216275`, version `3.3.5`.
 
 Snapshot identity (SHA-256 of the original bytes):
@@ -389,6 +392,8 @@ Snapshot identity (SHA-256 of the original bytes):
 | `main.59124dce33c280445fd9.js` (shared) | 1178843 | `38600cd494f8e505b100379db9d3b3217bfe834fc88804d15c566cf9972a5235` |
 | `main.6a3b1fe4700c6a5bd57e.js` (app) | 1404935 | `02ae29b557b435d9d502289aa71f72becd9933fe9aee03ebc02e38be5539cc2f` |
 | `main.f8e5777ff051023749db.js` | 333032 | `0263501996a75358d7d7491b321a388baae1d2f30d5913f400b16eb55cfbbbe0` |
+| `chunks/main.sdk-mouse-beiying.b4ffbeadbe8c318936bb.js` (mouse wrapper) | 83146 | `0487720e9d1c54c6106588b6d1b460ecff33cb991437d558e4c5bc417274d843` |
+| `chunks/main.sdk-api.b41e96c5c2fd148df1b7.js` (includes provider loader) | 471566 | `e25bbe23d82e884f99e9fde54b60628e2095c182092ce3f39ae80d95011c4b7c` |
 
 All offsets below are **zero-based UTF-8 byte offsets in those original files**,
 not character positions in a prettified or decoded copy.
@@ -400,34 +405,62 @@ display name `S9 Pro`, `deviceId: s9pro`, `is4G: true`, UUID `9895604649998`,
 At 1374397 the same receiver is listed for `S9 Max`, UUID `9895604650026`.
 Other rows share that VID/PID: S7 Max (1372432), S7 Pro (1373092), S7 Ultra
 (1373964), S9 Ultra (1375735), and S9 Ultra+ (1376404). Consequently VID/PID
-alone does not distinguish these mouse models. The UUID metadata does not prove
-how to read the UUID safely.
+alone does not distinguish these mouse models. The new wrapper calls
+`base.getUUID()`, but the method's implementation and read safety remain unknown.
 
 The task's diagnostic reports identify `FF00:0001` and `FF06:0001` collections;
-the catalog rows do not choose one. The configured report ID `03` does not prove
+neither the catalog nor the new wrapper chooses one. The wrapper's filter `L`
+at 4993 derives exact VID/PID pairs from the `beiying` mouse catalog, without
+usage-page/usage constraints. The configured report ID `03` does not prove
 its direction (input/output/feature), payload length, Windows/hidapi length or
 the battery command. In particular, the shared file's `Wo` filter at 248141 is
 `vendorId:14126, usage:97, usagePage:65376, productId:0` (`FF60:0061`) in the
 keyboard module `68572`, which starts at 48272. It is not evidence for choosing
 either S9 diagnostic collection.
 
-**Missing implementation boundary.** The runtime's chunk-name/hash maps identify
-the following absent files; none is among the four supplied JavaScript files:
+**Resolved loader; missing controller.** The previous missing-SDK finding is
+superseded: the added `sdk-api` file defines module 5122 at 32786 and module
+83143 at 159951. Its Webpack header registers chunk IDs including 8886 and 3143,
+so a separate `main.3143.*.js` file is not needed to inspect this loader.
+Likewise, `sdk-mouse-beiying` registers chunks 8056, 1274 and 2773 together.
 
-| Chunk | Required local artifact | Runtime map offsets |
-| --- | --- | --- |
-| 8056 | `main.sdk-mouse-beiying.b4ffbeadbe8c318936bb.js` | 1507, 3108 |
-| 8886 | `main.sdk-api.b41e96c5c2fd148df1b7.js` | 1577, 3304 |
-| 3143 | `main.3143.cdf1094d4146c975c1d5.js` | 2436 |
+The recovered dependency chain is:
 
-The app explicitly loads chunk 8886 / module 5122 at 21069, then chunk 3143 /
-module 83143 at 21292 to call `ensureCurrentMouseProviderLoaded`. Neither module
-definition is present in this snapshot. The app's mouse service metadata at
-22148 names `beiying` and `./beiying/basic`, but does not supply its transport.
-The runtime mapping establishes the missing mouse SDK artifact's filename;
-without the loader, the complete dependency/call path is still unresolved.
-These are follow-up evidence targets, not downloads performed by this task;
-their further dependencies may also be needed.
+| Evidence anchor | Static observation |
+| --- | --- |
+| `sdk-api`, 160235 | The `beiying` loader waits for **both** chunks 2542 and 8056, then imports module 4694. |
+| Runtime, 1347 and 2296 | Chunk 2542 maps to `main.vendor-bytech.803cedc7e7fc4dcad3e3.js`, absent from the supplied tree. |
+| `sdk-mouse-beiying`, 30552 | Module 4694 combines the mouse basic/settings wrappers. |
+| `sdk-mouse-beiying`, 406 | Basic module 51274 imports module 74590 as `o`; other wrapper modules import it too. |
+| `sdk-mouse-beiying`, 5305, 5471, 5505 | `T(e,t=3)` opens an authorized HID device and constructs `new o.uv(e,{reportId:t, protocolVersion:o.Gf.V2_1})`. |
+
+Across all 22 supplied JavaScript files, literal `74590` occurs only in three
+imports in `sdk-mouse-beiying`; no module definition is present. This bounded
+negative search used raw text/ordinary Webpack numeric module declarations, not
+vendor code execution. The loader establishes that `vendor-bytech` is a required
+missing dependency; attributing module 74590 specifically to it remains an
+inference until that file is supplied. Its transitive dependencies may also be
+needed. Do not substitute the keyboard controller or another mouse SDK.
+
+**Battery and initialization call path, not wire facts.** In the mouse wrapper,
+`init` (7769) creates/reuses the controller, calls `base.getUUID()`, then
+`base.getBasics()` (8426), and installs event listeners. Device information
+refresh (9480) again calls these two methods and optionally
+`base.checkWirelessOnline()` (10294). At 10615 it forwards `r.battery` and
+`r.isCharging` from the result of `getBasics()`. `getState` (12225) maps these
+to UI level/charging, defaulting missing values to zero/false. Those UI defaults
+are not valid evidence of a real 0% reading, disconnected state or charging flag
+encoding. The battery event handler even uses `Boolean(void 0)` at 8832, so it
+cannot establish charging semantics either.
+
+This identifies which missing methods must be inspected, not a safe sequence
+to send. Constructor I/O, UUID query bytes, `getBasics()` request/reply layout,
+checksum, charging bits, report direction/length, and sleep/offline handling
+remain unknown. No explicit device-setting command is visible in the wrapper's
+`init` sequence,
+but the absent constructor/method bodies prevent proving a read-only handshake
+or that battery polling works without initialization. **No target frame can be
+specified from this snapshot.**
 
 **Decoded false lead.** The shared file contains a `getBatteryStatus()` method
 at 150853 inside keyboard module `68572`. To reproduce the limited decoding,
@@ -449,31 +482,43 @@ these artifacts. **Target request bytes, reply fields/checksum, charging states,
 report lengths, sleep/offline replies and session/handshake requirements remain
 unknown.** In particular, a read-only cold-start path has not been proved.
 
-**State-changing operations to exclude.** The app contains mouse-facing UI
-labels for the following operations. These are observed feature categories,
-not recovered S9 opcodes or a complete command inventory:
+**State-changing operations to exclude.** The new mouse wrapper provides the
+following stronger evidence in addition to the app's UI labels. Offsets in the
+table refer to `sdk-mouse-beiying` unless marked otherwise. These are a partial
+inventory; method names/arguments are not complete transport frames:
 
-| Operation | App evidence anchor | Target command bytes |
+| Operation | Evidence anchor | Target command bytes |
 | --- | --- | --- |
-| Factory reset / reset all settings | `reset.button`, `reset.confirmMsg` at 975028 | Unknown; never send |
-| Configuration writes, including button debounce | `debounceDelay`, `debounceDelayDescBeiying` at 975325 | Unknown; never send |
-| Receiver pairing | `pairing.clickToStart` at 974197 | Unknown; never send |
-| Firmware upgrade authorization / transfer | `otaAuthFailed`, `otaTransferError` near 973987 | Unknown; never send |
+| Factory, button and DPI reset | `reset`, `resetMouseKey`, `resetDpi` at 35067, 35539, 36007 delegate to the controller's reset object | Unknown; never send |
+| Full board configuration writes | Export `writeFullBoardConfig` at 16046, implementation `M` at 19569 | Unknown; never send |
+| Report rate, DPI and debounce writes | `setReportRate`, `setDPI`, `setDebounce` at 11674, 28004, 75111 | Unknown; never send |
+| Macro writes/deletion and macro key binding | `setMacro`, `deleteMacro` at 67219, 68817 call `setMacros` / `setMouseKeyWithMacro` | Unknown; never send |
+| DPI lighting write | `bull.request(53,11,o)` at 32379; four data bytes are enabled, mode, mapped brightness, speed | Known request arguments `0x35,0x0B`; framing unknown; never send |
+| Receiver pairing | App `pairing.clickToStart` at 974197; target implementation unresolved | Unknown; never send |
+| Firmware upgrade authorization / transfer | App `otaAuthFailed`, `otaTransferError` near 973987; target implementation unresolved | Unknown; never send |
 
 No new provider or device registration is added, and this task introduces no
 request path for the receiver. The safety decision is to send nothing rather
-than guess an allowlist from those UI labels. Proving that reading needs no
-state-changing initialization requires the missing SDK and its dependencies.
+than guess an allowlist from wrapper names. Proving that reading needs no
+state-changing initialization requires the missing controller and its
+dependencies. Existing registrations and generated compatibility documentation
+remain unchanged; no unsupported device is promoted to grade C.
 
 **Other candidates, also deferred.** The same mouse catalog records wireless
 `372E:103D` (decimal PID 4157; S9 Pro at 1375285, S9 Max at 1374608, plus other
 S7/S9 variants) and `372E:106E` (PID 4206; S7 Max at 1372218 and S7 Ultra at
 1373744), with `beiying` and report ID 3. They are absent from the current
 provider registrations, but a shared SDK name/report ID does not establish
-identical battery frames. None is added without the same missing protocol
-evidence. Wired catalog entries are not receiver candidates.
+identical battery frames. The new wrapper's decimal `14126` occurrences are
+report-rate limits for `372E:103D` and wired `372E:1029` (first at 14171), not
+battery protocol definitions for `372E:1026`. None is added without the same
+missing protocol evidence. Wired catalog entries are not receiver candidates.
 
-Acceptance remains blocked on the complete matching SDK snapshot, exact
+Next evidence needed: the exact runtime-matched
+`main.vendor-bytech.803cedc7e7fc4dcad3e3.js`, the definition of module 74590,
+and any dependencies needed to trace the controller constructor and its
+`base.getUUID/getBasics/checkWirelessOnline` methods. No download is attempted.
+Acceptance remains blocked on these implementation bodies, exact
 collection/report semantics, battery and charging frame definitions, and proof
 of a read-only initialization path. A future implementation must then gate I/O
 on runtime descriptor-backed per-report lengths and test exact request bytes,
