@@ -23,6 +23,7 @@ BRAND_PROVIDERS = frozenset((
     "razer", "audeze", "wlmouse", "mchose", "mchose_headset", "hyperx_alpha2", "hyperx_cloud3",
     "mchose_qhw_keyboard", "mchose_glw_keyboard",
     "mchose_by_keyboard",
+    "moondrop",
     "g3m", "eweadn", "eweadn_s9pro", "flydigi",
     "vgn_keyboard", "vgn_beiying",
     "vgn_dragonfly3", "ninjutso_legacy",
