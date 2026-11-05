@@ -233,6 +233,7 @@ class DescriptorCacheTests(unittest.TestCase):
 
     def test_batch3_report_sizes_are_per_id_cached_and_descriptor_only(self):
         cases = (((0x320F, 0x706E), (0xFF1C, 0x92), {4: 64}, {4: 64}),
+                 ((0x3554, 0xFA09), (0xFF04, 2), {19: 20}, {19: 20}),
                  ((0x320F, 0x5088), (0xFF1C, 0x92), {4: 64}, {4: 64}),
                  ((0x089D, 0x062F), (0xFF01, 0x10), {0: 33}, {0: 33}),
                  ((0x37D7, 0x2501), (0xFFA0, 1), {4: 32}, {3: 32, 8: 13}))
@@ -251,6 +252,35 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.hid.HidD_SetFeature.assert_not_called()
                 self.kernel.ReadFile.assert_not_called()
                 self.kernel.WriteFile.assert_not_called()
+
+    def test_fa09_single_byte_selector_arrays_are_proven_without_device_commands(self):
+        self.batch3_descriptor((0x3554, 0xFA09), (0xFF04, 2), {19: 20}, {19: 20})
+        original = self.hid.HidP_GetCaps.side_effect
+
+        def caps(data, pointer):
+            result = original(data, pointer)
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.iv, value.ov, value.ib, value.ob = 0, 0, 1, 1
+            return result
+
+        def buttons(report_type, values, length, data):
+            values[0].report, values[0].is_range = 19, 1
+            values[0].usage_min, values[0].usage_max = 0, 255
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetButtonCaps.side_effect = buttons
+        first, = self.scan([PATH_A])
+        self.assertEqual(first["input_report_sizes"], {"19": 20})
+        self.assertEqual(first["output_report_sizes"], {"19": 20})
+        self.kernel.CreateFileW.reset_mock()
+        self.assertEqual(self.scan([PATH_A]), [first])
+        self.kernel.CreateFileW.assert_not_called()
+        self.hid.HidP_GetValueCaps.assert_not_called()
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
 
     def test_batch3_size_discovery_refuses_partial_alias_split_or_non_byte_caps(self):
         for defect in ("failure", "partial", "alias", "bits", "count", "split", "padding", "buttons"):
@@ -297,6 +327,8 @@ class DescriptorCacheTests(unittest.TestCase):
 
     def test_batch3_size_discovery_does_not_expand_to_nearby_devices(self):
         for identity, collection in (((0x320F, 0x5055), (0xFF1C, 0x92)),
+                                     ((0x3554, 0xFA09), (0xFF02, 2)),
+                                     ((0x3554, 0xFA07), (0xFF04, 2)),
                                      ((0x320F, 0x5088), (0xFF1C, 0x91)),
                                      ((0x089D, 0x062F), (0xFF00, 0)),
                                      ((0x37D7, 0x2501), (0xFFEE, 1)),

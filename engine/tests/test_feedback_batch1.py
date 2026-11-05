@@ -128,8 +128,10 @@ class FeedbackProtocolTests(unittest.TestCase):
                          ("pulsar", "Scyrox 8K 接收器", "mouse"))
         v3 = entries[(0x3837, 0x1018)]
         self.assertEqual((v3["provider"], v3["kind"]), ("mchose", "mouse"))
-        for identity in ((0x3554, 0xFA09), (0x3554, 0xFA07)):
-            self.assertNotIn(identity, entries)
+        keyboard = entries[(0x3554, 0xFA09)]
+        self.assertEqual((keyboard["provider"], keyboard["kind"]), ("mchose_by_keyboard", "keyboard"))
+        self.assertIn("model identification required", keyboard["name"])
+        self.assertNotIn((0x3554, 0xFA07), entries)
 
 
 if __name__ == "__main__":

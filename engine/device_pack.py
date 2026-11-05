@@ -22,6 +22,7 @@ MAX_ENTRIES = 2000
 BRAND_PROVIDERS = frozenset((
     "razer", "audeze", "wlmouse", "mchose", "mchose_headset", "hyperx_alpha2", "hyperx_cloud3",
     "mchose_qhw_keyboard", "mchose_glw_keyboard",
+    "mchose_by_keyboard",
     "g3m", "eweadn", "flydigi",
     "vgn_keyboard",
     "vgn_dragonfly3", "ninjutso_legacy",

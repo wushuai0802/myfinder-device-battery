@@ -463,18 +463,18 @@ and battery / charging captures from the exact Pro model are still needed;
 the upstream hardware evidence describes an Ultra+ sibling. Existing V2 behavior
 is preserved.
 
-**CompX keyboard receivers `3554:FA09` (#22, #25) and `3554:FA07` (#25): not
-added.** `FF02:0002` is transport shape, not evidence that a keyboard answers a
-mouse battery command. The reviewed OpenMouse mouse package `0.49.0` and
+**CompX keyboard receiver `3554:FA09`: MCHOSE-only identification/battery path
+added on 2026-11-05, C / unverified; see the [M HUB evidence below](#mchose-by-keyboard-receiver-3554fa09).
+`3554:FA07` remains unimplemented.** `FF02:0002` is transport shape, not evidence
+that a keyboard answers a mouse battery command. The reviewed OpenMouse mouse package `0.49.0` and
 [keyboard package `1.6.1`](https://www.npmjs.com/package/@openmouse/keyboard-protocol/v/1.6.1)
 contain no matching keyboard IDs / CompX keyboard battery implementation. The
 repository's existing `pulsar.py`, `gwolves.py` and G-Wolves Compx notes describe
 mouse framing and mouse battery reads only. They do not justify a keyboard
-command or reply offsets. Both IDs remain unclaimed and receive no mouse query.
-Needed: an official-driver USB capture with the exact receiver ID, collection,
-report IDs/lengths, battery command/reply, and corresponding level/charging state,
-or an independently documented compatible implementation. Any future entries
-must use `kind=keyboard` and remain pending hardware verification.
+command or reply offsets. Neither ID receives a mouse query. The FA09 reader
+uses the official BY keyboard protocol on `FF04:0002`, not those mouse readers;
+non-MCHOSE models sharing FA09 remain unsupported. Hardware captures of the exact
+descriptor, responses, charging transitions and sleep/wake behavior are still needed.
 
 Sources above were read on **2026-11-04**. OpenMouse mouse-protocol commit
 `30d6ad37d0ecc9fff53f86d5058d67a88e07150d` and the two published packages use
@@ -1189,6 +1189,157 @@ hardware was accessed. Actual descriptors, notification frequency/freshness,
 standalone operation, sleep/wake, charging transitions and coexistence with the
 official driver remain unverified. For `1601`, an exact official
 device/class/filter mapping is still needed before any implementation.
+
+### MCHOSE BY keyboard receiver 3554:FA09
+
+**C / 待本项目实机验证; `kind="keyboard"`.** Independently implemented in
+`providers/mchose_by_keyboard.py` on 2026-11-05. Source: the official
+[M HUB bundle](https://www.mchose.com.cn/assets/main-DCRwBIvm.js), supplied at
+`.ai/evidence/mhub/main-DCRwBIvm.js` (9,375,649 bytes, SHA-256
+`405102805e2adeb93073ee2186f6d0193ca1317a6b4657d636e4e611bd25a446`).
+No vendor implementation was copied. These are static protocol observations,
+not USB captures. REA parsed the artifact without execution (Evidence
+`ev_98c981e0bb862fabffdef01c9b1f5871776c8f3eca1485589034d68c1d2206b8`);
+its semantic graph hit its node ceiling, so the findings below were checked
+directly against the named source anchors rather than assuming full graph coverage.
+
+#### Routing and model gate
+
+The filter `{vendorId:13652,productId:64009,usagePage:65284}` and the matching
+`getDeviceMap` predicate route FA09's **FF04** endpoint to the BY keyboard path.
+The supplied #22/#25 diagnostics record `FF04:0002` alongside `FF02:0002`; only
+the former is eligible. `registerHidDevice` / `instantiateDevice` create
+`DeviceManager` / **`HidDeviceHandler`**. Wireless names select
+`defaultWirelessRID=19` (`0x13`); other names select wired feature ID 6 or 9.
+
+M HUB does **not** read battery on every FA09 receiver. For the exact generic
+names `2.4G Wireless Receiver` and `MCHOSE 2.4G Wireless`, its identification
+path (`Va`, `getPassWord`, `keyboardPwds`, `Ba` in `getDeviceMap`) reads a
+six-byte model code and searches `keyboardPwds` for an exact match. Only a match
+creates `realName = productName + "-" + model`; the unmatched generic entry is
+removed. The home battery path (`Nd`, `isValidPrefix`, `getBattery`) then selects
+that recognized receiver. `getDevName` also recognizes named K99_V2/G98/X75/
+X75_V2/GX87/GX87_V2/K87/G75_Pro variants, but that alone does not prove they use
+the wireless rather than wired transport.
+
+This implementation supports **only those two exact generic wireless names**
+and re-reads the model every poll. It never trusts an injected/cached `realName`,
+a substring such as `X75`, the manufacturer string, or the USB ID alone. The
+following source-table codes are protocol facts, not passwords or credentials:
+
+| Six bytes (hex) | Official model key | Six bytes (hex) | Official model key |
+| --- | --- | --- | --- |
+| `03 00 00 00 02 1C` | G87 | `03 00 00 00 00 77` | K99 |
+| `03 00 00 00 01 DF` | K99_V2 | `03 00 00 00 01 32` | G98 |
+| `03 00 00 00 00 D6` | X75 | `0A 00 00 00 00 03` | G98_Pro |
+| `03 00 00 00 01 C6` | X75_V2 | `03 00 00 00 01 15` | G75_Pro |
+| `0A 00 00 00 00 18` | G98_V2 | `0A 00 00 00 00 2B` | UT98 |
+| `0A 00 00 00 00 01` | Z75 | `0A 00 00 00 00 09` | Z75S |
+| `03 00 00 00 01 C7` | KX75 | `03 00 00 00 01 74` | GX87 |
+| `03 00 00 00 01 ED` | GX87_V2 | `03 00 00 00 01 35` | K87 |
+| `03 00 00 00 03 35` | G75_V2 | `0A 00 00 00 00 34` | G87_V2 |
+
+The generic-receiver branch uses the whole table, without an additional
+model/PID cross-product filter. These are eligible identification results, **not
+18 hardware-verified FA09 models**. Named AULA/狼蛛, NEWMEN/新盟, XUNSHE/迅蛇,
+SCC100, bare MCHOSE G75, unknown names and all suffixed product strings receive
+no commands here. A generic name shared by another brand may receive the same
+read-only identity query M HUB issues, but an unknown code stops there: **no
+battery query and no reading**. Sharing FA09 is not a compatibility claim for
+#22/#25/#53/#99/#108/#110/#115/#128/#129/#133 or another brand. If another brand
+reuses a recognized code, these published fields cannot distinguish it; this
+is an unverified firmware-identity boundary, not proof of its compatibility.
+
+#### Complete exchanges and session requirements
+
+`configManagerMap`, `HidDeviceHandler.readCommand`, `crcHandler16` and
+`genCommandHandler` establish these complete **20-byte hidapi frames**, including
+the report-ID slot (WebHID supplies ID `0x13` separately and sends 19 data bytes):
+
+```text
+identify: 13 05 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 19
+battery:  13 4A 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 5E
+```
+
+The last byte is the sum of the preceding bytes for these fixed requests.
+There is no nonce, incrementing transaction ID, challenge response, unlock,
+pairing, wake, reset, or session-opening write in this read path. The sequence
+state is host-local packet reassembly (`expectedSequence=0`). Identification
+returns data; it is not an authentication handshake. Its `processQueue` branch
+also invalidates the browser's `sessions` WeakMap used for lighting snapshots;
+`invalidateByLocalLight` only deletes that host entry and sends no device command.
+The constructor/register/read path contains no configuration/firmware writes.
+This is the source-level evidence for treating `05` as read-only; actual
+firmware behavior and cold-start independence remain hardware-unverified.
+
+`DeviceManager.handleInputReport` passes WebHID input **data without the ID**
+to `handleCommandResponse`, which checks command, packet total and packet index,
+then appends data `[4:-1]`. `getPassWordParserWireless` takes its first six bytes;
+`getBatteryParser(false)` takes percentage and two four-bit flags. In a numbered
+20-byte HID reply used here:
+
+| Offset including ID | Meaning and implemented acceptance |
+| --- | --- |
+| 0 | Input report ID `13`, required by this descriptor-gated implementation |
+| 1 | Echoed command `05` for identification, `4A` for battery |
+| 2 / 3 | Total packets = 1 / current packet = 0; multipart packets refused |
+| 4 | Packet metadata; ignored by upstream, no invented length validation |
+| 5..10 | Six-byte identity in the `05` reply |
+| 5 | Battery percentage 0..100 in the `4A` reply; 101..255 refused |
+| 6 | LOW nibble `fullStatus`, HIGH nibble `chargeStatus` |
+| 19 | Trailer discarded by upstream; response checksum not established |
+
+The nibble order follows the bundled `Parser.generateBit` little-endian branch,
+not the textual field order. `resolveBatteryIcon` and the home battery status
+use `chargeStatus === 1 && battery < 100`. Accept only 0/1 for each flag; other
+nibble values have no established semantics and produce no reading. Like M HUB,
+do not replace percentage with 100 based on `fullStatus`. Reject literal request
+echoes, wrong commands/IDs, malformed lengths and out-of-order packets.
+
+The source input handler itself does **not** inspect `event.reportId` or enforce
+input length. Consequently this reader deliberately accepts only the descriptor
+variant with **one input and one output report, ID 13, 20 bytes each**, each
+proven as a raw byte array by `battery_caps` (including the single byte-selector
+array case). This is a conservative local acceptance boundary, not a claim that
+the script proves all FA09 input IDs/lengths. Unknown/multiple IDs, split/aliased
+fields, unproven lengths, wrong collection or duplicate eligible collections
+cause zero opens/sends. Topology uses preparsed descriptor data only; no feature
+request or output query is used to discover capabilities.
+
+Each exchange sends once and reads at most 32 packets/2200 ms (M HUB's
+`retryTime:2` budget). A silent/asleep receiver, an invalid reply or unknown model
+creates no new reading and no engine error. There is no invented sleep byte or
+offline 0%. The protocol has no nonce; cached receiver replies, delayed packets,
+sleep freshness, charge transitions and concurrent M HUB ownership are untested.
+All new reply fixtures are **synthetic**, including their trailer values.
+
+#### Commands excluded from this reader
+
+The complete `configManagerMap` used by this class has these state-changing
+entries. The wireless opcode is at byte 1 of the report; wired opcodes belong
+to feature payloads and must not be confused with wireless opcodes.
+
+| Entry | Wireless opcode | Wired opcode | Effect |
+| --- | --- | --- | --- |
+| setKeySetting | `01` | `03` | Key mapping/configuration |
+| setDiyLight | `02` | `06` | Per-key RGB tables |
+| setMacro | `03` | `05` | Macro storage |
+| setPerformance | `04` | `04` | Performance/configuration |
+| setReset | `06` | `04` | Factory reset (confirmed by reset UI call site) |
+| setLightColor | `09` | `10` | Lighting configuration |
+
+No pairing or firmware command is present in that class's command map. This is
+a bounded finding about the BY class, not a claim that the whole M HUB bundle
+has no updater or pairing logic. Those other paths, wired feature operations,
+streaming RGB commands, and every read except identity `05` and battery `4A`
+are absent from this provider. Fake handles provide no feature API and tests
+assert the entire allowed send trace, including failure and unknown-model paths.
+
+`258A:010C / FF00` is selected by the same upstream predicate; `05AC:024F`
+appears with FF00/FF04 in the filter table and K99/K87 naming logic. The evidence
+does not supply their exact target usage/report descriptor variants or prove
+which named devices take feature vs output transport. They are **recorded only,
+not enabled**. FA07 and other keyboard/mouse identities are also excluded.
 
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
