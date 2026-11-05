@@ -58,7 +58,7 @@ namespace AtkBatteryTray {
             layout.End=end;layout.VolumeTop=Math.Max(0,y);layout.Footer=layout.VolumeRect.Bottom;return layout;
         }
         internal static string EmptyReason(TrayContext owner,bool allHidden) {
-            return allHidden?"设备已隐藏，可在设备管理中恢复":owner.GenericScanning?"正在识别设备…":!String.IsNullOrEmpty(owner.GenericError)?"设备读取组件暂不可用":owner.GenericFailureCount>0||!String.IsNullOrEmpty(owner.GenericHealthSummary)?"部分读取器暂不可用":!owner.GenericReady?"设备读取组件尚未就绪":"尚未连接兼容设备";
+            return allHidden?"设备已隐藏，可在设备管理中恢复":owner.GenericScanning?"正在识别设备…":!String.IsNullOrEmpty(owner.GenericError)?"设备读取组件暂不可用":owner.GenericFailureCount>0||!String.IsNullOrEmpty(owner.GenericHealthSummary)?"部分读取器暂不可用":!String.IsNullOrEmpty(owner.GenericIdleSummary)?"设备休眠中，动一下鼠标或按一下键盘即可刷新":!owner.GenericReady?"设备读取组件尚未就绪":"尚未连接兼容设备";
         }
         internal static BatteryView View(WirelessDevice device) {
             bool system=device.SourceQuality=="system_property";

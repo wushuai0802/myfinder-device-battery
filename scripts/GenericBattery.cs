@@ -172,6 +172,7 @@ namespace AtkBattery {
         [DataMember(Name="physicalId",EmitDefaultValue=false)] public string PhysicalId;
         [DataMember(Name="provider")] public string Provider;
         [DataMember(Name="state")] public string State;
+        [DataMember(Name="reason",EmitDefaultValue=false)] public string Reason;
         [DataMember(Name="scope")] public string Scope;
         [DataMember(Name="errorCode")] public string ErrorCode;
         [DataMember(Name="deviceCount")] public int DeviceCount;
@@ -424,7 +425,7 @@ namespace AtkBattery {
                 }
                 snapshot.Unadapted=unadapted.ToArray();
             }
-            var health=new List<ReaderHealth>();foreach(var item in snapshot.Health??new ReaderHealth[0])if(item!=null&&health.Count<64){if(!Regex.IsMatch(item.PhysicalId??"",@"^device-[a-f0-9]{24}$"))item.PhysicalId=null;item.Provider=Clean(item.Provider,48,"unknown");item.State=Clean(item.State,24,"unknown");item.ErrorCode=Clean(item.ErrorCode,48,"");item.Scope=item.Scope=="device"?"device":"provider";item.DeviceCount=Math.Max(0,Math.Min(64,item.DeviceCount));health.Add(item);}snapshot.Health=health.ToArray();
+            var health=new List<ReaderHealth>();foreach(var item in snapshot.Health??new ReaderHealth[0])if(item!=null&&health.Count<64){if(!Regex.IsMatch(item.PhysicalId??"",@"^device-[a-f0-9]{24}$"))item.PhysicalId=null;item.Provider=Clean(item.Provider,48,"unknown");item.State=Clean(item.State,24,"unknown");item.Reason=Regex.IsMatch(item.Reason??"",@"\A[a-z0-9_]{1,48}\z")?item.Reason:null;item.ErrorCode=Clean(item.ErrorCode,48,"");item.Scope=item.Scope=="device"?"device":"provider";item.DeviceCount=Math.Max(0,Math.Min(64,item.DeviceCount));health.Add(item);}snapshot.Health=health.ToArray();
             if(snapshot.DpiResult!=null){
                 var result=snapshot.DpiResult;result.Error=Clean(result.Error,160,"");
                 if(!Regex.IsMatch(result.DeviceId??"",@"^device-[a-f0-9]{24}$"))result.DeviceId=null;

@@ -15,6 +15,62 @@ static class CardsFeedbackTests {
     static WirelessDevice Device(string id,string name){return new WirelessDevice {Id=id,Name=name,Kind="mouse",Provider="logitech",Percent=10,Fresh=true,Online=true,ConnectionState="connected",MeasurementState="current",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),PhysicalId=id};}
     static void Apply(TrayContext owner,WirelessSnapshot value){Call(owner,"ApplyWireless",value,false);}
     static string Decode(string url){return Uri.UnescapeDataString(url.Substring(url.IndexOf("&diagnostics=",StringComparison.Ordinal)+13));}
+    static WirelessSnapshot HealthSnapshot(string entries,string errors="[]"){
+        var snapshot=GenericBatteryWorker.Parse("{\"schema\":2,\"nativeMousePresent\":false,\"devices\":[],\"health\":["+entries+"],\"errors\":"+errors+"}");
+        Check(String.IsNullOrEmpty(snapshot.Error),"health fixture passes the real worker parser");return snapshot;
+    }
+    static void CheckFooter(TrayContext owner,string text,bool failure){
+        var layout=WirelessLayout.Build(owner,0,1000);
+        foreach(bool dark in new[]{false,true})using(var actual=new Bitmap(layout.Size.Width,layout.Size.Height))using(var expected=new Bitmap(layout.Size.Width,layout.Size.Height))using(var opposite=new Bitmap(layout.Size.Width,layout.Size.Height)){
+            using(var g=Graphics.FromImage(actual))CompactRenderer.PaintWireless(g,owner,layout,dark,new PanelFeedback());
+            foreach(bool wrongStyle in new[]{false,true})using(var g=Graphics.FromImage(wrongStyle?opposite:expected)){
+                g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                typeof(CompactRenderer).GetMethod("DrawSync",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{g,text,layout.Footer,208f,dark,wrongStyle?!failure:failure,new PanelFeedback()});
+            }
+            bool matches=true,styleDiffers=false;
+            for(int y=(int)layout.Footer+3;y<(int)layout.Footer+27;y++)for(int x=8;x<216;x++){
+                if(actual.GetPixel(x,y)!=expected.GetPixel(x,y))matches=false;
+                if(expected.GetPixel(x,y)!=opposite.GetPixel(x,y))styleDiffers=true;
+            }
+            Check(matches&&styleDiffers,"wireless footer shows the expected text using "+(failure?"failure":"normal")+" styling, dark="+dark);
+        }
+    }
+    static void CheckHealthPresentation(TrayContext owner,int failures,int idle){
+        string failed=failures>0?"部分读取暂不可用（"+failures+"项）":null;
+        string sleeping=idle>0&&failures==0?idle+" 台设备休眠中，动一下即可刷新":null;
+        Check(owner.GenericFailureCount==failures&&owner.GenericIdleCount==idle,"idle and failed readers are counted separately");
+        Check(owner.GenericHealthSummary==failed&&owner.GenericIdleSummary==sleeping,"only failures populate reader health and take precedence over idle");
+        var rows=PopupPages.Build(owner,new PopupNavigation {Page=PopupPage.Diagnostics,VisibleChoices=100},false);
+        Check(rows.Exists(delegate(PopupControl row){return row.Text=="读取器健康"&&row.Value==(failed??sleeping);})==(failed!=null||sleeping!=null),"status page shows failure first, otherwise idle");
+        Check(owner.DiagnosticSummary().Contains("\r\n读取健康："+(failed??sleeping??"正常")+"\r\n"),"diagnostic health text distinguishes idle from failure");
+        Check(owner.BuildStatusJson().Contains("\"readerHealth\":\""+(failed??"")+"\",\"readerFailures\":"+failures+",\"readerIdle\":"+idle+","),"status JSON keeps reader health/failures separate from idle");
+        string reason=failed!=null?"部分读取器暂不可用":sleeping!=null?"设备休眠中，动一下鼠标或按一下键盘即可刷新":"尚未连接兼容设备";
+        Check(WirelessLayout.EmptyReason(owner,false)==reason,"missing-device explanation distinguishes idle from failure");
+        CheckFooter(owner,failed??sleeping??"暂无可读取电量的设备",failures>0);
+    }
+    static void ReaderHealthStates(TrayContext owner){
+        owner.Headset=null;owner.Audio=null;
+        const string idle="{\"provider\":\"vgn\",\"state\":\"unavailable\",\"reason\":\"no_measurement\"}";
+        var snapshot=HealthSnapshot(idle);Check(snapshot.Health[0].Reason=="no_measurement","worker preserves the no_measurement reason");
+        Apply(owner,snapshot);CheckHealthPresentation(owner,0,1);
+        Apply(owner,HealthSnapshot(idle+","+idle));CheckHealthPresentation(owner,0,2);
+        foreach(string entry in new[]{"{\"state\":\"unavailable\"}","{\"state\":\"unavailable\",\"reason\":\"no_matched_model\"}","{\"state\":\"error\",\"reason\":\"no_measurement\"}","{\"state\":\"timeout\",\"reason\":\"no_measurement\"}","{\"state\":\"backoff\",\"reason\":\"no_measurement\"}"}){
+            Apply(owner,HealthSnapshot(entry));CheckHealthPresentation(owner,1,0);
+        }
+        Apply(owner,HealthSnapshot(idle+",{\"state\":\"timeout\"}"));CheckHealthPresentation(owner,1,1);
+        Apply(owner,HealthSnapshot(idle,"[\"vgn: timeout\"]"));CheckHealthPresentation(owner,1,1);
+        Apply(owner,HealthSnapshot("{\"state\":\"unavailable\"},{\"state\":\"error\"},{\"state\":\"timeout\"},{\"state\":\"backoff\"},"+idle));CheckHealthPresentation(owner,4,1);
+        string longest=new string('a',48);Check(HealthSnapshot("{\"state\":\"unavailable\",\"reason\":\""+longest+"\"}").Health[0].Reason==longest,"reason tokens accept the bounded character set");
+        foreach(string reason in new[]{"no_measurement\\n","no_measurement/path","NO_MEASUREMENT","休眠",new string('a',49)}){
+            snapshot=HealthSnapshot("{\"state\":\"unavailable\",\"reason\":\""+reason+"\"}");
+            Check(snapshot.Health[0].Reason==null,"invalid reason is rejected rather than normalized to idle");Apply(owner,snapshot);CheckHealthPresentation(owner,1,0);
+        }
+        Apply(owner,HealthSnapshot(idle));
+        Apply(owner,GenericBatteryWorker.Parse("{\"schema\":2,\"error\":\"fixture failure\"}"));
+        Check(owner.GenericIdleSummary==null&&owner.GenericIdleCount==0&&!String.IsNullOrEmpty(owner.GenericError),"worker failure clears stale idle state");
+        CheckFooter(owner,"读取组件暂不可用",true);
+        Apply(owner,HealthSnapshot("{\"state\":\"ok\"},{\"state\":\"unsupported\"},{\"state\":\"no_devices\"},{\"state\":\"deferred\",\"reason\":\"round_budget\"}"));CheckHealthPresentation(owner,0,0);
+    }
     [STAThread] static int Main(string[] args){
         TrayContext owner=null;
         try {
@@ -88,6 +144,7 @@ static class CardsFeedbackTests {
             Check(reduced.Contains("U0")&&!reduced.Contains("读取器健康")&&reduced.Contains("已截断"),"health-only overflow retains all unadapted items");
             Apply(owner,new WirelessSnapshot {Devices=new[]{a}});Check(owner.DiagnosticSummary().Contains("Old Mouse"),"omitted optional suppression preserves diagnostics");
             Apply(owner,new WirelessSnapshot {Devices=new[]{a},Suppressed=new SuppressedDevice[0]});Check(!owner.DiagnosticSummary().Contains("Old Mouse"),"explicit empty suppression clears diagnostics");
+            ReaderHealthStates(owner);
             Console.WriteLine("PASS "+checks+" cards/feedback checks; no HID or browser");return 0;
         }catch(Exception e){Console.Error.WriteLine(e);return 1;}finally{if(owner!=null)owner.ExitThread();}
     }

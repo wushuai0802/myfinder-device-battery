@@ -728,6 +728,8 @@ namespace AtkBatteryTray {
         public string GenericError;
         public string GenericHealthSummary;
         public int GenericFailureCount;
+        public string GenericIdleSummary;
+        public int GenericIdleCount;
         public ReaderHealth[] GenericHealth=new ReaderHealth[0];
         public bool GenericScanning {get{return genericBusy!=0;}}
         public bool UseWirelessLayout {get{return GenericReady||!NativeMousePresent||WirelessDevices.Length>0||DeviceSettings.Current.HiddenDeviceIds.Count>0||DeviceSettings.Current.DeviceOrder.Count>0;}}
@@ -1064,7 +1066,7 @@ namespace AtkBatteryTray {
                     ",\"speakerAvailable\":"+(Audio!=null&&Audio.SpeakerAvailable?"true":"false")+
                     ",\"volumePercent\":"+(Audio!=null&&Audio.OutputVolumePercent.HasValue?Audio.OutputVolumePercent.Value.ToString():"null")+
                     ",\"microphoneMuted\":"+(Audio!=null&&Audio.MicrophoneMuted.HasValue?Audio.MicrophoneMuted.Value.ToString().ToLower():"null")+
-                    ",\"error\":\""+Escape(Audio==null?"":SafeDiagnostic.Clean(Audio.Error))+"\"},\"universalReady\":"+GenericReady.ToString().ToLower()+",\"universalDeviceCount\":"+WirelessDevices.Length+",\"universalError\":\""+Escape(GenericError)+"\",\"readerHealth\":\""+Escape(GenericHealthSummary)+"\",\"readerFailures\":"+GenericFailureCount+",\"audioReconcilePending\":"+audioNeedsReconcile.ToString().ToLower()+
+                    ",\"error\":\""+Escape(Audio==null?"":SafeDiagnostic.Clean(Audio.Error))+"\"},\"universalReady\":"+GenericReady.ToString().ToLower()+",\"universalDeviceCount\":"+WirelessDevices.Length+",\"universalError\":\""+Escape(GenericError)+"\",\"readerHealth\":\""+Escape(GenericHealthSummary)+"\",\"readerFailures\":"+GenericFailureCount+",\"readerIdle\":"+GenericIdleCount+",\"audioReconcilePending\":"+audioNeedsReconcile.ToString().ToLower()+
                     ",\"genericDpi\":{\"busy\":"+(wirelessDpiInFlight!=null).ToString().ToLower()+",\"pendingCount\":"+pendingWirelessDpi.Count+",\"reconcilePending\":"+wirelessDpiNeedsReconcile.ToString().ToLower()+
                     ",\"lastRequestedDpi\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.RequestedDpi.ToString())+",\"lastConfirmedDpi\":"+(lastWirelessDpiResult!=null&&lastWirelessDpiResult.ConfirmedDpi.HasValue?lastWirelessDpiResult.ConfirmedDpi.Value.ToString():"null")+
                     ",\"lastSuccess\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.Success.ToString().ToLower())+",\"outcomeUnknown\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.OutcomeUnknown.ToString().ToLower())+
@@ -1233,12 +1235,13 @@ namespace AtkBatteryTray {
             if(String.IsNullOrEmpty(snapshot.Error)){
                 if(snapshot.Generation>0&&snapshot.Generation!=wirelessDpiGeneration){wirelessDpiGeneration=snapshot.Generation;Interlocked.Increment(ref wirelessDpiEpoch);pendingWirelessDpi.Clear();wirelessDpiFailures.Clear();}
                 if(complete&&snapshot.DpiResult==null)wirelessDpiNeedsReconcile=false;
-                GenericReady=true;GenericError=null;WirelessDevices=snapshot.Devices??new WirelessDevice[0];GenericHealth=snapshot.Health??new ReaderHealth[0];GenericFailureCount=0;
+                GenericReady=true;GenericError=null;WirelessDevices=snapshot.Devices??new WirelessDevice[0];GenericHealth=snapshot.Health??new ReaderHealth[0];GenericFailureCount=0;GenericIdleCount=0;
                 if(snapshot.Unadapted!=null)unadaptedDevices=snapshot.Unadapted;
                 if(snapshot.Suppressed!=null)suppressedDevices=snapshot.Suppressed;
                 foreach(var device in WirelessDevices)if(device.Kind=="mouse")activityRefresh.ObserveMouse(device.PhysicalId);
-                foreach(var health in GenericHealth)if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
+                foreach(var health in GenericHealth)if(health.State=="unavailable"&&health.Reason=="no_measurement")GenericIdleCount++;else if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
+                GenericIdleSummary=GenericIdleCount>0&&GenericFailureCount==0?GenericIdleCount+" 台设备休眠中，动一下即可刷新":null;
                 var pref=DeviceSettings.Current;
                 foreach(var device in WirelessDevices){WirelessDevice cached;
                     // A legacy PID-only key cannot prove which physical device
@@ -1249,7 +1252,7 @@ namespace AtkBatteryTray {
                 foreach(string key in new List<string>(wirelessCache.Keys))if((DateTime.UtcNow-wirelessCache[key].ConfirmedTime).TotalDays>7)wirelessCache.Remove(key);
                 if(complete&&!clearingHistory&&pref.RememberReadings)fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json"),ReadingCache.EncodeWireless(wirelessCache.Values));
                 if(!applyingPhysicalSnapshot){bool previous=NativeMousePresent;if(snapshot.NativeMousePresent.HasValue)NativeMousePresent=snapshot.NativeMousePresent.Value;if(NativeMousePresent&&!previous)RequestRead(true,false);}
-            }else{GenericError=snapshot.Error;GenericHealthSummary="读取组件暂不可用";BlockWirelessDpi();foreach(var device in WirelessDevices){device.Fresh=false;device.Charging=null;}}
+            }else{GenericError=snapshot.Error;GenericHealthSummary="读取组件暂不可用";GenericIdleSummary=null;GenericIdleCount=0;BlockWirelessDpi();foreach(var device in WirelessDevices){device.Fresh=false;device.Charging=null;}}
             if(complete){string state=GenericError??GenericHealthSummary??"ready";ThreadPool.QueueUserWorkItem(delegate{SafeDiagnostic.Transition("device_readers",state);});}
             UpdateIcon();
         }
@@ -1271,7 +1274,7 @@ namespace AtkBatteryTray {
             if(!String.IsNullOrEmpty(ErrorMessage))text+="\r\n鼠标读取："+SafeDiagnostic.Clean(ErrorMessage);
             if(!String.IsNullOrEmpty(DpiError))text+="\r\nDPI读取："+SafeDiagnostic.Clean(DpiError);
             foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip+(device.ModelSource=="pack"?" | 来自数据包，待验证":"");
-            text+="\r\n通用读取："+(GenericReady?"已就绪":GenericScanning?"识别中":"尚未就绪")+"\r\n读取健康："+(GenericError??GenericHealthSummary??"正常");foreach(var item in GenericHealth)if(item.State!="ok"&&item.State!="no_devices")text+="\r\n"+item.Provider+"："+item.State+" / "+item.ErrorCode;
+            text+="\r\n通用读取："+(GenericReady?"已就绪":GenericScanning?"识别中":"尚未就绪")+"\r\n读取健康："+(GenericError??GenericHealthSummary??GenericIdleSummary??"正常");foreach(var item in GenericHealth)if(item.State!="ok"&&item.State!="no_devices")text+="\r\n"+item.Provider+"："+item.State+" / "+item.ErrorCode;
             text+="\r\n未取得电量的设备（可能未适配，也可能正在休眠）";
             if(unadaptedDevices.Length==0)text+="\r\n无记录";
             foreach(var device in unadaptedDevices)text+="\r\n"+device.DiagnosticLine();

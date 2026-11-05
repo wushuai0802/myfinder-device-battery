@@ -299,7 +299,7 @@ namespace AtkBatteryTray {
             float top=layout.Footer;float width=layout.Paged?146:208;
             string status=feedback.ManualRefreshing?"正在同步…":layout.All[0].Id=="empty"?owner.GenericScanning?"正在识别设备…":"暂无可读取电量的设备":layout.Paged?(layout.Start+1)+"–"+layout.End+" / "+layout.All.Count+" 台设备":"已识别 "+layout.All.Count+" 台设备";
             var failure=feedback.DpiFailure??feedback.AudioFailure??(!String.IsNullOrEmpty(owner.GenericHealthSummary)?owner.GenericHealthSummary:!String.IsNullOrEmpty(owner.GenericError)?"读取器暂不可用":null);
-            DrawSync(g,failure??status,top,width,dark,!String.IsNullOrEmpty(failure),feedback);
+            DrawSync(g,failure??owner.GenericIdleSummary??status,top,width,dark,!String.IsNullOrEmpty(failure),feedback);
             if(layout.Paged) {
                 InteractionLayout.Paint(g,new RectangleF(0,top,260,30),new RectangleF(158,top,28,30),902,layout.Start>0?feedback:null,dark,false,delegate{DrawSymbol(g,"back",new RectangleF(166,top+8,14,14),layout.Start>0?Fg(dark):Muted(dark));});
                 InteractionLayout.Paint(g,new RectangleF(0,top,260,30),new RectangleF(192,top,28,30),903,layout.End<layout.All.Count?feedback:null,dark,false,delegate{DrawSymbol(g,"chevron",new RectangleF(198,top+8,14,14),layout.End<layout.All.Count?Fg(dark):Muted(dark));});
