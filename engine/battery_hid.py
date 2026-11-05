@@ -31,8 +31,9 @@ One value-cap per ID supplies the entire payload. A collection maximum must
 agree with the largest array; buttons, split fields and padding are not guessed.
 String keys survive the reader child's JSON boundary without conversion.
 """
-    buttons, count, maximum = ((caps.ib, caps.iv, caps.input) if report_type == 0
-                               else (caps.ob, caps.ov, caps.output))
+    buttons, count, maximum = ((caps.ib, caps.iv, caps.input),
+                               (caps.ob, caps.ov, caps.output),
+                               (caps.fb, caps.fv, caps.feature))[report_type]
     if buttons and not count:
         return byte_array_report_size(api, data, buttons, maximum, report_type)
     if buttons or not 1 <= count <= 32 or not 2 <= maximum <= 4096:

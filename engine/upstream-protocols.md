@@ -850,6 +850,119 @@ The level Windows itself knows (`DEVPKEY_Bluetooth_Battery`). Only devices conne
 
 ## Others
 
+### VGN Dragonfly3 SE 391D:1A01
+
+**C — protocol implemented, no hardware validation.** Independent battery-only
+implementation in `providers/vgn_dragonfly3.py`; only `391D:1A01 / FF01:0010`.
+The other diagnosed collection `FF05:0002`, wired `1001`, Pro `1A03` and all
+other PIDs are excluded. Unknown report layouts or more than one eligible
+collection on a physical receiver cause no open/query.
+
+Source: the official [VGN HUB](https://drive.vgnlab.com.cn/) bundle
+`assets/index-ZngoA_qG.js`, supplied at `.ai/evidence/vgnhub/index-ZngoA_qG.js`,
+retrieved 2026-11-05, SHA256
+`53adfab22f478249bdb9117bb26cedf8a7d3c6c561f2f2eb735e7d86e943be63`.
+No source commit or redistribution licence was provided for the proprietary
+bundle. Only protocol facts were extracted; vendor implementation code is not
+copied or bundled by this change. Stable locators within this exact artifact
+(zero-based UTF-16 character offsets, not byte offsets):
+
+- `1718131`: device table, VID 14621 / PID 6657, usage page 65281 / usage 16,
+  `customDeviceType:"yongjiaxin"`, receiver, report ID 0.
+- `2755846`: `Yd.GetBattery=48`; `2758803`: `class oc`, report ID 0.
+- `2776232`: `oc.getBattery`; `2784545`: `oc.sendCmd` and adjacent
+  `sendHidBuffer`; `2781311`: `oc.readHidBuffer` reply handler.
+- `2884917`: `yongjiaxin` dispatch to `oc`.
+
+REA static inventory Evidence
+`ev_4a033baf1ccf93b5e4f41d744777c7f6c6e2de3aaf6b1f738874aac6e03bb5d4`
+parsed the supplied JS without execution. Its semantic graph hit a node limit;
+the protocol facts above were checked directly at the listed source locations.
+Neither the static analysis nor synthetic tests establish hardware behavior.
+
+| Item | Implemented boundary |
+| --- | --- |
+| Request | WebHID Output ID 0, 64-byte payload: `55 30` + 62 zeros. Hidapi supplies an additional leading ID-0 slot, 65 bytes total. No checksum is added by `oc.sendCmd`. |
+| Descriptor gate | Windows input/output lengths exactly 65, each direction proving only report ID 0 using the existing byte-array capability checks (including a lone selector array spanning 0..255). Collection maxima alone are insufficient. |
+| Input | Unnumbered hidapi input is exactly 64 bytes, without an ID slot. HUB correlates payload `[1]==30`, takes `[8]` as battery and treats `[9]==1` as wired with no battery reading. This implementation requires 0..100, rejects the exact request echo and emits no reading when wired. |
+| Unknown fields | The upstream handler does not check an input report ID, byte-0 signature, or response checksum. This reader accepts only descriptor-proven unnumbered input; it does not invent a signature/checksum or interpret the wired byte as charging. |
+
+One battery request only; no online probe, DPI, lighting, configuration, save,
+mode change or firmware command. Silence uses `battery_hid`'s bounded no-reading
+behavior and does not become an engine error. Charging remains unknown.
+`engine/tests/test_vgn_dragonfly3.py` replies are **synthetic**, derived from the
+handler, not captures. A zero-percent response identical to the request echo
+is conservatively discarded. Actual Windows caps, firmware response padding,
+stale receiver responses during sleep, wired/unwired transitions, physical
+battery accuracy and official-driver coexistence remain unverified.
+
+### Ninjutso Sora V2 legacy receiver 1915:AE1C
+
+**C — protocol implemented, no hardware validation.** Independent read-only
+implementation in `providers/ninjutso_legacy.py`. Only `1915:AE1C / FFA0:0001`
+with product name exactly `Ninjutso Sora V2`; collection evidence is the task's
+user diagnosis #112. AE8C/AE8A are not added: upstream lists their PIDs but does
+not prove their collection. The compact `Ninjutso Sora V2 8K` format is excluded.
+
+Source: [OpenMouse-Project/mouse-protocol](https://github.com/OpenMouse-Project/mouse-protocol),
+commit `30d6ad37d0ecc9fff53f86d5058d67a88e07150d` (current head checked 2026-11-05),
+[`src/ninjutso/index.ts`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/ninjutso/index.ts)
+lines 2, 8, 25–28, 36–37 and 135–139 (identity, legacy report and builder), and
+[`src/drivers/ninjutso/hid.ts`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/ninjutso/hid.ts)
+lines 63–70, 441–442, 631–655 and 699–702 (selection, fields and read path).
+[`package.json`](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/package.json)
+declares **AGPL-3.0-or-later**, compatible with this project's AGPL-3.0-only.
+Sources were read through the GitHub contents API at that fixed commit.
+
+All offsets below include the feature report ID. WebHID send payloads exclude
+that byte; `receiveFeatureReport`/hidapi feature replies include it.
+
+| Step | Exact read-only request and response |
+| --- | --- |
+| Active profile | Feature ID 5: `05 0D 00 00 01 00 00 16` + 24 zeros (32 total, payload 31). Wait 15 ms, get report 5/32 bytes; profile is reply `[9]`. Only a well-sized ID-5 zero-profile reply gets one retry, as in upstream. Silence/malformed replies stop; a second zero stops. |
+| Configuration block read | Feature ID 4: `04 26 00 00 01 00 <profile>` + 697 zeros (704 total, payload 703). Wait 90 ms, get report 4/704 bytes. No setting is modified by this read request. |
+| Integrity | Require exactly 704 bytes and ID 4; `sum(reply[0:701]) == reply[702] + (reply[703] << 8)`. Byte 701 is deliberately excluded, with no modulo, matching upstream. |
+| Battery | Upstream slices at offset 9 and reads data `[7]`/`[8]`, hence full reply `[16]` is percent and `[17]==1` is charging. Accept percent 0..100 and charging 0/1; reject other values. |
+
+Before opening, require a unique physical collection and descriptor-proven
+feature sizes `4:704` and `5:32`, with collection maximum 704. The shared size
+proof now supports feature caps as well as input/output; topology invokes it
+only for this exact new identity/collection. No size is inferred from a maximum.
+The active profile must be nonzero (1..255); no unproven upper limit or command
+echo/header signature is invented. A settings-request echo fails the checksum.
+
+`readLegacySettings` requires no entering/exiting configuration mode, control
+command, write/save, profile switching, firmware read or paired-product query.
+The new report-6 battery commands 18/17 are **not** used. The normal engine reader
+process provides the existing outer isolation/deadline for synchronous feature
+I/O. Empty/invalid replies yield no reading and no engine error; previous readings
+retain the existing stale-history behavior.
+
+`engine/tests/test_ninjutso_legacy.py` uses **synthetic** replies. Upstream's own
+`src/drivers/ninjutso/hid.test.ts:188–244` supports field/checksum offsets but has
+inconsistent fake descriptor/report metadata (report-4 count 704 vs driver
+payload 703, short ID-5 fake response, zeroed report/header bytes); those mocks
+are not descriptor evidence. The driver itself allocates payload 703 and reads
+through full reply offset 703. Runtime descriptor proof is mandatory; a real
+704-byte payload/705-byte full report, array/split layout that cannot prove
+both sizes, or compact 74-byte full report is rejected rather than guessed.
+Actual Windows feature transfer lengths, wake/sleep behavior, cached-response
+freshness, charge transitions, firmware variants and official-driver coexistence
+remain unverified. No hardware was accessed in this task.
+
+### Deferred VGN N75 V2 391D:2A01
+
+**Not implemented.** The same official VGN HUB bundle above lists
+`vendorId:14621,productId:10753` at UTF-16 offset `1720691`, with
+`FF02:0002`, receiver, report ID 19 (`13` hex), and `beiying` dispatch. Task
+diagnosis #97 for `VGN N75 V2 2.4G Dongle` shows only vendor `FF00:0001`, alongside
+standard collections. This contradicts the exact official collection; the
+`FF00` path must not be substituted or inferred from the shared VID/PID/name.
+No provider or compatible-device claim is added. Required evidence: the correct
+receiver/firmware's matching collection, descriptor-proven input/output or
+feature IDs and lengths, and a battery request/reply tied to that precise
+variant. Further N75 implementation remains deferred under the revised brief.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

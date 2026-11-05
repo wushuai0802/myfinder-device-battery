@@ -48,6 +48,8 @@
     }
   ],
   "readers": [
+    {"provider":"vgn_dragonfly3","name":"VGN 蜻蜓 Dragonfly3 SE 接收器","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/vgn_dragonfly3.py","matchScope":"仅391D:1A01 / FF01:0010；描述符证明输入/输出均为唯一ID 0、64字节payload（Windows含ID槽65）；只读55 30，回复payload[8]为百分比、[9]=1时不产生读数；充电未知，回显拒绝；不含FF05集合、其他型号或N75 V2，待实机验证","reference":"engine/upstream-protocols.md#vgn-dragonfly3-se-391d1a01"},
+    {"provider":"ninjutso_legacy","name":"Ninjutso Sora V2 旧款 AE1C 接收器","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/ninjutso_legacy.py","matchScope":"仅1915:AE1C / FFA0:0001且产品名Ninjutso Sora V2；描述符逐ID证明Feature 5共32字节、4共704字节；只读活动配置号及配置块中的电量/充电，校验和不符或无回复无读数；不写入/保存/切换配置，不用report 6；排除8K紧凑格式及AE8C/AE8A，待实机验证","reference":"engine/upstream-protocols.md#ninjutso-sora-v2-legacy-receiver-1915ae1c"},
     {"provider":"razer","name":"Razer 已列明鼠标、耳机与键盘","kinds":["mouse","headset","keyboard"],"verificationLevel":"C","source":"engine/providers/razer.py","matchScope":"限代码内既有匹配表；含 Viper V3 Pro SE（1532:00DE / 00DF，transaction 0x1F），待实机验证","reference":"engine/upstream-protocols.md#razer-viper-v3-pro-se"},
     {"provider":"audeze","name":"Audeze Maxwell 已列明变体","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/audeze.py"},
     {"provider":"wlmouse","name":"WLmouse 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/wlmouse.py"},
