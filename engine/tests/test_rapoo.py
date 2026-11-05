@@ -11,7 +11,9 @@ import _hidstub  # noqa: F401
 from providers import rapoo as R
 from catalog import load_catalog, validate_catalog
 from known_ids import build_index
+import battery_hid
 import server
+from test_battery_caps import FakeApi, caps
 
 
 def descriptor(pid=0x1412, physical="usb:receiver-a", **changes):
@@ -91,6 +93,23 @@ def fixture(frames=(), inventory=None):
 
 
 class RapooTests(unittest.TestCase):
+    def test_issue_120_vt3s_fixed_usage_caps_and_passive_notification(self):
+        # Windows caps for #120's Input(Data,Array): 18 bytes, fixed usage 2.
+        item = dict(page=0xFF00, report=7, field=0, is_range=0,
+                    usage_min=2, usage_max=2, report_count=18)
+        api, descriptor_caps = FakeApi([item]), caps(ib=1, size=19)
+        self.assertIsNone(battery_hid.byte_report_sizes(api, None, descriptor_caps, 0))
+        sizes = battery_hid.byte_report_sizes(api, None, descriptor_caps, 0, allow_fixed_usage=True)
+        self.assertEqual(sizes, {"7": 19})
+        notification = list(bytes.fromhex("07 10 01 40 06 40 06 01 44 00 03 81 00 11 46 01 00 05 b1"))
+        with fixture([notification], [descriptor(0x1411, input_report_sizes=sizes)]) as bus:
+            status, = R.RapooProvider().poll()
+            self.assertEqual((status.name, status.level, status.charging, status.charging_known),
+                             ("Rapoo VT3S", 68, False, True))
+            self.assertEqual(status.verification_level, "C")
+            self.assertEqual(bus.opened, bus.closed)
+            self.assertEqual(len(bus.opened), 1)
+
     def test_exact_wireless_models_parse_without_any_request(self):
         for pid, name in R.PIDS.items():
             for level in (0, 73, 100):
@@ -286,7 +305,7 @@ class RapooTests(unittest.TestCase):
                 self.assertEqual(bus.opened, [])
 
     def test_other_pids_and_vendors_never_open(self):
-        for pid in (0x1601, 0x4612, 0x4621, 0x46A1, 0x14A9, 0x1205, 0xFFFF):
+        for pid in (0x1601, 0x4611, 0x4612, 0x4621, 0x46A1, 0x4B15, 0x1B00, 0x1205, 0xFFFF):
             with self.subTest(pid=pid), fixture([report()], [descriptor(pid)]) as bus:
                 self.assertEqual(R.RapooProvider().poll(), [])
                 self.assertEqual(bus.opened, [])
@@ -306,7 +325,17 @@ class RapooTests(unittest.TestCase):
         self.assertEqual(server.PROVIDER_VIDS["rapoo"], (0x24AE,))
         entries = [e for e in build_index()["devices"] if e["provider"] == "rapoo"]
         self.assertEqual({(e["vendorId"], e["productId"]) for e in entries},
-                         {(0x24AE, pid) for pid in (0x1412, 0x1421, 0x14A1)})
+                         {(0x24AE, pid) for pid in (
+                             0x1410, 0x1411, 0x1412, 0x1413, 0x1414, 0x1415, 0x1416, 0x1417,
+                             0x1418, 0x1420, 0x1421, 0x1422, 0x1423, 0x1444, 0x144A, 0x144B,
+                             0x1451, 0x1452, 0x1453, 0x1459, 0x145B, 0x145D, 0x1460, 0x1462,
+                             0x1464, 0x1466, 0x1468, 0x146A, 0x146C, 0x146D, 0x146E, 0x1470,
+                             0x1471, 0x1473, 0x1474, 0x1475, 0x1476, 0x1477, 0x1478, 0x14A1,
+                             0x14A2, 0x14A4, 0x14A5, 0x14A6, 0x14A7, 0x14A8, 0x14A9, 0x14AA,
+                             0x1B01, 0x1B02, 0x1B03, 0x1B04, 0x1B05, 0x1B06, 0x1B07, 0x1B08,
+                             0x1B09, 0x1B0A, 0x1B0B, 0x1B0C, 0x1B0D, 0x1B0E, 0x1B0F, 0x1B10,
+                             0x1B11, 0x1B12, 0x1B13, 0x1B14, 0x1B15,
+                         )})
         reader, = [e for e in load_catalog()["readers"] if e["provider"] == "rapoo"]
         self.assertEqual(reader["verificationLevel"], "C")
         unsupported = [e for e in load_catalog()["observedUnsupported"] if e["id"].startswith("rapoo_")]

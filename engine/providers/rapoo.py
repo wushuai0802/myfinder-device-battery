@@ -1,14 +1,15 @@
 """Passive Rapoo VT nrf54L battery notifications; no device requests.
 
-Only the three wireless IDs below are supported, at evidence level C. The
+Only the listed wireless IDs below are supported, at evidence level C. The
 official A HUB's Ik/dy parser receives report 07 on the default FF00:0002
 channel. Report length must be proven from that collection's descriptor.
 
-The mouse sends report 07 on its own schedule, about every 30-60 s (measured
-by a user in #120), so one short listen per poll almost always missed it. The
-collection handle therefore stays open between polls: Windows queues input
-reports for an open handle, and each poll drains that queue and keeps the
-newest battery report. The first poll after opening still listens briefly.
+#120's VT3S exposes a fixed-usage button array: without the opt-in descriptor
+proof in topology, _pick refuses to open it. The user observed report 07 about
+every 3 s; cadence for other models remains unknown. The collection handle
+stays open between polls: Windows queues input reports for an open handle,
+and each poll drains that queue and keeps the newest battery report. The
+first poll after opening still listens briefly.
 See upstream-protocols.md for the host route, UI flags and remaining unknowns.
 """
 from __future__ import annotations
@@ -24,9 +25,75 @@ from .base import DeviceStatus, Provider
 
 VID = 0x24AE
 PIDS = {
+    0x1410: "Rapoo VT0",
+    0x1411: "Rapoo VT3S",
     0x1412: "Rapoo VT3",
+    0x1413: "Rapoo VT7",
+    0x1414: "Rapoo VT9",
+    0x1415: "Rapoo VT1",
+    0x1416: "Rapoo VT7 MAX",
+    0x1417: "Rapoo VT3 MAX",
+    0x1418: "Rapoo VT9 MAX",
+    0x1420: "Rapoo VT0 MAX",
     0x1421: "Rapoo VT3S MAX",
+    0x1422: "Rapoo VT2",
+    0x1423: "Rapoo VT2 MAX",
+    0x1444: "Rapoo VT1 MAX",
+    0x144A: "Rapoo VT0 MAX MASTER",
+    0x144B: "Rapoo VT3S MAX MASTER",
+    0x1451: "Rapoo VT6",
+    0x1452: "Rapoo VT6 MAX",
+    0x1453: "Rapoo VT9S V2",
+    0x1459: "Rapoo VT7S V2",
+    0x145B: "Rapoo VT4 V2",
+    0x145D: "Rapoo VT2S V2",
+    0x1460: "Rapoo VT7 V2",
+    0x1462: "Rapoo VT3 V2",
+    0x1464: "Rapoo VT3S V2",
+    0x1466: "Rapoo VT9 V2",
+    0x1468: "Rapoo VT2 V2",
+    0x146A: "Rapoo VT1S V2",
+    0x146C: "Rapoo VT8 V2",
+    0x146D: "Rapoo VT3 MAX MASTER V2",
+    0x146E: "Rapoo VT3S MAX MASTER V2",
+    0x1470: "Rapoo VT7 MAX MASTER V2",
+    0x1471: "Rapoo VT7S MAX MASTER V2",
+    0x1473: "Rapoo VT9 MAX MASTER V2",
+    0x1474: "Rapoo VT9S MAX MASTER V2",
+    0x1475: "Rapoo VT2 MAX MASTER V2",
+    0x1476: "Rapoo VT2S MAX MASTER V2",
+    0x1477: "Rapoo VT4 MAX MASTER V2",
+    0x1478: "Rapoo VT8 MAX MASTER V2",
     0x14A1: "Rapoo VT0 Air MAX",
+    0x14A2: "Rapoo VT3S Air Max",
+    0x14A4: "Rapoo VT2K MAX",
+    0x14A5: "Rapoo VT3 PRO V2",
+    0x14A6: "Rapoo VT3S PRO V2",
+    0x14A7: "Rapoo VT7 PRO V2",
+    0x14A8: "Rapoo VT7S PRO V2",
+    0x14A9: "Rapoo VT9 PRO V2",
+    0x14AA: "Rapoo VT9S PRO V2",
+    0x1B01: "Rapoo VT9S MAX V2",
+    0x1B02: "Rapoo VT7S MAX V2",
+    0x1B03: "Rapoo VT4 MAX V2",
+    0x1B04: "Rapoo VT2S MAX V2",
+    0x1B05: "Rapoo VT7 MAX V2",
+    0x1B06: "Rapoo VT3 MAX V2",
+    0x1B07: "Rapoo VT3S MAX V2",
+    0x1B08: "Rapoo VT9 MAX V2",
+    0x1B09: "Rapoo VT2 MAX V2",
+    0x1B0A: "Rapoo VT1S MAX V2",
+    0x1B0B: "Rapoo VT8 MAX V2",
+    0x1B0C: "Rapoo VT3 Air MAX V2",
+    0x1B0D: "Rapoo VT3S Air MAX V2",
+    0x1B0E: "Rapoo VT7 Air MAX V2",
+    0x1B0F: "Rapoo VT7S Air MAX V2",
+    0x1B10: "Rapoo VT9 Air MAX V2",
+    0x1B11: "Rapoo VT9S Air MAX V2",
+    0x1B12: "Rapoo VT2 Air MAX V2",
+    0x1B13: "Rapoo VT2S Air MAX V2",
+    0x1B14: "Rapoo VT4 Air MAX V2",
+    0x1B15: "Rapoo VT8 Air MAX V2",
 }
 COLLECTION = (0xFF00, 0x0002)
 INPUT_ID = 0x07

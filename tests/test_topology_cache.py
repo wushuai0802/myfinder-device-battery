@@ -14,7 +14,7 @@ sys.path.insert(0, str(ENGINE / "tests"))
 import _hidstub
 import server
 import topology
-from providers import audeze
+from providers import audeze, rapoo
 from standardhid import Caps
 
 
@@ -397,14 +397,14 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.hid.HidP_GetValueCaps.assert_not_called()
 
     def test_rapoo_input_proof_is_descriptor_only_numeric_or_single_byte_array(self):
-        for pid in (0x1412, 0x1421, 0x14A1):
-            for array in (False, True):
-                with self.subTest(pid=pid, array=array):
+        for pid in rapoo.PIDS:
+            for shape in ("numeric", "selector", "fixed_usage"):
+                with self.subTest(pid=pid, shape=shape):
                     self.cache.clear()
                     self.hid.HidP_GetValueCaps.reset_mock()
                     self.hid.HidP_GetButtonCaps.reset_mock()
                     self.batch3_descriptor((0x24AE, pid), (0xFF00, 2), {7: 19}, {6: 65})
-                    if array:
+                    if shape != "numeric":
                         original = self.hid.HidP_GetCaps.side_effect
 
                         def caps(data, pointer):
@@ -415,8 +415,11 @@ class DescriptorCacheTests(unittest.TestCase):
 
                         def buttons(report_type, values, length, data):
                             self.assertEqual(report_type, 0)
-                            values[0].report, values[0].is_range = 7, 1
-                            values[0].usage_min, values[0].usage_max = 0, 255
+                            values[0].page, values[0].report = 0xFF00, 7
+                            values[0].is_range = int(shape == "selector")
+                            values[0].usage_min = 0 if shape == "selector" else 2
+                            values[0].usage_max = 255 if shape == "selector" else 2
+                            values[0].report_count = 18
                             return 0x00110000
 
                         self.hid.HidP_GetCaps.side_effect = caps
@@ -425,8 +428,9 @@ class DescriptorCacheTests(unittest.TestCase):
                     self.assertEqual(first["input_report_sizes"], {"7": 19})
                     self.assertNotIn("output_report_sizes", first)
                     self.assertNotIn("feature_report_sizes", first)
-                    calls = (self.hid.HidP_GetButtonCaps if array else self.hid.HidP_GetValueCaps).call_args_list
-                    self.assertEqual([call.args[0] for call in calls], [0])
+                    calls = (self.hid.HidP_GetValueCaps if shape == "numeric"
+                             else self.hid.HidP_GetButtonCaps).call_args_list
+                    self.assertEqual([call.args[0] for call in calls], [0, 0] if shape == "fixed_usage" else [0])
                     self.kernel.CreateFileW.reset_mock()
                     self.assertEqual(self.scan([PATH_A]), [first])
                     self.kernel.CreateFileW.assert_not_called()
@@ -436,7 +440,7 @@ class DescriptorCacheTests(unittest.TestCase):
                     self.kernel.WriteFile.assert_not_called()
 
     def test_rapoo_unproven_input_is_retried_and_nearby_devices_are_not_probed(self):
-        for pid in (0x1412, 0x1421, 0x14A1):
+        for pid in rapoo.PIDS:
             for defect in ("no_07", "not_bytes", "alias", "partial", "failure"):
                 with self.subTest(pid=pid, defect=defect):
                     self.cache.clear()
@@ -466,7 +470,12 @@ class DescriptorCacheTests(unittest.TestCase):
                     recovered, = self.scan([PATH_A])
                     self.assertEqual(recovered["input_report_sizes"], {"7": 19})
         for identity, collection in (((0x24AE, 0x1601), (0xFF00, 2)),
+                                     ((0x24AE, 0x1419), (0xFF00, 2)),
+                                     ((0x24AE, 0x4611), (0xFF00, 2)),
                                      ((0x24AE, 0x4612), (0xFF00, 2)),
+                                     ((0x24AE, 0x1411), (0xFF00, 1)),
+                                     ((0x24AE, 0x1411), (0xFF00, 14)),
+                                     ((0x24AE, 0x1411), (0xFF01, 2)),
                                      ((0x24AE, 0x1412), (0xFF00, 1)),
                                      ((0x24AE, 0x1421), (0xFF00, 14)),
                                      ((0x24AF, 0x14A1), (0xFF00, 2))):
@@ -475,6 +484,15 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.hid.HidP_GetValueCaps.reset_mock()
                 self.hid.HidP_GetButtonCaps.reset_mock()
                 self.batch3_descriptor(identity, collection, {7: 19}, {6: 65})
+
+                def fixed_caps(data, pointer):
+                    value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                    value.page, value.usage = collection
+                    value.input, value.output = 19, 65
+                    value.ib, value.iv = 1, 0
+                    return 0x00110000
+
+                self.hid.HidP_GetCaps.side_effect = fixed_caps
                 info, = self.scan([PATH_A])
                 self.assertNotIn("input_report_sizes", info)
                 self.hid.HidP_GetValueCaps.assert_not_called()

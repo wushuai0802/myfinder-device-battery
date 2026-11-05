@@ -1067,10 +1067,11 @@ receiver/firmware's matching collection, descriptor-proven input/output or
 feature IDs and lengths, and a battery request/reply tied to that precise
 variant. Further N75 implementation remains deferred under the revised brief.
 
-### Rapoo VT nrf54L passive input 24AE:1412, 1421, 14A1
+### Rapoo VT nrf54L passive input 24AE:1411 and listed wireless IDs
 
-**C / 被动接收，待实机验证.** Only these three wireless PIDs are implemented;
-`24AE:1601` remains **D / not implemented**. Each PID was checked independently against the official
+**C / 被动接收，待本项目实机验证.** The 69 exact wireless PIDs below are
+implemented, including VT3S `24AE:1411` (**用户实机验证，#120**).
+`24AE:1601` remains **D / not implemented**. Each PID was checked against the official
 [Rapoo A HUB](https://hub.rapoo.cn/) bundle supplied at
 `.ai/evidence/rapoohub/index-cgGQw9wn.js`, retrieved 2026-11-05 from
 `https://hid.rapoo.cn/AHUB_WEB/dist/assets/js/index-cgGQw9wn.js`. SHA256:
@@ -1080,12 +1081,13 @@ No redistribution licence or source commit was supplied for this artifact.
 
 | Target / task diagnosis | Exact official identity and dispatch | Decision |
 | --- | --- | --- |
+| `24AE:1411`, #120 VT3S (not MAX) | `model:"VT3S"`, `mainControl:"VT3S"`, product IDs `[17937,5137]` (`4611,1411`); `dongleModel:"Dongle_NordicL5"`, `driver:"VT_nrf54L"`, MCU `N54L15` | C / 用户实机验证，#120: passive Input 07, 19 bytes, 67–68%; project hardware verification pending. |
 | `24AE:1412`, #120 VT3 dual 8K | `model:"VT3"`, `mainControl:"VT3"`, product IDs `[17938,5138]` (`4612,1412`); `dongleModel:"Dongle_NordicL5"`, `driver:"VT_nrf54L"`, MCU `N54L15` | C / passive input only, pending hardware verification. |
 | `24AE:1421`, #86 VT3S MAX | `model:"VT3S MAX"`, `mainControl:"VT3S MAX"`, product IDs `[17953,5153]` (`4621,1421`); same dongle/driver/MCU | C / passive input only, independently matched to this driver. |
 | `24AE:14A1`, #54 | `model:"VT0 Air MAX"`, `mainControl:"VT0Air MAX"`, product IDs `[18081,5281]` (`46A1,14A1`); same dongle/driver/MCU | C / passive input only. The exact official name corrects the older batch4 note's shorthand "VT0". |
 | `24AE:1601`, #36 user-reported VT9 PRO | No matching device manifest in this supplied bundle; official class, `mainControl`, `dongleModel` and filters unknown | Deferred: identity-to-protocol mapping and the entire battery exchange remain unproven. |
 
-The first three identities each occur in exactly one product-ID declaration.
+These four implemented identities each occur in exactly one product-ID declaration.
 Their official filters all designate **`FF00:0002` as the default
 "Configuration Interface (Secondary)"**. `FF00:000E` is "Only update Firmware";
 `FF00:0001` is "Only update WCH Firmware". Neither update collection is a battery
@@ -1104,14 +1106,146 @@ equivalent (`Po`) forwards `event.reportId` and `event.data` from the selected
 device. This source route supports `FF00:0002`; it is not a hardware capture
 proving the contents of a receiver's actual descriptor.
 
+#### Additional wireless IDs checked against the same driver
+
+All 77 `driver:"VT_nrf54L"` manifests in this supplied bundle were inspected.
+Exactly 69 list a wired/wireless PID pair: each has vendor `9390` (`24AE`),
+one default `FF00:0002` filter, and no `input-report` capability selecting
+the `cybercafe` wrapper. `Ik.detectConnectionType` explicitly treats the second
+PID as wireless, so these 69 use the same retail `Ok` -> `dy` battery parser.
+The four IDs above plus the following 65 are allow-listed at **C**; the table
+records each exact identity rather than enabling a VID-wide or PID-range match.
+The wired partner is recorded for evidence only and is **not** enabled.
+
+| Wireless PID | Official model | Excluded wired PID | Manifest symbol / UTF-16 offset |
+| --- | --- | --- | --- |
+| `24AE:1410` | VT0 | `4610` | `NN` / `1950602` |
+| `24AE:1413` | VT7 | `4613` | `BW` / `2038310` |
+| `24AE:1414` | VT9 | `4614` | `pK` / `2066908` |
+| `24AE:1415` | VT1 | `4615` | `YN` / `1957081` |
+| `24AE:1416` | VT7 MAX | `4616` | `kW` / `2031112` |
+| `24AE:1417` | VT3 MAX | `4617` | `BH` / `1990407` |
+| `24AE:1418` | VT9 MAX | `4618` | `aK` / `2061407` |
+| `24AE:1420` | VT0 MAX | `4620` | `RN` / `1948941` |
+| `24AE:1422` | VT2 | `4622` | `gH` / `1975019` |
+| `24AE:1423` | VT2 MAX | `4623` | `oH` / `1965492` |
+| `24AE:1444` | VT1 MAX | `4644` | `GN` / `1953849` |
+| `24AE:144A` | VT0 MAX MASTER | `464A` | `UN` / `1947358` |
+| `24AE:144B` | VT3S MAX MASTER | `464B` | `GH` / `2001124` |
+| `24AE:1451` | VT6 | `4651` | `yW` / `2023087` |
+| `24AE:1452` | VT6 MAX | `4652` | `gW` / `2021310` |
+| `24AE:1453` | VT9S V2 | `4653` | `xK` / `2075549` |
+| `24AE:1459` | VT7S V2 | `4659` | `ZW` / `2048037` |
+| `24AE:145B` | VT4 V2 | `465B` | `uW` / `2018027` |
+| `24AE:145D` | VT2S V2 | `465D` | `kH` / `1983513` |
+| `24AE:1460` | VT7 V2 | `4660` | `PW` / `2036393` |
+| `24AE:1462` | VT3 V2 | `4662` | `UH` / `1994085` |
+| `24AE:1464` | VT3S V2 | `4664` | `QH` / `2007938` |
+| `24AE:1466` | VT9 V2 | `4666` | `dK` / `2064987` |
+| `24AE:1468` | VT2 V2 | `4668` | `fH` / `1973304` |
+| `24AE:146A` | VT1S V2 | `466A` | `QN` / `1960503` |
+| `24AE:146C` | VT8 V2 | `466C` | `SW` / `2054684` |
+| `24AE:146D` | VT3 MAX MASTER V2 | `466D` | `AH` / `1986803` |
+| `24AE:146E` | VT3S MAX MASTER V2 | `466E` | `WH` / `1999525` |
+| `24AE:1470` | VT7 MAX MASTER V2 | `4670` | `wW` / `2027518` |
+| `24AE:1471` | VT7S MAX MASTER V2 | `4671` | `IW` / `2043081` |
+| `24AE:1473` | VT9 MAX MASTER V2 | `4673` | `nK` / `2057897` |
+| `24AE:1474` | VT9S MAX MASTER V2 | `4674` | `mK` / `2070496` |
+| `24AE:1475` | VT2 MAX MASTER V2 | `4675` | `eH` / `1962148` |
+| `24AE:1476` | VT2S MAX MASTER V2 | `4676` | `wH` / `1980247` |
+| `24AE:1477` | VT4 MAX MASTER V2 | `4677` | `iW` / `2014679` |
+| `24AE:1478` | VT8 MAX MASTER V2 | `4678` | `XW` / `2051410` |
+| `24AE:14A2` | VT3S Air Max | `46A2` | `oW` / `2013119` |
+| `24AE:14A4` | VT2K MAX | `46A4` | `hH` / `1978590` |
+| `24AE:14A5` | VT3 PRO V2 | `46A5` | `$H` / `1992281` |
+| `24AE:14A6` | VT3S PRO V2 | `46A6` | `qH` / `2006248` |
+| `24AE:14A7` | VT7 PRO V2 | `46A7` | `MW` / `2033151` |
+| `24AE:14A8` | VT7S PRO V2 | `46A8` | `KW` / `2046357` |
+| `24AE:14A9` | VT9 PRO V2 | `46A9` | `cK` / `2063189` |
+| `24AE:14AA` | VT9S PRO V2 | `46AA` | `_K` / `2073865` |
+| `24AE:1B01` | VT9S MAX V2 | `4B01` | `vK` / `2072095` |
+| `24AE:1B02` | VT7S MAX V2 | `4B02` | `HW` / `2044680` |
+| `24AE:1B03` | VT4 MAX V2 | `4B03` | `lW` / `2016274` |
+| `24AE:1B04` | VT2S MAX V2 | `4B04` | `bH` / `1981846` |
+| `24AE:1B05` | VT7 MAX V2 | `4B05` | `bW` / `2029233` |
+| `24AE:1B06` | VT3 MAX V2 | `4B06` | `PH` / `1988518` |
+| `24AE:1B07` | VT3S MAX V2 | `4B07` | `zH` / `2002711` |
+| `24AE:1B08` | VT9 MAX V2 | `4B08` | `rK` / `2059612` |
+| `24AE:1B09` | VT2 MAX V2 | `4B09` | `sH` / `1963743` |
+| `24AE:1B0A` | VT1S MAX V2 | `4B0A` | `qN` / `1958828` |
+| `24AE:1B0B` | VT8 MAX V2 | `4B0B` | `JW` / `2053005` |
+| `24AE:1B0C` | VT3 Air MAX V2 | `4B0C` | `NH` / `1997923` |
+| `24AE:1B0D` | VT3S Air MAX V2 | `4B0D` | `sW` / `2011551` |
+| `24AE:1B0E` | VT7 Air MAX V2 | `4B0E` | `OW` / `2041397` |
+| `24AE:1B0F` | VT7S Air MAX V2 | `4B0F` | `jW` / `2049842` |
+| `24AE:1B10` | VT9 Air MAX V2 | `4B10` | `CK` / `2068812` |
+| `24AE:1B11` | VT9S Air MAX V2 | `4B11` | `LK` / `2077358` |
+| `24AE:1B12` | VT2 Air MAX V2 | `4B12` | `yH` / `1977026` |
+| `24AE:1B13` | VT2S Air MAX V2 | `4B13` | `MH` / `1985235` |
+| `24AE:1B14` | VT4 Air MAX V2 | `4B14` | `fW` / `2019746` |
+| `24AE:1B15` | VT8 Air MAX V2 | `4B15` | `tK` / `2056333` |
+
+The other eight same-driver manifests have only a single PID and no declared
+dongle: `ESM612ACE:464D`, `ESM612MAX:4681`, `ESM612PRO:4631`,
+`ESM622MAX:4637`, `ESM622PRO:4632`, `ESM652PRO:4633`,
+`ESM672MAX:4640`, `ESM672PRO:4635`. Their receiver identities and wireless
+routing remain unproven, so none is enabled. Other driver families and
+`24AE:1601` are not inferred from a nearby model name.
+
+#### #120: Windows report-length proof, not missed notifications
+
+The user's local 1.3.8 adaptation is retained in
+`.ai/evidence/rapoo-vt3s/issue-120-plaudern.md` and `VT3S.patch`.
+This is **用户实机验证，#120**, not a project-maintainer hardware test:
+VT3S `24AE:1411`, `FF00:0002`, Input `07`, 19 bytes including the ID.
+The reconstructed descriptor was:
+
+```text
+06 00 ff 09 02 a1 01 85 07 09 02 15 00 26 ff 00
+75 08 95 12 81 00 09 02 15 00 26 ff 00 75 08 95
+12 91 00 c0
+```
+
+Windows exposes its input as one non-aliased, non-range button cap:
+Data,Array, report `07`, fixed usage `2`, `report_count=18`,
+no input value caps, collection input maximum `19`. The previous
+`byte_report_sizes()` accepted numeric byte arrays or selector ranges
+`0..255`, returned `None` for this shape, and left `input_report_sizes`
+unproven. `RapooProvider._pick()` therefore refused to open the device.
+Adding the PID alone cannot fix this. The earlier attribution to missed
+reports, including the provider comment's claimed 30–60 s cadence, was wrong
+for this documented failure.
+
+Reuse `fixed_usage_report_size()`, already used for VGN #190, via
+`byte_report_sizes(..., report_type=0, allow_fixed_usage=True)` only for the
+Rapoo allow-list on `FF00:0002`. It proves `{"7": 19}` for these caps by
+checking the lone fixed-usage Data,Array item and `report_count == maximum - 1`.
+Aliases, mixed fields, ranges, constant/variable items and count mismatches
+still fail closed. No byte-for-byte descriptor fallback, extra device open,
+output proof, feature query or new transport operation is introduced.
+
+The user received 18 valid notifications in about 55 s, averaging **3.04 s**
+between reports, all 68% / state `1`; the patched application later showed
+67–68% with zero read errors. Example full report:
+
+```text
+07 10 01 40 06 40 06 01 44 00 03 81 00 11 46 01 00 05 b1
+```
+
+Full-report `[7]=01` and `[8]=44` use the existing status/percentage parser
+without a battery request. The cadence is one user's VT3S observation, not a
+promise for the other 68 models or firmware versions. No official-driver
+percentage calibration, complete charging transition, long sleep/wake or
+cross-firmware validation was supplied; all added identities remain **C**.
+
 #### Confirmed Nordic facts and passive-reader boundaries
 
 | Item | Observation in the supplied artifact / unresolved boundary |
 | --- | --- |
-| Battery delivery | `Ik.handleReport` handles **Input report ID `07`**, passes the body (excluding report ID) to `Ok`/`dy`, and publishes battery changes. These three manifests use the default retail parser, not the cybercafe wrapper. |
+| Battery delivery | `Ik.handleReport` handles **Input report ID `07`**, passes the body (excluding report ID) to `Ok`/`dy`, and publishes battery changes. All 69 enabled manifests use the default retail parser, not the cybercafe wrapper. |
 | Fields | Body `[0]` low nibble is connection protocol, high nibble sensor; `[6]` is `batStatus`, `[7]` is `batPercent`. Thus hidapi's numbered input would place the battery fields at full-report `[7]` and `[8]`. These are status notifications, not proven replies to a battery query. |
 | Charging UI | `le` passes the stored `batStatus` to `batteryStatus`; `Hr` accepts `1/2/3` as battery states, and `Ii` shows charging for `2/3` (also for wired transport, excluded here). Thus `1` maps to not charging and `2/3` to charging, following the official wireless UI. The inspected parser/UI does not distinguish full from charging for `2` versus `3`. `Jm` treats `0` as unavailable; other values have no established mapping. The reader keeps an in-range reported percentage but sets `charging_known=False` for `0`/unknown values; it never invents a full-state flag. |
-| Length / integrity | `dy` uses defaults for missing bytes and conditionally parses fields through body `[17]`. This proves field offsets, **not** an 8-, 18-, 31- or 63-byte fixed payload. No checksum validation is present in this parser; that does not prove the firmware has no integrity fields. The task diagnostics provide top-level collections, not per-report byte-array descriptors. |
+| Length / integrity | `dy` uses defaults for missing bytes and conditionally parses fields through body `[17]`. This proves field offsets, **not** a universal fixed payload length. #120 supplies a 19-byte full-report VT3S descriptor; every actual collection still needs its own per-report length proof. No checksum validation is present in this parser; that does not prove the firmware has no integrity fields. |
 | Request | No standalone battery query or battery EEPROM address is established for this class. `Ik` installs config/DPI/keys/performance/firmware/pairing features, but no battery feature. Its connection callback reads configuration and DPI; those operations are not documented as battery requests. No request bytes, response correlation, request length or response deadline can therefore be specified. |
 | Host session | WebHID/NodeHID channel open/close only open/close host handles and register/remove input listeners. The base connection session calls the class callback, which reads configuration/DPI. This passive implementation does not reproduce those operations or report backfill. No battery-specific enter/exit command was found. This does not establish whether/when an otherwise idle receiver will emit a status report without setup. |
 | Excluded command families | The AP/Telink3228C `getBatteryLevel:173` / `readBatteryStatus()` and the CH315 `batteryPercent:t[9]` parser belong to other classes. Telink8273's `BB` status path also has no dispatch link to these targets. They cannot supply the missing Nordic exchange. |
@@ -1138,6 +1272,7 @@ The following strings are unique within this exact supplied bundle:
 | Offset | Searchable anchor | Fact |
 | --- | --- | --- |
 | `1996012` | `RH={channel:["china_game","global"],model:"VT3"` | `1412` manifest and filters |
+| `2009753` | `eW={channel:["china_game","global"],model:"VT3S"` | `1411` manifest and filters |
 | `2004523` | `model:"VT3S MAX",mainControl:"VT3S MAX"` | `1421` manifest and filters |
 | `1952330` | `model:"VT0 Air MAX",mainControl:"VT0Air MAX"` | `14A1` manifest and filters |
 | `120182` | `static create(t,e){const s=this.registry.get(t.driver)` | Factory dispatch key |
@@ -1158,8 +1293,14 @@ REA static inventory Evidence
 `ev_94a2e7e23216b9728fd6bd2dcea9f3cdffb8eda7420faeb33ebd74d2ba8ee99c`
 parsed the single supplied JS file without execution or parse errors. Its
 semantic graph reached its node ceiling and is partial; the identity and
-protocol facts above were checked directly in the source. Static analysis
-does not establish firmware behavior or battery accuracy.
+protocol facts above were checked directly in the source. The current static
+recheck produced application Evidence
+`ev_5b8d9d5481d3711d31b7da30f58085831b5dd6a402e162c3ab73f7e1f96282af`
+(summary view `ev_5476d9430c618f9a20dc4de11219c21d8b7546d6073902686e64c7dcc8fe0079`):
+one JS file, zero parse failures, semantic graph partial at its node ceiling.
+The 77 manifest declarations and input-report capabilities were inspected
+directly as inert source. Static analysis does not establish firmware behavior
+or battery accuracy.
 
 `providers/rapoo.py` **only receives and never sends**: open, bounded input
 reads, close. There is no `write`, `send_feature_report` or `get_feature_report`
@@ -1167,16 +1308,20 @@ reads, close. There is no `write`, `send_feature_report` or `get_feature_report`
 `08`, connection/configuration/DPI reads and guessed setup are never used.
 The receiver must have one uniquely selected `FF00:0002` collection under a
 proven USB parent. `topology` enables input-only `battery_hid.byte_report_sizes`
-proof for exactly these three IDs and this collection: either numeric byte
-arrays or a lone byte-selector array. Collection maxima alone do not suffice;
+proof for exactly the 69 listed wireless IDs and this collection: numeric byte
+arrays, a lone byte-selector range, or the opt-in lone fixed-usage Data,Array.
+Collection maxima alone do not suffice;
 without a proven `"7"` input length, the provider does not open the device.
 The descriptor supplies the length (9..4096 full-report bytes); no fixed
 payload length is inferred from the optional parser fields. Only exact-length
 ID `07` input with percentage `0..100` is accepted; other reports are ignored.
 
-Each opened poll listens for at most **1500 ms**, also bounded to 32 reads.
-**Notification frequency is unknown**: the receiver may report only on changes,
-and a fresh launch may initially have no battery reading. Silence is normal
+The first poll after opening listens for at most **1500 ms**, bounded to 32
+reads. Handles stay open between polls, which drain up to 256 queued reports
+with 1 ms read timeouts and keep the newest valid battery report. This handle
+lifetime and drain behavior is unchanged by the descriptor-proof fix.
+**Notification frequency beyond the #120 VT3S sample is unverified**; a fresh
+launch may initially have no battery reading. Silence is normal
 `no_measurement`, including after a previous reading, and the UI can show
 “休眠中，动一下即可刷新”. It never fabricates 0% or renews a historical timestamp.
 The provider instance retains each receiver's last reading/receive time as
@@ -1187,9 +1332,11 @@ for this passive path. No device-pack extension is added.
 Synthetic fake-device tests raise on every attempted write or feature request,
 cover parsing, other report IDs, silence/history, deadlines, collection and
 descriptor rejection, exact PID scope and descriptor-only discovery. No
-hardware was accessed. Actual descriptors, notification frequency/freshness,
-standalone operation, sleep/wake, charging transitions and coexistence with the
-official driver remain unverified. For `1601`, an exact official
+hardware was accessed by this implementation task. The user supplied one VT3S
+descriptor and passive-reading result; actual descriptors for other models,
+notification frequency/freshness across firmware, standalone operation,
+sleep/wake, charging transitions and coexistence with the official driver
+remain unverified by this project. For `1601`, an exact official
 device/class/filter mapping is still needed before any implementation.
 
 ### MCHOSE BY keyboard receiver 3554:FA09
