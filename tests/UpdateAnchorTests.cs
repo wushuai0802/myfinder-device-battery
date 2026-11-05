@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using AtkBattery;
@@ -13,10 +14,35 @@ static class UpdateAnchorTests {
     const BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
     static void Check(bool value,string name){if(!value)throw new Exception("FAIL "+name);checks++;}
     static object Field(object target,string name){return target.GetType().GetField(name,Private).GetValue(target);}
-    // The updated-panel paths deliberately wait about two seconds for a tray icon
-    // before falling back, so a 3 s budget left <1 s of slack under a busy CI/test
-    // host. The budget only bounds waiting; completion is still asserted.
-    static void Pump(Func<bool> done,int timeout=10000){var clock=Stopwatch.StartNew();while(!done()&&clock.ElapsedMilliseconds<timeout){Application.DoEvents();Thread.Sleep(5);}Check(done(),"asynchronous request completes");}
+    [StructLayout(LayoutKind.Sequential)] struct NativeMessage {
+        internal IntPtr Window;internal uint Id;internal IntPtr WParam,LParam;
+        internal uint Time;internal Point Point;internal uint Private;
+    }
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool PeekMessage(out NativeMessage message,IntPtr window,uint minimum,uint maximum,uint remove);
+    [DllImport("user32.dll")] static extern bool TranslateMessage(ref NativeMessage message);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr DispatchMessage(ref NativeMessage message);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window,uint message,IntPtr wParam,IntPtr lParam);
+    sealed class PostedAction:NativeWindow,IDisposable {
+        readonly Action action;
+        internal PostedAction(Action action){this.action=action;CreateHandle(new CreateParams {Parent=new IntPtr(-3)});}
+        internal void Post(){if(!PostMessage(Handle,0x8001,IntPtr.Zero,IntPtr.Zero))throw new Exception("Cannot post fixture action");}
+        protected override void WndProc(ref Message message){if(message.Msg==0x8001)action();else base.WndProc(ref message);}
+        public void Dispose(){DestroyHandle();}
+    }
+    // DoEvents drains the whole queue: a forwarded launcher can open and then
+    // legitimately close on focus loss before its caller observes completion.
+    // Observe each dispatch boundary, leaving later dismissal messages queued.
+    static void Pump(Func<bool> done,int timeout=10000,string name="asynchronous request completes"){
+        var clock=Stopwatch.StartNew();
+        while(!done()&&clock.ElapsedMilliseconds<timeout){
+            NativeMessage message;
+            if(PeekMessage(out message,IntPtr.Zero,0,0,1)){
+                if(message.Id==0x12)throw new Exception("UI thread quit while waiting for "+name);
+                TranslateMessage(ref message);DispatchMessage(ref message);
+            }else Thread.Sleep(5);
+        }
+        Check(done(),name);
+    }
     static void ArgumentsAndForwarding() {
         Check(PanelStartup.Parse(new[]{"--show"})==PanelOpenRequest.Launcher,"legacy show uses launcher placement");
         Check(PanelStartup.Parse(new[]{"--show-updated"})==PanelOpenRequest.Updated,"updated show uses tray placement");
@@ -198,6 +224,27 @@ static class UpdateAnchorTests {
             Check(!TrayPanelPlacement.TryIconRect(icon,out rect),"unregistered icon rectangle fails safely");
         }
     }
+    static void OpeningThenDeactivation() {
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false});
+        using(var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot();},delegate(int stage){throw new Exception("unexpected hardware write");},null,null,leftButtonReader:delegate{return false;})){
+            Details popup=null;PostedAction action=null;
+            using(action=new PostedAction(delegate{
+                if(popup==null){
+                    owner.OpenUpdatedPanel(TrayPanelPlacement.Anchor(null,Screen.PrimaryScreen.WorkingArea,TaskbarEdge.Bottom));
+                    popup=(Details)Field(owner,"details");
+                    // Queue a focus loss after the opening guard is released, as
+                    // another application can do while DoEvents drains messages.
+                    popup.BeginInvoke((MethodInvoker)delegate{action.Post();});
+                }else typeof(Form).GetMethod("OnDeactivate",Private).Invoke(popup,new object[]{EventArgs.Empty});
+            })){
+                action.Post();
+                Pump(delegate{return popup!=null&&!popup.IsDisposed;},name:"opening is observed before queued focus loss");
+                Check(popup.Visible,"completed opening is visible even with a dismissal queued");
+                Pump(delegate{return popup.IsDisposed;},name:"later focus loss still dismisses the popup");
+            }
+            owner.ExitThread();
+        }
+    }
     static void PopupRouting() {
         DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false,Theme="light"});
         int saves=0,reads=0;var fixedPoint=new Point(Screen.PrimaryScreen.Bounds.Left+150,Screen.PrimaryScreen.Bounds.Top+12);
@@ -209,7 +256,7 @@ static class UpdateAnchorTests {
             using(var launcher=new ShowPanelSignal(name))using(var updated=new ShowPanelSignal(name+"-updated")) {
             owner.ListenForShowRequest(launcher);owner.ListenForShowRequest(updated,true);
             PanelStartup.Forward(PanelOpenRequest.Updated,launcher,updated);
-            Pump(delegate{return Field(owner,"details")!=null;});var popup=(Details)Field(owner,"details");
+            Pump(delegate{return Field(owner,"details")!=null;},name:"forwarded updated request completes");var popup=(Details)Field(owner,"details");
             var placement=(TrayPanelAnchor)Field(popup,"updatedAnchor");
             Check(popup.Visible&&placement.WorkArea.Contains(popup.Bounds),"forwarded updated request opens inside tray fallback work area");
             var feedback=(PanelFeedback)typeof(Details).GetMethod("Feedback",Private).Invoke(popup,null);
@@ -226,7 +273,7 @@ static class UpdateAnchorTests {
             Check(String.IsNullOrEmpty(feedback.UpdatedNotice),"repeated updated requests do not repeat the notice");
             popup.Close();
             PanelStartup.Forward(PanelOpenRequest.Launcher,launcher,updated);
-            Pump(delegate{var current=(Details)Field(owner,"details");return current!=null&&current!=popup&&!current.IsDisposed;});popup=(Details)Field(owner,"details");
+            Pump(delegate{var current=(Details)Field(owner,"details");return current!=null&&current!=popup&&!current.IsDisposed;},name:"forwarded launcher request creates a live replacement");popup=(Details)Field(owner,"details");
             var cursorScreen=TrayPanelPlacement.WorkingArea(Screen.FromPoint(fixedPoint));
             Check((Point)Field(popup,"anchor")==new Point(cursorScreen.Right-24,cursorScreen.Top+16),"launcher keeps its existing upper-right anchor");
             Check(saves==0,"updated and legacy launcher paths do not record an icon click");
@@ -245,7 +292,7 @@ static class UpdateAnchorTests {
         }
     }
     [STAThread] static int Main() {
-        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();AnchorPriority();AutoHiddenTaskbarAreas();ReservedPanelLimits();PositionSettings();Retries();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
+        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();AnchorPriority();AutoHiddenTaskbarAreas();ReservedPanelLimits();PositionSettings();Retries();OpeningThenDeactivation();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
 }
