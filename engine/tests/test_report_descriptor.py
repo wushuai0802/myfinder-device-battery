@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _hidstub
-from battery_hid import parse_report_descriptor, report_descriptor_proof
+from battery_hid import declared_report_summary, parse_report_descriptor, report_descriptor_proof
 
 
 RAPOO_DESCRIPTOR = bytes.fromhex(
@@ -19,6 +19,25 @@ def descriptor(body):
 
 
 class ReportDescriptorTests(unittest.TestCase):
+    def test_declarations_are_bounded_numeric_metadata_not_arbitrary_inventory(self):
+        info = {"declared_report_sizes": {"output": {"75": 64}, "input": {"76": 64}, "feature": {}}}
+        self.assertEqual(declared_report_summary(info),
+                         "; declared=out:4B/64,in:4C/64,feature:none")
+        self.assertEqual(declared_report_summary({}),
+                         "; declared=out:unknown,in:unknown,feature:unknown")
+        info["declared_report_sizes"]["input"] = {
+            "76": 64, "private-path": 64, "1": "private-payload", "2": True,
+            "3": 4097, "256": 64, "٤": 64, "0004": 64, 5: 64}
+        summary = declared_report_summary(info)
+        self.assertEqual(summary, "; declared=out:4B/64,in:4C/64,in:unknown,feature:none")
+        self.assertNotIn("private", summary)
+        info["declared_report_sizes"] = {d: {str(i): 4096 for i in range(256)}
+                                         for d in ("input", "output", "feature")}
+        summary = declared_report_summary(info)
+        self.assertLess(len(summary), 512)
+        self.assertEqual(summary.count("/4096"), 24)
+        self.assertEqual(summary.count(":+248"), 3)
+
     def test_reported_vt3s_descriptor_input_and_output_include_id(self):
         self.assertEqual(parse_report_descriptor(RAPOO_DESCRIPTOR), {
             (0xFF00, 2): {"input": {"7": 19}, "output": {"7": 19}, "feature": {}}})

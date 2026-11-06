@@ -179,17 +179,49 @@ def _parse_report_descriptor(raw):
     return result
 
 
-def report_proof_summary(info, direction):
+def declared_report_summary(info):
+    """Bounded, numeric-only declarations for this collection, never a proof.
+
+    Raw descriptor declarations can disagree with caps; keep them separate
+    from the *_report_sizes maps that authorize I/O. Unknown is not absence.
+    """
+    declared = info.get("declared_report_sizes")
+    parts = []
+    for direction, label in (("output", "out"), ("input", "in"), ("feature", "feature")):
+        sizes = (declared.get(direction) if isinstance(declared, dict)
+                 else info.get(direction + "_report_sizes"))
+        if not isinstance(sizes, dict):
+            parts.append(label + ":unknown")
+            continue
+        safe = {}
+        for key, length in sizes.items():
+            if (isinstance(key, str) and key.isascii() and key.isdecimal()
+                    and len(key) <= 3 and 0 <= int(key) <= 255
+                    and type(length) is int and 1 <= length <= 4096):
+                safe[int(key)] = length
+        parts.extend(f"{label}:{report_id:02X}/{length}"
+                     for report_id, length in sorted(safe.items())[:8])
+        if len(safe) > 8:
+            parts.append(f"{label}:+{len(safe) - 8}")
+        if len(safe) != len(sizes):
+            parts.append(label + ":unknown")
+        elif not sizes:
+            parts.append(label + ":none")
+    return "; declared=" + ",".join(parts)
+
+
+def report_proof_summary(info, direction, *, include_declared=False):
     """Render only our known proof codes; never echo arbitrary inventory text."""
     proof = info.get(direction + "_report_proof")
+    summary = ""
     if proof in ("caps", "descriptor"):
-        return "; proof=" + proof
-    if proof == "failed":
+        summary = "; proof=" + proof
+    elif proof == "failed":
         reason = info.get("report_descriptor_error")
         if not isinstance(reason, str) or reason not in DESCRIPTOR_FAILURES:
             reason = "unknown"
-        return "; proof=caps+descriptor failed; descriptor=" + reason
-    return ""
+        summary = "; proof=caps+descriptor failed; descriptor=" + reason
+    return summary + (declared_report_summary(info) if include_declared else "")
 
 
 def byte_report_sizes(api, data, caps, report_type, *, allow_fixed_usage=False):
@@ -321,7 +353,8 @@ class BatteryHidProvider(Provider):
                     or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                     or sizes.get(str(report_id)) != maximum
                     or report_id == 0 and set(sizes) != {"0"}):
-                self._diag.append("report IDs/lengths unknown or incompatible: nothing sent")
+                self._diag.append("report IDs/lengths unknown or incompatible: nothing sent"
+                                  + report_proof_summary(info, direction, include_declared=True))
                 return None
         return info
 

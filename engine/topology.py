@@ -147,6 +147,13 @@ def _read_report_descriptor(path):
 
 def _descriptor_fallback(info, caps, directions):
     """Called only inside explicit provider identity/usage gates."""
+    # Diagnostic metadata only: do not turn declarations into I/O permission.
+    info["declared_report_sizes"] = {
+        direction: info.get(direction + "_report_sizes", {} if not any(fields) else None)
+        for direction, fields in (("input", (caps.input, caps.ib, caps.iv)),
+                                  ("output", (caps.output, caps.ob, caps.ov)),
+                                  ("feature", (caps.feature, caps.fb, caps.fv)))
+    }
     missing = [d for d in directions if info.get(d + "_report_sizes") is None]
     for direction in directions:
         info[direction + "_report_proof"] = "failed" if direction in missing else "caps"
@@ -158,6 +165,9 @@ def _descriptor_fallback(info, caps, directions):
         parsed, reason = report_descriptor_proof(raw)
         if parsed is not None:
             collection = parsed.get((caps.page, caps.usage))
+            if collection is not None:
+                # Retain exactly this collection even if caps disagree below.
+                info["declared_report_sizes"] = collection
             if collection is None:
                 reason = "collection not found"
             elif any(max(collection[d].values(), default=0) != maximum

@@ -88,7 +88,12 @@ class MoondropBridgeTests(unittest.TestCase):
                  ([E.entry(output_report_sizes=None, output_report_proof="failed",
                            report_descriptor_error="collection maximum mismatch")],
                   "output report 4B length unproven; proof=caps+descriptor failed; "
-                  "descriptor=collection maximum mismatch")]
+                  "descriptor=collection maximum mismatch"),
+                 ([E.entry(input_report_sizes={"76": 64}, input_report_proof="descriptor",
+                           declared_report_sizes={"input": {"76": 64}, "output": {"75": 64},
+                                                  "feature": {}})],
+                  "input report 4B length unproven; proof=descriptor; "
+                  "declared=out:4B/64,in:4C/64,feature:none; not opened; nothing sent")]
         for infos, expected in cases:
             request = dict(action="query", sequence=1, provider="moondrop", inventory=infos,
                            physicalId=infos[0]["physical_id"])
@@ -108,7 +113,14 @@ class MoondropBridgeTests(unittest.TestCase):
                            diagnostics=response["diagnostics"])
             health, = engine._snapshot()["health"]
             self.assertEqual(health["state"], "unavailable")
-            self.assertIn(expected, health["errorCode"])
+            self.assertIn(expected, health["diagnostics"][0])
+            self.assertLessEqual(len(health["errorCode"]), 48)
+            if "input report" in expected:
+                self.assertTrue(health["errorCode"].startswith("in:4B unproven;declared="))
+            elif "output report" in expected:
+                self.assertTrue(health["errorCode"].startswith("out:4B unproven;declared="))
+            else:
+                self.assertIn(expected, health["errorCode"])
             self.assertEqual(engine._snapshot()["errors"], [])
             self.assertFalse(engine.failures)
             self.assertFalse(engine.retry_after)
@@ -117,6 +129,30 @@ class MoondropBridgeTests(unittest.TestCase):
             recovered = next(h for h in engine._snapshot()["health"] if h["provider"] == "moondrop"
                              and h["state"] == "ok")
             self.assertNotIn("errorCode", recovered)
+
+    def test_long_bounded_declarations_survive_health_and_keep_safety_suffix(self):
+        info = E.entry(input_report_sizes=None, input_report_proof="failed",
+                       report_descriptor_error="caps/descriptor disagreement",
+                       declared_report_sizes={d: {str(i): 4096 for i in range(256)}
+                                              for d in ("input", "output", "feature")})
+        with E.fixture(inventory=[info]):
+            provider = E.P()
+            self.assertEqual(provider.poll(), [])
+        diagnostic, = provider.diagnostics()
+        self.assertGreater(len(diagnostic), 200)
+        self.assertLess(len(diagnostic), server.READER_DIAGNOSTIC_LIMIT)
+        engine = server.BatteryEngine([], include_native=True)
+        self.addCleanup(engine.close)
+        for name in ("moondrop", "rapoo"):
+            engine._accept(name, name, [], server.utcnow(), "receiver-a", 1, diagnostics=[diagnostic])
+        snapshot = engine._snapshot()
+        self.assertEqual(snapshot["errors"], [])
+        for health in snapshot["health"]:
+            self.assertTrue(health["errorCode"].startswith("in:4B unproven;declared="))
+            self.assertLessEqual(len(health["errorCode"]), 48)
+            self.assertTrue(health["errorCode"].endswith("..."))
+            self.assertEqual(health["diagnostics"], [diagnostic])
+            self.assertTrue(health["diagnostics"][0].endswith("not opened; nothing sent"))
 
     def descriptor_fixture(self, info):
         case = T.DescriptorCacheTests()

@@ -4,6 +4,8 @@ Only 35D8:0133 / FF02:0002 with descriptor-proven input/output report 4B
 is eligible. Lengths include the report ID and are never guessed. The Hub's
 read-only reachability preflight is omitted: only 80 27 00 is sent, without
 initialization, flash, EQ, control-panel or OTA commands. See upstream-protocols.
+The Hub confirms inputreport ID 4B; it supplies no alternate ID, Feature read,
+fixed usage or report length. Failed proof stays diagnostic-only; do not probe.
 """
 import math
 import time
@@ -72,7 +74,8 @@ class MoondropProvider(BatteryHidProvider):
                     or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                     or sizes.get(str(REPORT_ID)) != maximum):
                 self._diag.append(direction + " report 4B length unproven"
-                                  + report_proof_summary(info, direction) + "; not opened; nothing sent")
+                                  + report_proof_summary(info, direction, include_declared=True)
+                                  + "; not opened; nothing sent")
                 return None
         return info
 

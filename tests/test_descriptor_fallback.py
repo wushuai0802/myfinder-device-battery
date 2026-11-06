@@ -103,6 +103,53 @@ class DescriptorFallbackTests(unittest.TestCase):
                     self.assertEqual(M.P().poll()[0].level, 73)
                     self.assertEqual(bus.writes, [M.M.make_request(64)])
 
+    def test_declared_summary_uses_only_selected_collection_and_survives_failed_proof(self):
+        self.configure(moondrop=True, failed=(0, 1))
+        # Selected collection: output 4B, input 4C, feature 4D; another TLC
+        # declares 4E. None of these synthetic declarations is a reply capture.
+        raw = bytes.fromhex("06 02 ff 09 02 a1 01 75 08 95 3f "
+                            "85 4b 91 02 85 4c 81 02 85 4d b1 02 c0 "
+                            "09 03 a1 01 85 4e 81 02 c0")
+        self.dev.get_report_descriptor.return_value = raw
+        # Feature maximum deliberately disagrees with the raw descriptor.
+        info = self.scan()
+        self.assertEqual(info["report_descriptor_error"], "collection maximum mismatch")
+        self.assertIsNone(info["input_report_sizes"])
+        self.assertIsNone(info["output_report_sizes"])
+        self.assertEqual(info["declared_report_sizes"],
+                         {"output": {"75": 64}, "input": {"76": 64}, "feature": {"77": 64}})
+        self.assertNotIn(T.PATH_A, self.case.cache)
+        with M.fixture(inventory=[info]) as bus:
+            provider = M.P()
+            self.assertEqual(provider.poll(), [])
+            self.assertIn("declared=out:4B/64,in:4C/64,feature:4D/64", provider.diagnostics()[0])
+            self.assertNotIn("4E", provider.diagnostics()[0])
+            self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+
+    def test_proven_alternate_input_and_caps_only_declarations_never_enable_query(self):
+        for failed in ((), (0, 1)):
+            with self.subTest(failed=failed):
+                self.configure(moondrop=True, failed=failed)
+                self.dev.get_report_descriptor.return_value = bytes.fromhex(
+                    "06 02 ff 09 02 a1 01 75 08 95 3f 85 4b 91 02 85 4c 81 02 c0")
+                original = self.case.hid.HidP_GetValueCaps.side_effect
+
+                def fields(report_type, values, *args):
+                    result = original(report_type, values, *args)
+                    if report_type == 0 and result:
+                        values[0].report = 0x4C
+                    return result
+
+                self.case.hid.HidP_GetValueCaps.side_effect = fields
+                info = self.scan()
+                self.assertEqual(info["input_report_sizes"], {"76": 64})
+                self.assertEqual(info["input_report_proof"], "descriptor" if failed else "caps")
+                with M.fixture(inventory=[info]) as bus:
+                    provider = M.P()
+                    self.assertEqual(provider.poll(), [])
+                    self.assertIn("declared=out:4B/64,in:4C/64,feature:none", provider.diagnostics()[0])
+                    self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+
     def test_exact_identity_collection_caps_and_native_exclusion_gates(self):
         for identity, collection in (
                 ((0x24AE, 0xFFFF), (0xFF00, 2)), ((0x24AF, 0x1412), (0xFF00, 2)),
@@ -138,6 +185,7 @@ class DescriptorFallbackTests(unittest.TestCase):
             provider = R.RapooProvider()
             self.assertEqual(provider.poll(), [])
             self.assertIn("proof=caps", provider.diagnostics()[0])
+            self.assertIn("declared=out:unknown,in:08/19,feature:none", provider.diagnostics()[0])
             self.assertEqual(bus.opened, [])
 
     def test_unavailable_method_skips_open_and_failed_proof_retries(self):

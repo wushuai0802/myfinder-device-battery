@@ -2900,6 +2900,38 @@ was partial at its node ceiling, so the following anchors were also inspected
 directly. Analysis evidence:
 `ev_26296df6304414d418feebf35f8902c5e7976c091a19f2a0832228a5378bb7f9`.
 
+**#127 beta.7 reply-path recheck (2026-11-06).** The supplied snapshot still
+uses **output `4B` -> input `4B`**. It does not establish a Feature reply,
+an alternate input ID, a particular usage page/usage, or a fixed report length.
+The reported absence of an input-`4B` proof on `FF02:0002` is therefore still
+unresolved; it is not evidence authorizing `GET_FEATURE`, another ID, or a
+sibling-collection probe. This change follows the diagnostic-only fallback:
+the reader's existing input/output proof gates and wire exchange stay intact.
+It sends nothing when either required report is unproven.
+
+The following anchors are in `index-BJe6cqeQ.js` (same SHA256 above). The bundle
+is minified, so symbol names disambiguate the large lines:
+
+| Anchor | Static observation |
+| --- | --- |
+| Line 65, `oj`, `ij/pR`, `iy=Qp`, `Qp.config` | `35D8:0133` selects `Qp`, type `HEADPHONE`, report ID 75, battery feature `zP()`; no usage filter or report length in this configuration. |
+| Line 65, `zP`, `UG`, `tb`, `em.queryCommand`, `pj`, `hj/mR` | Read OP `80`, command `27`, payload length zero; `pj.sendData` passes the same report ID with response-wait enabled. No report-ID rewrite or length padding in this chain. |
+| Line 69, `nK`, `Jj.q`, `Xj.send` | `nK` supplies `sendData`, not `sendFeatureData`; `q` calls `me.send(V,N,W,!1,ce)`. The false feature flag selects `device.sendReport`, not `sendFeatureReport`. |
+| Line 69, `Xj.d` | `addEventListener("inputreport", d)` on that same device; resolves only when `c.reportId===event.reportId` and `claimReport` has not claimed it. Hence battery reply ID `4B`. The shared transport's optional Feature-send branch also waits on input events; it is not a Feature receive implementation. |
+| Line 65, `tb.isUnsolicitedReport`, `iR`; line 69, `nK.claimReport` | Claiming excludes OTA command `4F`; it does not translate or accept another reply ID. |
+| Line 69, `tK`, `tf`, `Wa`, `vg` | Initial filter is VID/PID/reportId. Prefer a WebHID device containing output `4B` and any input capability, then output `4B`, then generic fallbacks. `tf` and `Wa` search independently across `device.collections`; neither proves input `4B` or its owning collection. There is no fixed usage, same-collection assertion, or length check here. Remembered-device reconnect filters can additionally use the first saved collection's usage; that value is not a static GM01 constant. |
+| Line 65, `Sc/Lt`, `zP.decode`, `Yt` | WebHID payload indices 7 and 8 are validity and unsigned percentage; with hidapi's ID slot these are indices 8 and 9. At least 9 payload bytes are needed, but no actual descriptor length is supplied. |
+| `chunks/index-B-KWtA3L.js`, `A9/DeviceBattery` | Consumes the device battery getter and displays percent; no alternate HID transport or charging field in this path. |
+
+Static searches of the main bundle and all 14 supplied chunks found no
+`receiveFeatureReport` or `oninputreport` property assignment; the listener is
+registered with `addEventListener` as above. No vendor script was executed.
+Reinspection evidence `ev_8001813028f6bee0817c439e0e0de99696513f5c36c501b84db8124adaa5ef4a`
+(summary view `ev_05bf5ae2c056a848ec98f4d1dd1380cb70336a7d44adb963e4b946dc446f0221`)
+parsed 15 JavaScript files without failures. The semantic graph again hit its
+node ceiling; the explicit call sites above were inspected directly. These
+are static observations, not a device capture or proof of Windows routing.
+
 **Request and reply.** `et.OP_READ=128`, `zP.command=39`, `UG` and
 `em.buildCommand/queryCommand` establish WebHID output report `4B` with exactly
 three payload bytes `80 27 00` (OP, CMD, zero request payload length).
@@ -2953,6 +2985,46 @@ collections are never tried. This is a runtime condition, not a claim that
 #126 or the web snapshot supplies a full descriptor. Unsupported descriptor
 shapes remain disabled rather than guessed.
 
+**Descriptor diagnostics and truncation.** The shared descriptor fallback now
+retains a separate `declared_report_sizes` map for the selected collection's
+input/output/feature declarations, including declarations that subsequently
+fail caps/max-length consistency checks. This map is diagnostic metadata only;
+the existing `*_report_sizes` proof maps still authorize I/O. Other collections,
+raw descriptor bytes, paths, serials and arbitrary failure text are not exported.
+When raw parsing is unavailable, summaries use available caps proofs; `none`
+means proven absence and `unknown` means unavailable or invalid metadata.
+Summaries contain numeric ID/byte-length pairs (length includes the ID slot),
+at most eight per direction, with `+N` for additional declarations. The shared
+output/input reader and Rapoo's proof-failure diagnostic also use this formatter.
+
+For example, a **synthetic** descriptor with output `4B/64` and input `4C/64`
+produces the complete diagnostic below in the engine JSON and sends no command;
+this is not a claim about #127's actual descriptor:
+
+```text
+input report 4B length unproven; proof=descriptor; declared=out:4B/64,in:4C/64,feature:none; not opened; nothing sent
+```
+
+The reported `proof=descripto` suffix is exactly the existing C# worker's
+48-character `ReaderHealth.ErrorCode` limit. `scripts/GenericBattery.cs` is
+outside this task's scope and remains unchanged, including its 80-character
+feedback-field bound and redaction. The engine retains full diagnostic lines
+up to 1024 characters in `health[].diagnostics`; the bounded declarations fit
+with their complete reason and safety suffix. For desktop `errorCode` it now
+builds a separate summary of at most 48 characters, preserving complete reason
+clauses or numeric report declarations and explicitly marking omitted details
+with `...`. The example above reaches the existing desktop parser and feedback
+formatter as:
+
+```text
+moondrop | unavailable | in:4B unproven;declared=out:4B/64,in:4C/64,...
+```
+
+The full proof source, remaining declarations and safety suffix are available
+in engine JSON, not the compact desktop feedback. The existing 6000-character
+issue URL budget can also omit whole health rows with a truncation notice.
+Diagnostics do not become provider failures, retry backoff, or snapshot errors.
+
 **Commands never sent.** `et.OP_WRITE=01`: EQ flash save (`01`), offset flash
 save (`04`), flash clear (`05`, target ALL=`04`), active EQ (`0F`), PEQ update
 (`09`), EQ coefficients (`0A`), DAC offset/global gain (`03`), pre-gain (`23`),
@@ -2973,6 +3045,11 @@ the existing required equality with registered brand readers. Synthetic
 tests cover wire bytes, offsets/ranges, guards before opening, no other
 commands, deadlines, cleanup, child isolation, history, and fake Windows
 descriptor discovery/caching. No hardware, network or vendor script is used.
+The reply-path regression rejects synthetic input `4C` and Feature-only `4B`
+without opening a query handle. Additional tests retain selected-collection
+declarations through failed proofs and child JSON, and compile/run the unchanged
+C# JSON parser and feedback formatter to verify compact reasons, redaction and
+URL projection without starting the application, clipboard or browser.
 Actual collection/lengths, response headers, standalone cold-start queries,
 freshness while off, charging and sleep/wake remain unverified.
 

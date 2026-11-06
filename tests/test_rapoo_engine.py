@@ -21,9 +21,11 @@ class RapooDiagnosticBridgeTests(unittest.TestCase):
         cases = [([descriptor(usage=1)], [], missing, False),
                  ([descriptor(), descriptor(path=b"private-duplicate")], [], missing, False),
                  ([descriptor(input_report_sizes={"7": None})], [],
-                  'report 07 unproven; sizes={"7":null}; not opened', False),
+                  'report 07 unproven; sizes={"7":null}; '
+                  'declared=out:unknown,in:unknown,feature:unknown; not opened', False),
                  ([descriptor(input_report_sizes={"8": 19})], [],
-                  'report 07 unproven; sizes={"8":19}; not opened', False),
+                  'report 07 unproven; sizes={"8":19}; '
+                  'declared=out:unknown,in:08/19,feature:unknown; not opened', False),
                  ([descriptor()], [], "opened; no input reports; no new measurement", True),
                  ([descriptor()], [report(report_id=6), report()[:8]],
                   "opened; no valid report 07; seen=06/19,07/8", True),
@@ -35,11 +37,11 @@ class RapooDiagnosticBridgeTests(unittest.TestCase):
         cases.append(([descriptor(input_report_sizes=None, input_report_proof="failed",
                                   report_descriptor_error="long item")], [],
                       "report 07 unproven; sizes=null; proof=caps+descriptor failed; "
-                      "descriptor=long item; not opened", False))
+                      "descriptor=long item; declared=out:unknown,in:unknown,feature:unknown; not opened", False))
         cases.append(([descriptor(input_report_sizes=None, input_report_proof="failed",
                                   report_descriptor_error="private-path-and-bytes")], [],
                       "report 07 unproven; sizes=null; proof=caps+descriptor failed; "
-                      "descriptor=unknown; not opened", False))
+                      "descriptor=unknown; declared=out:unknown,in:unknown,feature:unknown; not opened", False))
         for infos, frames, expected, opened in cases:
             command = dict(action="query", sequence=1, provider="rapoo",
                            physicalId="usb:receiver-a", inventory=infos)
@@ -71,8 +73,14 @@ class RapooDiagnosticBridgeTests(unittest.TestCase):
             with patch.object(engine._hidlist, "interface_paths", return_value=frozenset()):
                 snapshot = engine.poll()
             health, = [h for h in snapshot["health"] if h["provider"] == "rapoo"]
-            self.assertEqual((health["state"], health["reason"], health["errorCode"]),
-                             ("unavailable", "no_measurement", expected))
+            self.assertEqual((health["state"], health["reason"]), ("unavailable", "no_measurement"))
+            self.assertLessEqual(len(health["errorCode"]), 48)
+            if "unproven" in expected:
+                self.assertTrue(health["errorCode"].startswith("07 unproven;declared="))
+            elif len(expected) <= 48:
+                self.assertEqual(health["errorCode"], expected)
+            else:
+                self.assertTrue(health["errorCode"].endswith("..."))
             self.assertEqual(health["diagnostics"], [expected])
             self.assertNotIn("diagnosticSummary", health)
             self.assertEqual(snapshot["errors"], [])

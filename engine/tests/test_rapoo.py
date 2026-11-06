@@ -317,12 +317,16 @@ class RapooTests(unittest.TestCase):
         cases = [([descriptor(usage=1)], "missing or ambiguous FF00:0002 collection; not opened"),
                  ([descriptor(), descriptor(path=b"private-duplicate")],
                   "missing or ambiguous FF00:0002 collection; not opened")]
-        for sizes, summary in ((None, "null"), ({"7": None}, '{"7":null}'),
-                               ({"8": 19}, '{"8":19}'), ({"7": 8}, '{"7":8}'),
-                               ({"7": 19, "9": None}, '{"7":19,"9":null}'),
-                               ({"private-path": b"private-payload", "7": "private-length"}, '{"7":null}')):
+        for sizes, summary, declared in ((None, "null", "in:unknown"),
+                               ({"7": None}, '{"7":null}', "in:unknown"),
+                               ({"8": 19}, '{"8":19}', "in:08/19"),
+                               ({"7": 8}, '{"7":8}', "in:07/8"),
+                               ({"7": 19, "9": None}, '{"7":19,"9":null}', "in:07/19,in:unknown"),
+                               ({"private-path": b"private-payload", "7": "private-length"},
+                                '{"7":null}', "in:unknown")):
             cases.append(([descriptor(input_report_sizes=sizes)],
-                          f"report 07 unproven; sizes={summary}; not opened"))
+                          f"report 07 unproven; sizes={summary}; "
+                          f"declared=out:unknown,{declared},feature:unknown; not opened"))
         for inventory, expected in cases:
             with self.subTest(expected=expected), fixture(inventory=inventory) as bus:
                 provider = R.RapooProvider()

@@ -72,6 +72,21 @@ def fixture(frames=(), inventory=None, *, short=False, error_at=None):
 
 
 class MoondropTests(unittest.TestCase):
+    def test_alternate_input_or_feature_declarations_do_not_authorize_a_new_path(self):
+        for inputs, features in (({"76": 64}, {}), ({}, {"75": 64})):
+            info = entry(input_report_sizes=inputs, input_report_proof="descriptor",
+                         declared_report_sizes={"output": {"75": 64}, "input": inputs,
+                                                "feature": features})
+            with self.subTest(inputs=inputs), fixture([reply()], [info]) as bus:
+                provider = P()
+                self.assertEqual(provider.poll(), [])
+                diagnostic, = provider.diagnostics()
+                self.assertIn("input report 4B length unproven; proof=descriptor; declared=", diagnostic)
+                self.assertIn("out:4B/64", diagnostic)
+                self.assertIn("in:4C/64" if inputs else "feature:4B/64", diagnostic)
+                self.assertTrue(diagnostic.endswith("not opened; nothing sent"))
+                self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+
     def test_empty_inventory_and_missing_backend_also_explain_no_open(self):
         provider = P()
         with fixture(inventory=[]) as bus:

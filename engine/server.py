@@ -91,6 +91,8 @@ BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
 READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro"}
+READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
+READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -101,6 +103,35 @@ def reader_diagnostics(provider):
         return []
     lines = provider.reader_diagnostics() if provider.name == "mchose" else provider.diagnostics()
     return lines if len(lines) <= 16 else lines[:6] + lines[-10:]
+
+
+def reader_health_summary(value):
+    """Fit the existing desktop bound; keep full details in diagnostics JSON."""
+    text = str(value)
+    if len(text) <= READER_HEALTH_LIMIT:
+        return text
+    failure = re.match(r"(?:(input|output|feature) )?report ([0-9A-F]{2}) (?:length )?unproven;", text)
+    declared = re.search(r"; declared=([^;]+)", text)
+    if failure and declared:
+        direction, report_id = failure.groups()
+        label = {"input": "in:", "output": "out:", "feature": "feature:", None: ""}[direction]
+        prefix = label + report_id + " unproven;declared="
+        entries = declared.group(1).split(",")
+        # Show one declaration per direction before spending space on extras.
+        first = [next((item for item in entries if item.startswith(d + ":")), None)
+                 for d in ("out", "in", "feature")]
+        entries = [item for item in first if item is not None] + [item for item in entries if item not in first]
+        for count in range(len(entries), -1, -1):
+            summary = prefix + ",".join(entries[:count] + (["..."] if count < len(entries) else []))
+            if len(summary) <= READER_HEALTH_LIMIT:
+                return summary
+    # Retain whole reason clauses, never half a word or report declaration.
+    clauses = text.split("; ")
+    for count in range(len(clauses), 0, -1):
+        summary = "; ".join(clauses[:count] + (["..."] if count < len(clauses) else []))
+        if len(summary) <= READER_HEALTH_LIMIT:
+            return summary
+    return "reader unavailable; details in engine JSON"
 
 
 def utcnow():
@@ -723,11 +754,11 @@ class BatteryEngine:
                                    "reason": "" if measured else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
-            self.health[reader_key]["diagnostics"] = [str(line)[:200] for line in diagnostics[-16:]]
+            self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
             if name in ("rapoo", "moondrop") and not measured and diagnostics:
                 # These readers emit only fixed text, numeric descriptor sizes and
                 # input report IDs/lengths. No paths, payloads or exceptions.
-                self.health[reader_key]["diagnosticSummary"] = str(diagnostics[0])[:200]
+                self.health[reader_key]["diagnosticSummary"] = reader_health_summary(diagnostics[0])
             if name == "mchose_by_keyboard" and not measured:
                 # Feedback needs a short, fixed reason. Keep it separate from
                 # errorCode, which would also populate snapshot errors.
@@ -739,7 +770,8 @@ class BatteryEngine:
                     (("missing or ambiguous eligible collection: nothing sent",), "collection missing or ambiguous"),
                     (("battery I/O failed; connection unknown",), "battery I/O failed"),
                 ):
-                    if any(message in diagnostics for message in messages):
+                    if any(line == message or line.startswith(message + ";")
+                           for message in messages for line in diagnostics if isinstance(line, str)):
                         self.health[reader_key]["diagnosticSummary"] = summary
                         break
         # The feedback UI already displays errorCode (up to 48 characters).

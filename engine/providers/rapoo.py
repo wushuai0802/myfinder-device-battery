@@ -158,7 +158,7 @@ class RapooProvider(Provider):
                 or max(sizes.values()) != maximum
                 or type(sizes.get("7")) is not int or not 9 <= sizes["7"] <= maximum):
             self._diag.append(f"report 07 unproven; sizes={_sizes_summary(sizes)}"
-                              + report_proof_summary(info, "input") + "; not opened")
+                              + report_proof_summary(info, "input", include_declared=True) + "; not opened")
             return None
         return info
 
