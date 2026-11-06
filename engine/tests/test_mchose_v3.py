@@ -24,6 +24,11 @@ DISCHARGING = bytes.fromhex(
 CHARGING = bytes.fromhex(
     "4d 01 01 10 00 09 00 00 37 38 26 40 04 00 00 00 00 10 02 01 55 00 08 e4 df"
 ).ljust(64, b"\x00")
+# #276's 24-byte prefix plus the reporter's stated XOR A1; zero padding is
+# reconstructed for the 64-byte transport, not a complete captured report.
+ULTRA_42 = bytes.fromhex(
+    "4d 01 01 10 00 09 00 00 37 38 26 40 04 00 00 00 00 10 02 00 2a 00 08 e4 a1"
+).ljust(64, b"\x00")
 REQUEST = bytes.fromhex("4d 01 01 00 00 09 00 00 08").ljust(64, b"\x00")
 BUSY = bytes.fromhex("4d 01 01 01 00 09 00 00 ff f6").ljust(64, b"\x00")
 REFUSAL = bytes.fromhex("4d 01 00 00 00 00 00 ff").ljust(64, b"\x00")
@@ -41,8 +46,10 @@ def edited(frame=DISCHARGING, **fields):
     return bytes(data)
 
 
-def inventory():
-    return [dict(d, input_report_length=64, output_report_length=64)
+def inventory(pid=0x1018):
+    return [dict(d, product_id=pid, input_report_length=64, output_report_length=64,
+                 input_report_sizes={"77": 64}, output_report_sizes={"77": 64},
+                 input_report_proof="caps", output_report_proof="caps")
             for d in feedback_inventory(24)
             if (d["vendor_id"], d["product_id"]) == (0x3837, 0x1018)]
 
@@ -95,6 +102,61 @@ def fixture(replies=(), infos=None, fail=None):
 
 
 class V3ProtocolTests(unittest.TestCase):
+    def test_1014_user_reply_uses_only_v3_and_the_explicit_ultra_name(self):
+        infos = [dict(vendor_id=0x3837, product_id=0x1014, path=f"collection-{n}".encode(),
+                      usage_page=page, usage=usage, product_string="generic receiver",
+                      input_report_length=64, output_report_length=64,
+                      input_report_sizes={"77": 64}, output_report_sizes={"77": 64})
+                 for n, (page, usage) in enumerate(((1, 2), (1, 6), (12, 1),
+                                                    (0xFF0B, 0xC4), (0xFF01, 1)))]
+        self.assertEqual(M.parse_v3(ULTRA_42), (42, False))
+        bad_xor = bytearray(ULTRA_42)
+        bad_xor[24] ^= 1
+        invalid = (bytes(bad_xor), edited(ULTRA_42, **{"20": 101}),
+                   edited(ULTRA_42, **{"3": 56}), ULTRA_42[:24], b"")
+        for frame in (ULTRA_42,) + invalid:
+            with self.subTest(frame=frame), fixture([frame], infos) as bus:
+                provider = M.MchoseProvider()
+                result = provider.poll()
+                self.assertEqual(bus.sent, [REQUEST])
+                self.assertEqual(bus.opened, [b"collection-4"])
+                self.assertIn("用户实机验证，#276", " ".join(provider.diagnostics()))
+                if frame == ULTRA_42:
+                    device, = result
+                    self.assertEqual((device.name, device.level, device.charging),
+                                     ("MCHOSE A7 V3 Ultra+", 42, False))
+                else:
+                    self.assertEqual(result, [])
+
+    def test_both_v3_ids_require_report_proof_and_explain_refusals(self):
+        for pid in (0x1018, 0x1014):
+            for direction in ("input", "output"):
+                for sizes in (None, {}, {"76": 64}, {"77": 63}, {"77": 64.0},
+                              {"77": 64, "78": True}, {"77": 64, "78": 65}):
+                    infos = [dict(d, **{direction + "_report_sizes": sizes,
+                                       direction + "_report_proof": "failed",
+                                       "report_descriptor_error": "get_report_descriptor unavailable"})
+                             for d in inventory(pid)]
+                    with self.subTest(pid=pid, direction=direction, sizes=sizes), fixture([], infos) as bus:
+                        provider = M.MchoseProvider()
+                        self.assertEqual(provider.poll(), [])
+                        self.assertEqual((bus.opened, bus.sent), ([], []))
+                        diagnostic = " ".join(provider.reader_diagnostics())
+                        self.assertIn(direction + " report 4D/64 length unproven", diagnostic)
+                        self.assertIn("proof=caps+descriptor failed", diagnostic)
+                        self.assertIn("descriptor=get_report_descriptor unavailable", diagnostic)
+                        self.assertIn("not opened; nothing sent", diagnostic)
+
+    def test_v3_ambiguous_collection_and_missing_path_never_open(self):
+        info = next(d for d in inventory(0x1014) if d["usage_page"] == 0xFF01)
+        for infos, reason in (([info, dict(info, path=b"duplicate")], "ambiguous"),
+                              ([dict(info, path=b"")], "path unresolved")):
+            with self.subTest(reason=reason), fixture([], infos) as bus:
+                provider = M.MchoseProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertIn(reason, " ".join(provider.reader_diagnostics()))
+                self.assertEqual((bus.opened, bus.sent), ([], []))
+
     def test_request_and_upstream_power_vectors(self):
         self.assertEqual(M.make_v3_request(), REQUEST)
         self.assertEqual(M.parse_v3(DISCHARGING), (87, False))
@@ -208,7 +270,7 @@ class V3ProtocolTests(unittest.TestCase):
             self.assertEqual(bus.sent, [])
 
     def test_v3_and_v2_have_separate_keys(self):
-        self.assertNotEqual(M.device_key(0x3837, 0x1018), M.device_key(0x3837, 0x100B))
+        self.assertEqual(len({M.device_key(0x3837, pid) for pid in (0x1018, 0x1014, 0x100B)}), 3)
 
 
 if __name__ == "__main__":

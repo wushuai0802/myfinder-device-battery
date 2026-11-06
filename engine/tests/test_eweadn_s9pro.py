@@ -72,6 +72,31 @@ def fixture(frames=(), inventory=None, *, short=False, error_at=None):
 
 
 class EweadnS9ProTests(unittest.TestCase):
+    def test_empty_inventory_and_missing_backend_have_reasons(self):
+        for backend_missing in (False, True):
+            with self.subTest(backend_missing=backend_missing), fixture(inventory=[]) as bus, \
+                    patch.object(H, "hid", None if backend_missing else bus):
+                provider = P()
+                self.assertEqual(provider.poll(), [])
+                self.assertIn("no eligible S9 PRO collection or HID backend", provider.diagnostics()[0])
+                self.assertEqual(bus.opened, [])
+
+    def test_refusal_identifies_feature_proof_without_private_text(self):
+        for proof, error, expected in (("caps", None, "proof=caps"),
+                                       ("failed", "long item", "descriptor=long item"),
+                                       ("failed", "private-path", "descriptor=unknown")):
+            info = entry(feature_report_sizes=None, feature_report_proof=proof,
+                         report_descriptor_error=error)
+            with self.subTest(proof=proof, error=error), fixture(inventory=[info]) as bus:
+                provider = P()
+                self.assertEqual(provider.poll(), [])
+                diagnostic = " ".join(provider.diagnostics())
+                self.assertIn("FF00:0001 Feature 03 length unproven", diagnostic)
+                self.assertIn(expected, diagnostic)
+                self.assertIn("not opened; nothing sent", diagnostic)
+                self.assertNotIn("private-path", diagnostic)
+                self.assertEqual(bus.opened, [])
+
     def test_byte_exact_battery_request_and_exchange(self):
         self.assertEqual(E.make_request(), REQUEST)
         self.assertEqual(len(REQUEST), 64)

@@ -80,6 +80,23 @@ class EweadnS9ProBridgeTests(unittest.TestCase):
             self.assertEqual(bus.opened, [] if ambiguous else [infos[0]["path"]])
             if not ambiguous:
                 self.assertEqual(response["statuses"][0]["level"], 73)
+            else:
+                self.assertIn("ambiguous proven Feature 03 collection", " ".join(response["diagnostics"]))
+
+    def test_unavailable_reader_exports_descriptor_failure_reason(self):
+        info = E.entry(feature_report_sizes=None, feature_report_proof="failed",
+                       report_descriptor_error="get_report_descriptor unavailable")
+        request = dict(action="query", sequence=1, provider=E.P.name,
+                       physicalId="receiver-a", inventory=[info])
+        data = (json.dumps(request, default=wire_encode) + "\n").encode()
+        with E.fixture(inventory=[info]) as bus, \
+                patch.object(server.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data))), \
+                patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+            server.reader_child()
+        response = json.loads(output.getvalue())
+        self.assertEqual(response["statuses"], [])
+        self.assertIn("descriptor=get_report_descriptor unavailable", " ".join(response["diagnostics"]))
+        self.assertEqual(bus.opened, [])
 
     def descriptor_fixture(self, rows):
         # Reuse the fake Windows environment, without changing its framework.

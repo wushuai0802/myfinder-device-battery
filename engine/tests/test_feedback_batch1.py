@@ -106,7 +106,7 @@ class FeedbackProtocolTests(unittest.TestCase):
              patch.object(M.hid, "device", side_effect=AssertionError("V3 is not V2/G7/A5")):
             provider = M.MchoseProvider()
             self.assertEqual(provider.poll(), [])
-            self.assertIn("input/output lengths 64/64; nothing sent", "\n".join(provider.diagnostics()))
+            self.assertIn("input report 4D/64 length unproven", "\n".join(provider.diagnostics()))
 
     def test_a7_v2_still_selects_its_existing_reader(self):
         infos = [dict(d, product_id=0x100B, product_string="MCHOSE A7 V2 Ultra")

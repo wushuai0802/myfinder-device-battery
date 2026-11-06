@@ -146,7 +146,7 @@ def _read_report_descriptor(path):
 
 
 def _descriptor_fallback(info, caps, directions):
-    """Called only inside the existing Rapoo/MOONDROP identity/usage gates."""
+    """Called only inside explicit provider identity/usage gates."""
     missing = [d for d in directions if info.get(d + "_report_sizes") is None]
     for direction in directions:
         info[direction + "_report_proof"] = "failed" if direction in missing else "caps"
@@ -182,7 +182,7 @@ def discover(paths, excluded=(), *, full=False):
     results are subsequently filtered. Here cfgmgr32 already supplied present
     paths; read only attributes/caps/strings for remaining paths, with access 0.
     No keyboard input reports, feature queries or feature writes are read here.
-    Rapoo/MOONDROP caps failures may additionally open their exact allow-listed
+    Rapoo/MOONDROP/MCHOSE V3/S9 PRO caps failures may open their allow-listed
     collection via hidapi solely to fetch the raw report descriptor, then close.
     Cache complete descriptors while the full path set is unchanged: product
     strings can encode connection state. Partial discoveries always refresh
@@ -273,6 +273,8 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_ids", "output_report_ids"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x3837, 0x1018, 0xFF01, 0x0001),
+                    (0x3837, 0x1014, 0xFF01, 0x0001),
                     (0x373B, 0x1262, 0xFF90, 0x0001),
                     (0x373B, 0x12D6, 0xFF90, 0x0001),
                     (0x373B, 0x1216, 0xFF05, 0x0001),
@@ -286,7 +288,8 @@ def discover(paths, excluded=(), *, full=False):
                     (0x37D7, 0x2501, 0xFFA0, 0x0001)):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
-                if (attrs.vendor, attrs.product) == (0x35D8, 0x0133):
+                if (attrs.vendor, attrs.product) in (
+                        (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014)):
                     _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
@@ -360,6 +363,8 @@ def discover(paths, excluded=(), *, full=False):
                 from battery_hid import byte_report_sizes
                 info.update(feature_report_length=caps.feature,
                             feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
+                if (attrs.vendor, attrs.product) == (0x372E, 0x1026):
+                    _descriptor_fallback(info, caps, ("feature",))
                 caps_complete = info["feature_report_sizes"] is not None
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)

@@ -6,7 +6,7 @@ initialization commands, online/UUID queries or configuration writes.
 """
 import time
 
-from battery_hid import BatteryHidProvider
+from battery_hid import BatteryHidProvider, report_proof_summary
 
 VID = 0x372E
 PIDS = {0x1026: "EWEADN S9 PRO 8K"}
@@ -39,6 +39,12 @@ class EweadnS9ProProvider(BatteryHidProvider):
     kind = "mouse"
     charging_known = True
 
+    def poll(self):
+        result = super().poll()
+        if not result and not self._diag:
+            self._diag.append("no eligible S9 PRO collection or HID backend; not opened; nothing sent")
+        return result
+
     def _pick(self, infos):
         candidates = []
         for info in infos:
@@ -53,13 +59,18 @@ class EweadnS9ProProvider(BatteryHidProvider):
                     and max(sizes.values()) == maximum
                     and sizes.get(str(REPORT_ID)) == REPORT_BYTES):
                 candidates.append(info)
+            else:
+                self._diag.append(f"{info['usage_page']:04X}:0001 Feature 03 length unproven"
+                                  + report_proof_summary(info, "feature") + "; not opened; nothing sent")
         if len(candidates) != 1:
-            self._diag.append("missing or ambiguous proven Feature 03 collection: nothing sent")
+            self._diag.append("missing or ambiguous proven Feature 03 collection; not opened; nothing sent")
             return None
         info = candidates[0]
         if not info.get("path") or not info.get("physical_id"):
-            self._diag.append("collection path/physical parent unresolved: nothing sent")
+            self._diag.append("collection path/physical parent unresolved; not opened; nothing sent")
             return None
+        self._diag.append("selected unique Feature 03/64 collection"
+                          + report_proof_summary(info, "feature"))
         return info
 
     def _query(self, dev, info):

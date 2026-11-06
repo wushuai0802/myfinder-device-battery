@@ -219,7 +219,10 @@ def build_index(root=None, *, engine_root=None):
                 partial[module] = "已收录耳机和接收器固定 ID，其他 HID++ 设备及配对型号依赖运行时识别。"
             elif module == "mchose":
                 add(module, source.get("G7_VID"), source.get("G7_PID"), "MCHOSE mouse", "mouse")
-                if "V3_VID" in source.values and "V3_PID" in source.values:
+                if "V3_VID" in source.values and "V3_PIDS" in source.values:
+                    for pid, name in source.table("V3_PIDS"):
+                        add(module, source.get("V3_VID"), source.literal(pid), source.name(name), "mouse")
+                elif "V3_VID" in source.values and "V3_PID" in source.values:
                     add(module, source.get("V3_VID"), source.get("V3_PID"),
                         "MCHOSE A7 V3 Pro (V3 8K 接收器)", "mouse")
                 # MODEL_NAMES uses reply model codes, NOT USB product IDs.

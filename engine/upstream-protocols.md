@@ -834,6 +834,20 @@ coexist, including a larger feature report, but only report 03 is transferred.
 Selection counts proven matches across both pages before opening either; it
 does not prefer FF00, fall back to FF06 after a failed read, or probe both.
 
+For #266's empty `eweadn_s9pro | unavailable |` diagnostic, discovery now
+opts these two exact collections into the existing raw-descriptor fallback
+when the HidP Feature report map is `None`. The parsed collection's input,
+output and feature maxima must all match HidP; only a proven Feature `03:64`
+can enter the unchanged unique-match selection. Missing/unsupported methods,
+malformed descriptors and inconsistent maxima still prevent battery I/O.
+The reader child now exports bounded reasons, including `FF00:0001 Feature 03
+length unproven; proof=caps+descriptor failed; descriptor=get_report_descriptor
+unavailable; not opened; nothing sent`, ambiguous selection, unresolved parent,
+missing inventory/backend and invalid/silent replies. Selection records
+`proof=caps` or `proof=descriptor`. Synthetic tests cover both pages, either
+proof source, rejected proofs and two qualifying collections; real S9 PRO
+descriptors and successful battery/charging reads remain unverified.
+
 **Resolved loader and controller.** `sdk-api` defines module 5122 at 32786 and module
 83143 at 159951. Its Webpack header registers chunk IDs including 8886 and 3143,
 so a separate `main.3143.*.js` file is not needed to inspect this loader.
@@ -1217,12 +1231,34 @@ The supplied LICENSE is GNU AGPL version 3, compatible with this project's AGPL-
 license. Only the battery framing/decoding subset was adapted; no upstream file
 was copied into the tracked tree or executed, and no network fetch was needed.
 
-The match requires **exactly `3837:1018 / FF01:0001`**, with input and output
-caps both **64 bytes including report ID `4D`** (63-byte body). Caps come from
-the existing topology inventory; unknown or different lengths prevent opening
-for I/O and sending. Other collections and legacy protocols are never tried for
-this ID, including after an invalid reply or timeout. Other V3 receiver/wired
-IDs in OpenMouse's broader table are not added by this change.
+The match requires **`3837:1018` or `3837:1014`, one `FF01:0001` collection**,
+with both input/output maxima and per-report `4D` lengths proven as **64 bytes
+including the ID** (63-byte body). Discovery tries HidP's per-ID caps first;
+if either report map is `None`, it uses the bounded raw-descriptor parser below.
+All three collection maxima must match HidP, and any successful caps map must
+agree with the descriptor. Unknown lengths are never accepted as 64. If the
+proof still fails, the battery reader does not open or send. Other collections
+and legacy protocols are never tried for these IDs, including after invalid
+replies or timeouts. No other V3 receiver/wired IDs are added. V3-only sanitized
+reasons reach reader health, including `V3 input report 4D/64 length unproven;
+proof=caps+descriptor failed; descriptor=collection maximum mismatch; not
+opened; nothing sent`; successful proofs state `proof=caps/descriptor` by
+direction. Legacy MCHOSE diagnostic payloads, product strings and exception
+text are not exported through this path.
+
+**A7 V3 Ultra+ `3837:1014`: C / 用户实机验证，#276.** The supplied
+`.ai/evidence/issue-274.md` records five collections (`1:2`, `1:6`, `12:1`,
+`FF0B:00C4`, `FF01:0001`); `.ai/evidence/issue-276.md` reports that traditional
+`0x06` requests on `11/12` receive no answer, while V3 `readDeviceInfo` succeeds
+on FF01. The user locally displayed **42%, not charging**. Their reply prefix
+is `4d 01 01 10 00 09 00 00 37 38 26 40 04 00 00 00 00 10 02 00 2a 00 08 e4`,
+with reported XOR `A1`. The fixture appends that checksum and reconstructs zero
+padding to 64 bytes; it is not a supplied complete 64-byte capture. The explicit
+name is `MCHOSE A7 V3 Ultra+`, keyed separately from `1018` and legacy receivers.
+This user result validates the exchange, not this new descriptor-proof path:
+the issue supplied no raw descriptor, and hidapi's missing length fields are
+not permission to bypass proof. Both identities remain C. Charging, sleep/wake,
+reconnection, firmware variants and the new proof path require hardware checks.
 
 Only `readDeviceInfo`, command **`0x0900`**, is sent: full frame
 `4d 01 01 00 00 09 00 00 08`, then zeros to 64 bytes. Full-frame offsets are
@@ -1234,8 +1270,9 @@ are refused. The declared data must contain at least 14 bytes: vendor at 0–1
 must be `3837`, link at 10 must be nonzero, charge at 11 is a nonzero boolean,
 and percentage at 12 must be 0–100. Extra declared data is accepted and covered
 by the checksum. The reply PID is not used to identify the model: the upstream
-Ultra+ returned `4026` (an A5 ID). Use the USB product string, including a sibling
-collection, or the neutral `MCHOSE V3 8K 接收器` fallback.
+Ultra+ returned `4026` (an A5 ID). For `1018`, use the USB product string,
+including a sibling collection, or the neutral `MCHOSE V3 8K 接收器` fallback;
+`1014` uses the explicit Ultra+ name from #276.
 
 The local reader sends one battery query per poll, then waits at most 1500 ms
 and 32 input reads, ignoring unrelated or malformed frames. This clears the
@@ -1907,8 +1944,9 @@ with a fixed short diagnostic reason, never raw bytes or a device path.
 
 `topology` tries caps first, retaining the existing fixed-usage Rapoo proof.
 Only a `None` result triggers raw-descriptor retrieval, and only inside the
-existing Rapoo PID + `FF00:0002` gate or the exact MOONDROP
-`35D8:0133 / FF02:0002` gate. A successful caps proof with an unsuitable ID
+existing Rapoo PID + `FF00:0002` gate, the exact MOONDROP
+`35D8:0133 / FF02:0002` gate, MCHOSE V3 `3837:1018/1014 / FF01:0001`, or
+S9 PRO `372E:1026 / FF00:0001 or FF06:0001`. A successful caps proof with an unsuitable ID
 does not trigger this fallback. If the current hidapi device has no callable
 `get_report_descriptor`, it skips opening. Otherwise one temporary handle
 opens that same selected path, retrieves metadata and closes, including on
@@ -1918,8 +1956,12 @@ feature maxima must **all** equal HidP's collection maxima, and any already
 proven direction must agree with the parsed report map. Only missing proofs
 are filled; failed proofs stay uncached and can be retried by normal discovery.
 Other providers do not opt in: their existing evidence and proof gates remain
-unchanged. Reader uniqueness/parent/ID/length guards and battery request bytes
-are unchanged; Rapoo remains receive-only.
+unchanged. V3 now requires per-ID input/output `4D:64` proof, not just collection
+capacity; S9 PRO retains exactly one proven Feature `03:64` collection across
+its two vendor usages. Existing parent/ID/length guards and battery request
+bytes are unchanged; Rapoo remains receive-only. These additional opt-ins and
+reason exports were checked with synthetic data only, without hardware/network
+access. The optional EWEADN S9, ATK headset, Dareu and FA6x readers are unchanged.
 
 Rapoo reasons now identify their proof source, for example `opened; no input
 reports; no new measurement; proof=caps` or `proof=descriptor`. A failed proof

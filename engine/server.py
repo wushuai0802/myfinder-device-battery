@@ -90,7 +90,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro"}
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -99,7 +99,7 @@ def reader_diagnostics(provider):
     # serials, product strings or raw exception text). Do not expose legacy logs.
     if provider.name not in READER_DIAGNOSTICS:
         return []
-    lines = provider.diagnostics()
+    lines = provider.reader_diagnostics() if provider.name == "mchose" else provider.diagnostics()
     return lines if len(lines) <= 16 else lines[:6] + lines[-10:]
 
 

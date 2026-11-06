@@ -50,9 +50,9 @@ than by model list, which is what this provider does as well. The diagnostics in
 (a MCHOSE A7 V2 Ultra, 3837:100b, RealTek strings, collections 0xFF0B:0x104 and
 0xFF01:0x01 on interface 2) have exactly that shape, and the reference documents the status
 read on the *short* 0x11 report, so both report ids are tried before a poll gives up.
-Exception: A7 V3's 3837:1018 receiver shares the configuration collection but uses
+Exception: A7 V3's 3837:1018 and 3837:1014 receivers share the collection but use
 output report 0x4D and a different command set (OpenMouse's V3 codec). Its separate
-read-only path below requires FF01:0001 and 64-byte input/output caps; it never
+read-only path below requires FF01:0001 and proven 64-byte input/output report 4D; it never
 falls back to a legacy exchange. See the V3 source/license notes in upstream-protocols.md.
 3837:600A is the V9 Turbo+ headset (mchose_headset); 3837:6008 is its lighting
 device. Both are excluded before any mouse I/O (用户实机抓包，#61).
@@ -83,6 +83,7 @@ from typing import Dict, List, Optional, Tuple
 
 import hid
 
+from battery_hid import report_proof_summary
 from . import hidlist
 from .base import DeviceStatus, Provider, hexdump, log
 
@@ -96,6 +97,10 @@ MCHOSE_VIDS = (MEASURED_VID, 0x3837)
 # src/drivers/mchose/v3-hid.ts (AGPL-3.0; see upstream-protocols.md).
 # The upstream hardware capture is an Ultra+ sibling, not this Pro: level C.
 V3_VID, V3_PID = 0x3837, 0x1018
+V3_PIDS = {
+    0x1018: "MCHOSE A7 V3 Pro (V3 8K 接收器)",
+    0x1014: "MCHOSE A7 V3 Ultra+",  # 用户实机验证，#276; remains level C.
+}
 V3_USAGE = (0xFF01, 0x0001)
 V3_REPORT_ID, V3_REPORT_LEN = 0x4D, 64  # includes the report ID; body is 63 bytes
 V3_CMD_POWER = 0x0900
@@ -255,7 +260,7 @@ def device_key(vid: int, pid: int) -> str:
     G7's 0xA8A5, and the newer 0x3837 receivers (the A7 V2 Ultra in issue #4) - which is
     what keeps two MCHOSE devices on one machine off a single shared icon.
     """
-    if (vid, pid) == (V3_VID, V3_PID):
+    if vid == V3_VID and pid in V3_PIDS:
         return f"mchose:{vid:04x}:{pid:04x}"
     return "mchose" if vid == MEASURED_VID else f"mchose:{vid:04x}"
 
@@ -301,6 +306,7 @@ class MchoseProvider(Provider):
 
     def __init__(self):
         self._diag: List[str] = []
+        self._v3_diag: List[str] = []
         self._last: Dict[str, Tuple[int, bool, float]] = {}
         self._names: Dict[str, str] = {}
         self._models: Dict[str, int] = {}
@@ -426,13 +432,46 @@ class MchoseProvider(Provider):
             except Exception:
                 pass
 
+    def _note_v3(self, message):
+        # Public reader health gets only these protocol-owned messages, never
+        # the legacy logs' paths, product strings, payloads or exception text.
+        self._v3_diag.append(message)
+        self._diag.append(message)
+
+    def reader_diagnostics(self):
+        return list(self._v3_diag)
+
+    def _pick_v3(self, ifaces):
+        cols = [d for d in ifaces if (d.get("usage_page"), d.get("usage")) == V3_USAGE]
+        if len(cols) != 1:
+            self._note_v3("V3 missing or ambiguous FF01:0001 collection; not opened; nothing sent")
+            return None
+        info = cols[0]
+        if not info.get("path"):
+            self._note_v3("V3 collection path unresolved; not opened; nothing sent")
+            return None
+        for direction in ("input", "output"):
+            maximum = info.get(direction + "_report_length")
+            sizes = info.get(direction + "_report_sizes")
+            if (type(maximum) is not int or maximum != V3_REPORT_LEN
+                    or not isinstance(sizes, dict) or not sizes
+                    or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
+                    or sizes.get(str(V3_REPORT_ID)) != V3_REPORT_LEN):
+                self._note_v3("V3 " + direction + " report 4D/64 length unproven"
+                              + report_proof_summary(info, direction) + "; not opened; nothing sent")
+                return None
+        for direction in ("input", "output"):
+            self._note_v3("V3 " + direction + " report 4D/64 proven"
+                          + report_proof_summary(info, direction))
+        return info
+
     def _read_v3(self, path: bytes) -> Optional[Tuple[int, bool]]:
         """One power query per poll; ignore unrelated input within a bounded wait."""
         dev = hid.device()
         try:
             dev.open_path(path)
             if dev.write(make_v3_request()) != V3_REPORT_LEN:
-                self._diag.append("    V3 power query write failed or short; no retry")
+                self._note_v3("V3 power query write failed or short; no retry")
                 return None
             deadline = time.monotonic() + V3_TIMEOUT_MS / 1000
             for _ in range(V3_MAX_READS):
@@ -444,12 +483,11 @@ class MchoseProvider(Provider):
                     break
                 got = parse_v3(resp)
                 if got is not None:
-                    self._diag.append(f"    V3 power answer: {hexdump(resp, 24)}")
+                    self._note_v3("V3 valid power reply")
                     return got
-                self._diag.append(f"    V3 ignored non-power/invalid reply: {hexdump(resp, 8)}")
-            self._diag.append("    no valid V3 power reply; no legacy fallback")
-        except (OSError, ValueError) as e:
-            self._diag.append(f"    V3 power I/O: {e}")
+            self._note_v3("no valid V3 power reply; no legacy fallback")
+        except (OSError, ValueError):
+            self._note_v3("V3 power I/O failed; no legacy fallback")
         finally:
             try:
                 dev.close()
@@ -460,6 +498,7 @@ class MchoseProvider(Provider):
     def poll(self) -> List[DeviceStatus]:
         """One icon per device, whether it is on the dongle, on the cable or on radio."""
         self._diag = []
+        self._v3_diag = []
         infos: List[dict] = []
         for vid in MCHOSE_VIDS + (G7_VID, A5_VID):
             try:
@@ -488,19 +527,17 @@ class MchoseProvider(Provider):
                 self._diag.append("[MCHOSE] keyboard identity reserved; no mouse commands sent")
                 continue
             key = device_key(vid, pid)
-            if (vid, pid) == (V3_VID, V3_PID):
-                self._diag.append("[MCHOSE] 3837:1018 V3 power reader (C / 待实机验证)")
-                self._names[key] = next(((d.get("product_string") or "").strip()
+            if vid == V3_VID and pid in V3_PIDS:
+                evidence = "用户实机验证，#276" if pid == 0x1014 else "待实机验证"
+                self._note_v3(f"[MCHOSE] 3837:{pid:04x} V3 power reader (C / {evidence})")
+                self._names[key] = V3_PIDS[pid] if pid == 0x1014 else next(((d.get("product_string") or "").strip()
                                          for d in ifaces if (d.get("product_string") or "").strip()),
                                         "MCHOSE V3 8K 接收器")
-                cols = [d for d in ifaces if (d.get("usage_page"), d.get("usage")) == V3_USAGE]
-                eligible = [d for d in cols if (d.get("input_report_length"),
-                                                d.get("output_report_length")) == (64, 64)]
-                if not eligible:
-                    self._diag.append("    V3 requires FF01:0001 and input/output lengths 64/64; nothing sent")
+                info = self._pick_v3(ifaces)
+                if info is None:
                     self._last.pop(key, None)
                     continue
-                got_v3 = self._read_v3(eligible[0]["path"])
+                got_v3 = self._read_v3(info["path"])
                 if got_v3 is not None:
                     found.setdefault(key, []).append((got_v3[0], got_v3[1], pid, 0))
                 continue  # V3 never scans siblings or calls any legacy protocol.
