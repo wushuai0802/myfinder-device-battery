@@ -28,6 +28,8 @@ PROVIDERS = (
     ("mchose_headset", "MchoseHeadsetProvider"),
     ("atk_headset", "AtkHeadsetProvider"),
     ("moondrop", "MoondropProvider"),
+    ("aula_keyboard", "AulaKeyboardProvider"),
+    ("lingbao_mouse", "LingbaoMouseProvider"),
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
     ("eweadn_s9pro", "EweadnS9ProProvider"),
     ("vgn_keyboard", "VgnKeyboardProvider"),
@@ -61,6 +63,7 @@ PROVIDER_VIDS = {
     "mchose_headset": (0x291D, 0x3837),
     "atk_headset": (0x373B,),
     "moondrop": (0x35D8,),
+    "aula_keyboard": (0x05AC,), "lingbao_mouse": (0x088D,),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "eweadn_s9pro": (0x372E,),
     "vgn_keyboard": (0x320F,),
@@ -90,7 +93,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "aula_keyboard", "lingbao_mouse"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}

@@ -491,6 +491,48 @@ The same `b0` exchange as the other Nova headsets, asked for with report id `06`
 
 ## Mice
 
+### Lingbao 088D:052E / 052F mouse
+
+**A — local hardware reading on 2026-11-06 (100 % over the 2.4 GHz receiver);
+the cabled identity read 100 % and the receiver cached 96 % in an earlier
+session.** The vendor utility for this mouse (`LB-M1 pro Setup.exe`, which
+installs `CBMouse.exe` and `device/mouse/dev1/MS.ini`) declares `devVID=0x088D`,
+`devPID=0x052E` (cable), `devPID_Wireless=0x052F` and `Identify=4d,35,33,36`
+(`M536`). The utility only ever calls `HidD_SetFeature`/`HidD_GetFeature`; the
+frames below were read from the live device, and the same exchange was
+independently observed while the vendor utility was running. Only protocol
+facts are used in `providers/lingbao_mouse.py`; no vendor code is copied.
+
+Both identities expose one `FF00:0001` collection with no input or output
+reports and a single Feature report `0F` of 33 bytes including the report-ID
+slot. The reader requires that exact proven size before opening anything.
+
+Request (33 bytes): `0F 01 30 00 01 01` followed by 27 zeroes — report `0F`,
+command `01 30`, page `01`.
+
+Reply (33 bytes, captured at 100 %):
+
+```text
+0F 01 30 00 01 01 10 4D 35 33 36 01 06 4C 58 11 10 01 64 00 FF 01 FF D0 00 0C 31 79 00 5B 81 2C C8
+```
+
+Bytes 7–10 are the model signature `M536`, byte 18 is the percentage (here
+`64`, 100 %). The reply must be exactly 33 bytes, start with `0F 01 30`, carry
+`M536`, and hold 1–100 in byte 18; anything else is refused instead of shown,
+and 0 is never displayed (a sleeping device or an empty receiver slot must not
+look like an empty battery).
+
+Bytes 17 (`01` here, `02` on cable) and 19 (`00` here) look like link mode and
+a charge flag, but no plugged/unplugged comparison was captured, so both stay
+unproven and charging is reported as unknown. The provider queries the cable
+identity first and only asks the receiver when the cable produced no reading, so
+one mouse never produces two cards; that ordering is the only reason 052E is
+listed first.
+
+No DPI, configuration, macro, pairing, reset or firmware command is sent, and
+other Lingbao models sharing these IDs with a different `Identify` string are
+rejected by the model gate.
+
 ### ATK / VXE NANO receiver (373B:1216)
 
 **Verification C: static ATK Hub 3.2.31 evidence and synthetic tests only.**
@@ -1404,6 +1446,45 @@ itself is open the dongle stops answering this request - the app keeps the
 last value on a greyed icon, so live readings want CAM closed.
 
 ## Mice and keyboards
+
+### AULA 05AC:024F keyboard receiver
+
+**A — local hardware reading on 2026-11-06 (33 %, rising while charging over
+2.4 GHz).** The receiver (`05AC:024F`, product string `2.4G Dongle`) publishes
+two raw collections on `FF60:0061`, 33 and 65 bytes. The 33-byte one answers a
+32-byte battery query; the 65-byte one replies to the same bytes with a
+completely different frame (`0F 01 01 11 ...`), so it belongs to another command
+set and is never opened. The same command appears as `queryBattery` in the
+public [Aula-F75-Max-Driver](https://github.com/VitalyArt/Aula-F75-Max-Driver)
+project for this VID/PID; `providers/aula_keyboard.py` is an independent
+implementation of the frame, not a copy of that code.
+
+Request (33 bytes, report ID 0):
+
+```text
+00 20 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 21
+```
+
+`20 01` is the query, byte 32 is the running sum of bytes 0–31 (0x21 here).
+
+Reply (32 payload bytes; hidapi strips the report-ID slot):
+
+```text
+20 01 00 21 00 ... 00 42
+```
+
+Byte 3 is the percentage (`21`, 33 %); bytes 2 and the trailing byte are not
+understood and are not used as gates. Only a 32-byte reply whose first two bytes
+are `20 01` and whose byte 3 is 1–100 is accepted; 0 is refused (a sleeping
+keyboard behind a live receiver answers 0 and must not look empty) and the
+request frame can never be mistaken for a reply.
+
+The wired identity `0C45:800A` (Sonix, `FF68`) stays disabled: it enumerates
+while the cable is attached, but no battery reply was ever captured from it, so
+the receiver remains the only source. Charging is unknown — this reply carries
+no proven power flag even though the level rose from 27 % to 33 % during the
+session. No configuration, lighting, macro, reset, pairing or firmware command
+is sent.
 
 ### VGN 2.4G keyboard receiver (320F:5088)
 
