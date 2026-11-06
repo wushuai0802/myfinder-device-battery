@@ -1319,12 +1319,26 @@ text are not exported through this path.
 on FF01. The user locally displayed **42%, not charging**. Their reply prefix
 is `4d 01 01 10 00 09 00 00 37 38 26 40 04 00 00 00 00 10 02 00 2a 00 08 e4`,
 with reported XOR `A1`. The fixture appends that checksum and reconstructs zero
-padding to 64 bytes; it is not a supplied complete 64-byte capture. The explicit
-name is `MCHOSE A7 V3 Ultra+`, keyed separately from `1018` and legacy receivers.
-This user result validates the exchange, not this new descriptor-proof path:
+padding to 64 bytes; it is not a supplied complete 64-byte capture. The original
+`MCHOSE A7 V3 Ultra+` name remains the empty-product fallback, keyed separately
+from `1018` and legacy receivers. This user result applies only to that A7 model,
+not every device sharing `1014`, and does not validate the new descriptor-proof path:
 the issue supplied no raw descriptor, and hidapi's missing length fields are
 not permission to bypass proof. Both identities remain C. Charging, sleep/wake,
 reconnection, firmware variants and the new proof path require hardware checks.
+
+**2026-11-07 health/name follow-up:** #324 (1.3.9) reports `3837:1014`,
+`MCHOSE K7 V2 Ultra+`; #346 (1.3.10-beta.1) reports `3837:1018`,
+`MCHOSE A5 V3 Ultra+(3955)`. Both list `FF01:0001` / `FF0B:00C4` but lack
+a battery card and MCHOSE health reason. The recalled older-version reading
+in #346 is an unverified regression clue; the current V3 matcher has no product-name gate.
+These two exact VID/PID pairs now count as supported candidates, preserving
+`unavailable` health without a reading. Compact feedback prioritizes safe collection,
+proof, I/O or no-valid-reply reasons over general notes, within the existing 48-character
+limit; it does not add errors, retries or backoff. Legacy logs remain private.
+This changes observability and displayed names only: collection/report proof and
+all HID exchanges remain unchanged. Neither issue's hardware cause nor successful
+battery reading is established by the synthetic tests; both models still need hardware checks.
 
 Only `readDeviceInfo`, command **`0x0900`**, is sent: full frame
 `4d 01 01 00 00 09 00 00 08`, then zeros to 64 bytes. Full-frame offsets are
@@ -1336,9 +1350,11 @@ are refused. The declared data must contain at least 14 bytes: vendor at 0–1
 must be `3837`, link at 10 must be nonzero, charge at 11 is a nonzero boolean,
 and percentage at 12 must be 0–100. Extra declared data is accepted and covered
 by the checksum. The reply PID is not used to identify the model: the upstream
-Ultra+ returned `4026` (an A5 ID). For `1018`, use the USB product string,
-including a sibling collection, or the neutral `MCHOSE V3 8K 接收器` fallback;
-`1014` uses the explicit Ultra+ name from #276.
+Ultra+ returned `4026` (an A5 ID). For both `1014` and `1018`, use the first
+nonempty USB product string, including a sibling collection. With an empty name,
+`1014` falls back to `MCHOSE A7 V3 Ultra+`; `1018` keeps the neutral
+`MCHOSE V3 8K 接收器`. Runtime V3 diagnostics keep the generic C / unverified
+label, so #276's A7 result is never attached to another model from its PID or name.
 
 The local reader sends one battery query per poll, then waits at most 1500 ms
 and 32 input reads, ignoring unrelated or malformed frames. This clears the

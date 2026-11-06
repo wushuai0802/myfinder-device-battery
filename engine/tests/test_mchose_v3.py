@@ -102,7 +102,7 @@ def fixture(replies=(), infos=None, fail=None):
 
 
 class V3ProtocolTests(unittest.TestCase):
-    def test_1014_user_reply_uses_only_v3_and_the_explicit_ultra_name(self):
+    def test_1014_user_reply_uses_only_v3_and_the_product_name(self):
         infos = [dict(vendor_id=0x3837, product_id=0x1014, path=f"collection-{n}".encode(),
                       usage_page=page, usage=usage, product_string="generic receiver",
                       input_report_length=64, output_report_length=64,
@@ -120,11 +120,12 @@ class V3ProtocolTests(unittest.TestCase):
                 result = provider.poll()
                 self.assertEqual(bus.sent, [REQUEST])
                 self.assertEqual(bus.opened, [b"collection-4"])
-                self.assertIn("用户实机验证，#276", " ".join(provider.diagnostics()))
+                self.assertIn("C / 待实机验证", " ".join(provider.diagnostics()))
+                self.assertNotIn("#276", " ".join(provider.reader_diagnostics()))
                 if frame == ULTRA_42:
                     device, = result
                     self.assertEqual((device.name, device.level, device.charging),
-                                     ("MCHOSE A7 V3 Ultra+", 42, False))
+                                     ("generic receiver", 42, False))
                 else:
                     self.assertEqual(result, [])
 
@@ -197,16 +198,25 @@ class V3ProtocolTests(unittest.TestCase):
                 self.assertIn("待实机验证", "\n".join(provider.diagnostics()))
 
     def test_names_use_sibling_strings_and_never_reply_pid(self):
-        infos = inventory()
-        infos[0]["product_string"] = "MCHOSE A7 V3 Ultra+"
-        for info in infos[1:]:
-            info["product_string"] = " "
-        with fixture([CHARGING], infos):
-            self.assertEqual(M.MchoseProvider().poll()[0].name, "MCHOSE A7 V3 Ultra+")
-        for info in infos:
-            info["product_string"] = ""
-        with fixture([CHARGING], infos):
-            self.assertEqual(M.MchoseProvider().poll()[0].name, "MCHOSE V3 8K 接收器")
+        for pid, product, fallback in (
+                (0x1014, "MCHOSE K7 V2 Ultra+", "MCHOSE A7 V3 Ultra+"),
+                (0x1018, "MCHOSE A5 V3 Ultra+(3955)", "MCHOSE V3 8K 接收器")):
+            infos = inventory(pid)
+            infos[0]["product_string"] = " " + product + " "
+            for info in infos[1:]:
+                info["product_string"] = " "
+            with self.subTest(pid=pid, product=product), fixture([CHARGING], infos) as bus:
+                provider = M.MchoseProvider()
+                self.assertEqual(provider.poll()[0].name, product)
+                self.assertEqual(bus.sent, [REQUEST])
+                self.assertNotIn(product, " ".join(provider.reader_diagnostics()))
+                self.assertNotIn("#276", " ".join(provider.reader_diagnostics()))
+            for blank in ("", "   ", None):
+                for info in infos:
+                    info["product_string"] = blank
+                with self.subTest(pid=pid, blank=blank), fixture([CHARGING], infos) as bus:
+                    self.assertEqual(M.MchoseProvider().poll()[0].name, fallback)
+                    self.assertEqual(bus.sent, [REQUEST])
 
     def test_unknown_or_wrong_lengths_never_open_or_send(self):
         for field in ("input_report_length", "output_report_length"):
