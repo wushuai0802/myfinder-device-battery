@@ -539,6 +539,10 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if (d.get("vendor_id"), d.get("product_id")) in module.PIDS})
     pids = set()
+    nano_candidates = set()
+    if name == "pulsar":
+        nano_candidates = {(d.get("vendor_id"), d.get("product_id")) for d in inventory
+                           if d.get("product_id") in module.NANO_PIDS.get(d.get("vendor_id"), {})}
     for field in ("PIDS", "KNOWN", "DONGLES", "RECEIVERS", "HEADSETS", "WIRED", "BRAGI_PIDS", "MOUSE_MODELS", "MODELS", "CLASSIC_MODELS"):
         value = getattr(module, field, ())
         if name == "pulsar" and field == "PIDS":
@@ -551,7 +555,8 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         if type(value) is int:
             pids.add(value)
     pids.update(e.match.product_id for e in device_pack.entries if e.provider == name)
-    return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory if d.get("product_id") in pids})
+    return len(nano_candidates | {(d.get("vendor_id"), d.get("product_id"))
+                                  for d in inventory if d.get("product_id") in pids})
 
 
 class BatteryEngine:

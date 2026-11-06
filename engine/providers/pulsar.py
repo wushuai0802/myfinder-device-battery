@@ -4,7 +4,9 @@ MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matchi
 (协议族匹配，未实测; level C). Only FF02:0002 with a known output length of exactly
 17 bytes receives the existing power query. N9 headset IDs 1204/1262/12D6 are
 excluded before collection/length probing. FF04/FF05 alone and unknown lengths
-are not sufficient. DPI uses a separate exact allow-list below; the server keeps
+are not sufficient. Exact 373B:1216 uses the separate, descriptor-guarded
+FF05 BITMOUSE reader below; it never enters the legacy FF02/DPI path.
+DPI uses a separate exact allow-list below; the server keeps
 native 373B:1278 excluded. Scyrox 3554:F517, VGN F2 Master+ 3554:FB56 and
 VXE R1 SE 1K 3554:F58E also require FF02:0002 and exactly 17 output bytes;
 they are pending hardware verification in this project. VGN Dragonfly 4K
@@ -92,6 +94,7 @@ from typing import Dict, List, Optional, Tuple
 
 import hid
 
+from battery_hid import BatteryHidProvider
 from . import hidlist
 from .base import DeviceStatus, Provider, hexdump, log
 
@@ -200,6 +203,68 @@ PIDS: Dict[int, Dict[int, str]] = {
         0x5501: "Pulsar Link 8K Dongle",  # #134 + Pulsar web snapshot; 待实机验证
     },
 }
+
+# Separate from PIDS: that table's listed mice use the legacy CompX protocol.
+NANO_PIDS = {0x373B: {0x1216: "ATK / VXE NANO receiver"}}
+
+
+def make_nano_request():
+    # Output report 08 + 63-byte BITMOUSE payload; receiver target 01.
+    # Checksum 7D = sum(72 02 00 01 07 01 + padding) modulo 256.
+    return [0x08, 0x7D, 0x72, 0x02, 0x00, 0x01, 0x07, 0x01] + [0] * 56
+
+
+def parse_nano_reply(reply, report_id):
+    # WebHID delivers payload only; numbered hidapi input retains its ID.
+    if report_id:
+        if not reply or reply[0] != report_id:
+            return None
+        reply = reply[1:]
+    # Same BITMOUSE readVersions path proves status 0 and declared data length.
+    # The vendor does not check a response checksum or fixed first byte.
+    if (not 7 <= len(reply) <= 63 or reply[1] != 0 or reply[4] != 0x07
+            or not 1 <= reply[5] <= len(reply) - 6 or not 0 <= reply[6] <= 100):
+        return None
+    return reply[6], False, ""
+
+
+class AtkNanoProvider(BatteryHidProvider):
+    """Private BITMOUSE path owned by PulsarProvider; no CompX fallbacks.
+
+    The upstream listener ignores input reportId. Require a sole proven input
+    byte-array report instead of assuming that its ID equals output report 08.
+    Each pick/query runs synchronously; input_id belongs to that selected path.
+    """
+    name = "pulsar"
+    vid = 0x373B
+    pids = NANO_PIDS[vid]
+    collection = (0xFF05, 0x0001)
+    output_id = 0x08
+    output_bytes = 64
+    input_bounds = (8, 64)  # 7 payload bytes minimum; local conservative ceiling.
+    kind = "mouse"
+    charging_known = False
+    make_request = staticmethod(make_nano_request)
+
+    def _pick(self, infos):
+        candidates = [d for d in infos if d.get("vendor_id") == self.vid
+                      and d.get("product_id") in self.pids
+                      and (d.get("usage_page"), d.get("usage")) == self.collection]
+        sizes = candidates[0].get("input_report_sizes") if len(candidates) == 1 else None
+        if not isinstance(sizes, dict) or len(sizes) != 1:
+            self._diag.append("NANO requires one proven input report: nothing sent")
+            return None
+        key = next(iter(sizes))
+        if (not isinstance(key, str) or not re.fullmatch(r"0|[1-9][0-9]{0,2}", key)
+                or int(key) > 255):
+            self._diag.append("NANO input report ID invalid: nothing sent")
+            return None
+        self.input_id = int(key)
+        return super()._pick(infos)
+
+    def parse_reply(self, reply):
+        return parse_nano_reply(reply, self.input_id)
+
 
 # Exact IDs with strict descriptor guards, including the maintainer-tested F505.
 # Unlike legacy entries, never fall back to a sibling or unknown-length path.
@@ -603,10 +668,16 @@ class PulsarProvider(Provider):
             except Exception as e:  # pragma: no cover
                 log.warning("hid.enumerate(%04x): %s", vid, e)
                 continue
+            if vid == 0x373B and any(d.get("product_id") == 0x1216 for d in infos):
+                nano = AtkNanoProvider()
+                out.extend(nano.poll())
+                self._diag.extend(nano.diagnostics())
             candidates = list(pids)
             if vid == 0x373B:
                 candidates += sorted({d["product_id"] for d in infos if d["product_id"] not in pids})
             for pid in candidates:
+                if vid == 0x373B and pid == 0x1216:
+                    continue  # Never fall back to CompX, even if NANO proof fails.
                 if vid == 0x373B and pid in ATK_HEADSET_PIDS:
                     self._diag.append(f"  ATK {vid:04x}:{pid:04x} headset reserved: nothing sent")
                     continue

@@ -149,8 +149,8 @@ and options 9600 baud, 8 data bits, no parity, one stop bit, no flow control.
 data[1] equal to 1 means connected. The UI first checks status, then battery,
 and rounds values above 89 to 100; that UI policy is not a measured precision.
 These bytes are not HID reports and prove no `FF02:0002` report ID/size or
-safe HID bridge for #172. Serial port association/native transport and any
-native initialization remain unverified, so no reader is added for `1204`.
+safe HID bridge for #172. The desktop follow-up below establishes the Web
+Serial association/open path, but still no HID battery transport for `1204`.
 Its serial EQ writes (command `03`, subcommands `20/21/22`), microphone writes
 (`02`, `20..24`), effect writes/reset (`04`, `20/21`) and surround writes (`05`,
 `20/21`) are excluded; no exact initial-N9 pairing, lighting, hardware factory
@@ -162,6 +162,101 @@ RS7 Air `373B:1258` maps at D `productId:4696` (158274) to `mn`, BITYUAN,
 report-0 configuration transport is not battery evidence. Do not send its
 reset payload `03 96 15`, lighting writes `07 41 ...`, key/macro/calibration,
 storage or OTA operations to discover battery state.
+
+#### Desktop ASAR follow-up (2026-11-06)
+
+The supplied ATK Hub 3.2.31 Windows installer was unpacked before this task;
+its two ASARs were parsed offline with Python as data. No installer, vendor JS,
+native module, device operation or network request was executed. The outer
+`package.json` confirms version `3.2.31`. The source URL supplied by #172 is
+`https://bpcdn.atkgear.com/device/update-v3/win32/atk-hub-3.2.31.exe`;
+that URL was not fetched or independently authenticated in this task.
+
+Paths in this table are relative to `.ai/evidence/atkhub/desktop/resources/`.
+ASAR JSON starts at byte 16; member data starts at `8 + uint32le(bytes[4:8])`.
+Member offsets are relative to that data start. Every desktop source offset
+below is a **zero-based UTF-8 byte offset within the named member**, unlike
+the earlier web snapshot's character offsets. These are protocol observations,
+not copied vendor implementation code or observations of device execution.
+
+| Artifact / member | SHA256 |
+| --- | --- |
+| Outer `app.asar` | `53806badedf6341e36d8dc6e388f38988c6274a407c0f07b589934fcafbf9b0a` |
+| Renderer `main/app.asar` | `edf329a0b8fb425cede4c2b35c454c10796eab30d576cca93db95eb2b7bd7f8a` |
+| Renderer `static/demoMode.store-BX86g6j2.js` (DD) | `5c69a081180aec8bcb6213a0e08a89c80d24c9b99d6cd33ae953e2448da5275e` |
+| Renderer `static/filter-Ch93_xPk.js` (NF) | `35eac998392c5652a60169e1ef4d6bf560211b0031c670464948ca1c31d3be00` |
+| Renderer `static/base-hid-device-DSGIfKq_.js` (DB) | `4ccf6eadca09f973a0ac6fedbcc9197e279271b9b2910f044cf45a916cf1e7ff` |
+| Renderer `static/keymap-CHSYV07T.js` (DK) | `da804dfd0bce437bb391644bf98e59b7363ebcfca19033d2980cdfa34d18b557` |
+| Outer `dist-electron/main/index.js` (DM) | `fa497264847977f63386b584e93a0f4b0f93a3dfb8dcd57ae9a04fe5344a5bf2` |
+| Outer `dist-electron/threads/HidDevice.worker.js` | `ad6ee3e01a16da6920ebf2ead549d90e69f7c7f09cf498e629d9988a99c48aa7` |
+
+**Initial N9 Ultra `373B:1204`: still deferred.** DD's `productId:4612`
+at 1733807 maps to `uj`, `n9-pro`, Electron/Windows only. `000C:0001` is
+the discovery filter; it is not a battery HID collection. `getSerialPort`
+at 169760 chooses the first `navigator.serial.getPorts()` entry whose
+`getInfo()` USB VID/PID match. It does not establish a Windows COM path,
+physical-parent uniqueness for two identical receivers, or any relationship
+between that serial port and the reported `FF02:0002` HID collection.
+
+The serial base `hg` at DD 164878 opens at 9600/8N1, no flow control
+(catalog bufferSize 4096). `cj.connect` at 1068976 only opens and starts
+reading; `writeSerialData` at 1071349 writes to the Web Serial writer. No
+authentication or device-side initialization command appears in this chain.
+DM's general Electron permission callbacks at 1129671/1129747 allow access;
+they are not HID-to-serial bridge implementations. OS driver/port availability
+and operation with the Hub closed remain unverified.
+
+DD `aj`/`ij` at 1067494/1067824, `getBatteryInfo` at 1075247 and `runCmd`
+at 1075448 confirm the serial frames (not HID report IDs):
+
+```text
+02 00 03 [61 zero bytes]     battery, 64 serial bytes
+02 00 04 [61 zero bytes]     link status, 64 serial bytes
+```
+
+`createData` at 1077208 splits `[length, command, subcommand, data...]`;
+`createBatteryInfo` at 1076957 reads raw byte 4, low seven bits percentage,
+bit 7 charging. `createStatus` at 1077105 takes raw byte 4 equal to 1 as
+connected. DD 1082730 checks status before battery and rounds levels above
+89 to 100 for the UI. The source parser does not validate response command,
+subcommand, checksum or percentage range: `cj.handleSerialData` at 1070535
+resolves the oldest pending request. Its local request counter is not on the
+wire. Partial serial data can be delivered after 50 ms, and retries are
+vendor policy, not evidence for safe HID framing. No HID request, reply
+report ID, descriptor size or safe HID handshake is established for `1204`;
+`atk_headset` and Pulsar continue to exclude it.
+
+All N9 serial setters remain forbidden: command/subcommand `03/20..22`
+(EQ), `02/20..24` (microphone/monitor), `04/20..21` (effects/reset),
+`05/20..21` (surround), and local audio volume/mute/registry writes. These
+enums follow DD 1067824 and the `uj` methods at 1072088 onward. No exact
+initial-N9 pairing, lighting, hardware-reset or firmware frame was established;
+V2 Bolutek update commands must not be transplanted to this receiver.
+
+**RS7 Air `373B:1258`: still deferred.** DD `tg` at 155174 names RS7 Air;
+the PID entry at 159780 maps to BITYUAN `Tv`, collection `FF60:0061`.
+`Tv.getPowerInfo` at 124768 still returns only `this.result()`, without a
+request or battery data; `startCorrespond`/`endCorrespond` at 124896/124941
+are also empty. Its initialization at 96118 only assigns row/col/custom.
+The `vv`/`Hh` transport (86457/10211, size at 10785) sends 32-byte report-0
+configuration payloads; that does not establish battery framing or descriptors.
+A bounded search of outer application JS found no additional RS7 battery path;
+native dependencies were not executed or exhaustively decompiled.
+
+Forbidden RS7 payloads include factory reset `03 96 15` (DD 29659),
+backlight `07 41 ...` (26471), logo/side lighting `03 96 21/27 ...`
+(31972/33335), calibration reset `03 96 08 <00/01/02>` (40159), calibration
+start/finish `03 96 18/19` (57327), and persist custom light `03 96 12`
+(53602). The OTA path at 181833 constructs `F1 02 F3` plus 61 zeros;
+it is not a battery initialization. DK's enums at 8817/11185 also declare
+configuration `03`, keymap `05/13`, keymap reset `06`, lighting `07/20`,
+save `09`, EEPROM reset `0A`, boot jump `0B`, macro write/reset `0F/10`;
+not every declared operation was traced to an RS7 caller. None is sent.
+
+The third desktop candidate, NANO `373B:1216`, has a separate mouse protocol
+and is implemented as described [below](#atk--vxe-nano-receiver-373b1216).
+
+#### Other deferred keyboard candidates
 
 Other keyboard candidates are recorded, not enabled: D `c3` / `controller:ps`
 at 542184 maps HFD A87 PRO `111E/111F`, A87 Ultra `1231`, A98 `114D/114E`
@@ -382,6 +477,97 @@ A read-only status request `01 b0` (a 64-byte output report, report id `01`) goe
 The same `b0` exchange as the other Nova headsets, asked for with report id `06` instead of `00`, as HeadsetControl asks for these base stations: the level is a nine-step code in byte 6 (shown as "about NN%") and the state in byte 15 (`01` off / out of range, `02` cable charging, `08` on battery). A reply with any other state byte, a level code above 8 or fewer than 16 bytes is refused rather than shown. The request goes only to a vendor collection of these two ids; the diagnostics in #41 show `1038:12e5` exposing `ffc0:0001` on interface 4 (plus a second vendor collection `ff00:0001` there), so both are tried and the answering one is remembered. The reply layout is HeadsetControl's - not yet seen on hardware here
 
 ## Mice
+
+### ATK / VXE NANO receiver (373B:1216)
+
+**Verification C: static ATK Hub 3.2.31 evidence and synthetic tests only.**
+The existing `pulsar` provider owns an isolated `AtkNanoProvider` battery path,
+with `kind="mouse"`. Its normal CompX query/DPI logic never handles `1216`,
+including when NANO descriptor proof fails. Server candidate counting and the
+offline `known_ids` index consume a separate literal `NANO_PIDS` table; the
+existing Pulsar provider registration is reused. It is named
+generically: #227/#229 mention A9 Plus / VXE R1, but the shared receiver ID
+does not prove its currently paired mouse model. No CID/MID/model reads run.
+
+Evidence abbreviations and hashes are in the desktop table above. NF's
+`Nt` at 87739 selects `Et`, BITMOUSE; the filter at 88215 identifies
+`373B:1216`, **FF05:0001**, receiver/NearLink true. This is not the FF02
+17-byte CompX protocol. NF `de` at 5046 defines a 63-byte payload (6328);
+`xe.get` at 18796 selects GetBatteryLevel `07`, paramLen 2, cmdLen 1.
+`Et.transferForResult` at 58814 selects receiver target 1 and output report 8.
+The sole allowed hidapi write is:
+
+```text
+08 7D 72 02 00 01 07 01 [56 zero bytes]    (64 bytes including report ID)
+```
+
+Payload byte 0 is checksum `7D`, the sum modulo 256 of payload bytes 1..62;
+the rest is command family `72`, parameter length `02`, sequence `00`,
+receiver `01`, battery opcode `07`, requested data length `01`, and padding.
+There is no challenge/token or preceding write in the traced getter/connect
+chain. DB connect at 470 opens the handle; NF `Et.init` at 45045 only merges
+custom/sensor fields; DD controller initialization at 169029 connects and
+sets custom data. The vendor's `getPowerInfo` at NF 45288 also reads charging
+`0F` and remaining time `AE`; neither is necessary for `07`. This reader
+sends neither and explicitly reports charging **unknown**.
+
+`At.handleInputReport` at NF 40084 receives WebHID payload (without report
+ID), matches payload byte 4 to the requested opcode, ignores status 2 at
+byte 1, then prepends a zero before handing data to `xe`. `xe.batteryLevel`
+reads normalized byte 7, hence **payload byte 6**. `de.isError` uses status
+FF. The same BITMOUSE `due.readVersions` at DD 1973298 additionally validates
+success status 0 and declared data length. The local parser requires:
+
+| WebHID payload offset | Acceptance |
+| --- | --- |
+| 1 | Status exactly `00`; busy/error/other states rejected. |
+| 4 | Command exactly `07`; notifications, other queries and request echoes rejected. |
+| 5 | Declared data length at least 1 and no greater than available bytes after offset 5. |
+| 6 | Integer byte percentage `0..100`. |
+
+There is no proven response checksum or fixed byte-0 marker. In particular,
+the request's `72` is not asserted as a verified reply marker. DB's input
+listener at 4721 ignores `event.reportId`; the supplied bundle establishes no
+fixed input ID or exact input length. Therefore the implementation requires
+one unique FF05:0001 collection per physical receiver and **one sole runtime
+descriptor-proven byte-array Input report**, whose ID (0..255) is taken from
+that descriptor. The Input size must equal its collection maximum and be
+8..64 bytes including the Windows ID slot: 7 payload bytes is the source
+minimum, 63 payload bytes is a conservative local ceiling, not a capture.
+Output report 08 must be proven exactly 64 bytes. Unknown, split/ambiguous,
+malformed or mismatched report descriptors fail before opening for I/O.
+Actual replies must exactly match the proven size and numbered input ID;
+hidapi omits the ID slot only for unnumbered input. No output-to-input ID
+assumption, feature fallback or probing of other collections is used.
+
+Each poll sends that query once, reads for at most one second / 32 reports,
+and closes the handle. Short writes are not retried. Silence/error/busy-only
+streams produce no new reading, not 0% or an invented disconnected state.
+The engine may retain unconfirmed history. Physical identities keep multiple
+receivers separate, even if their serial strings coincide. DPI is unavailable.
+
+All other commands are excluded. NF enum at 1012..2953 and setters at
+19522..39300 identify pairing `82`, clear pairing `83`, lighting `85/14`,
+reset `13`, and settings `01 02 03 05 06 0A 0B 0C 0D 15 16 18 1B 1F 21
+25 AF` (poll rate, DPI, lift height, keys/macros, profile, correction,
+sleep/debounce, address writes, sensor/performance and DPI toggle). `18`
+is declared without a traced setter here. Write forms of `22 27 AA AB AC B7`
+configure BHOP, reverse scroll, center or sensitivity; no form is sent.
+Other read commands, including charging `0F`, are also outside the allow-list.
+
+NearLink firmware uses **FFB1:0001 / FFB3:0001**, selected by DD `ise`
+at 1854481, not the battery collection. `buildDfuCtrlPayload` at 1858481
+uses FFB1 output report 09 with prefix `EF BE AD DE 0C 00 1E E1`, then
+`00 00` to enter or `FF FF` to exit. FFB3 report 0 carries a DFU header
+beginning `EF BE AD DE 18 00 D2 2D` and firmware data. Neither collection
+is opened by this reader, and no updater lifecycle is reused.
+
+Tests cover every request byte, runtime input IDs/lengths (including ID 0),
+malformed/busy/error replies, rejected descriptors without opens, forbidden
+send traces, multiple receivers, bounded I/O, topology and the public bridge.
+No actual descriptors or hardware battery samples were available: standalone
+operation with the Hub closed, charge/discharge accuracy, sleep/wake,
+reconnect behavior and paired-model identity remain unverified.
 
 ### CompX onboard DPI selection (2026-11-05)
 
