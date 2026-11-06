@@ -90,7 +90,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
@@ -101,7 +101,7 @@ def reader_diagnostics(provider):
     # serials, product strings or raw exception text). Do not expose legacy logs.
     if provider.name not in READER_DIAGNOSTICS:
         return []
-    lines = provider.reader_diagnostics() if provider.name == "mchose" else provider.diagnostics()
+    lines = provider.reader_diagnostics() if provider.name in ("mchose", "pulsar") else provider.diagnostics()
     if provider.name == "mchose_headset":
         # Expose only fixed firmware reasons, never this legacy reader's
         # raw I/O exceptions or packet log.
@@ -712,7 +712,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "rapoo", "moondrop") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "rapoo", "moondrop", "pulsar") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -763,6 +763,13 @@ class BatteryEngine:
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
+            if name == "pulsar":
+                # A cached card can keep the existing health state ok while this
+                # poll has no reading. Project its safe result without a failure.
+                for line in reversed(diagnostics):
+                    if line != "valid battery reply":
+                        self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line)
+                        break
             if name == "mchose_headset" and not measured:
                 for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未知，按原方式查询"):
                     if reason in diagnostics:

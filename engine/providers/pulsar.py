@@ -555,6 +555,7 @@ class PulsarProvider(Provider):
 
     def __init__(self, device_pack=None):
         self._diag: List[str] = []
+        self._reader_diag: List[str] = []
         self.configure_pack(device_pack)
         # key -> (name, level, charging, when it was last read)
         self._last: Dict[str, Tuple[str, int, bool, float]] = {}
@@ -563,6 +564,12 @@ class PulsarProvider(Provider):
 
     def configure_pack(self, device_pack):
         self._device_pack = device_pack
+
+    def _note_reader(self, message: str) -> None:
+        # Only fixed battery-result text belongs here. Legacy logs contain
+        # product strings, paths, frames and exceptions and stay private.
+        if message not in self._reader_diag and len(self._reader_diag) < 16:
+            self._reader_diag.append(message)
 
     def set_device_dpi(self, inventory, target, value, expected_dpi, target_token):
         response = set_device_dpi(inventory, target, value, expected_dpi, target_token)
@@ -583,6 +590,12 @@ class PulsarProvider(Provider):
                    for direction in ("input", "output")):
                 return info
         self._diag.append("  Link 8K: missing/ambiguous FF02:0002 or unproven report-8 lengths; nothing sent")
+        if len(candidates) != 1:
+            self._note_reader("FF02:0002 missing or ambiguous; nothing sent")
+        elif not candidates[0].get("path"):
+            self._note_reader("collection path unresolved; nothing sent")
+        else:
+            self._note_reader("report-8 input/output lengths unproven; nothing sent")
         return None
 
     def _pick(self, infos: List[dict]) -> Optional[dict]:
@@ -608,16 +621,19 @@ class PulsarProvider(Provider):
         for d in control + infos:
             if output_length(d["path"]) in (None, PAYLOAD_LEN):
                 if not control:
+                    self._note_reader("legacy FF02:0002 missing; fallback selected")
                     self._diag.append("  no control collection; using "
                                       f"iface={d.get('interface_number')} "
                                       f"{d.get('usage_page', 0):04x}:{d.get('usage', 0):04x} "
                                       f"(output={output_length(d['path'])})")
                 return d
+            self._note_reader("legacy output length incompatible")
             self._diag.append(f"  {d.get('usage_page', 0):04x}:{d.get('usage', 0):04x} "
                               f"output={output_length(d['path'])} cannot take a "
                               f"{PAYLOAD_LEN}-byte frame; skipped")
         if control:
             return control[0]
+        self._note_reader("legacy FF02:0002 missing; fallback selected")
         self._diag.append(f"  no interface {CONTROL_INTERFACE} collection; "
                           f"falling back to the first of {len(infos)}")
         return infos[0] if infos else None
@@ -627,11 +643,15 @@ class PulsarProvider(Provider):
         try:
             dev.open_path(path)
         except (OSError, IOError) as e:
+            self._note_reader("battery open failed")
             self._diag.append(f"  open: {e}")
             return None
         try:
+            operation = "read"
             self._drain(dev)
+            operation = "write"
             dev.write(make_request())
+            operation = "read"
             for attempt in range(READ_ATTEMPTS):
                 r = dev.read(PAYLOAD_LEN, READ_TIMEOUT_MS)
                 if not r:
@@ -640,9 +660,11 @@ class PulsarProvider(Provider):
                 if parse_reply(r) is not None:
                     return list(r)
                 time.sleep(0.02)
+            self._note_reader("no valid battery reply; connection unknown")
             self._diag.append("  no power reply (events and short frames are ignored)")
             return None
         except (OSError, IOError, ValueError) as e:
+            self._note_reader("battery write failed" if operation == "write" else "battery read failed")
             self._diag.append(f"  query error: {e}")
             return None
         finally:
@@ -658,6 +680,7 @@ class PulsarProvider(Provider):
 
     def poll(self) -> List[DeviceStatus]:
         self._diag = []
+        self._reader_diag = []
         out = []
         now = time.time()
         found: set = set()      # answered this poll
@@ -684,6 +707,7 @@ class PulsarProvider(Provider):
                 mine = [d for d in infos if d["product_id"] == pid]
                 if not mine:
                     continue
+                reader_diag_start = len(self._reader_diag)
                 key = f"pulsar:{vid:04x}{pid:04x}"
                 link8k = (vid, pid) == LINK8K_ID
                 parse_reply = parse_link8k_power if link8k else parse_power
@@ -721,6 +745,13 @@ class PulsarProvider(Provider):
                         present.add(key)
                     name = (d.get("product_string") or "ATK Mouse") if d is not None else "ATK Mouse"
                 if d is None:
+                    if not link8k:
+                        # Selection already checked every eligible length. Do
+                        # not repeat output_length or probe sibling collections.
+                        has_control = any((info.get("usage_page"), info.get("usage")) == CONTROL_USAGE
+                                          for info in mine)
+                        self._note_reader("output=17 unproven; nothing sent" if has_control
+                                          else "FF02:0002 missing; nothing sent")
                     continue
                 out_length = d["output_report_length"] if link8k else output_length(d["path"])
                 self._diag.append(f"[Pulsar] pid={vid:04x}:{pid:04x} '{name}' "
@@ -733,6 +764,10 @@ class PulsarProvider(Provider):
                     if not reply:
                         self._diag.append("    no reply (asleep, or the mouse is idle)")
                     continue
+                # A usable reply supersedes this candidate's selection warnings,
+                # including skipped legacy collections. Other results survive.
+                del self._reader_diag[reader_diag_start:]
+                self._note_reader("valid battery reply")
                 level, on_cable = parsed
                 mv = voltage_mv(reply)
                 if mv:
@@ -768,3 +803,6 @@ class PulsarProvider(Provider):
 
     def diagnostics(self) -> List[str]:
         return list(self._diag)
+
+    def reader_diagnostics(self) -> List[str]:
+        return list(self._reader_diag)
