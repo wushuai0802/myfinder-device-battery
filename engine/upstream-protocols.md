@@ -1177,6 +1177,19 @@ Still needed: the #19 device's descriptor and a live reading/charging comparison
 the upstream notes warn that the official UI smooths a voltage-derived value,
 which can differ from the device's raw percentage. No other Scyrox IDs are added.
 
+Pulsar public reader health (including #323's `3554:F517`) uses a separate,
+bounded list of fixed battery-result messages for the existing strict/legacy
+CompX and Link 8K paths: missing collections, failed length checks, open/write/read
+failures, or no valid battery reply. It never copies legacy logs, product strings,
+paths, serials, frames, DPI targets or exception text. The compact reason stays
+within 48 characters and does not enter `errors[]`, failure counts or backoff;
+a valid reply clears that candidate's failure reason. Silence leaves the
+connection unknown, rather than proving sleep or unsupported hardware. Strict
+fake-HID traces verify unchanged selection, length-probe counts, opens/closes,
+frames, reads/writes, waits and retries; existing DPI, device-pack and history
+tests remain in force. These offline checks do not verify #323's actual receiver,
+its descriptors, live battery/charging results or sleep/wake behavior.
+
 **MCHOSE A7 V3 Pro, `3837:1018`: deferred in the initial feedback batch;
 now implemented by the [separate V3 battery reader](#mchose-a7-v3-pro-38371018).** Matching `FF01:0001` does not
 establish the V2 protocol, and #24 has neither RealTek strings nor feature report
