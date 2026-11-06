@@ -91,9 +91,10 @@ namespace AtkBattery {
         [OnDeserializing] void Defaults(StreamingContext context){LastCheckUtc=NotBeforeUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);}
     }
     internal static class UpdateSchedule {
+        const int AutomaticCheckIntervalHours=6;
         internal static bool CanCheck(UpdateState state,DateTime now,DateTime started,bool automatic,bool enabled){
             if(now<state.NotBeforeUtc)return false;if(!automatic)return true;
-            return enabled&&now>=started.AddMinutes(2)&&(state.LastCheckUtc==DateTime.MinValue||now>=state.LastCheckUtc.AddHours(24));
+            return enabled&&now>=started.AddMinutes(2)&&(state.LastCheckUtc==DateTime.MinValue||now>=state.LastCheckUtc.AddHours(AutomaticCheckIntervalHours));
         }
     }
     internal sealed class UpdateChecker {
@@ -105,7 +106,7 @@ namespace AtkBattery {
         internal UpdateChecker(IUpdateTransport http,string statePath,string version,DateTime startedAt){
             transport=http;path=statePath;current=version;started=startedAt;
             if(File.Exists(path)){
-                // Corrupt state fails closed for a day instead of hammering the API at each launch.
+                // Corrupt state waits for the automatic check interval instead of hammering the API at each launch.
                 try{state=UpdateJson.ReadFile<UpdateState>(path,65536);if(state==null)throw new InvalidDataException();}catch(Exception){state=new UpdateState {LastCheckUtc=DateTime.UtcNow};ErrorCode="update_state_invalid";}
             }else state=new UpdateState();
         }

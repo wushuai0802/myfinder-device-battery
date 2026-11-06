@@ -196,8 +196,9 @@ static class UpdateTests {
             var state=new UpdateState();Check(!UpdateSchedule.CanCheck(state,now,now.AddMinutes(-5),true,false),"disabled sends no request");
             Check(!UpdateSchedule.CanCheck(state,now,now.AddSeconds(-119),true,true),"two minute startup delay");
             Check(UpdateSchedule.CanCheck(state,now,now.AddMinutes(-2),true,true),"startup delay expires");
-            state.LastCheckUtc=now.AddHours(-23);Check(!UpdateSchedule.CanCheck(state,now,now.AddDays(-1),true,true),"24 hour throttle");
-            state.LastCheckUtc=now.AddDays(-1);Check(UpdateSchedule.CanCheck(state,now,now.AddDays(-2),true,true),"daily check allowed");
+            state.LastCheckUtc=now.AddHours(-5).AddMinutes(-59);Check(!UpdateSchedule.CanCheck(state,now,now.AddDays(-1),true,true),"no automatic check after 5 hours 59 minutes");
+            state.LastCheckUtc=now.AddHours(-6);Check(UpdateSchedule.CanCheck(state,now,now.AddDays(-1),true,true),"automatic check allowed at 6 hours");
+            state.LastCheckUtc=now;Check(UpdateSchedule.CanCheck(state,now,now,false,true),"manual check bypasses automatic interval and startup delay");
             Check(UpdateSchedule.CanCheck(state,now,now,true,false)==false&&UpdateSchedule.CanCheck(state,now,now,false,false),"manual works when disabled");
             var http=new Http();http.Reply("redirect",302,"http://github.com/x");Reject(()=>UpdateNetwork.Fetch(http,new Uri(UpdateTrust.ApiUrl),100,CancellationToken.None,null),"HTTP redirect refused");
             http=new Http();http.Reply("redirect",302,"https://example.com/x");Reject(()=>UpdateNetwork.Fetch(http,new Uri(UpdateTrust.ApiUrl),100,CancellationToken.None,null),"foreign redirect refused");
@@ -209,6 +210,7 @@ static class UpdateTests {
             foreach(int status in new[]{403,429}){
                 http=new Http();http.Reply("limited",status,null,-1,"172800");var checker=new UpdateChecker(http,Path.Combine(root,"state-"+status+".json"),"1.3.4",now.AddDays(-1));
                 Check(checker.Check(true,true,now)==null,"rate limit quiet "+status);checker.Check(false,true,now.AddDays(1));Check(http.Requests.Count==1,"Retry-After respected by manual checks "+status+" (requests="+http.Requests.Count+", error="+checker.ErrorCode+")");
+                checker.Check(true,true,now.AddHours(6));Check(http.Requests.Count==1,"six hour interval does not bypass Retry-After "+status);
                 Check(!checker.DownloadsAllowed(now.AddDays(1))&&checker.DownloadsAllowed(now.AddDays(2)),"download also respects Retry-After "+status);
             }
             http=new Http {Timeout=true};var timeout=new UpdateChecker(http,Path.Combine(root,"timeout.json"),"1.3.4",now.AddDays(-1));Check(timeout.Check(true,true,now)==null,"timeout quiet");timeout.Check(true,true,now.AddHours(1));Check(http.Requests.Count==1,"failure throttled");

@@ -51,6 +51,14 @@ static class UpdateBadgeTests {
         var pref=DeviceSettings.LoadBindings(settings);Check(pref.ShowUpdateBadge&&pref.Clone().ShowUpdateBadge&&pref.MouseAlias=="保留","old preferences default on and preserve existing fields");
         pref.ShowUpdateBadge=false;DeviceSettings.SaveBindings(settings,pref);Check(!DeviceSettings.LoadBindings(settings).ShowUpdateBadge&&!pref.Clone().ShowUpdateBadge,"disabled badge setting saves and clones");
     }
+    static void AutomaticDiscovery(){
+        var http=new Http();var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);string path=Path.Combine(output,"automatic-discovery.json");
+        File.WriteAllText(path,"{}");var checker=new UpdateChecker(http,path,"98.0.0",now.AddMinutes(-2));
+        Check(checker.Check(true,true,now)==null&&http.Requests==1&&!checker.BadgeVisible(true,true),"initial automatic check has no available release");
+        http.Release=Release("99.0.1");
+        Check(checker.Check(true,true,now.AddHours(5).AddMinutes(59))==null&&http.Requests==1&&!checker.BadgeVisible(true,true),"new release is not fetched before six hour interval");
+        Check(checker.Check(true,true,now.AddHours(6)).Version=="99.0.1"&&http.Requests==2&&checker.BadgeVisible(true,true),"six hour automatic check discovers new release and shows badge");
+    }
     static void Tooltips(){
         string battery="鼠标 80% · 充电中";Check(UpdateBadge.Tooltip(battery,"99.0.1")==battery+" · 有新版本 99.0.1","short tooltip suffix");
         for(int length=0;length<=63;length++){
@@ -184,7 +192,7 @@ static class UpdateBadgeTests {
     [STAThread] static int Main(string[] args){
         bool render=args[0]=="--render";output=Path.Combine(Path.GetFullPath(args[render?1:0]),"update-badge");Directory.CreateDirectory(output);
         var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
-        try{if(!render){State();Tooltips();Ui();}Drawings();Console.WriteLine("PASS "+checks+" update badge checks; fake HTTP/hardware and isolated state only");return 0;}
+        try{if(!render){State();AutomaticDiscovery();Tooltips();Ui();}Drawings();Console.WriteLine("PASS "+checks+" update badge checks; fake HTTP/hardware and isolated state only");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}
     }
