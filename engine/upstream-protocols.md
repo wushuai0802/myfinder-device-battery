@@ -122,6 +122,18 @@ not 0%, a synthetic error or a fresh disconnected card. Existing engine
 history may remain unconfirmed until the receiver disappears. No wake or
 configuration command is sent to obtain a reading.
 
+The engine exposes the reader's existing fixed safety reasons and numeric
+report proof in diagnostics JSON, including across the isolated reader boundary.
+When a poll has no valid reading, compact feedback shows a fixed reason of at
+most 48 characters (for example, unproven reports, missing/ambiguous collection,
+unresolved physical parent, enumeration/I/O failure, short write, offline or
+rejected/no reply). A successful poll clears that summary. These notes do not
+become engine errors or increase failure/backoff counts, and do not expose paths,
+serials, product strings, exception text or raw packets. This supplements #175's
+blank unavailable reason only: synthetic tests do not establish that the real
+`373B:12D6` descriptor passes the guards or that 2.4G battery reads work. History,
+charging and connection semantics, protocol I/O and verification C are unchanged.
+
 #### Commands excluded from the implementation
 
 All V2 frames below use report `55` unless stated otherwise. Command values

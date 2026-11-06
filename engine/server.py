@@ -90,7 +90,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
@@ -715,7 +715,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "mchose", "rapoo", "moondrop", "pulsar") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -809,6 +809,27 @@ class BatteryEngine:
                 ):
                     if any(line == message or line.startswith(message + ";")
                            for message in messages for line in diagnostics if isinstance(line, str)):
+                        self.health[reader_key]["diagnosticSummary"] = summary
+                        break
+            if name == "atk_headset" and not measured:
+                # BatteryHidProvider emits fixed reasons and numeric report proof.
+                # Project only known reasons, prioritizing them over the trailing
+                # no-valid-reply note. Never copy arbitrary text into feedback.
+                for message, summary in (
+                    ("report IDs/lengths unknown or incompatible: nothing sent", "report sizes unproven"),
+                    ("physical parent unresolved; uniqueness unknown: nothing sent", "physical parent unresolved"),
+                    ("missing or ambiguous eligible collection: nothing sent", "collection missing or ambiguous"),
+                    ("enumeration failed: nothing sent", "enumeration failed"),
+                    ("battery I/O failed; connection unknown", "battery I/O failed"),
+                    ("short/failed battery query write; no retry", "battery query write short/failed"),
+                    ("device asleep/offline; no new reading; connection unknown", "device asleep/offline"),
+                    ("rejected input report length", "input report length rejected"),
+                    ("rejected battery reply", "battery reply rejected"),
+                    ("no valid reply within deadline/read limit; connection unknown", "no valid battery reply"),
+                    ("HID handle close failed", "HID handle close failed"),
+                ):
+                    if any(line == message or line.startswith(message + ";")
+                           for line in diagnostics if isinstance(line, str)):
                         self.health[reader_key]["diagnosticSummary"] = summary
                         break
         # The feedback UI already displays errorCode (up to 48 characters).
