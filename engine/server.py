@@ -43,6 +43,7 @@ PROVIDERS = (
     ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
     ("dareu", "DareuProvider"),
     ("rapoo", "RapooProvider"),
+    ("fa6x_passive", "Fa6xPassiveProvider"),
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
     ("barracuda", "BarracudaProvider"), ("asus", "AsusProvider"),
     ("gwolves", "GWolvesProvider"), ("lofree", "LofreeProvider"),
@@ -71,6 +72,7 @@ PROVIDER_VIDS = {
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
     "dareu": (0x260D,),
     "rapoo": (0x24AE,),
+    "fa6x_passive": (0x1D57,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
@@ -707,9 +709,9 @@ class BatteryEngine:
         self.last_poll[reader_key] = time.monotonic()
         self.failures.pop(reader_key, None)
         self.retry_after.pop(reader_key, None)
-        # A passive Rapoo poll can return history without a new notification.
+        # Passive readers can return history without a new notification.
         # Keep the card, but expose the same idle health as a first silent poll.
-        measured = bool(group) and (name != "rapoo" or any(
+        measured = bool(group) and (name not in ("rapoo", "fa6x_passive") or any(
             s.online and not s.cached and s.level is not None for s in statuses))
         self.health[reader_key] = {"provider": name, "readerId": public_id(reader_key),
                                    "state": "ok" if measured else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),

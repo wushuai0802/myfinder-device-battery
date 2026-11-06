@@ -2751,7 +2751,8 @@ This is a bounded list from the HX SDK, not an exhaustive native-driver
 command inventory. None is authorized as a battery request; no new commands
 are sent by this change.
 
-`1D57:FA60` (#239) and `1D57:FA65` (#242) remain unenrolled: the brief records
+The first-round AULA investigation left `1D57:FA60` (#239) and `1D57:FA65`
+(#242) unenrolled: the brief records
 cross-brand reuse (#101/#148/#189), and the traced native filter supplies no
 brand/model distinction. Their battery frames, reply parsing and handshake
 were not completed after the primary target mismatch was established.
@@ -2760,19 +2761,50 @@ official evidence matching the target collections and report descriptors,
 plus a safe identity gate before considering the shared `1D57` IDs. Runtime
 length proof, hardware battery/charging behavior and coexistence with the
 official driver remain unverified. Registration and generated compatibility
-documentation are intentionally unchanged because no support was enabled.
+documentation were intentionally unchanged by that investigation. The
+second-round receive-only decision for FA60/FA65 is recorded below; it does
+not enable this AULA command path or claim brand identification.
 
-### Shared 1D57:FA60 / FA65 receivers: INPHIC evidence, not enrolled
+### Shared 1D57:FA60 / FA65 receivers: receive-only battery
 
-**Not implemented (2026-11-06).** The official INPHIC HUB V1.0.1.24 and
-`hubbeta.inphic.cn` snapshots establish model-specific passive battery
-notifications, not a proven battery request for every receiver with these IDs.
-The AULA comparison confirms shared transport code but also different charging
-encodings. Neither source establishes a brand-independent contract for the
-reported INPHIC, AULA and Delux variants, or a globally unique model identifier.
-Following the task's evidence gate, this is a research-only result: no provider,
-server/known-ID/topology registration, compatibility entry or grade C claim.
-`docs/compatibility.md` and the compatibility catalog remain unchanged.
+**Implemented at grade C (2026-11-06, second-round decision): 只接收，绝不发送。**
+`providers/fa6x_passive.py` listens for the official INPHIC battery prefix with
+exact collection, descriptor-length and web model-table gates. It never calls
+`write`, `send_feature_report` or `get_feature_report`, and performs no vendor
+initialization. This supersedes the first-round decision to leave the IDs
+unenrolled. The tradeoff is deliberate: accepting a matching notification can
+still misinterpret a shared receiver's percentage, but sends no speculative
+command to it. Shared IDs/model bytes do not establish a brand-independent
+contract or globally unique model identity. Cards therefore use the neutral
+names `2.4G 无线鼠标（1D57:FA60）` / `2.4G 无线鼠标（1D57:FA65）`, `kind="mouse"`,
+and always unknown charging. No real hardware validation is claimed.
+
+Runtime matching follows the **web table's per-PID listener and model values**:
+
+| VID:PID | Unique input collection | Accepted model bytes (hex) |
+| --- | --- | --- |
+| `1D57:FA60` | `000A:0000` | `07 76 77 78 79 E8` |
+| `1D57:FA65` | `FF00:0001` | `71 76 77 78 79 90` |
+
+The older native FA65 `000A:0000` route is outside this reader. A proven USB
+parent and a unique matching collection are required. Topology inspects only
+Input descriptor metadata; the input handle is not opened unless Input `03`
+has a proven length of at least five bytes. Each received report must match
+that length exactly and begin `03 <allowed-model> 40/41 <state> <percentage>`.
+Only `1..100` is displayed: zero, out-of-range values, other IDs/events/models
+and short/overlong reports are ignored. State does not change the percentage
+or charging status. There is no assumed five-byte total length or checksum.
+
+As with Rapoo, handles remain open between refreshes so input can queue. The
+first poll listens for up to 1500 ms / 32 non-battery reports; after a valid
+report, and on subsequent polls, it drains with 1 ms reads, bounded to 256
+reads and the same 1500 ms deadline per poll, retaining the newest valid value.
+Silence returns no first reading and no error; existing history keeps its
+original measurement time with unknown connection/charging and
+`no_measurement` health. Descriptor/parent uncertainty retains history but
+closes the input handle; receiver removal clears history. A changed path or
+report length reopens the handle only after revalidation. No fallback writes
+or feature fetches are available.
 
 #### Evidence identity and comparison
 
@@ -2933,16 +2965,19 @@ webpack `l.u` (byte `1441`) and `l.p` (`3126`) give the filename/base rule:
 | `249.d30f1455bfccc163.js` | `./en/common.json` |
 | `35.099700917d28f3e1.js` | `./en/landing.json` |
 
-They were not downloaded and do not explain away the protocol/identity gaps.
-A follow-up needs an official contract covering the intended receiver variants
-or a reliable model/firmware gate, plus the target's full report descriptors
-and passive samples with independently known percentage/charging states.
-Runtime descriptor proof must precede any query handle, with exact VID/PID,
-collection, report ID and length; the historical five-byte prefixes and
-100-byte read buffers cannot substitute for that proof. The reports in the
-task do not supply it. Freshness, charging, sleep/wake and coexistence with the
-official driver remain unverified. No synthetic provider tests were added
-because no provider or request frame was implemented.
+These locale files were not downloaded and are not needed by the receive-only
+parser. Protocol/identity gaps remain: cross-brand meaning, notification
+frequency, fresh reports after cold start without vendor setup, sleep/wake,
+charging transitions and coexistence with the official driver are unverified.
+The web model allow-list is a format gate, not a proven global identity.
+Runtime descriptors must prove Input `03` before opening the listener; the
+historical five-byte prefixes and 100-byte read buffers are not length proof.
+Unprovable descriptor shapes fail closed. Future hardware validation needs
+full descriptors and passive samples with independently known percentages.
+Synthetic tests now cover parsing, model/collection/length rejection,
+receive-only AST checks, persistent handles, latest queued values, silent
+history and descriptor-only topology discovery. No supplied evidence code was
+executed and no hardware or network was accessed for this implementation.
 
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
