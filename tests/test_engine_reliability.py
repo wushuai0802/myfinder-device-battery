@@ -1330,9 +1330,10 @@ class CompatibilityCatalogTests(unittest.TestCase):
 
     def test_generic_readers_do_not_inherit_upstream_hardware_claims(self):
         levels = {entry["provider"]: entry["verificationLevel"] for entry in load_catalog()["readers"]}
-        # This exact receiver has a project-maintainer capture, not an inherited
-        # upstream claim. Every other generic reader remains conservatively C.
-        self.assertEqual(levels.pop("vgn_keyboard"), "A")
+        # These exact identities have project hardware captures, not inherited
+        # upstream claims. Every other generic reader remains conservatively C.
+        for verified in ("vgn_keyboard", "aula_keyboard", "lingbao_mouse"):
+            self.assertEqual(levels.pop(verified), "A")
         self.assertTrue(all(level == "C" for level in levels.values()))
         self.assertEqual(verification_for("lofree")[0], "C")
         self.assertEqual(verification_for("unknown")[0], "E")

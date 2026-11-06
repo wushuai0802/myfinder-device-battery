@@ -45,6 +45,7 @@ TABLES = {
     "moondrop": ("PIDS",),
     "g3m": ("PIDS",), "eweadn": ("PIDS",), "flydigi": ("PIDS",),
     "eweadn_s9pro": ("PIDS",),
+    "aula_keyboard": ("PIDS",), "lingbao_mouse": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),

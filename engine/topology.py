@@ -295,7 +295,8 @@ def discover(paths, excluded=(), *, full=False):
                     (0x320F, 0x5088, 0xFF1C, 0x0092),
                     (0x391D, 0x1A01, 0xFF01, 0x0010),
                     (0x089D, 0x062F, 0xFF01, 0x0010),
-                    (0x37D7, 0x2501, 0xFFA0, 0x0001)):
+                    (0x37D7, 0x2501, 0xFFA0, 0x0001),
+                    (0x05AC, 0x024F, 0xFF60, 0x0061)):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
                 if (attrs.vendor, attrs.product) in (
@@ -375,6 +376,14 @@ def discover(paths, excluded=(), *, full=False):
                             feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
                 if (attrs.vendor, attrs.product) == (0x372E, 0x1026):
                     _descriptor_fallback(info, caps, ("feature",))
+                caps_complete = info["feature_report_sizes"] is not None
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x088D, 0x052E, 0xFF00, 0x0001),
+                    (0x088D, 0x052F, 0xFF00, 0x0001)):
+                # Feature-only vendor collection: prove Feature 0F from caps.
+                from battery_hid import byte_report_sizes
+                info.update(feature_report_length=caps.feature,
+                            feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
                 caps_complete = info["feature_report_sizes"] is not None
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
