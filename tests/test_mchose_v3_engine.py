@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine" / "tests"))
-from test_mchose_v3 import M, CHARGING, ULTRA_42, fixture, inventory
+from test_mchose_v3 import M, CHARGING, ULTRA_42, REQUEST, fixture, inventory
 from known_ids import build_index
 import server
 
@@ -22,11 +22,12 @@ class MchoseV3EngineTests(unittest.TestCase):
         with fixture([ULTRA_42], infos):
             status, = server.scoped_poll(provider, infos, "v3-test")
             public = server.normalise(status, None, server.utcnow())
-        self.assertEqual((public["percent"], public["verificationLevel"]), (42, "C"))
+        self.assertEqual((public["name"], public["percent"], public["verificationLevel"]), ("private-product", 42, "C"))
         provider._diag.append("private-path legacy log")
         diagnostic = " ".join(server.reader_diagnostics(provider))
         self.assertIn("proof=caps", diagnostic)
-        self.assertIn("用户实机验证，#276", diagnostic)
+        self.assertIn("C / 待实机验证", diagnostic)
+        self.assertNotIn("#276", diagnostic)
         self.assertNotIn("private", diagnostic)
         with fixture([], infos) as bus, patch.object(bus, "open_path", side_effect=OSError("private-path")):
             self.assertEqual(provider.poll()[0].online, False)
@@ -36,6 +37,23 @@ class MchoseV3EngineTests(unittest.TestCase):
         with fixture([], []):
             provider.poll()
         self.assertEqual(server.reader_diagnostics(provider), [])
+
+    def test_reported_models_and_empty_name_fallbacks_remain_c_level(self):
+        for pid, product, expected in (
+                (0x1014, "MCHOSE K7 V2 Ultra+", "MCHOSE K7 V2 Ultra+"),
+                (0x1018, "MCHOSE A5 V3 Ultra+(3955)", "MCHOSE A5 V3 Ultra+(3955)"),
+                (0x1014, "", "MCHOSE A7 V3 Ultra+"),
+                (0x1018, "", "MCHOSE V3 8K 接收器")):
+            infos = [dict(d, physical_id="v3-test", product_string=product) for d in inventory(pid)]
+            provider = M.MchoseProvider()
+            with self.subTest(pid=pid, product=product), fixture([CHARGING], infos) as bus:
+                status, = server.scoped_poll(provider, infos, "v3-test")
+                public = server.normalise(status, None, server.utcnow())
+                self.assertEqual(bus.sent, [REQUEST])
+            self.assertEqual((public["name"], public["percent"], public["verificationLevel"]), (expected, 85, "C"))
+            self.assertIn("待本项目实机验证", public["verificationLabel"])
+            self.assertIsNone(public["dpi"])
+            self.assertNotIn("#276", " ".join(server.reader_diagnostics(provider)))
 
     def test_scoped_reader_keeps_c_level_and_no_dpi_and_marks_stale_power(self):
         infos = [dict(d, physical_id="v3-test") for d in inventory()]

@@ -584,6 +584,9 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     if name == "pulsar":
         nano_candidates = {(d.get("vendor_id"), d.get("product_id")) for d in inventory
                            if d.get("product_id") in module.NANO_PIDS.get(d.get("vendor_id"), {})}
+    v3_candidates = ({(d.get("vendor_id"), d.get("product_id")) for d in inventory
+                      if d.get("vendor_id") == module.V3_VID and d.get("product_id") in module.V3_PIDS}
+                     if name == "mchose" else set())
     for field in ("PIDS", "KNOWN", "DONGLES", "RECEIVERS", "HEADSETS", "WIRED", "BRAGI_PIDS", "MOUSE_MODELS", "MODELS", "CLASSIC_MODELS"):
         value = getattr(module, field, ())
         if name == "pulsar" and field == "PIDS":
@@ -596,7 +599,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         if type(value) is int:
             pids.add(value)
     pids.update(e.match.product_id for e in device_pack.entries if e.provider == name)
-    return len(nano_candidates | {(d.get("vendor_id"), d.get("product_id"))
+    return len(nano_candidates | v3_candidates | {(d.get("vendor_id"), d.get("product_id"))
                                   for d in inventory if d.get("product_id") in pids})
 
 
@@ -712,7 +715,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "rapoo", "moondrop") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "mchose", "rapoo", "moondrop") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -763,6 +766,20 @@ class BatteryEngine:
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
+            if name == "mchose" and not measured:
+                # V3-only protocol-owned failures outrank the identity/proof notes.
+                # The full safe proof stays in diagnostics, the first clause fits feedback.
+                for line in diagnostics:
+                    if isinstance(line, str) and line.startswith((
+                            "V3 missing or ambiguous FF01:0001 collection;",
+                            "V3 collection path unresolved;",
+                            "V3 input report 4D/64 length unproven;",
+                            "V3 output report 4D/64 length unproven;",
+                            "V3 power query write failed or short;",
+                            "V3 power I/O failed;",
+                            "no valid V3 power reply;")):
+                        self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
+                        break
             if name == "mchose_headset" and not measured:
                 for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未知，按原方式查询"):
                     if reason in diagnostics:

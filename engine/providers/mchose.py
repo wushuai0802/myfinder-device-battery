@@ -99,7 +99,7 @@ MCHOSE_VIDS = (MEASURED_VID, 0x3837)
 V3_VID, V3_PID = 0x3837, 0x1018
 V3_PIDS = {
     0x1018: "MCHOSE A7 V3 Pro (V3 8K 接收器)",
-    0x1014: "MCHOSE A7 V3 Ultra+",  # 用户实机验证，#276; remains level C.
+    0x1014: "MCHOSE A7 V3 Ultra+",  # Fallback; #276 verified this model, not every 1014.
 }
 V3_USAGE = (0xFF01, 0x0001)
 V3_REPORT_ID, V3_REPORT_LEN = 0x4D, 64  # includes the report ID; body is 63 bytes
@@ -528,11 +528,10 @@ class MchoseProvider(Provider):
                 continue
             key = device_key(vid, pid)
             if vid == V3_VID and pid in V3_PIDS:
-                evidence = "用户实机验证，#276" if pid == 0x1014 else "待实机验证"
-                self._note_v3(f"[MCHOSE] 3837:{pid:04x} V3 power reader (C / {evidence})")
-                self._names[key] = V3_PIDS[pid] if pid == 0x1014 else next(((d.get("product_string") or "").strip()
+                self._note_v3(f"[MCHOSE] 3837:{pid:04x} V3 power reader (C / 待实机验证)")
+                self._names[key] = next(((d.get("product_string") or "").strip()
                                          for d in ifaces if (d.get("product_string") or "").strip()),
-                                        "MCHOSE V3 8K 接收器")
+                                       V3_PIDS[pid] if pid == 0x1014 else "MCHOSE V3 8K 接收器")
                 info = self._pick_v3(ifaces)
                 if info is None:
                     self._last.pop(key, None)
