@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.3.9-beta.10**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.3.9**（正式版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.3.9 正式版汇总了 1.3.9-beta.1 至 beta.10：新增 VGN V98 Pro V3、雷柏 VT3 系列、HyperX 03F0:0FCC、迈从 A7 V3 Ultra+（均有用户实测），以及前行者 S9 PRO、达尔优 EM901、Pulsar Link 8K、ATK 耳机与 NANO 接收器、英菲克 FA60/FA65 等（待实机验证）；正式版也可收到测试版提醒，更新检查改为每 6 小时。
 
 1.3.9-beta.10 将 3554:FA09 键盘的 Feature 06 读数标为“待确认”。
 
