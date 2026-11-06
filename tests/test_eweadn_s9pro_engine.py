@@ -83,6 +83,45 @@ class EweadnS9ProBridgeTests(unittest.TestCase):
             else:
                 self.assertIn("ambiguous proven Feature 03 collection", " ".join(response["diagnostics"]))
 
+    def test_short_replies_and_absence_preserve_history_without_errors(self):
+        engine = server.BatteryEngine([E.P()], include_native=True)
+        self.addCleanup(engine.close)
+        absent_frames = []
+        for presence in (0, 0x35, 0xFF):
+            for level in (0, 73):
+                frame = E.short_reply(level)
+                frame[5] = presence
+                absent_frames.append(frame)
+        for frame in absent_frames:
+            with self.subTest(frame=frame), E.fixture([frame]):
+                snapshot = engine.poll()
+            self.assertEqual((snapshot["devices"], snapshot["errors"]), ([], []))
+        for level, charging in ((23, False), (98, True)):
+            with self.subTest(level=level, charging=charging), E.fixture([E.short_reply(level, charging)]):
+                snapshot = engine.poll()
+            first, = snapshot["devices"]
+            self.assertEqual((first["percent"], first["charging"]), (level, charging))
+            self.assertEqual(first["measurementState"], "current")
+            self.assertTrue(first["fresh"])
+            self.assertEqual(snapshot["errors"], [])
+        for frame in absent_frames:
+            with self.subTest(frame=frame), E.fixture([frame]):
+                snapshot = engine.poll()
+            stale, = snapshot["devices"]
+            self.assertEqual(stale["percent"], 98)
+            self.assertEqual(stale["confirmedAtUtc"], first["confirmedAtUtc"])
+            self.assertEqual(stale["connectionState"], "unconfirmed")
+            self.assertFalse(stale["fresh"])
+            self.assertIsNone(stale["charging"])
+            self.assertEqual(snapshot["errors"], [])
+            self.assertFalse(engine.failures)
+            self.assertFalse(engine.retry_after)
+        with E.fixture([E.short_reply(97)]):
+            awake, = engine.poll()["devices"]
+        self.assertEqual(awake["percent"], 97)
+        self.assertTrue(awake["fresh"])
+        self.assertFalse(awake["charging"])
+
     def test_unavailable_reader_exports_descriptor_failure_reason(self):
         info = E.entry(feature_report_sizes=None, feature_report_proof="failed",
                        report_descriptor_error="get_report_descriptor unavailable")

@@ -1,4 +1,4 @@
-"""Synthetic Bytech basics replies, not captures; no real HID access."""
+"""Synthetic Bytech replies and #315-based fixtures; no real HID access."""
 from contextlib import contextmanager
 from pathlib import Path
 import sys
@@ -26,6 +26,13 @@ def entry(**changes):
 def reply(level=73, charging=False):
     # TYPE and OFFSET are illustrative, not proven constant response bytes.
     return [3, 0x50, 0, 7, 0, 0x81, level | (0x80 if charging else 0)] + [0] * 57
+
+
+def short_reply(level=73, charging=False):
+    # 16-byte format reported by the #315 hardware tester.
+    frame = list(bytes.fromhex("03 50 00 0B 00 01 00 21 07 01 90 65 04 A5 5A 00"))
+    frame[6] = level | (0x80 if charging else 0)
+    return frame
 
 
 @contextmanager
@@ -119,6 +126,42 @@ class EweadnS9ProTests(unittest.TestCase):
                 frame[6] = value
                 expected = (value & 127, bool(value & 128), "") if value & 127 <= 100 else None
                 self.assertEqual(E.parse_reply(frame), expected)
+
+    def test_issue315_short_reply_exchange(self):
+        for level, charging in ((23, False), (98, True), (1, True), (100, False)):
+            with self.subTest(level=level, charging=charging), fixture([short_reply(level, charging)]) as bus:
+                status, = P().poll()
+                self.assertEqual((status.level, status.charging, status.charging_known), (level, charging, True))
+                self.assertEqual(bus.writes, [REQUEST])
+                self.assertEqual(bus.reads, [(3, 64)])
+                self.assertEqual(bus.events, ["set", 0.100, "get"])
+                self.assertEqual(bus.opened, bus.closed)
+
+    def test_short_reply_battery_bit_patterns(self):
+        for value in range(256):
+            with self.subTest(value=value):
+                frame = short_reply()
+                frame[6] = value
+                level = value & 0x7F
+                expected = (level, bool(value & 0x80), "") if 1 <= level <= 100 else None
+                self.assertEqual(E.parse_reply(frame), expected)
+
+    def test_short_reply_bad_headers_absence_and_invalid_levels_are_discarded(self):
+        frames = [short_reply()[:-1], short_reply() + [0], [0] * 16]
+        for index, values in ((0, (0, 2, 9)), (1, (0, 0x20, 0x51, 0xFF)),
+                              (2, (1, 0xFF)), (5, (0, 2, 0x35, 0xFF)),
+                              (6, (0, 0x80, 101, 127, 229, 255))):
+            for value in values:
+                frame = short_reply()
+                frame[index] = value
+                frames.append(frame)
+        for frame in frames:
+            with self.subTest(frame=frame), fixture([frame]) as bus:
+                self.assertIsNone(E.parse_reply(frame))
+                self.assertEqual(P().poll(), [])
+                self.assertEqual(bus.writes, [REQUEST])
+                self.assertEqual(bus.reads, [(3, 64)])
+                self.assertEqual(bus.opened, bus.closed)
 
     def test_malformed_replies_and_silence_do_not_trigger_fallback_commands(self):
         frames = [None, [], [0] * 64, [3] + [0] * 63, reply()[:-1], reply() + [0], REQUEST]

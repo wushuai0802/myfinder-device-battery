@@ -761,7 +761,8 @@ comparison. Other connection-state values are intentionally unaccepted.
 
 ### EWEADN S9 PRO 8K (372E:1026)
 
-**C — implemented, pending this project's hardware validation.** The independent
+**C — implemented; 16-byte replies user-verified in #315, pending this project's
+independent hardware validation.** The independent
 `providers/eweadn_s9pro.py` reader sends only the basics/battery request below.
 The fourth-pass brief supplies seven consistent diagnostic inventories with
 vendor collections `FF00:0001` and `FF06:0001`. Within each physical receiver,
@@ -776,8 +777,9 @@ contains all 67 supplied chunks, including `vendor-bytech` and its module 74590
 (71 JavaScript files in total). The previous missing-controller finding is
 superseded: battery request bytes, charging parsing and a read-only SDK call
 path are established. Collection ownership and length are now required at
-runtime rather than guessed from a static usage-page preference. Complete real
-replies, cold-start and sleep/offline behavior still need hardware validation.
+runtime rather than guessed from a static usage-page preference. The later
+#315 evidence below establishes a real 16-byte reply variant; cold-start and
+sleep/offline behavior still need hardware validation.
 
 The earlier analysis used only local text and bounded Python string-table decoding in
 `.ai/evidence/eweadnhub/`; no vendor JavaScript, hardware or network was used.
@@ -845,8 +847,9 @@ length unproven; proof=caps+descriptor failed; descriptor=get_report_descriptor
 unavailable; not opened; nothing sent`, ambiguous selection, unresolved parent,
 missing inventory/backend and invalid/silent replies. Selection records
 `proof=caps` or `proof=descriptor`. Synthetic tests cover both pages, either
-proof source, rejected proofs and two qualifying collections; real S9 PRO
-descriptors and successful battery/charging reads remain unverified.
+proof source, rejected proofs and two qualifying collections. This project has
+not independently tested real S9 PRO hardware; #315's user-supplied descriptor
+and successful battery/charging evidence is recorded below.
 
 **Resolved loader and controller.** `sdk-api` defines module 5122 at 32786 and module
 83143 at 159951. Its Webpack header registers chunk IDs including 8886 and 3143,
@@ -934,7 +937,7 @@ pagination setting, **not** a descriptor length or proof of a fixed 10-byte
 battery reply. A 63-byte outgoing buffer likewise does not prove the incoming
 feature report's complete Windows length.
 
-The implemented parser requires exactly the runtime-proven 64-byte report,
+The original 64-byte parser branch requires exactly 64 bytes,
 ID `03`, ACK `00`, encapsulation index `00`, and declared data length 7..58
 so all decoded data fits after index 6. It follows the SDK signature checks;
 TYPE and OFFSET are not assumed to echo request bytes, and no reply checksum
@@ -942,6 +945,26 @@ is invented. Empty, short/oversized, wrong-ID/ACK/index, invalid-length,
 all-zero, request-echo and out-of-range-level replies produce no reading.
 A structurally valid reply may report 0%; an all-zero buffer is not such a
 reply. Synthetic fixtures test these rules, not actual receiver captures.
+
+**#315 user-verified 16-byte replies (grade C).** The local
+[issue evidence](../.ai/evidence/issue-315.md) records Windows x64 tests on
+1.3.9 and beta.6/beta.8. With `feature_report_length = 64` and
+`feature_report_sizes = {"3": 64}`, the unchanged battery request on
+`FF00:0001` consistently returned only 16 bytes in both 2K and 8K modes:
+`03 50 00 0B 00 01 <level> 21 07 01 90 65 04 A5 5A 00`.
+The added short branch requires ID `03`, TYPE `50`, ACK `00`, and
+`reply[5] == 01` (device present). It reads `reply[6] & 0x7F` as 1..100%,
+uses `reply[6] & 0x80` as charging, and reports charging as known. Zero and
+values above 100 are rejected. Any `reply[5] != 01`, including the observed
+`03 50 00 0B 00 35 ...` empty packet, produces no reading or engine error;
+it never becomes a spurious 0% or renews the retained reading's timestamp.
+The user reports stable panel readings of 23%–98% and correct charging after
+applying this parser change locally. This is user hardware evidence, not an
+independent hardware test by this project. The same report describes
+`FF06:0001` read failures and failed feature sends; collection selection,
+descriptor proof, request bytes and the existing 64-byte branch stay unchanged.
+Offline fixtures cover short replies, charging, absent packets, all battery
+byte values, invalid headers and continued 64-byte behavior.
 
 **Initialization and freshness.** `me`, `tn`, `_`, `y` and basic-service `sn`
 constructors allocate objects, bind handlers and install an `inputreport`
@@ -1026,9 +1049,10 @@ No hardware or network was accessed for implementation or verification.
 The retained SDK path shows no state-changing handshake prerequisite; actual
 cold-start device behavior remains untested. Real descriptor shapes may fail
 the conservative byte-array proof, in which case the device stays unopened.
-Complete real replies, TYPE/OFFSET semantics, cached responses during sleep,
-percentage/charging accuracy, wake/reconnect, driver coexistence and final UI
-behavior are unverified. Only `372E:1026` is added; no UUID, online, reset,
+#315 supplies the user-captured short format and panel/charging verification
+above. Independent replication, real 64-byte replies, remaining TYPE/OFFSET
+semantics, cached responses during sleep, wake/reconnect and driver coexistence
+are unverified. Only `372E:1026` is added; no UUID, online, reset,
 configuration, pairing, macro, display or firmware commands are reachable.
 
 ### AM Infinity 8K (Angry Miao)

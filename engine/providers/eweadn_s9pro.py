@@ -21,6 +21,15 @@ def make_request():
 
 
 def parse_reply(reply):
+    if reply and len(reply) == 16:
+        # #315: short replies despite a descriptor-proven Feature 03/64.
+        if (reply[0] != REPORT_ID or reply[1] != 0x50 or reply[2] != 0
+                or reply[5] != 1):
+            return None
+        level = reply[6] & 0x7F
+        if not 1 <= level <= 100:
+            return None
+        return level, bool(reply[6] & 0x80), ""
     if (not reply or len(reply) != REPORT_BYTES or reply[0] != REPORT_ID
             or reply[2] != 0 or reply[4] != 0
             or not 7 <= reply[3] <= REPORT_BYTES - 6):
