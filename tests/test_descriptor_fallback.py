@@ -18,9 +18,12 @@ from test_rapoo import R, fixture as rapoo_fixture, report
 import test_moondrop as M
 
 
-# Illustrative only; the real GM01 Pro descriptor has not been supplied.
+# Synthetic FF02 proof retained for the previously supported collection.
 MOONDROP_DESCRIPTOR = bytes.fromhex(
     "06 02 ff 09 02 a1 01 85 4b 75 08 95 3f 81 02 91 02 c0")
+# Minimal byte-array fixture matching #127's user-reported battery collection.
+MOONDROP_CONSUMER_DESCRIPTOR = bytes.fromhex(
+    "05 0c 09 01 a1 01 75 08 95 3f 85 4b 81 02 91 02 85 54 81 02 91 02 c0")
 
 
 class DescriptorFallbackTests(unittest.TestCase):
@@ -39,17 +42,21 @@ class DescriptorFallbackTests(unittest.TestCase):
         self.case.cache.clear()
         self.case.parent.side_effect = None
         self.case.parent.return_value = "receiver-a" if moondrop else "usb:receiver-a"
+        consumer = moondrop and collection == (0x000C, 1)
+        sizes = {75: 64, 84: 64} if consumer else {75: 64} if moondrop else {7: 19}
         self.case.batch3_descriptor(
             identity or ((0x35D8, 0x0133) if moondrop else (0x24AE, 0x1412)),
             collection or ((0xFF02, 2) if moondrop else (0xFF00, 2)),
-            {75: 64} if moondrop else {7: 19}, {75: 64} if moondrop else {7: 19})
+            sizes, sizes)
         original = self.case.hid.HidP_GetValueCaps.side_effect
 
         def fields(report_type, *args):
             return 0 if report_type in failed else original(report_type, *args)
 
         self.case.hid.HidP_GetValueCaps.side_effect = fields
-        self.dev.get_report_descriptor.return_value = MOONDROP_DESCRIPTOR if moondrop else RAPOO_DESCRIPTOR
+        self.dev.get_report_descriptor.return_value = (MOONDROP_CONSUMER_DESCRIPTOR if consumer
+                                                       else MOONDROP_DESCRIPTOR if moondrop
+                                                       else RAPOO_DESCRIPTOR)
 
     def scan(self):
         info, = self.case.scan([T.PATH_A])
@@ -103,6 +110,48 @@ class DescriptorFallbackTests(unittest.TestCase):
                     self.assertEqual(M.P().poll()[0].level, 73)
                     self.assertEqual(bus.writes, [M.M.make_request(64)])
 
+    def test_consumer_fallback_proves_each_direction_and_caches_without_commands(self):
+        for failed in ((), (0,), (1,), (0, 1)):
+            with self.subTest(failed=failed):
+                self.configure(moondrop=True, collection=(0x000C, 1), failed=failed)
+                self.dev.reset_mock()
+                self.backend.device.reset_mock()
+                info = self.scan()
+                for index, direction in enumerate(("input", "output")):
+                    self.assertEqual(info[direction + "_report_sizes"], {"75": 64, "84": 64})
+                    self.assertEqual(info[direction + "_report_proof"],
+                                     "descriptor" if index in failed else "caps")
+                self.assertEqual(self.scan(), info)
+                if failed:
+                    self.assertEqual(self.dev.mock_calls, [call.open_path(T.PATH_A.encode()),
+                                                          call.get_report_descriptor(), call.close()])
+                    self.backend.device.assert_called_once_with()
+                else:
+                    self.backend.device.assert_not_called()
+                with M.fixture([M.issue127_reply()], [info]) as bus:
+                    self.assertEqual(M.P().poll()[0].level, 50)
+                    self.assertEqual(bus.writes, [M.M.make_request(64)])
+
+    def test_consumer_fallback_cannot_borrow_battery_proof_for_volume_collection(self):
+        self.configure(moondrop=True, collection=(0x000C, 1), failed=(0, 1))
+        original = self.case.hid.HidP_GetCaps.side_effect
+
+        def caps(data, pointer):
+            result = original(data, pointer)
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.input, value.output, value.iv, value.ov = 3, 0, 1, 0
+            return result
+
+        self.case.hid.HidP_GetCaps.side_effect = caps
+        info = self.scan()
+        self.assertEqual(info["report_descriptor_error"], "collection maximum mismatch")
+        self.assertIsNone(info["input_report_sizes"])
+        self.assertIsNone(info["output_report_sizes"])
+        self.assertNotIn(T.PATH_A, self.case.cache)
+        with M.fixture([M.issue127_reply()], [info]) as bus:
+            self.assertEqual(M.P().poll(), [])
+            self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+
     def test_declared_summary_uses_only_selected_collection_and_survives_failed_proof(self):
         self.configure(moondrop=True, failed=(0, 1))
         # Selected collection: output 4B, input 4C, feature 4D; another TLC
@@ -155,6 +204,9 @@ class DescriptorFallbackTests(unittest.TestCase):
                 ((0x24AE, 0xFFFF), (0xFF00, 2)), ((0x24AF, 0x1412), (0xFF00, 2)),
                 ((0x24AE, 0x1412), (0xFF00, 1)), ((0x24AE, 0x1412), (1, 6)),
                 ((0x35D8, 0x0133), (0xFF02, 1)), ((0x35D8, 0x0134), (0xFF02, 2)),
+                ((0x35D9, 0x0133), (0x000C, 1)), ((0x35D8, 0x0134), (0x000C, 1)),
+                ((0x35D8, 0x0133), (0x000C, 2)), ((0x35D8, 0x0133), (0x000B, 5)),
+                ((0x35D8, 0x0133), (1, 2)), ((0x35D8, 0x0133), (1, 6)),
                 ((0x373B, 0x1262), (0xFF90, 1)), ((0x320F, 0x5088), (0xFF1C, 0x92)),
                 ((0x258A, 0x024F), (0xFF02, 2)), ((0x3554, 0xFA09), (0xFF04, 2))):
             with self.subTest(identity=identity, collection=collection):

@@ -22,6 +22,34 @@ import server
 
 
 class MoondropBridgeTests(unittest.TestCase):
+    def test_issue127_consumer_reading_keeps_headset_grade_and_unknown_charging(self):
+        engine = server.BatteryEngine([E.P()], include_native=True)
+        self.addCleanup(engine.close)
+        infos = E.issue127_inventory()
+        with E.fixture([E.issue127_reply()], infos) as bus:
+            snapshot = engine.poll()
+        self.assertEqual(len(snapshot["devices"]), 1)
+        first, = snapshot["devices"]
+        self.assertEqual((first["percent"], first["kind"], first["verificationLevel"]),
+                         (50, "headset", "C"))
+        self.assertIsNone(first["charging"])
+        self.assertFalse(first["chargingKnown"])
+        self.assertEqual(bus.opened, [infos[1]["path"]])
+        self.assertEqual(bus.writes, [E.M.make_request(64)])
+        self.assertEqual(snapshot["errors"], [])
+        for frames, options in (([], {}), ([E.reply(valid=0)], {}), ([], {"error_at": "read"})):
+            with E.fixture(frames, infos, **options):
+                snapshot = engine.poll()
+            stale, = snapshot["devices"]
+            self.assertEqual(stale["percent"], 50)
+            self.assertEqual(stale["confirmedAtUtc"], first["confirmedAtUtc"])
+            self.assertEqual(stale["connectionState"], "unconfirmed")
+            self.assertFalse(stale["fresh"])
+            self.assertIsNone(stale["charging"])
+            self.assertEqual(snapshot["errors"], [])
+            self.assertFalse(engine.failures)
+            self.assertFalse(engine.retry_after)
+
     def test_registration_catalog_offline_index_and_exact_candidate_identity(self):
         self.assertIn(("moondrop", "MoondropProvider"), server.PROVIDERS)
         self.assertEqual(server.PROVIDER_VIDS["moondrop"], (0x35D8,))
@@ -77,7 +105,7 @@ class MoondropBridgeTests(unittest.TestCase):
         self.assertEqual(bus.opened, [infos[0]["path"]])
 
     def test_not_opened_reasons_reach_worker_and_feedback_without_errors(self):
-        cases = [([E.entry(usage=1)], "missing or ambiguous FF02:0002 collection"),
+        cases = [([E.entry(usage=1)], "missing eligible GM01 Pro collection"),
                  ([E.entry(), E.entry(path=b"private-duplicate")], "missing or ambiguous FF02:0002 collection"),
                  ([E.entry(physical_id="collection:private")], "physical parent unresolved"),
                  ([E.entry(path=b"")], "collection path/physical parent unresolved"),
@@ -158,11 +186,13 @@ class MoondropBridgeTests(unittest.TestCase):
         case = T.DescriptorCacheTests()
         case.setUp()
         self.addCleanup(case.doCleanups)
-        case.parent.return_value = "receiver-a"
-        case.parent.side_effect = None
-        case.identities[T.PATH_A] = (info["vendor_id"], info["product_id"])
+        by_path = {T.PATH_A: info} if "vendor_id" in info else info
+        case.parent.side_effect = lambda path: by_path[path]["physical_id"]
+        for path, row in by_path.items():
+            case.identities[path] = (row["vendor_id"], row["product_id"])
 
         def caps(data, pointer):
+            info = by_path[case.handles[data.value]]
             value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
             value.page, value.usage = info["usage_page"], info["usage"]
             value.input, value.output = info["input_report_length"], info["output_report_length"]
@@ -171,6 +201,7 @@ class MoondropBridgeTests(unittest.TestCase):
 
         def fields(report_type, values, length, data):
             self.assertIn(report_type, (0, 1))
+            info = by_path[case.handles[data.value]]
             sizes = info[("input" if report_type == 0 else "output") + "_report_sizes"]
             for field, (report_id, size) in zip(values, sizes.items()):
                 field.report, field.bits, field.count = int(report_id), 8, size - 1
@@ -179,6 +210,56 @@ class MoondropBridgeTests(unittest.TestCase):
         case.hid.HidP_GetCaps.side_effect = caps
         case.hid.HidP_GetValueCaps.side_effect = fields
         return case
+
+    def test_consumer_caps_cache_and_reader_child_keep_collection_and_receiver_proofs_separate(self):
+        battery = E.consumer_entry()
+        for sibling in (E.consumer_entry(input_report_sizes={"2": 64}, output_report_sizes={"2": 64}),
+                        E.consumer_entry(physical_id="receiver-b")):
+            with self.subTest(sibling=sibling):
+                case = self.descriptor_fixture({T.PATH_A: battery, T.PATH_B: sibling})
+                infos = case.scan([T.PATH_A, T.PATH_B])
+                first, second = infos
+                self.assertEqual(first["input_report_sizes"], {"75": 64, "84": 64})
+                self.assertEqual(first["output_report_sizes"], {"75": 64, "84": 64})
+                self.assertEqual(first["input_report_proof"], "caps")
+                self.assertEqual(first["output_report_proof"], "caps")
+                self.assertEqual(second["input_report_sizes"], sibling["input_report_sizes"])
+                self.assertEqual(second["output_report_sizes"], sibling["output_report_sizes"])
+                case.kernel.CreateFileW.reset_mock()
+                self.assertEqual(case.scan([T.PATH_A, T.PATH_B]), infos)
+                case.kernel.CreateFileW.assert_not_called()
+                # No descriptor discovery operation may exchange reports.
+                case.hid.HidD_GetFeature.assert_not_called()
+                case.hid.HidD_SetFeature.assert_not_called()
+                case.kernel.ReadFile.assert_not_called()
+                case.kernel.WriteFile.assert_not_called()
+                request = dict(action="query", sequence=1, provider="moondrop",
+                               physicalId="receiver-a", inventory=infos)
+                data = (json.dumps(request, default=wire_encode) + "\n").encode()
+                with E.fixture([E.issue127_reply()], infos) as bus, \
+                        patch.object(server.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data))), \
+                        patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+                    server.reader_child()
+                response = json.loads(output.getvalue())
+                self.assertFalse(response.get("errorCode"))
+                self.assertEqual(len(response["statuses"]), 1)
+                self.assertEqual(response["statuses"][0]["level"], 50)
+                self.assertEqual(bus.opened, [T.PATH_A.encode()])
+                self.assertEqual(bus.closed, bus.opened)
+                self.assertEqual(bus.writes, [E.M.make_request(64)])
+                case.doCleanups()
+
+    def test_two_consumer_caps_do_not_share_input_and_output_proofs(self):
+        case = self.descriptor_fixture({
+            T.PATH_A: E.consumer_entry(output_report_sizes={"2": 64}),
+            T.PATH_B: E.consumer_entry(input_report_sizes={"2": 64})})
+        infos = case.scan([T.PATH_A, T.PATH_B])
+        self.assertEqual(infos[0]["output_report_sizes"], {"2": 64})
+        self.assertEqual(infos[1]["input_report_sizes"], {"2": 64})
+        self.assertEqual(case.scan([T.PATH_A, T.PATH_B]), infos)
+        with E.fixture([E.issue127_reply()], infos) as bus:
+            self.assertEqual(E.P().poll(), [])
+            self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
 
     def test_descriptor_proof_survives_cache_without_any_device_commands(self):
         case = self.descriptor_fixture(E.entry())

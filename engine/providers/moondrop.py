@@ -1,7 +1,9 @@
 """GM01 Pro battery only; static MOONDROP Hub evidence, hardware unverified.
 
-Only 35D8:0133 / FF02:0002 with descriptor-proven input/output report 4B
-is eligible. Lengths include the report ID and are never guessed. The Hub's
+Only 35D8:0133 / FF02:0002 or 000C:0001 with descriptor-proven input/output
+report 4B is eligible. #127 supplies user evidence for the latter collection;
+maintainer hardware verification remains pending. Lengths include the report
+ID and are never guessed. The Hub's
 read-only reachability preflight is omitted: only 80 27 00 is sent, without
 initialization, flash, EQ, control-panel or OTA commands. See upstream-protocols.
 The Hub confirms inputreport ID 4B; it supplies no alternate ID, Feature read,
@@ -15,6 +17,7 @@ from battery_hid import BatteryHidProvider, report_proof_summary
 VID = 0x35D8
 PIDS = {0x0133: "MOONDROP GM01 Pro"}
 COLLECTION = (0xFF02, 0x0002)
+COLLECTIONS = (COLLECTION, (0x000C, 0x0001))  # Prefer proven FF02, then proven 000C.
 REPORT_ID = 0x4B
 MAX_REPORT_BYTES = 4096
 MAX_READS = 32
@@ -56,14 +59,41 @@ class MoondropProvider(BatteryHidProvider):
     def _pick(self, infos):
         candidates = [info for info in infos
                       if (info.get("vendor_id"), info.get("product_id")) == (VID, 0x0133)
-                      and (info.get("usage_page"), info.get("usage")) == COLLECTION]
-        if len(candidates) != 1:
+                      and (info.get("usage_page"), info.get("usage")) in COLLECTIONS]
+        if not candidates:
+            self._diag.append("missing eligible GM01 Pro collection; not opened; nothing sent")
+            return None
+        # Preserve the original fail-closed rule for duplicate raw FF02 paths,
+        # even if one lacks proof or a valid consumer collection also exists.
+        if sum((info.get("usage_page"), info.get("usage")) == COLLECTION
+               for info in candidates) > 1:
             self._diag.append("missing or ambiguous FF02:0002 collection; not opened; nothing sent")
             return None
-        info = candidates[0]
+        failures = []
+        for collection in COLLECTIONS:
+            eligible = []
+            for info in candidates:
+                if (info.get("usage_page"), info.get("usage")) != collection:
+                    continue
+                reason = self._proof_failure(info)
+                if reason:
+                    failures.append(reason)
+                else:
+                    eligible.append(info)
+            if len(eligible) > 1:
+                self._diag.append(f"ambiguous {collection[0]:04X}:{collection[1]:04X} collection; "
+                                  "not opened; nothing sent")
+                return None
+            if eligible:
+                return eligible[0]
+        # Failed siblings are not a 'nothing sent' diagnostic for a successful
+        # selection. Retain their sanitized proof reasons only when none qualify.
+        self._diag.extend(failures)
+        return None
+
+    def _proof_failure(self, info):
         if not info.get("path") or not info.get("physical_id"):
-            self._diag.append("collection path/physical parent unresolved; not opened; nothing sent")
-            return None
+            return "collection path/physical parent unresolved; not opened; nothing sent"
         for direction, minimum in (("input", 10), ("output", 4)):
             maximum = info.get(direction + "_report_length")
             sizes = info.get(direction + "_report_sizes")
@@ -73,11 +103,10 @@ class MoondropProvider(BatteryHidProvider):
                     or not isinstance(sizes, dict) or not sizes
                     or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                     or sizes.get(str(REPORT_ID)) != maximum):
-                self._diag.append(direction + " report 4B length unproven"
-                                  + report_proof_summary(info, direction, include_declared=True)
-                                  + "; not opened; nothing sent")
-                return None
-        return info
+                return (direction + " report 4B length unproven"
+                        + report_proof_summary(info, direction, include_declared=True)
+                        + "; not opened; nothing sent")
+        return None
 
     def _query(self, dev, info):
         request = make_request(info["output_report_length"])

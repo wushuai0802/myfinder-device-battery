@@ -29,6 +29,30 @@ def reply(level=73, valid=1, length=64):
     return [0x4B, 0x00, 0x27, 6, 0, 0, 0, 0, valid, level] + [0] * (length - 10)
 
 
+def consumer_entry(**changes):
+    info = entry(usage_page=0x000C, usage=1, path=b"gm01-battery",
+                 input_report_sizes={"75": 64, "84": 64},
+                 output_report_sizes={"75": 64, "84": 64})
+    info.update(changes)
+    return info
+
+
+def issue127_inventory():
+    # User-supplied four-TLC layout; fixtures do not access the real receiver.
+    return [entry(input_report_sizes={"2": 64}, output_report_sizes={"2": 64}),
+            consumer_entry(),
+            entry(path=b"gm01-telephony", usage_page=0x000B, usage=5,
+                  input_report_length=3, output_report_length=0,
+                  input_report_sizes={"1": 3}, output_report_sizes={}),
+            consumer_entry(path=b"gm01-volume", input_report_length=3,
+                           output_report_length=0, input_report_sizes={"1": 3},
+                           output_report_sizes={})]
+
+
+def issue127_reply():
+    return [0x4B, 0x80, 0x27, 6, 0, 0, 0, 0, 1, 0x32] + [0] * 54
+
+
 @contextmanager
 def fixture(frames=(), inventory=None, *, short=False, error_at=None):
     bus = SimpleNamespace(frames=list(frames), opened=[], closed=[], writes=[], reads=[])
@@ -72,9 +96,72 @@ def fixture(frames=(), inventory=None, *, short=False, error_at=None):
 
 
 class MoondropTests(unittest.TestCase):
+    def test_issue127_four_collections_select_proven_consumer_and_read_50_percent(self):
+        infos = issue127_inventory()
+        with fixture([issue127_reply()], infos) as bus:
+            provider = P()
+            statuses = provider.poll()
+        self.assertEqual(len(statuses), 1, provider.diagnostics())
+        status, = statuses
+        self.assertEqual((status.level, status.kind, status.charging_known,
+                          status.verification_level), (50, "headset", False, "C"))
+        self.assertEqual(bus.opened, [infos[1]["path"]])
+        self.assertEqual(bus.closed, bus.opened)
+        self.assertEqual(bus.writes, [[0x4B, 0x80, 0x27, 0] + [0] * 60])
+        self.assertEqual(len(bus.reads), 1)
+        self.assertEqual(provider.diagnostics(), [])
+
+    def test_proven_ff02_precedes_consumer_regardless_of_enumeration_order(self):
+        ff02, consumer = entry(), consumer_entry()
+        for infos in ([ff02, consumer], [consumer, ff02],
+                      [consumer, consumer_entry(path=b"second-consumer"), ff02]):
+            with self.subTest(infos=infos), fixture([reply()], infos) as bus:
+                self.assertEqual(len(P().poll()), 1)
+                self.assertEqual(bus.opened, [ff02["path"]])
+                self.assertEqual(bus.writes, [M.make_request(64)])
+
+    def test_consumer_ambiguity_and_duplicate_raw_ff02_remain_closed(self):
+        consumer = consumer_entry()
+        cases = [[consumer, consumer_entry(path=b"second-consumer")],
+                 [entry(), entry(path=b"second-ff02"), consumer],
+                 [entry(), entry(path=b"second-ff02", input_report_sizes=None), consumer],
+                 [entry(input_report_sizes=None), entry(path=b"second-ff02"), consumer],
+                 [entry(input_report_sizes=None), entry(path=b"second-ff02", input_report_sizes=None),
+                  consumer]]
+        for infos in cases:
+            for ordered in (infos, list(reversed(infos))):
+                with self.subTest(infos=ordered), fixture([reply()], ordered) as bus:
+                    self.assertEqual(P().poll(), [])
+                    self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+        # A second 000C without complete proof is not an eligible contender.
+        for direction in ("input", "output"):
+            invalid = consumer_entry(path=b"private-invalid", serial_number="private-serial",
+                                     **{direction + "_report_sizes": None})
+            with fixture([reply()], [invalid, consumer]) as bus:
+                provider = P()
+                self.assertEqual(len(provider.poll()), 1)
+                self.assertEqual(bus.opened, [consumer["path"]])
+                self.assertEqual(provider.diagnostics(), [])
+
+    def test_consumer_proofs_cannot_be_combined_across_collections_or_receivers(self):
+        for physical in ("receiver-a", "receiver-b"):
+            infos = [consumer_entry(output_report_sizes=None),
+                     consumer_entry(path=b"other", physical_id=physical, input_report_sizes=None)]
+            with self.subTest(physical=physical), fixture([reply()], infos) as bus:
+                self.assertEqual(P().poll(), [])
+                self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+        infos = [consumer_entry(), consumer_entry(path=b"other", physical_id="receiver-b")]
+        with fixture([reply(20), reply(90)], infos) as bus:
+            statuses = P().poll()
+            self.assertEqual([s.level for s in statuses], [20, 90])
+            self.assertEqual(len({s.key for s in statuses}), 2)
+            self.assertEqual(bus.opened, [i["path"] for i in infos])
+
     def test_alternate_input_or_feature_declarations_do_not_authorize_a_new_path(self):
-        for inputs, features in (({"76": 64}, {}), ({}, {"75": 64})):
-            info = entry(input_report_sizes=inputs, input_report_proof="descriptor",
+        for factory, inputs, features in ((factory, inputs, features)
+                                         for factory in (entry, consumer_entry)
+                                         for inputs, features in (({"76": 64}, {}), ({}, {"75": 64}))):
+            info = factory(input_report_sizes=inputs, input_report_proof="descriptor",
                          declared_report_sizes={"output": {"75": 64}, "input": inputs,
                                                 "feature": features})
             with self.subTest(inputs=inputs), fixture([reply()], [info]) as bus:
@@ -141,17 +228,25 @@ class MoondropTests(unittest.TestCase):
 
     def test_unknown_or_inconsistent_proof_never_opens(self):
         changes = [dict(vendor_id=0x35D9), dict(product_id=0x012D), dict(product_id=0x0130),
-                   dict(usage_page=1, usage=6), dict(usage_page=0xFF04), dict(usage=1),
+                   dict(usage_page=1, usage=6), dict(usage_page=1, usage=2),
+                   dict(usage_page=0x000B, usage=5), dict(usage_page=0xFF04),
+                   dict(usage_page=0xFF02, usage=1), dict(usage_page=0x000C, usage=2),
                    dict(path=b""), dict(physical_id=""), dict(physical_id="collection:unknown")]
         for direction, minimum in (("input", 10), ("output", 4)):
             changes += [{direction + "_report_length": n} for n in (None, True, 0, minimum - 1, 63, 65, 4097)]
             changes += [{direction + "_report_sizes": sizes} for sizes in
-                        (None, {}, {75: 64}, {"75": 63}, {"75": 65}, {"74": 64},
+                        (None, {}, [], "75", {75: 64}, {"4B": 64}, {"75": 63}, {"75": 65},
+                         {"74": 64}, {"75": 17, "84": 64}, {"75": "64"},
                          {"75": 64.0}, {"75": 64, "9": True}, {"75": 64, "9": 65})]
-        for change in changes:
-            with self.subTest(change=change), fixture([reply()], [entry(**change)]) as bus:
-                self.assertEqual(P().poll(), [])
-                self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+            changes.append({direction + "_report_sizes": None,
+                            "declared_report_sizes": {"input": {"75": 64},
+                                                      "output": {"75": 64}, "feature": {}}})
+        for factory in (entry, consumer_entry):
+            for change in changes:
+                with self.subTest(collection=factory.__name__, change=change), \
+                        fixture([reply()], [factory(**change)]) as bus:
+                    self.assertEqual(P().poll(), [])
+                    self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
 
     def test_ambiguous_collections_fail_closed_and_physical_receivers_stay_separate(self):
         a, b = entry(), entry(path=b"second")

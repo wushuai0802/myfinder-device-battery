@@ -1985,8 +1985,9 @@ not opened` even with the fixed-usage caps opt-in. Plaudern's earlier VT3S
 `24AE:1411` evidence above demonstrates hidapi `get_report_descriptor()` on
 that user's installation, not availability in every hidapi build. #127's
 GM01 Pro `35D8:0133` exposed `000B:0005 000C:0001 000C:0001 FF02:0002` but
-showed `moondrop | unavailable |` without a reason. This does not establish
-GM01's actual report lengths or prove the cause of its missing measurement.
+showed `moondrop | unavailable |` without a reason. That original feedback did
+not establish GM01's report lengths; the later user-supplied collection and
+50% reply evidence is recorded in the GM01 Pro section below.
 
 `battery_hid.parse_report_descriptor()` is a pure, bounded HID 1.11 short-item
 parser. It maintains Global Usage Page, Report ID/Size/Count and the full
@@ -2011,7 +2012,7 @@ with a fixed short diagnostic reason, never raw bytes or a device path.
 `topology` tries caps first, retaining the existing fixed-usage Rapoo proof.
 Only a `None` result triggers raw-descriptor retrieval, and only inside the
 existing Rapoo PID + `FF00:0002` gate, the exact MOONDROP
-`35D8:0133 / FF02:0002` gate, MCHOSE V3 `3837:1018/1014 / FF01:0001`, or
+`35D8:0133 / FF02:0002 or 000C:0001` gate, MCHOSE V3 `3837:1018/1014 / FF01:0001`, or
 S9 PRO `372E:1026 / FF00:0001 or FF06:0001`. A successful caps proof with an unsuitable ID
 does not trigger this fallback. If the current hidapi device has no callable
 `get_report_descriptor`, it skips opening. Otherwise one temporary handle
@@ -3022,14 +3023,29 @@ was partial at its node ceiling, so the following anchors were also inspected
 directly. Analysis evidence:
 `ev_26296df6304414d418feebf35f8902c5e7976c091a19f2a0832228a5378bb7f9`.
 
-**#127 beta.7 reply-path recheck (2026-11-06).** The supplied snapshot still
+**#127 collection evidence (2026-11-06).** The supplied snapshot still
 uses **output `4B` -> input `4B`**. It does not establish a Feature reply,
 an alternate input ID, a particular usage page/usage, or a fixed report length.
-The reported absence of an input-`4B` proof on `FF02:0002` is therefore still
-unresolved; it is not evidence authorizing `GET_FEATURE`, another ID, or a
-sibling-collection probe. This change follows the diagnostic-only fallback:
-the reader's existing input/output proof gates and wire exchange stay intact.
-It sends nothing when either required report is unproven.
+The [new user hardware report](https://github.com/wushuai0802/myfinder-device-battery/issues/127#issuecomment-6687188223)
+identifies four top-level collections on the same `35D8:0133` receiver:
+
+| Collection | User-reported capability |
+| --- | --- |
+| `FF02:0002` | 64-byte input/output report `02`; no `4B`. |
+| `000C:0001` battery collection | Input/output reports `4B` and `54`, each a 63-byte array plus ID (64 bytes). |
+| `000B:0005` | 3-byte multimedia collection. |
+| Second `000C:0001` | 3-byte volume input, no output. |
+
+On the battery `000C:0001`, the user sent one `4B 80 27 00` request padded to
+64 bytes and received `4B 80 27 06 00 00 00 00 01 32 00 ...`. Index 8 is
+nonzero and index 9 is `0x32`, so the existing parser returns **50%**. The user
+also tested selection by report proof locally. The earlier “FF02 has no 4B”
+finding applies to that collection, not the whole receiver. It does not
+authorize report `02` encapsulation, a Feature reply, or any new handshake.
+This evidence supersedes waiting for a first reply capture, but is **user
+verification, not maintainer hardware retesting**; grade **C** is unchanged.
+The implementation adds only the exact `000C:0001` candidate and preserves
+both directional proof gates and the existing wire exchange.
 
 The following anchors are in `index-BJe6cqeQ.js` (same SHA256 above). The bundle
 is minified, so symbol names disambiguate the large lines:
@@ -3075,13 +3091,14 @@ and does not pass charging state. No charging field was found in this path;
 The reader additionally requires exact runtime-proven input length, report
 ID `4B`, CMD `27` and a declared payload length of at least 6, no larger than
 the available report. CMD/LEN use the shared three-byte framing (`Sc`, `Lt`,
-`tb.readFirmwareVersion`, `iR`); **battery CMD echo and LEN values are a local
-conservative correlation guard, not an observed GM01 reply capture**. The
+`tb.readFirmwareVersion`, `iR`); the user's captured `27 06` now satisfies this
+existing conservative correlation guard. This single sample does not prove
+every firmware's headers. The
 Hub transport itself only correlates report ID, excluding OTA `iR` frames.
 No response OP, checksum, charging, voltage or percentage resolution is
 assumed. Command `4F` OTA/control replies, other commands and request echoes
-cannot become readings under the local guard. The actual response header
-must still be checked on hardware; a different header fails closed.
+cannot become readings under the local guard. A different response header
+still fails closed; the maintainer has not repeated the hardware capture.
 
 **Preflight and descriptor boundary.** `jp/F8/N8` wrap async device methods;
 `Qp.beforeHook/pingDevice` query `OP_READ/DONGLE_STATUS` (`80 31 00`) and delay
@@ -3089,23 +3106,33 @@ must still be checked on hardware; a different header fails closed.
 guard, with no flash/EQ/initialization write. `UG`'s battery getter directly
 calls `queryCommand`; its settle object only waits. The implementation sends
 only the battery query and omits even that status read. Static analysis does
-not prove a cold receiver answers the standalone battery query; silence is
-accepted as no measurement, with no fallback initialization or retry.
+not prove a cold receiver answers the standalone battery query. The user
+obtained a standalone reply on the reported receiver, without establishing
+cold-start or reconnect behavior; silence remains no measurement, with no
+fallback initialization or retry.
 
 The task's #126 diagnostic identifies `35D8:0133 "MOONDROP GM01 Pro"` and
 includes `FF02:0002`, but does **not** establish its report lengths or prove
 that this collection owns `4B`. The Hub's `tf/vg` selects by output report ID
-and input capability, not a hard-coded usage. Locally, only a **unique
-FF02:0002** collection per resolved physical receiver is a candidate. Passive
-Windows preparsed-data inspection, or the gated raw-descriptor fallback
-documented under #120 / #127 above, must prove input and output `4B`
-sizes before any query handle opens. Input must hold at least 10 bytes and
+and input capability, not a hard-coded usage. Locally, only `FF02:0002` and
+the user-proven `000C:0001` on exact `35D8:0133` are candidates, grouped by
+resolved physical receiver. Passive Windows preparsed-data inspection, or
+the existing gated raw-descriptor fallback documented under #120 / #127,
+must prove input and output `4B` sizes independently before any query handle
+opens. Proof-map keys must be decimal string `"75"`; declarations alone do
+not authorize I/O. Input must hold at least 10 bytes and
 output at least 4, both at most 4096 including ID; `4B` must equal the
 collection maximum in each direction. Unknown, inconsistent, non-byte-aligned,
-ambiguous, or shorter-than-maximum `4B` descriptors are rejected. Other
-collections are never tried. This is a runtime condition, not a claim that
-#126 or the web snapshot supplies a full descriptor. Unsupported descriptor
-shapes remain disabled rather than guessed.
+ambiguous, or shorter-than-maximum `4B` descriptors are rejected. Prefer a
+proven `FF02:0002`; if it has only `02` and `000C:0001` proves `4B`, select
+that battery collection. Multiple proven candidates at the selected priority
+are rejected. The original stricter rule for duplicate raw `FF02:0002` paths
+also remains: reject even if one proof fails or a valid `000C:0001` exists.
+The 3-byte volume collection never opens for a query; its shared usage cannot
+borrow the battery collection's proof. Unknown physical parents, other
+VID/PIDs and other usages remain ineligible. Raw descriptors with duplicate
+top-level usages remain rejected by the unchanged generic parser. Runtime
+proof is always required; the user's 64-byte sample is not a hard-coded size.
 
 **Descriptor diagnostics and truncation.** The shared descriptor fallback now
 retains a separate `declared_report_sizes` map for the selected collection's
@@ -3168,12 +3195,14 @@ tests cover wire bytes, offsets/ranges, guards before opening, no other
 commands, deadlines, cleanup, child isolation, history, and fake Windows
 descriptor discovery/caching. No hardware, network or vendor script is used.
 The reply-path regression rejects synthetic input `4C` and Feature-only `4B`
-without opening a query handle. Additional tests retain selected-collection
-declarations through failed proofs and child JSON, and compile/run the unchanged
-C# JSON parser and feedback formatter to verify compact reasons, redaction and
-URL projection without starting the application, clipboard or browser.
-Actual collection/lengths, response headers, standalone cold-start queries,
-freshness while off, charging and sleep/wake remain unverified.
+without opening a query handle. The collection-selection regression reproduces
+the user's four-collection layout and 50% reply, one original query frame,
+FF02 preference, ambiguity rejection, directional proofs, descriptor fallback,
+cache and reader-child isolation. Existing failed-proof, history and sanitized
+diagnostic assertions remain. No C# or packaging work is part of this change.
+The reported collection/lengths, header and standalone 50% reply are user
+evidence only; maintainer hardware acceptance, cold start/reconnect, freshness
+while off, charging and sleep/wake remain unverified.
 
 ### AULA mice: SC800 Max investigation blocked by collection mismatch
 
