@@ -2670,6 +2670,98 @@ descriptor discovery/caching. No hardware, network or vendor script is used.
 Actual collection/lengths, response headers, standalone cold-start queries,
 freshness while off, charging and sleep/wake remain unverified.
 
+### AULA mice: SC800 Max investigation blocked by collection mismatch
+
+**Not implemented or enrolled (2026-11-06).** The supplied official drivers do
+not establish a battery protocol for the `38A6:28E9 "AULA Receiver"` collections
+reported in issues #173/#175: `FF02:0001`, `FF70:0071`, `FF80:0001`. The Hub
+uses a different collection for that same VID:PID, while the native SC800
+package configures different IDs. Do not substitute either protocol onto the
+reported collections, infer a report size, or use a generic vendor-page probe.
+No new provider, registration, compatibility entry or grade C support claim
+was added. This is a stopped investigation, not a completed mouse adaptation.
+
+#### Pinned evidence and conflicting device routes
+
+The task supplied these files as official downloads acquired on 2026-11-06.
+Inspection was offline: Python parsed the ASAR header/member offsets and
+literal string tables; local Ghidra decompiled the native files. No supplied
+EXE, DLL or JavaScript was executed, and no hardware or network was accessed.
+Hashes below identify the exact evidence, not every release of these drivers.
+
+| Artifact (relative to `.ai/evidence/aula/`) | SHA256 |
+| --- | --- |
+| `hub265/resources/app.asar` | `f2c3296c641693c44cecf27053451c43a6994340177a7630bf9e33922ea8ef18` |
+| ASAR `dist/assets/index-uuESAaqN.js` | `429762c75f7ca1feca13386f22f9addacd09791d324a9ca126b15ba0fe2a3dd7` |
+| ASAR `dist/assets/CmysjeBP.js` | `7acf8d6caffec8110e129d82d7080b757144b2cc3a96996be948d2b4e36ef99b` |
+| ASAR `dist/assets/DB8F-XTB.js` | `35d740d77d0f17feee60f33f5cb2506801c679b8fa3261ae07509718ca5e9da2` |
+| `sc800/unpacked/app/Mouse.exe` | `5d499ec20b371b6336f0d0d871cb1076bd56c19de14e3f6857d00f56ec4ae971` |
+| `sc800/unpacked/app/hiddriver_1.dll` (identical to `_2.dll`) | `f9efbf0630218b3e13e894b132d77ceb16113acef1bc841e25af8ce57eac39f4` |
+| `sc800/unpacked/app/hiddriver_4k.dll` (identical to `_8k.dll`) | `ef551819adebd979a52ac07f9a0a70e0d22c8e028f4e27f7bb1eacaea0b05f2f` |
+
+The ASAR has header words `(4, 170128, 170124, 170117)` and member data begins
+at byte `170136`. In `index-uuESAaqN.js`, the literal device table at member
+byte offset `6879830` contains `pId:0x28e9, vId:0x38a6, wireless:1,
+usage:2, usagePage:0xffa8`. `CmysjeBP.js` maps that wireless PID to
+`AULA-SC800 Max Mouse`, boot PID `28ED`, and the `hx` SDK; its `getDevices`
+also compares VID, PID, product name and collection. The string table was
+decoded as data with rotation 131, checking its literal checksum `0xD694E`.
+
+`CmysjeBP.js` imports `bQ` from `DB8F-XTB.js`; that export is `n1t`, wrapping
+the Infortech/HX SDK. Its plain string table has 1126 entries, rotation 133,
+checksum 582567. The SDK's `we` collection constants independently confirm
+usage `2`, usage page `65448` (`FFA8`). These observations do not prove that
+the issue reporter has this firmware/collection variant.
+
+In the native package, `Mouse.exe` constructor `00406440` initializes the
+backend ID slots to `1D57:1013`, `1D57:FA60`, `1D57:FA65`. Initializer
+`0040C5F0` passes them to the respective `Set_VIDPID` exports. The `_1/_2`
+filter at `10001D70` requires `000A:0000` for monitoring or `000B:0000` for
+Feature I/O. The `_4k/_8k` filter at `10002980` additionally allows
+`FF00:0001` for `Open_ReportDevice`. These traced routes do not connect the
+native package to the reported `38A6:28E9` vendor collections.
+
+#### Hub protocol facts retained for a corrected follow-up
+
+The HX `queryDeviceInfoCmd` returns `[0x81, 0x00]` (`DevGetInfo`).
+`sendCommand` calls WebHID `sendReport(11, new Uint8Array(payload))`: output
+report ID `0B`, payload `81 00`. Thus `0B 81 00` is a hidapi **prefix**, not
+a proven complete padded report. No fixed report lengths or input report ID
+were established. `getDeviceInfo` checks response payload byte 0 equals
+`81` and byte 2 equals zero; `getDataSlice` removes the first three bytes.
+The remaining data's offsets 13, 14 and 15 hold charging (`==1`), percentage,
+and full (`==1`) respectively. These are WebHID payload offsets 16/17/18
+(hidapi offsets 17/18/19 only if an input report ID is present). No synthetic
+fixture is presented as a captured reply or descriptor.
+
+`connectDevice`/`openHidDevice` open and attach an input listener. The SDK's
+`initDevice` subsequently reads device type, receiver lighting configuration,
+connection state, device information and further settings. The direct
+`getDeviceInfo` path has no initialization write or authentication call in
+the traced code, but this does not prove that a cold receiver answers a
+standalone query. Handshake necessity and actual reply freshness remain
+unverified; copying the full driver initialization would not resolve that.
+
+State-changing HX commands identified in the SDK's `H` table include button
+write `84`, configuration `86`, DPI data `88/9B`, pairing `89`, shortcut/macro
+writes `8C/8E`, profile/DPI/mode switches `8F/90/91/92`, factory reset `93`,
+sensor angle `97`, receiver lighting `99/D1`, axis/calibration `A2` through
+`A7`, firmware start/data/finish `C1/C2/C3`, RF band `D3`, and wallpaper `D4`.
+This is a bounded list from the HX SDK, not an exhaustive native-driver
+command inventory. None is authorized as a battery request; no new commands
+are sent by this change.
+
+`1D57:FA60` (#239) and `1D57:FA65` (#242) remain unenrolled: the brief records
+cross-brand reuse (#101/#148/#189), and the traced native filter supplies no
+brand/model distinction. Their battery frames, reply parsing and handshake
+were not completed after the primary target mismatch was established.
+SC580 (#208) still lacks an exact diagnostic identity. A follow-up needs
+official evidence matching the target collections and report descriptors,
+plus a safe identity gate before considering the shared `1D57` IDs. Runtime
+length proof, hardware battery/charging behavior and coexistence with the
+official driver remain unverified. Registration and generated compatibility
+documentation are intentionally unchanged because no support was enabled.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver
