@@ -33,6 +33,11 @@ def reply(level=63, flags=0):
     return packet(0x4A, [level, flags])
 
 
+def notification(level=95, flags=1):
+    # #312 supplies only the first eight bytes; padding/trailer are synthetic.
+    return [0x13, 0x0A, 1, 0, 4, 5, level, flags] + [0] * 12
+
+
 def fixture(frames=(), inventory=None, **kwargs):
     return hid_fixture(P, frames, [entry()] if inventory is None else inventory, **kwargs)
 
@@ -126,6 +131,57 @@ class MchoseByKeyboardTests(unittest.TestCase):
         for level in (101, 255):
             self.assertIsNone(M.parse_reply(reply(level)))
         self.assertIsNone(M.parse_reply(M.make_request()))
+
+    def test_notification_fields_ranges_and_no_invented_packet_or_checksum_gate(self):
+        self.assertEqual(bytes(notification()[:8]), bytes.fromhex("13 0A 01 00 04 05 5F 01"))
+        self.assertEqual(M.parse_reply(notification()), (95, False, ""))
+        for level in (1, 95, 99, 100):
+            for full in (0, 1):
+                for charge in (0, 1):
+                    self.assertEqual(M.parse_reply(notification(level, full | charge << 4)),
+                                     (level, charge == 1 and level < 100, ""))
+        invalid = [notification()[:8], notification()[:-1], notification() + [0]]
+        for offset, value in ((0, 6), (1, 5), (5, 2), (6, 0), (6, 101),
+                              (6, 255), (7, 2), (7, 0x20), (7, 0xFF), (8, True), (9, 256)):
+            frame = notification()
+            frame[offset] = value
+            invalid.append(frame)
+        for frame in invalid:
+            with self.subTest(frame=frame):
+                self.assertIsNone(M.parse_reply(frame))
+        frame = notification()
+        for offset in (2, 3, 4, 19):
+            frame[offset] = 0xFF  # skipped by M HUB's subscription parser
+        self.assertEqual(M.parse_reply(frame), (95, False, ""))
+
+    def test_notification_only_counts_in_known_model_battery_window(self):
+        with self.fixture([notification(), identity("030000000115"), identity(), notification()]) as bus:
+            status, = P().poll()
+        self.assertEqual((status.name, status.level), ("MCHOSE G75 Pro", 95))
+        self.assertEqual([f for _, f in bus.writes], [M.identity_request(), M.make_request()])
+        for frames in ([notification()], [identity("000000000000"), notification()]):
+            with self.subTest(frames=frames), self.fixture(frames):
+                self.assertEqual(P().poll(), [])
+
+    def test_ff02_transport_requires_ff04_marker_and_unique_proven_report(self):
+        ff04 = self.entry(path=b"marker", input_report_length=0, output_report_length=0,
+                          input_report_sizes={}, output_report_sizes={})
+        ff02 = self.entry(path=b"transport", usage_page=0xFF02)
+        for infos in ([ff04, ff02], [ff02, ff04]):
+            with self.subTest(infos=infos), self.fixture([identity(), notification()], infos) as bus:
+                self.assertEqual([s.level for s in P().poll()], [95])
+                self.assertEqual(bus.opened, [b"transport"])
+                self.assertEqual(bus.opened, bus.closed)
+        invalid = [[ff02], [self.entry(), ff02], [ff04, ff02, dict(ff02, path=b"duplicate")],
+                   [ff04, dict(ff02, input_report_sizes=None)],
+                   [ff04, dict(ff02, output_report_sizes={"19": 19})],
+                   [ff04, dict(ff02, physical_id="another-receiver")],
+                   [dict(ff04, physical_id=""), dict(ff02, physical_id="")],
+                   [ff04, dict(ff02, product_string="AULA F87")]]
+        for infos in invalid:
+            with self.subTest(infos=infos), self.fixture([identity(), notification()], infos) as bus:
+                self.assertEqual(P().poll(), [])
+                self.assertEqual(bus.opened, [])
 
     def test_bad_headers_lengths_and_sequence_do_not_enable_or_return_readings(self):
         for original, parse in ((identity(), M.parse_model), (reply(), M.parse_reply)):
@@ -274,7 +330,7 @@ class Mchose41e4KeyboardTests(MchoseByKeyboardTests):
 class SharedFa09Tests(unittest.TestCase):
     def test_both_collections_and_provider_orders_open_once_and_return_at_most_one_card(self):
         ff04 = entry(path=b"fa09-ff04")
-        ff02 = entry(path=b"fa09-ff02", usage_page=0xFF02)
+        ff02 = entry(path=b"fa09-ff02", usage_page=0xFF02, input_report_sizes=None)
         cases = (([identity(), reply()], "MCHOSE X75 V2", True),
                  ([identity("000000000000"), reply()], "2.4G 无线键盘（3554:FA09）", True),
                  ([], None, False), ([identity(), reply(0)], None, True),

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from test_mchose_by_keyboard import M, P, entry, identity, reply
+from test_mchose_by_keyboard import M, P, entry, identity, reply, notification
 from test_new_brands import FakeHid, H
 from providers.vgn_beiying import VgnBeiyingProvider
 
@@ -69,7 +69,7 @@ class AulaFa09Tests(unittest.TestCase):
 
     def test_exact_frame_name_unknown_charging_and_only_one_card(self):
         ff04 = aula_entry(path=b"feature-ff04")
-        ff02 = entry(path=b"by-ff02", usage_page=0xFF02)
+        ff02 = entry(path=b"by-ff02", usage_page=0xFF02, input_report_sizes=None)
         for factories in ((P, VgnBeiyingProvider), (VgnBeiyingProvider, P)):
             with self.subTest(order=factories), aula_fixture([aula_reply()], [ff02, ff04]) as bus:
                 status, = [s for factory in factories for s in factory().poll()]
@@ -131,6 +131,21 @@ class AulaFa09Tests(unittest.TestCase):
                 self.assertEqual(bus.feature_reads, [])
                 self.assertTrue(all(frame in (M.identity_request(), M.make_request())
                                     for _, frame in bus.writes))
+
+    def test_issue312_ff02_by_precedes_feature06_and_silence_does_not_fall_back(self):
+        infos = [aula_entry(path=b"ff04-feature"), entry(path=b"ff02-by", usage_page=0xFF02)]
+        for frames, count in (([identity("030000000115"), notification()], 1), ([], 0),
+                              ([identity("030000000115"), notification(0)], 0)):
+            for factories in ((P, VgnBeiyingProvider), (VgnBeiyingProvider, P)):
+                with self.subTest(frames=frames, order=factories), aula_fixture(frames, infos) as bus:
+                    statuses = [s for factory in factories for s in factory().poll()]
+                    self.assertEqual(len(statuses), count)
+                    if count:
+                        self.assertEqual((statuses[0].name, statuses[0].level), ("MCHOSE G75 Pro", 95))
+                        self.assertFalse(statuses[0].unconfirmed)
+                    self.assertEqual(bus.opened, [b"ff02-by"])
+                    self.assertEqual(bus.opened, bus.closed)
+                    self.assertEqual((bus.feature_reads, bus.feature_writes), ([], []))
 
     def test_failures_never_send_dangerous_commands_or_retry_in_same_poll(self):
         for options in (dict(error_at="open"), dict(error_at="feature_write"),

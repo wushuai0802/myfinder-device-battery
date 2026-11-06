@@ -90,7 +90,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
@@ -102,6 +102,15 @@ def reader_diagnostics(provider):
     if provider.name not in READER_DIAGNOSTICS:
         return []
     lines = provider.reader_diagnostics() if provider.name == "mchose" else provider.diagnostics()
+    if provider.name == "mchose_headset":
+        # Expose only fixed firmware-gate reasons, never this legacy reader's
+        # raw I/O exceptions or packet log.
+        if any(line.strip() == "接收器固件低于 0008，官方驱动也不支持电量" for line in lines):
+            return ["接收器固件低于 0008，官方驱动也不支持电量"]
+        if any(line.strip().startswith(("接收器固件版本", "receiver firmware query write failed"))
+               for line in lines):
+            return ["接收器固件版本未确认，需要 0008 及以上"]
+        return []
     return lines if len(lines) <= 16 else lines[:6] + lines[-10:]
 
 
@@ -705,7 +714,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "rapoo", "moondrop") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "rapoo", "moondrop") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -756,6 +765,11 @@ class BatteryEngine:
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
+            if name == "mchose_headset" and not measured:
+                for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未确认，需要 0008 及以上"):
+                    if reason in diagnostics:
+                        self.health[reader_key]["diagnosticSummary"] = reason
+                        break
             if name in ("rapoo", "moondrop") and not measured and diagnostics:
                 # These readers emit only fixed text, numeric descriptor sizes and
                 # input report IDs/lengths. No paths, payloads or exceptions.

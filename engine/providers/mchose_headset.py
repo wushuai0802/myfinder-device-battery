@@ -3,7 +3,9 @@
 Protocol facts: research/p2-protocols.md section 4, sources S8-S10 (MIT
 projects and upstream hardware reports); S14 is corroboration only, no code
 copied. Output/input reports include ID 55 and are exactly 64 bytes. Only
-the battery query 55 65 01 is sent; no feature, EQ or firmware commands.
+the battery query 55 65 01 is sent. V9 PRO first reads receiver firmware
+through Feature AA/64; versions below 0008 cannot read battery in M HUB.
+No EQ, configuration or firmware-update commands are sent.
 Turbo+ 3837:600A: 用户实机抓包，#61 confirms 80% discharge twice. Its
 charging/off states remain untested; 3837:6008 is lighting, never a target.
 
@@ -34,6 +36,10 @@ USAGE_PAGE, USAGE = 0xFF90, 0x0001
 REPORT_LEN = 64
 READ_TIMEOUT_MS = 1000
 MAX_READS = 32
+PRO_ID = (0x291D, 0x385D)
+FIRMWARE_COLLECTION = (0xFF22, 0x0001)
+FIRMWARE_REQUEST = [0xAA, 0x01, 0x01] + [0] * 61
+FIRMWARE_READ_DELAY_SECONDS = 0.3
 
 
 def make_request():
@@ -54,6 +60,16 @@ def parse_reply(reply):
     return None
 
 
+def parse_receiver_firmware(reply):
+    """M HUB BLK's decimal concatenation of four version bytes, not hex/BCD."""
+    if (len(reply) != REPORT_LEN
+            or any(type(value) is not int or not 0 <= value <= 255 for value in reply)
+            or list(reply[:2]) != [0xAA, 0x01]
+            or list(reply) == FIRMWARE_REQUEST):
+        return None
+    return int("".join(str(value) for value in reply[2:6]), 10)
+
+
 class MchoseHeadsetProvider(Provider):
     name = "mchose_headset"
 
@@ -71,6 +87,47 @@ class MchoseHeadsetProvider(Provider):
                 continue
             return info
         self._diag.append("  no eligible V9 PRO/Turbo+ ff90:0001 collection: nothing sent")
+        return None
+
+    def _pick_firmware(self, infos):
+        # M HUB addresses Feature AA. #305 supplies the FF22 feature-only
+        # sibling; its maximum alone does not prove report AA exists.
+        candidates = [info for info in infos
+                      if (info.get("vendor_id"), info.get("product_id")) == PRO_ID
+                      and (info.get("usage_page"), info.get("usage")) == FIRMWARE_COLLECTION]
+        if len(candidates) == 1:
+            info = candidates[0]
+            if (info.get("path") and type(info.get("feature_report_length")) is int
+                    and info["feature_report_length"] == REPORT_LEN
+                    and info.get("feature_report_sizes") == {"170": REPORT_LEN}
+                    and type(info["feature_report_sizes"]["170"]) is int):
+                return info
+        self._diag.append("  接收器固件版本未确认：缺少唯一且描述符证明的 FF22:0001 Feature AA/64；"
+                          "需要 0008 及以上，不发电量查询")
+        return None
+
+    def _read_receiver_firmware(self, path):
+        dev = hid.device()
+        try:
+            dev.open_path(path)
+            # audio.blk.readFirmwareVersion, RECEIVER=1. This selects a read
+            # target; it is distinct from BLK's OTA control/data reports.
+            if dev.send_feature_report(FIRMWARE_REQUEST) != REPORT_LEN:
+                self._diag.append("  接收器固件版本读取失败：查询写入失败或不完整；"
+                                  "需要 0008 及以上，不发电量查询")
+                return None
+            time.sleep(FIRMWARE_READ_DELAY_SECONDS)
+            version = parse_receiver_firmware(dev.get_feature_report(0xAA, REPORT_LEN))
+            if version is None:
+                self._diag.append("  接收器固件版本回复无效；需要 0008 及以上，不发电量查询")
+            return version
+        except (OSError, ValueError):
+            self._diag.append("  接收器固件版本读取失败；需要 0008 及以上，不发电量查询")
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
         return None
 
     def _query(self, path):
@@ -127,6 +184,16 @@ class MchoseHeadsetProvider(Provider):
             info = self._pick(group)
             if info is None:
                 continue
+            if (info["vendor_id"], info["product_id"]) == PRO_ID:
+                firmware_info = self._pick_firmware(group)
+                if firmware_info is None:
+                    continue
+                version = self._read_receiver_firmware(firmware_info["path"])
+                if version is None:
+                    continue
+                if version < 8:
+                    self._diag.append("  接收器固件低于 0008，官方驱动也不支持电量")
+                    continue
             reading = self._query(info["path"])
             if reading is None:
                 continue

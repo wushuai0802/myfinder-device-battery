@@ -10,7 +10,8 @@ from unittest.mock import patch
 ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
 sys.path.insert(0, str(ENGINE / "tests"))
-from test_mchose_by_keyboard import P, entry, fixture, identity, reply
+from test_mchose_by_keyboard import P, entry, fixture, identity, reply, notification
+from test_aula_fa09 import aula_entry, aula_fixture, aula_reply
 from providers.vgn_beiying import VgnBeiyingProvider
 from catalog import verification_for
 from device_pack import BRAND_PROVIDERS
@@ -104,7 +105,8 @@ class Mchose41e4KeyboardBridgeTests(MchoseByKeyboardBridgeTests):
 
 class SharedFa09BridgeTests(unittest.TestCase):
     def test_one_neutral_card_and_zero_reply_preserves_unconfirmed_history(self):
-        infos = [entry(path=b"fa09-ff04"), entry(path=b"fa09-ff02", usage_page=0xFF02)]
+        infos = [entry(path=b"fa09-ff04"), entry(path=b"fa09-ff02", usage_page=0xFF02,
+                                              input_report_sizes=None)]
         engine = server.BatteryEngine([VgnBeiyingProvider(), P()], include_native=True)
         self.addCleanup(engine.close)
         with fixture([identity("000000000000"), reply(63, 0xFF)], infos) as bus:
@@ -125,6 +127,26 @@ class SharedFa09BridgeTests(unittest.TestCase):
             self.assertEqual(stale["connectionState"], "unconfirmed")
             self.assertEqual(snapshot["errors"], [])
             self.assertEqual(bus.opened, [infos[0]["path"]])
+
+    def test_by_notification_replaces_unconfirmed_feature_history_on_same_receiver(self):
+        engine = server.BatteryEngine([P(), VgnBeiyingProvider()], include_native=True)
+        self.addCleanup(engine.close)
+        ff04 = aula_entry(path=b"ff04")
+        ff02 = entry(path=b"ff02", usage_page=0xFF02)
+        with aula_fixture([aula_reply()], [ff04]):
+            first, = engine.poll()["devices"]
+        self.assertTrue(first["unconfirmed"])
+        with aula_fixture([identity("030000000115"), notification()], [ff04, ff02]) as bus:
+            current, = engine.poll()["devices"]
+        self.assertEqual((current["id"], current["name"], current["percent"]),
+                         (first["id"], "MCHOSE G75 Pro", 95))
+        self.assertNotIn("unconfirmed", current)
+        self.assertEqual(bus.opened, [b"ff02"])
+        self.assertEqual(bus.feature_writes, [])
+        with aula_fixture([notification(0)], [ff04, ff02]):
+            stale, = engine.poll()["devices"]
+        self.assertEqual(stale["confirmedAtUtc"], current["confirmedAtUtc"])
+        self.assertFalse(stale["fresh"])
 
 
 if __name__ == "__main__":

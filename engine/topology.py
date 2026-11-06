@@ -291,6 +291,8 @@ def discover(paths, excluded=(), *, full=False):
                     (0x35D8, 0x0133, 0xFF02, 0x0002),
                     (0x3710, 0x5501, 0xFF02, 0x0002),
                     (0x41E4, 0x2001, 0xFF04, 0x0002),
+                    (0x41E4, 0x2001, 0xFF02, 0x0002),
+                    (0x3554, 0xFA09, 0xFF02, 0x0002),
                     (0x320F, 0x706E, 0xFF1C, 0x0092),
                     (0x320F, 0x5088, 0xFF1C, 0x0092),
                     (0x391D, 0x1A01, 0xFF01, 0x0010),
@@ -322,6 +324,14 @@ def discover(paths, excluded=(), *, full=False):
                                      for key in ("input_report_sizes", "output_report_sizes"))
                                  or (not any((caps.input, caps.output, caps.ib, caps.iv, caps.ob, caps.ov))
                                      and info["feature_report_sizes"] is not None))
+            # #305's V9 PRO sibling: prove the read-only AA firmware report
+            # before the provider may open it. Max length alone is not proof.
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x291D, 0x385D, 0xFF22, 0x0001):
+                from battery_hid import byte_report_sizes
+                info.update(feature_report_length=caps.feature,
+                            feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
+                caps_complete = info["feature_report_sizes"] is not None
             # Fixed-usage arrays are enabled only for VGN HUB's exact beiying
             # receiver pairs/collection, never for M HUB's FF04 BY endpoint.
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (

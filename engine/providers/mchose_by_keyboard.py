@@ -39,7 +39,14 @@ def parse_model(reply):
 
 
 def parse_reply(reply):
-    payload = _payload(reply, 0x4A)
+    # M HUB subscribes to 0A/type 05 independently of its 4A transaction.
+    # The notification skips bytes 2..4; they are NOT sequence/length gates.
+    # Its parser does not check a trailer. Require our proven 20-byte report.
+    if (len(reply) == 20 and all(type(b) is int and 0 <= b <= 255 for b in reply)
+            and reply[0] == 0x13 and reply[1] == 0x0A and reply[5] == 0x05):
+        payload = reply[6:8]
+    else:
+        payload = _payload(reply, 0x4A)
     if payload is None:
         return None
     level, flags = payload[:2]
@@ -66,8 +73,8 @@ def parse_generic_reply(reply):
 
 
 def parse_aula_reply(reply):
-    # #224 proves the framing, but byte 3 is not yet proven to track battery
-    # level: all reported captures are 100%. Keep the reading unconfirmed.
+    # #224 F87 is always 100%; #312 G75 Pro is always zero while BY works.
+    # Byte 3 is not proven to track battery. Keep this fallback unconfirmed.
     if (not reply or len(reply) != 8
             or any(type(n) is not int or not 0 <= n <= 255 for n in reply)
             or reply[0] != 0x06 or reply[1] != 0x87
@@ -125,14 +132,35 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
 
     def _pick(self, infos):
         self._aula = False
-        candidates = [info for info in infos
+        receiver = [info for info in infos
                       if info.get("vendor_id") == self.vid
-                      and info.get("product_id") in self.pids
-                      and (info.get("usage_page"), info.get("usage")) == self.collection]
-        info = candidates[0] if len(candidates) == 1 else None
+                      and info.get("product_id") in self.pids]
+        candidates = [info for info in receiver
+                      if (info.get("usage_page"), info.get("usage")) == self.collection]
+        # M HUB filters a WebHID device containing FF04, then sends report 13.
+        # hidapi exposes individual collections: locate that report on FF04
+        # or its FF02 sibling, keeping the physical/name/model gates intact.
+        if len(candidates) != 1 or not candidates[0].get("path"):
+            self._diag.append("missing or ambiguous eligible collection: nothing sent")
+            return None
+        info = candidates[0]
+        by = [item for item in receiver
+              if item.get("path")
+              and (item.get("usage_page"), item.get("usage")) in (self.collection, (0xFF02, 2))
+              and (item.get("usage_page") == self.collection[0] or item.get("physical_id"))
+              and all(type(item.get(d + "_report_length")) is int
+                      and item[d + "_report_length"] == 20
+                      and item.get(d + "_report_sizes") == {"19": 20}
+                      and type(item[d + "_report_sizes"]["19"]) is int
+                      for d in ("input", "output"))]
+        if len(by) > 1:
+            self._diag.append("missing or ambiguous eligible collection: nothing sent")
+            return None
+        if by:
+            info = by[0]
         # #224 proves a feature-only collection. Unknown input/output lengths
         # are not evidence of absence; mixed/20-byte BY collections stay BY.
-        if (info is not None and info.get("path")
+        elif (info.get("path")
                 and (info["vendor_id"], info["product_id"]) == (0x3554, 0xFA09)
                 and type(info.get("feature_report_length")) is int
                 and info.get("feature_report_length") == 8
@@ -149,7 +177,8 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
             return None
         self._key = (info.get("physical_id", ""), info.get("path"))
         self._seen.add(self._key)
-        if info.get("product_string") not in RECEIVER_NAMES:
+        if (info.get("product_string") not in RECEIVER_NAMES
+                or candidates[0].get("product_string") not in RECEIVER_NAMES):
             self._diag.append("unrecognized wireless receiver name: nothing sent")
             return None
         if not self._aula and any(info.get(direction + "_report_sizes") != {"19": 20}
@@ -219,6 +248,8 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
             return None
         self._model = model
         self.charging_known = model is not False
+        # Accept subscribed 0A notifications in this bounded post-4A window;
+        # never use them as identity or open an unsolicited background reader.
         return self._exchange(dev, make_request(), parse_reply if self.charging_known else parse_generic_reply)
 
     def _query_aula(self, dev):

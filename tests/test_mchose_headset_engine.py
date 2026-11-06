@@ -7,10 +7,12 @@ import unittest
 ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
 sys.path.insert(0, str(ENGINE / "tests"))
-from test_mchose_headset import M, entry, fixture, reply, turbo_inventory
+from test_mchose_headset import (M, entry, fixture, reply, turbo_inventory,
+                                firmware_entry, firmware_reply, pro_inventory)
 from catalog import verification_for
 from known_ids import build_index
-from server import BatteryEngine, PROVIDERS, PROVIDER_VIDS, normalise, recognized_candidate_count, scoped_poll
+from server import (BatteryEngine, PROVIDERS, PROVIDER_VIDS, normalise,
+                    reader_diagnostics, recognized_candidate_count, scoped_poll)
 
 T1, T2 = "2026-11-04T00:00:00Z", "2026-11-04T00:01:00Z"
 
@@ -111,17 +113,79 @@ class MchoseBridgeTests(unittest.TestCase):
         self.assertIsNone(silent["charging"])
 
     def test_existing_scoped_poll_keeps_two_receivers_separate_and_hides_identity(self):
-        infos = [entry("one"), entry("two")]
+        infos = pro_inventory("one") + pro_inventory("two")
         statuses = []
         with fixture([reply(20), reply(90)], infos) as bus:
             for physical in ("one", "two"):
                 statuses.extend(scoped_poll(M.MchoseHeadsetProvider(), infos, physical))
-            self.assertEqual(bus.opened, [entry("one")["path"], entry("two")["path"]])
+            self.assertEqual(bus.opened, [firmware_entry("one")["path"], entry("one")["path"],
+                                         firmware_entry("two")["path"], entry("two")["path"]])
         self.assertEqual([s.physical_id for s in statuses], ["one", "two"])
         values = [normalise(s, None, T1) for s in statuses]
         self.assertEqual(len({v["id"] for v in values}), 2)
         self.assertEqual(len({v["physicalId"] for v in values}), 2)
         self.assertTrue(all(v["physicalId"] not in ("one", "two") for v in values))
+
+    def test_unsupported_receiver_firmware_keeps_history_unconfirmed(self):
+        provider = M.MchoseHeadsetProvider()
+        engine = BatteryEngine([provider], include_native=True)
+        self.addCleanup(engine.close)
+        with fixture([reply(90)]):
+            first, = engine.poll()["devices"]
+        with fixture([reply(20)], firmware_frames=[firmware_reply((0, 0, 0, 7))]) as bus:
+            stale, = engine.poll()["devices"]
+            self.assertEqual(bus.writes, [])
+        self.assertEqual(stale["percent"], 90)
+        self.assertEqual(stale["confirmedAtUtc"], first["confirmedAtUtc"])
+        self.assertEqual(stale["connectionState"], "unconfirmed")
+        self.assertFalse(stale["fresh"])
+        self.assertIsNone(stale["charging"])
+        self.assertIn("接收器固件低于 0008，官方驱动也不支持电量", " ".join(provider.diagnostics()))
+
+    def test_firmware_gate_reason_reaches_public_reader_health(self):
+        for frames, expected in (([firmware_reply((0, 0, 0, 7))],
+                                  "接收器固件低于 0008，官方驱动也不支持电量"),
+                                 ([[]], "接收器固件版本未确认，需要 0008 及以上")):
+            with self.subTest(expected=expected):
+                provider = M.MchoseHeadsetProvider()
+                engine = BatteryEngine([], include_native=True)
+                self.addCleanup(engine.close)
+                inventory = pro_inventory()
+                with fixture([reply(90)], inventory, firmware_frames=frames) as bus:
+                    statuses = scoped_poll(provider, inventory, "receiver-a")
+                # Model the scoped child -> parent handoff. Legacy packet/I/O
+                # diagnostics must never join the fixed firmware health reason.
+                provider._diag.append("  battery I/O: C:/private/device-path serial=private")
+                diagnostics = reader_diagnostics(provider)
+                self.assertEqual(diagnostics, [expected])
+                engine._accept("mchose_headset|receiver-a", provider.name, statuses, T1,
+                               physical="receiver-a",
+                               candidate_count=recognized_candidate_count(provider.name, inventory),
+                               diagnostics=diagnostics)
+                snapshot = engine._snapshot()
+                self.assertEqual(snapshot["devices"], [])
+                self.assertEqual(snapshot["errors"], [])
+                self.assertEqual(bus.writes, [])
+                health, = snapshot["health"]
+                self.assertEqual(health["provider"], "mchose_headset")
+                self.assertEqual(health["state"], "unavailable")
+                self.assertEqual(health["errorCode"], expected)
+                self.assertEqual(health["diagnostics"], [expected])
+                self.assertFalse(engine.failures)
+
+                with fixture([reply(90)], inventory):
+                    recovered = scoped_poll(provider, inventory, "receiver-a")
+                self.assertEqual(reader_diagnostics(provider), [])
+                engine._accept("mchose_headset|receiver-a", provider.name, recovered, T2,
+                               physical="receiver-a", candidate_count=1,
+                               diagnostics=reader_diagnostics(provider))
+                snapshot = engine._snapshot()
+                self.assertEqual(snapshot["errors"], [])
+                self.assertEqual([device["percent"] for device in snapshot["devices"]], [90])
+                health, = snapshot["health"]
+                self.assertEqual(health["state"], "ok")
+                self.assertFalse(health.get("errorCode"))
+                self.assertEqual(health["diagnostics"], [])
 
 
 if __name__ == "__main__":

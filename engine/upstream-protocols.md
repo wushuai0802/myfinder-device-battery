@@ -309,8 +309,45 @@ power with `level=None` (charging-compatible flag true, unable to distinguish
 charging from full while plugged in); `1A` explicitly signals offline with no
 percentage. An explicit unknown percentage clears the old value in the engine.
 Other states and invalid lengths/percentages are diagnosed and rejected. Silence
-does not prove power-off. No feature, EQ, firmware or alternative protocol commands
+does not prove power-off. No EQ, firmware-update or alternative battery commands
 are sent, and no speculative checksum is added.
+
+#### Receiver firmware prerequisite (M HUB / issue #305)
+
+The supplied M HUB bundle (identity and static-analysis limits in the
+[BY section](#mchose-by-keyboard-receiver-3554fa09)) classifies V9 PRO as BLK P8
+only at receiver firmware **0008 or later**. UTF-16 anchors:
+`P8_MIN_RECEIVER_VERSION_BY_MODEL_KEY` / `resolveAudioBLKBaseType` near `607996`,
+and `initializeBLKHeadsetState` near `626466` read the receiver version before
+attempting battery. This threshold is for `291D:385D` only; no new gate is
+applied to Turbo+.
+
+`createReadFirmwareVersionCommand` (`461240`) is the read-only
+`audio.blk.readFirmwareVersion` operation, target `RECEIVER=1`. It sends Feature
+report `AA` with 63 data bytes: full hidapi frame `AA 01 01` + 61 zero bytes.
+The transport (`429157`/`429461`) waits 300 ms then reads Feature `AA`;
+`parseFirmwareVersionResponse` (`461695`) requires `AA 01` and concatenates
+the **decimal representations** of full-frame bytes 2..5. `00 00 00 08` means
+`0008`; this is not a hexadecimal/BCD or little-endian integer conversion.
+The official parser accepts at least six bytes; this implementation requires
+the descriptor-proven full 64 bytes, valid byte values and rejects the exact
+query echo. No response checksum is checked by the official parser.
+
+M HUB selects a firmware endpoint by Feature report `AA`, not a hardcoded
+usage page. #305 identifies an `FF22:0001` sibling with Feature maximum 64;
+it does **not** prove its report ID. The local conservative gate requires one
+same-physical-receiver `291D:385D / FF22:0001` collection with descriptor-proven
+single Feature `AA/64`, obtained passively by topology. Only then is the
+read-only version query allowed. Unknown/missing/ambiguous descriptor or invalid,
+silent or failed version read sends no battery query; versions below 8 expose
+`接收器固件低于 0008，官方驱动也不支持电量` in reader health. Versions >=8 permit
+the existing `FF90` battery exchange. Firmware reads are repeated each poll,
+without an updater, configuration write or speculative `FF82` fallback.
+
+#305's actual firmware and Feature report ID remain unknown. Static code and
+synthetic tests establish this gate, not that the reported receiver is old or
+that upgrading it would fix its silence. Independent hardware reads, concurrent
+M HUB ownership, firmware response freshness and final UI remain unverified.
 
 Sources: [rafagfran hardware/caps report](https://github.com/rafagfran/mchose-v9-pro-battery-tray#protocolo)
 ([MIT](https://github.com/rafagfran/mchose-v9-pro-battery-tray/blob/main/LICENSE));
@@ -2127,18 +2164,34 @@ device/class/filter mapping is still needed before any implementation.
 `405102805e2adeb93073ee2186f6d0193ca1317a6b4657d636e4e611bd25a446`).
 No vendor implementation was copied. These are static protocol observations,
 not USB captures. REA parsed the artifact without execution (Evidence
-`ev_98c981e0bb862fabffdef01c9b1f5871776c8f3eca1485589034d68c1d2206b8`);
+`ev_102e0e24a8d56d64ad7616da8f8bb184a2382e35239beca57b44a291e060d9f1`,
+summary `ev_f7c0b82157dc85a9e57eb71b3257073db80c7f232c88826de8b8fcf555d7410a`);
 its semantic graph hit its node ceiling, so the findings below were checked
 directly against the named source anchors rather than assuming full graph coverage.
 
 #### Routing and model gate
 
-The filter `{vendorId:13652,productId:64009,usagePage:65284}` and the matching
-`getDeviceMap` predicate route FA09's **FF04** endpoint to the BY keyboard path.
-The supplied #22/#25 diagnostics record `FF04:0002` alongside `FF02:0002`; only
-the former is eligible. `registerHidDevice` / `instantiateDevice` create
-`DeviceManager` / **`HidDeviceHandler`**. Wireless names select
-`defaultWirelessRID=19` (`0x13`); other names select wired feature ID 6 or 9.
+The filter `{vendorId:13652,productId:64009,usagePage:65284}` (`1991272`) and
+`getDeviceMap` predicate (`916939`; `916224` for `41E4:2001`) require a WebHID
+device **containing FF04**. This is not a binding of BY output to that collection:
+`registerHidDevice` / `instantiateDevice` (`356708`) create `DeviceManager` /
+`HidDeviceHandler`; wireless names select `defaultWirelessRID=19` (`0x13`).
+`readCommand` (`354502`) calls `device.sendReport(0x13, data)` on the WebHID
+device, without a usage-page argument. Other names use wired Feature ID 6 or 9.
+
+Windows hidapi exposes individual collection handles. The local translation
+retains one `FF04:0002` marker and the generic-name gate, then selects the
+**unique descriptor-proven** 20-byte input/output report `13` on FF04 or FF02
+of the same physical receiver. Two eligible transports are ambiguous and cause
+no query; no arbitrary enumeration-order preference is used. A sibling needs
+resolved physical identity, and an FF02-only receiver remains outside the
+official FF04 discovery gate. This is descriptor-based transport selection,
+not a claim that the JavaScript explicitly names FF02 for BY.
+
+#312 reports G75 Pro identification on FF02 while FF04 is Feature-only. Under
+the above runtime descriptor proof, FF02 handles both `05` and `4A`. Its
+notification prefix is decoded below; #312 does not supply a complete raw
+descriptor or all 20 reply bytes, so this task does not claim hardware acceptance.
 
 M HUB does **not** read battery on every FA09 receiver. For the exact generic
 names `2.4G Wireless Receiver` and `MCHOSE 2.4G Wireless`, its identification
@@ -2187,11 +2240,11 @@ is an unverified firmware-identity boundary, not proof of its compatibility.
 
 `3554:FA09` belongs exclusively to `mchose_by_keyboard`, including its offline
 device index and worker routing. `vgn_beiying` excludes the pair entirely, so
-the receiver's FF02 collection cannot start a second query or create a VXE
-card alongside the FF04 card. The existing generic-name, unique FF04:0002,
-single report-ID `13` / 20-byte input/output descriptor gates remain in place for BY.
-The feature-only AULA variant is selected separately as documented below.
-An FF02-only or otherwise ineligible FA09 is not queried by either reader.
+the receiver's FF02 collection cannot start a second provider or create a VXE
+card. The generic-name and model gates remain; one FF04 marker and one proven
+FF04/FF02 BY transport are required as above. BY takes priority over the
+feature-only AULA fallback documented below. An FF02-only or otherwise
+ineligible FA09 is not queried by either reader.
 
 The first BY query is always the fixed read-only `05` identification frame.
 A complete accepted `05` reply matching `keyboardPwds` retains the existing
@@ -2214,9 +2267,9 @@ The `3554:FA09` receiver row is in the table starting at UTF-16 offset
 `getBatteryInternal` without a product-name or model query/gate. `ds`
 (`2168848`) sends report `13`, command `4A`, using the same 20-byte BY frame.
 That is evidence for a receiver-level percentage read, not evidence that
-every FA09 keyboard is a VXE V87 Pro. We retain M HUB's FF04 identification
-endpoint and apply this ungated battery-read policy only after an unknown
-identity response, rather than probing its second endpoint.
+every FA09 keyboard is a VXE V87 Pro. We retain M HUB's FF04 discovery gate
+and apply this ungated battery-read policy only after an unknown identity
+response on the single selected BY transport.
 
 For an unknown model, the generic parser follows VGN HUB's percentage-only
 interpretation: full-frame byte 5, 1..100 accepted here, zero suppressed as
@@ -2235,7 +2288,7 @@ no evidence of `4A` state-changing side effects on non-MCHOSE/non-VGN devices;
 that is a bounded static finding, not a hardware safety result. Synthetic
 tests cover both provider orders, both FA09 collections, one open/one card,
 known/unknown names, silent back-off, zero suppression and stale history.
-Other-brand firmware, FF04/FF02 equivalence in practice, cold starts, delayed
+Other-brand firmware, actual descriptor mapping, cold starts, delayed
 or cached replies, charging and coexistence with either HUB remain unverified.
 
 #### Complete exchanges and session requirements
@@ -2302,6 +2355,38 @@ offline 0%. The protocol has no nonce; cached receiver replies, delayed packets,
 sleep freshness, charge transitions and concurrent M HUB ownership are untested.
 All new reply fixtures are **synthetic**, including their trailer values.
 
+#### Asynchronous `0A` battery notifications (#312)
+
+`batteryParser(false)` (`335541`, near the brief's `335450`) reads the WebHID data without report ID:
+command, three skipped bytes, type, batteryLevel, low-nibble fullStatus,
+high-nibble chargeStatus. `DeviceManager.handleInputReport` (`349501`)
+notifies subscribers without transaction matching or checksum validation.
+The home subscriber (`2487086`) and `useBattery` (`4629002`) accept
+only command `0A` and type `05`. Thus `0A` is an **asynchronous notification**,
+not a `4A` transaction reply: `handleCommandResponse` (`354748`) still
+matches the requested command. This implementation accepts it in the bounded
+read window after sending `4A`, only after recognized MCHOSE identification;
+unknown FA09 models retain the generic `4A` parser and unknown charging.
+
+| Offset including report ID | Notification interpretation |
+| --- | --- |
+| 0 | `13`; exactly 20 bytes required by this implementation's descriptor gate |
+| 1 | `0A` command |
+| 2..4 | Skipped by M HUB; no packet sequence/length validation invented |
+| 5 | Type `05`; sleep notification type `02` is not battery |
+| 6 | Battery percentage; accept 1..100, suppress 0 as in the existing BY path |
+| 7 | Low nibble fullStatus, high nibble chargeStatus; accept each only 0/1 |
+| 8..19 | Not consumed by batteryParser; no inferred checksum or zero-padding check |
+
+The user-reported prefix `13 0A 01 00 04 05 5F 01` means **95%, not charging**.
+FullStatus=1 does not override wireless percentage. ChargeStatus=1 indicates
+charging only below 100, as for `4A`. Values above 100, unknown flags, other
+types/IDs/commands and truncated packets produce no reading. The eight-byte
+#312 prefix alone is not accepted as a complete HID report; tests pad it with
+synthetic bytes. M HUB itself has no exact-length/range/flag gate here; these
+remain conservative local bounds. No nonce proves notification freshness or
+that a notification seen after `4A` was caused by that request.
+
 #### Commands excluded from this reader
 
 The complete `configManagerMap` used by this class has these state-changing
@@ -2333,7 +2418,7 @@ not enabled**. FA07 and other keyboard/mouse identities are also excluded.
 #### Shared FA09 feature-only variant: user hardware evidence #224 / #108
 
 **C / 用户实机验证，#224；待本项目实机验证。** The supplied issue
-`.ai/evidence/aula/issue-224.md` reports F87 on Windows 11, six stable 100%
+`.ai/evidence/issue-224.md` reports F87 on Windows 11, six stable 100%
 reads matching Aula Hub, with the same generic product string for F75/F87.
 It attributes the query to Aula Hub 2.2.3 `getKeyboardPower()`; that Hub bundle
 was not supplied or independently inspected here. The concrete F87 result is
@@ -2350,7 +2435,7 @@ maximum lengths both zero with proven empty input/output report-size maps**.
 Topology requires zero field counts as well as zero lengths to prove absence;
 failed proofs (`None`) and unknown lengths are not absence. This deliberately accepts only #224's feature-only
 shape, not arbitrary additional reports. A proven 20-byte BY input/output pair
-continues down the unchanged BY path even if Feature 06 also exists. Ambiguous
+on FF04 or the same receiver's FF02 takes priority even if Feature 06 exists. Ambiguous
 collections or failed proofs cause no query handle open or send; neither path
 falls back to the other following an I/O failure. Topology collects both forms
 of report-size evidence from preparsed data without any device command, and
@@ -2380,6 +2465,14 @@ capped at 30 minutes, per physical receiver/path and cleared on removal or
 successful recovery. Historical readings retain their confirmation timestamp
 and become unconfirmed. The existing isolated worker bounds blocking Feature
 I/O; this code adds no claim of native synchronous-call cancellation.
+
+#312 adds the counterexample `06 87 02 00 F7 00 FC 51` from G75 Pro: byte 3
+stays zero after wake/replug while FF02 BY identifies `030000000115` and reports
+the `0A` 95% notification. F87's #224 byte 3 remains `64` (hex, 100%). These
+constant samples do not prove Feature byte 3 tracks battery. Keep Feature
+readings **待确认** (`unconfirmed=True`) and use them only when no proven BY
+transport is available; a failed/silent selected BY exchange does not trigger
+Feature I/O in the same poll. No new Feature offset is guessed.
 
 For #231 feedback, fixed rejection text such as `report sizes unproven`,
 `receiver name unrecognized` or `collection missing or ambiguous` is carried
@@ -2541,7 +2634,7 @@ shared FA09 uses the single-owner flow documented above.
 | `258A:027E` | VGN V98pro V3 | `FF00:0001` | `09` | Wired; excluded |
 | `258A:027F` | VGN V98pro V3 | `FF02:0002` | `13` | Enabled; static evidence only |
 | `258A:010C` | VXE V87pro | `FF00:0001` | `06` | Wired; excluded |
-| `3554:FA09` | VXE V87pro (upstream label only) | `FF02:0002` | `13` | Excluded here; owned solely by `mchose_by_keyboard` on FF04, neutral name for unknown models |
+| `3554:FA09` | VXE V87pro (upstream label only) | `FF02:0002` | `13` | Excluded here; owned solely by `mchose_by_keyboard` with FF04 discovery and proven FF04/FF02 BY transport, neutral name for unknown models |
 | `258A:026A` | VGN V87 V2 | `FF00:0001` | `09` | Wired; excluded |
 | `258A:027B` | VGN V87 V2 | `FF02:0002` | `13` | Enabled; static evidence only |
 | `391D:2003` | VGN N75 V2 | `FF00:0001` | `09` | Wired; excluded |

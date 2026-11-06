@@ -45,7 +45,8 @@ class AulaFa09BridgeTests(unittest.TestCase):
         self.assertEqual(len(bus.feature_writes), 1)
 
     def test_zero_silence_io_failure_and_backoff_keep_history_without_errors(self):
-        infos = [aula_entry(), entry(path=b"other-collection", usage_page=0xFF02)]
+        infos = [aula_entry(), entry(path=b"other-collection", usage_page=0xFF02,
+                                    input_report_sizes=None)]
         engine = server.BatteryEngine([P(), VgnBeiyingProvider()], include_native=True)
         self.addCleanup(engine.close)
         with aula_fixture([aula_reply()], infos):
