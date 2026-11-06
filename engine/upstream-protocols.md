@@ -338,14 +338,19 @@ usage page. #305 identifies an `FF22:0001` sibling with Feature maximum 64;
 it does **not** prove its report ID. The local conservative gate requires one
 same-physical-receiver `291D:385D / FF22:0001` collection with descriptor-proven
 single Feature `AA/64`, obtained passively by topology. Only then is the
-read-only version query allowed. Unknown/missing/ambiguous descriptor or invalid,
-silent or failed version read sends no battery query; versions below 8 expose
-`接收器固件低于 0008，官方驱动也不支持电量` in reader health. Versions >=8 permit
-the existing `FF90` battery exchange. Firmware reads are repeated each poll,
-without an updater, configuration write or speculative `FF82` fallback.
+read-only version query allowed. Only a successfully read version below 8 blocks
+the battery query and exposes `接收器固件低于 0008，官方驱动也不支持电量` in reader health.
+Unknown/missing/ambiguous descriptor or invalid, silent or failed version reads
+instead retain the 1.3.9 `FF90` battery exchange, with the diagnostic
+`接收器固件版本未知，按原方式查询`. Versions >=8 also permit the existing exchange.
+Both known versions and unknown results are cached by `(physical, FF90 path)`
+until that receiver path disappears from the inventory; replugging reads the
+version afresh. Repeated polls do not retry Feature `AA`, including when an
+unknown result is cached. No updater, configuration write or speculative `FF82`
+fallback is added.
 
 #305's actual firmware and Feature report ID remain unknown. Static code and
-synthetic tests establish this gate, not that the reported receiver is old or
+synthetic tests establish this behavior, not that the reported receiver is old or
 that upgrading it would fix its silence. Independent hardware reads, concurrent
 M HUB ownership, firmware response freshness and final UI remain unverified.
 

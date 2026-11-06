@@ -103,13 +103,11 @@ def reader_diagnostics(provider):
         return []
     lines = provider.reader_diagnostics() if provider.name == "mchose" else provider.diagnostics()
     if provider.name == "mchose_headset":
-        # Expose only fixed firmware-gate reasons, never this legacy reader's
+        # Expose only fixed firmware reasons, never this legacy reader's
         # raw I/O exceptions or packet log.
-        if any(line.strip() == "接收器固件低于 0008，官方驱动也不支持电量" for line in lines):
-            return ["接收器固件低于 0008，官方驱动也不支持电量"]
-        if any(line.strip().startswith(("接收器固件版本", "receiver firmware query write failed"))
-               for line in lines):
-            return ["接收器固件版本未确认，需要 0008 及以上"]
+        for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未知，按原方式查询"):
+            if any(line.strip() == reason for line in lines):
+                return [reason]
         return []
     return lines if len(lines) <= 16 else lines[:6] + lines[-10:]
 
@@ -766,7 +764,7 @@ class BatteryEngine:
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
             if name == "mchose_headset" and not measured:
-                for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未确认，需要 0008 及以上"):
+                for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未知，按原方式查询"):
                     if reason in diagnostics:
                         self.health[reader_key]["diagnosticSummary"] = reason
                         break

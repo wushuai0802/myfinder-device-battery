@@ -5,6 +5,8 @@ projects and upstream hardware reports); S14 is corroboration only, no code
 copied. Output/input reports include ID 55 and are exactly 64 bytes. Only
 the battery query 55 65 01 is sent. V9 PRO first reads receiver firmware
 through Feature AA/64; versions below 0008 cannot read battery in M HUB.
+Unknown versions retain the original battery query. Cache either result per
+receiver until removal, so polling does not repeatedly send Feature AA.
 No EQ, configuration or firmware-update commands are sent.
 Turbo+ 3837:600A: 用户实机抓包，#61 confirms 80% discharge twice. Its
 charging/off states remain untested; 3837:6008 is lighting, never a target.
@@ -75,6 +77,8 @@ class MchoseHeadsetProvider(Provider):
 
     def __init__(self):
         self._diag = []
+        self._firmware_versions = {}  # (physical, battery path) -> version, or None when unknown
+        self._seen = set()
 
     def _pick(self, infos):
         for info in infos:
@@ -102,30 +106,30 @@ class MchoseHeadsetProvider(Provider):
                     and info.get("feature_report_sizes") == {"170": REPORT_LEN}
                     and type(info["feature_report_sizes"]["170"]) is int):
                 return info
-        self._diag.append("  接收器固件版本未确认：缺少唯一且描述符证明的 FF22:0001 Feature AA/64；"
-                          "需要 0008 及以上，不发电量查询")
+        self._diag.append("  缺少唯一且描述符证明的 FF22:0001 Feature AA/64")
         return None
 
     def _read_receiver_firmware(self, path):
-        dev = hid.device()
+        dev = None
         try:
+            dev = hid.device()
             dev.open_path(path)
             # audio.blk.readFirmwareVersion, RECEIVER=1. This selects a read
             # target; it is distinct from BLK's OTA control/data reports.
             if dev.send_feature_report(FIRMWARE_REQUEST) != REPORT_LEN:
-                self._diag.append("  接收器固件版本读取失败：查询写入失败或不完整；"
-                                  "需要 0008 及以上，不发电量查询")
+                self._diag.append("  接收器固件版本读取失败：查询写入失败或不完整")
                 return None
             time.sleep(FIRMWARE_READ_DELAY_SECONDS)
             version = parse_receiver_firmware(dev.get_feature_report(0xAA, REPORT_LEN))
             if version is None:
-                self._diag.append("  接收器固件版本回复无效；需要 0008 及以上，不发电量查询")
+                self._diag.append("  接收器固件版本回复无效")
             return version
-        except (OSError, ValueError):
-            self._diag.append("  接收器固件版本读取失败；需要 0008 及以上，不发电量查询")
+        except (OSError, ValueError, TypeError):
+            self._diag.append("  接收器固件版本读取失败")
         finally:
             try:
-                dev.close()
+                if dev is not None:
+                    dev.close()
             except Exception:
                 pass
         return None
@@ -169,6 +173,7 @@ class MchoseHeadsetProvider(Provider):
 
     def poll(self):
         self._diag = []
+        self._seen = set()
         if hid is None:
             return []
         infos = []
@@ -181,17 +186,23 @@ class MchoseHeadsetProvider(Provider):
                    if (info.get("vendor_id"), info.get("product_id")) in PIDS]
         out = []
         for physical, group in physical_groups(matched).items():
+            # Keep cached results while the receiver path is still present,
+            # even if descriptor capabilities are temporarily unavailable.
+            self._seen.update((physical, item.get("path")) for item in group
+                              if (item.get("vendor_id"), item.get("product_id")) == PRO_ID)
             info = self._pick(group)
             if info is None:
                 continue
             if (info["vendor_id"], info["product_id"]) == PRO_ID:
-                firmware_info = self._pick_firmware(group)
-                if firmware_info is None:
-                    continue
-                version = self._read_receiver_firmware(firmware_info["path"])
+                key = (physical, info["path"])
+                if key not in self._firmware_versions:
+                    firmware_info = self._pick_firmware(group)
+                    self._firmware_versions[key] = (self._read_receiver_firmware(firmware_info["path"])
+                                                    if firmware_info is not None else None)
+                version = self._firmware_versions[key]
                 if version is None:
-                    continue
-                if version < 8:
+                    self._diag.append("  接收器固件版本未知，按原方式查询")
+                elif version < 8:
                     self._diag.append("  接收器固件低于 0008，官方驱动也不支持电量")
                     continue
             reading = self._query(info["path"])
@@ -203,6 +214,8 @@ class MchoseHeadsetProvider(Provider):
                 level, charging, online, self.name, kind="headset",
                 connection_known=True, charging_known=online, physical_id=physical,
                 level_unavailable=level is None))
+        for key in [key for key in self._firmware_versions if key not in self._seen]:
+            del self._firmware_versions[key]
         return out
 
     def diagnostics(self):

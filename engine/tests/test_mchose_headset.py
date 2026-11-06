@@ -52,10 +52,11 @@ def turbo_inventory():
 
 class FakeHid:
     def __init__(self, frames=(), write_result=64, read_ms=10,
-                 firmware_frames=None, feature_write_result=64):
+                 firmware_frames=None, feature_write_result=64, open_errors=None):
         self.frames = list(frames)
         self.firmware_frames = None if firmware_frames is None else list(firmware_frames)
         self.feature_write_result = feature_write_result
+        self.open_errors = open_errors or {}
         self.write_result = write_result
         self.read_ms = read_ms
         self.now = 0.0
@@ -73,6 +74,8 @@ class FakeHid:
             def open_path(self, path):
                 self.path = path
                 bus.opened.append(path)
+                if path in bus.open_errors:
+                    raise bus.open_errors[path]
 
             def write(self, packet):
                 bus.writes.append((self.path, list(packet)))
@@ -80,6 +83,8 @@ class FakeHid:
 
             def send_feature_report(self, packet):
                 bus.feature_writes.append((self.path, list(packet)))
+                if isinstance(bus.feature_write_result, Exception):
+                    raise bus.feature_write_result
                 return bus.feature_write_result
 
             def get_feature_report(self, report_id, length):
@@ -161,7 +166,7 @@ class MchoseHeadsetTests(unittest.TestCase):
                         reply()[:4], reply()[:-1], reply() + [0]):
             with self.subTest(frame=invalid[:4], size=len(invalid)), fixture([invalid, reply(90)]) as bus:
                 self.assertEqual([s.level for s in self.provider.poll()], [90])
-                self.assertEqual(len(bus.opened), 2)
+                self.assertEqual(bus.opened.count(entry()["path"]), 1)
                 self.assertEqual(len(bus.writes), 1)
                 self.assertEqual(len(bus.reads), 2)
 
@@ -313,6 +318,7 @@ class MchoseHeadsetTests(unittest.TestCase):
                                  ((0, 0, 1, 0), True), ((0, 0, 0, 10), True)):
             with self.subTest(version=version), fixture(
                     [reply(90)], firmware_frames=[firmware_reply(version)]) as bus:
+                self.provider = M.MchoseHeadsetProvider()
                 statuses = self.provider.poll()
                 self.assertEqual([s.level for s in statuses], [90] if allowed else [])
                 self.assertEqual(bus.feature_writes,
@@ -325,58 +331,132 @@ class MchoseHeadsetTests(unittest.TestCase):
                     self.assertIn("接收器固件低于 0008，官方驱动也不支持电量",
                                   " ".join(self.provider.diagnostics()))
 
-    def test_firmware_unknown_invalid_or_echo_never_queries_battery(self):
-        frames = ([], firmware_reply()[:6], firmware_reply()[:-1], firmware_reply() + [0],
+    def test_firmware_unknown_invalid_or_echo_queries_battery_and_caches_unknown(self):
+        frames = (None, [], firmware_reply()[:6], firmware_reply()[:-1], firmware_reply() + [0],
                   [0xAA, 2] + [0] * 62, [0xAB, 1] + [0] * 62,
                   [0xAA, 1, True, 0, 0, 8] + [0] * 58,
                   [0xAA, 1, 256, 0, 0, 8] + [0] * 58,
                   [0xAA, 1, 1, 0, 0, 0] + [0] * 58,
-                  OSError("private path must not be logged"))
+                  OSError("private path must not be logged"), ValueError("invalid feature read"))
         for frame in frames:
-            with self.subTest(frame=frame), fixture([reply(90)], firmware_frames=[frame]) as bus:
-                self.assertEqual(self.provider.poll(), [])
-                self.assertEqual(bus.writes, [])
+            with self.subTest(frame=frame), fixture([reply(90), reply(70)], firmware_frames=[frame]) as bus:
+                self.provider = M.MchoseHeadsetProvider()
+                for level in (90, 70):
+                    self.assertEqual([s.level for s in self.provider.poll()], [level])
+                    diagnostics = " ".join(self.provider.diagnostics())
+                    self.assertIn("接收器固件版本未知，按原方式查询", diagnostics)
+                    self.assertNotIn("不发电量查询", diagnostics)
+                self.assertEqual(bus.writes, [(entry()["path"], M.make_request())] * 2)
+                self.assertEqual(len(bus.feature_writes), 1)
+                self.assertEqual(len(bus.feature_reads), 1)
                 self.assertEqual(bus.opened, bus.closed)
-                self.assertNotIn("private path", " ".join(self.provider.diagnostics()))
+                self.assertNotIn("private path", diagnostics)
 
-    def test_firmware_collection_must_be_unique_and_descriptor_proven(self):
+    def test_unproven_firmware_collection_keeps_battery_query_without_feature_io(self):
         invalid = [[], [firmware_entry(), firmware_entry(path=b"duplicate")]]
         invalid.extend([firmware_entry(**change)] for change in (
             dict(feature_report_length=None), dict(feature_report_length=63),
             dict(feature_report_sizes=None), dict(feature_report_sizes={"170": 63}),
             dict(feature_report_sizes={"171": 64}), dict(feature_report_sizes={"170": 64.0}),
+            dict(path=b""),
             dict(usage_page=0xFF82), dict(usage=2), dict(physical_id="other"),
             dict(vendor_id=0x3837, product_id=0x600A)))
         for siblings in invalid:
-            with self.subTest(siblings=siblings), fixture([reply(90)], [entry()] + siblings) as bus:
-                self.assertEqual(self.provider.poll(), [])
-                self.assertEqual((bus.opened, bus.writes, bus.feature_writes), ([], [], []))
+            with self.subTest(siblings=siblings), fixture([reply(90), reply(70)], [entry()] + siblings) as bus:
+                self.provider = M.MchoseHeadsetProvider()
+                for level in (90, 70):
+                    self.assertEqual([s.level for s in self.provider.poll()], [level])
+                    self.assertIn("接收器固件版本未知，按原方式查询", " ".join(self.provider.diagnostics()))
+                self.assertEqual(bus.opened, [entry()["path"]] * 2)
+                self.assertEqual(bus.writes, [(entry()["path"], M.make_request())] * 2)
+                self.assertEqual((bus.feature_writes, bus.feature_reads), ([], []))
 
-    def test_short_firmware_write_stops_before_feature_read_and_battery(self):
-        for written in (-1, 0, 63):
+    def test_failed_or_short_firmware_write_skips_feature_read_but_queries_battery(self):
+        for written in (-1, 0, 63, OSError("private feature path")):
             with self.subTest(written=written), fixture(
-                    [reply(90)], feature_write_result=written) as bus:
-                self.assertEqual(self.provider.poll(), [])
+                    [reply(90), reply(70)], feature_write_result=written) as bus:
+                self.provider = M.MchoseHeadsetProvider()
+                for level in (90, 70):
+                    self.assertEqual([s.level for s in self.provider.poll()], [level])
+                    self.assertIn("接收器固件版本未知，按原方式查询", " ".join(self.provider.diagnostics()))
                 self.assertEqual(len(bus.feature_writes), 1)
-                self.assertEqual((bus.feature_reads, bus.writes, bus.sleeps), ([], [], []))
+                self.assertEqual((bus.feature_reads, bus.sleeps), ([], []))
+                self.assertEqual(bus.writes, [(entry()["path"], M.make_request())] * 2)
                 self.assertEqual(bus.opened, bus.closed)
 
+    def test_firmware_handle_creation_or_open_failure_keeps_battery_query(self):
+        with fixture([reply(90)]) as bus, patch.object(
+                bus, "device", side_effect=[OSError("private creation error"), bus.device()]):
+            self.assertEqual([s.level for s in self.provider.poll()], [90])
+            self.assertEqual(bus.writes, [(entry()["path"], M.make_request())])
+            self.assertEqual(bus.feature_writes, [])
+            self.assertIn("接收器固件版本未知，按原方式查询", " ".join(self.provider.diagnostics()))
+        self.provider = M.MchoseHeadsetProvider()
+        with fixture([reply(90)], open_errors={firmware_entry()["path"]: OSError("private open error")}) as bus:
+            self.assertEqual([s.level for s in self.provider.poll()], [90])
+            self.assertEqual(bus.writes, [(entry()["path"], M.make_request())])
+            self.assertEqual(bus.feature_writes, [])
+            self.assertEqual(bus.opened, bus.closed)
+            self.assertNotIn("private", " ".join(self.provider.diagnostics()))
+
+    def test_firmware_result_is_cached_until_receiver_removal(self):
+        for frame, allowed in ((firmware_reply((0, 0, 0, 7)), False), (firmware_reply(), True), ([], True)):
+            with self.subTest(frame=frame):
+                self.provider = M.MchoseHeadsetProvider()
+                with fixture([reply(90), reply(70)], firmware_frames=[frame, firmware_reply()]) as bus:
+                    for level in (90, 70):
+                        self.assertEqual([s.level for s in self.provider.poll()], [level] if allowed else [])
+                    self.assertEqual(len(bus.feature_writes), 1)
+                    self.assertEqual(len(bus.feature_reads), 1)
+                    self.assertEqual(bus.writes, [(entry()["path"], M.make_request())] * (2 if allowed else 0))
+                with fixture(inventory=[]):
+                    self.assertEqual(self.provider.poll(), [])
+                with fixture([reply(80)]) as bus:
+                    self.assertEqual([s.level for s in self.provider.poll()], [80])
+                    self.assertEqual(len(bus.feature_writes), 1)
+                    self.assertEqual(len(bus.feature_reads), 1)
+                    self.assertEqual(bus.writes, [(entry()["path"], M.make_request())])
+
+    def test_firmware_cache_distinguishes_receiver_path_changes(self):
+        with fixture(firmware_frames=[firmware_reply((0, 0, 0, 7))]):
+            self.assertEqual(self.provider.poll(), [])
+        inventory = pro_inventory()
+        inventory[1]["path"] = b"receiver-a-new-ff90"
+        with fixture([reply(80)], inventory) as bus:
+            self.assertEqual([s.level for s in self.provider.poll()], [80])
+            self.assertEqual(len(bus.feature_writes), 1)
+            self.assertEqual(bus.writes, [(b"receiver-a-new-ff90", M.make_request())])
+
     def test_firmware_gates_each_receiver_and_never_applies_to_turbo(self):
-        inventory = pro_inventory("old") + pro_inventory("new") + turbo_inventory()
-        with fixture([reply(90), reply(80)], inventory, firmware_frames=[
-                firmware_reply((0, 0, 0, 7)), firmware_reply((0, 0, 0, 8))]) as bus:
-            statuses = self.provider.poll()
-            self.assertEqual([(s.physical_id, s.level) for s in statuses], [("new", 90), ("turbo", 80)])
-            self.assertEqual([path for path, _ in bus.feature_writes], [b"old-ff22", b"new-ff22"])
-            self.assertEqual([path for path, _ in bus.writes], [b"new-ff90", b"turbo-ff90"])
+        inventory = pro_inventory("old") + pro_inventory("new") + pro_inventory("unknown") + turbo_inventory()
+        with fixture([reply(90), reply(70), reply(80)] * 2, inventory, firmware_frames=[
+                firmware_reply((0, 0, 0, 7)), firmware_reply(), []]) as bus:
+            for _ in range(2):
+                statuses = self.provider.poll()
+                self.assertEqual([(s.physical_id, s.level) for s in statuses],
+                                 [("new", 90), ("unknown", 70), ("turbo", 80)])
+            self.assertEqual([path for path, _ in bus.feature_writes], [b"old-ff22", b"new-ff22", b"unknown-ff22"])
+            self.assertEqual([path for path, _ in bus.writes], [b"new-ff90", b"unknown-ff90", b"turbo-ff90"] * 2)
+
+        # Removing one receiver must not forget the still-connected receiver.
+        with fixture([reply(60)], pro_inventory("new")) as bus:
+            self.assertEqual([s.level for s in self.provider.poll()], [60])
+            self.assertEqual(bus.feature_writes, [])
+        with fixture([reply(80), reply(60)], pro_inventory("old") + pro_inventory("new")) as bus:
+            self.assertEqual([s.level for s in self.provider.poll()], [80, 60])
+            self.assertEqual([path for path, _ in bus.feature_writes], [b"old-ff22"])
 
     def test_unresolved_parent_never_borrows_another_collection_firmware(self):
         inventory = pro_inventory("one") + pro_inventory("two")
         for info in inventory:
             info.update(physical_id="", serial_number="shared-serial")
-        with fixture([reply(90)], inventory) as bus:
-            self.assertEqual(self.provider.poll(), [])
-            self.assertEqual((bus.opened, bus.feature_writes, bus.writes), ([], [], []))
+        with fixture([reply(90), reply(70)], inventory) as bus:
+            statuses = self.provider.poll()
+            self.assertEqual([s.level for s in statuses], [90, 70])
+            self.assertEqual(len({s.key for s in statuses}), 2)
+            self.assertEqual(bus.feature_writes, [])
+            self.assertEqual(bus.opened, [entry("one")["path"], entry("two")["path"]])
+            self.assertEqual(bus.writes, [(entry(physical)["path"], M.make_request()) for physical in ("one", "two")])
 
 
 if __name__ == "__main__":

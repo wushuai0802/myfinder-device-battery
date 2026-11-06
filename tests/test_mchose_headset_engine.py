@@ -132,6 +132,8 @@ class MchoseBridgeTests(unittest.TestCase):
         self.addCleanup(engine.close)
         with fixture([reply(90)]):
             first, = engine.poll()["devices"]
+        with fixture(inventory=[]):
+            engine.poll()
         with fixture([reply(20)], firmware_frames=[firmware_reply((0, 0, 0, 7))]) as bus:
             stale, = engine.poll()["devices"]
             self.assertEqual(bus.writes, [])
@@ -142,15 +144,16 @@ class MchoseBridgeTests(unittest.TestCase):
         self.assertIsNone(stale["charging"])
         self.assertIn("接收器固件低于 0008，官方驱动也不支持电量", " ".join(provider.diagnostics()))
 
-    def test_firmware_gate_reason_reaches_public_reader_health(self):
-        for frames, expected in (([firmware_reply((0, 0, 0, 7))],
-                                  "接收器固件低于 0008，官方驱动也不支持电量"),
-                                 ([[]], "接收器固件版本未确认，需要 0008 及以上")):
-            with self.subTest(expected=expected):
+    def test_firmware_reason_reaches_public_reader_health_without_blocking_unknown(self):
+        cases = ((pro_inventory(), [firmware_reply((0, 0, 0, 7))], False,
+                  "接收器固件低于 0008，官方驱动也不支持电量"),
+                 (pro_inventory(), [[]], True, "接收器固件版本未知，按原方式查询"),
+                 ([entry()], None, True, "接收器固件版本未知，按原方式查询"))
+        for inventory, frames, allowed, expected in cases:
+            with self.subTest(expected=expected, inventory=inventory):
                 provider = M.MchoseHeadsetProvider()
                 engine = BatteryEngine([], include_native=True)
                 self.addCleanup(engine.close)
-                inventory = pro_inventory()
                 with fixture([reply(90)], inventory, firmware_frames=frames) as bus:
                     statuses = scoped_poll(provider, inventory, "receiver-a")
                 # Model the scoped child -> parent handoff. Legacy packet/I/O
@@ -163,18 +166,24 @@ class MchoseBridgeTests(unittest.TestCase):
                                candidate_count=recognized_candidate_count(provider.name, inventory),
                                diagnostics=diagnostics)
                 snapshot = engine._snapshot()
-                self.assertEqual(snapshot["devices"], [])
+                self.assertEqual([device["percent"] for device in snapshot["devices"]], [90] if allowed else [])
+                if allowed:
+                    self.assertTrue(snapshot["devices"][0]["fresh"])
                 self.assertEqual(snapshot["errors"], [])
-                self.assertEqual(bus.writes, [])
+                self.assertEqual(bus.writes, [(entry()["path"], M.make_request())] if allowed else [])
                 health, = snapshot["health"]
                 self.assertEqual(health["provider"], "mchose_headset")
-                self.assertEqual(health["state"], "unavailable")
-                self.assertEqual(health["errorCode"], expected)
+                self.assertEqual(health["state"], "ok" if allowed else "unavailable")
+                self.assertEqual(health.get("errorCode"), None if allowed else expected)
                 self.assertEqual(health["diagnostics"], [expected])
                 self.assertFalse(engine.failures)
 
-                with fixture([reply(90)], inventory):
-                    recovered = scoped_poll(provider, inventory, "receiver-a")
+                # A firmware result (including unknown) is refreshed only after
+                # removal, then a proven version >=8 clears the diagnostic.
+                with fixture(inventory=[]):
+                    self.assertEqual(scoped_poll(provider, [], "receiver-a"), [])
+                with fixture([reply(90)], pro_inventory()):
+                    recovered = scoped_poll(provider, pro_inventory(), "receiver-a")
                 self.assertEqual(reader_diagnostics(provider), [])
                 engine._accept("mchose_headset|receiver-a", provider.name, recovered, T2,
                                physical="receiver-a", candidate_count=1,
@@ -186,6 +195,25 @@ class MchoseBridgeTests(unittest.TestCase):
                 self.assertEqual(health["state"], "ok")
                 self.assertFalse(health.get("errorCode"))
                 self.assertEqual(health["diagnostics"], [])
+
+    def test_unknown_firmware_without_battery_reply_is_unconfirmed_with_fallback_diagnostic(self):
+        provider = M.MchoseHeadsetProvider()
+        engine = BatteryEngine([], include_native=True)
+        self.addCleanup(engine.close)
+        inventory = pro_inventory()
+        with fixture(inventory=inventory, firmware_frames=[[]]) as bus:
+            statuses = scoped_poll(provider, inventory, "receiver-a")
+        self.assertEqual(statuses, [])
+        self.assertEqual(bus.writes, [(entry()["path"], M.make_request())])
+        engine._accept("mchose_headset|receiver-a", provider.name, statuses, T1,
+                       physical="receiver-a", candidate_count=1, diagnostics=reader_diagnostics(provider))
+        snapshot = engine._snapshot()
+        self.assertEqual(snapshot["devices"], [])
+        self.assertEqual(snapshot["errors"], [])
+        health, = snapshot["health"]
+        self.assertEqual(health["state"], "unavailable")
+        self.assertEqual(health["errorCode"], "接收器固件版本未知，按原方式查询")
+        self.assertEqual(health["diagnostics"], ["接收器固件版本未知，按原方式查询"])
 
 
 if __name__ == "__main__":
