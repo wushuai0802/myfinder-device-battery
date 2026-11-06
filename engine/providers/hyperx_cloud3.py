@@ -65,11 +65,13 @@ READ_TIMEOUT_MS = 200
 WRITE_PAUSE = 0.1                  # the reference waits between request and read
 
 # Cloud III Wireless. 0x05B7 is the dongle here, 0x0C9D the other id the reference lists.
+# 0x0FCC uses the same exchange, user-verified in #186 (90%, not charging).
 # Cloud II Core Wireless (#155): 0x0995 is its dongle (the one in the capture), 0x0795 the
 # second mode the reporter's diagnostics show - same vendor collection, same exchange.
 PIDS = {
     0x05B7: "HyperX Cloud III Wireless",
     0x0C9D: "HyperX Cloud III Wireless",
+    0x0FCC: "HyperX Cloud III Wireless",
     0x0795: "HyperX Cloud II Core Wireless",
     0x0995: "HyperX Cloud II Core Wireless",
 }
@@ -82,6 +84,7 @@ PIDS = {
 # the ASUS provider uses for a mouse answering on its cable and receiver.
 CANONICAL = {
     0x05B7: 0x05B7, 0x0C9D: 0x05B7,     # Cloud III Wireless (0C9D is its alternate id)
+    0x0FCC: 0x05B7,                     # #186: same headset and icon
     0x0995: 0x0995, 0x0795: 0x0995,     # Cloud II Core Wireless and its charging mode
 }
 

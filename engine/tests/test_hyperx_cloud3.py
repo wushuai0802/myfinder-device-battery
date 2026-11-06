@@ -200,6 +200,56 @@ class WritePath(Base):
         self.assertEqual(d.features, [])
 
 
+class Cloud3Issue186(Base):
+    """The user's 0FCC output exchange, including its original icon identity."""
+
+    @staticmethod
+    def entries(pid):
+        path = PATH.replace(b"05b7", f"{pid:04x}".encode())
+        return [dict(vendor_id=H.HP_VID, product_id=pid, interface_number=3,
+                     path=path + suffix, usage_page=page, usage=usage)
+                for suffix, page, usage in ((b"-consumer", 0x000C, 1),
+                                            (b"-telephony", 0x000B, 5),
+                                            (b"-vendor", 0xFF13, 1))]
+
+    def test_user_replies_follow_the_same_output_exchange_as_05b7(self):
+        class CapturedDongle(FakeDongle):
+            def _answer(self, packet):
+                self.pending.append([0x66, 0x89, 0x0F, 0xCF, 0x5A]
+                                    if packet[1] == 0x89 else [0x66, 0x8A, 0x00])
+
+        for pid in (0x05B7, 0x0FCC):
+            with self.subTest(pid=pid):
+                dongle = CapturedDongle()
+                entries = self.entries(pid)
+                out, _ = self.poll_entries(dongle, entries)
+                self.assertEqual([(s.key, s.name, s.level, s.charging) for s in out],
+                                 [("hyperx:05b7", "HyperX Cloud III Wireless", 90, False)])
+                self.assertEqual(dongle.writes, [[0x66, command] + [0] * 60
+                                                for command in (0x89, 0x8A)])
+                self.assertEqual(dongle.features, [])
+                self.assertEqual(set(dongle.opened), {entries[-1]["path"]})
+
+    def test_0fcc_and_05b7_share_one_icon(self):
+        out, _ = self.poll_entries(FakeDongle(level=90, charging=0),
+                                   self.entries(0x05B7) + self.entries(0x0FCC))
+        self.assertEqual([(s.key, s.level) for s in out], [("hyperx:05b7", 90)])
+
+    def test_offline_index_automatically_includes_the_new_pid_at_level_c(self):
+        from pathlib import Path
+        from catalog import load_catalog
+        from known_ids import build_index
+
+        for index in (build_index(), build_index(engine_root=Path(H.__file__).parents[1])):
+            rows = [row for row in index["devices"] if row["provider"] == "hyperx_cloud3"]
+            self.assertEqual({(row["vendorId"], row["productId"]) for row in rows},
+                             {(0x03F0, pid) for pid in (0x05B7, 0x0C9D, 0x0FCC, 0x0795, 0x0995)})
+            row, = [row for row in rows if row["productId"] == 0x0FCC]
+            self.assertEqual((row["name"], row["kind"]), ("HyperX Cloud III Wireless", "headset"))
+        reader, = [reader for reader in load_catalog()["readers"] if reader["provider"] == H.HyperXCloud3Provider.name]
+        self.assertEqual(reader["verificationLevel"], "C")
+
+
 class Cloud2Core(Base):
     """#155: NGENUITY's own exchange with the Cloud II Core dongle, pinned verbatim."""
 

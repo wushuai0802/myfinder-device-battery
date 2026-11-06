@@ -313,6 +313,63 @@ class RapooTests(unittest.TestCase):
             self.assertEqual(R.RapooProvider().poll(), [])
             self.assertEqual(bus.opened, [])
 
+    def test_rejection_diagnostics_distinguish_collection_and_descriptor_proof(self):
+        cases = [([descriptor(usage=1)], "missing or ambiguous FF00:0002 collection; not opened"),
+                 ([descriptor(), descriptor(path=b"private-duplicate")],
+                  "missing or ambiguous FF00:0002 collection; not opened")]
+        for sizes, summary in ((None, "null"), ({"7": None}, '{"7":null}'),
+                               ({"8": 19}, '{"8":19}'), ({"7": 8}, '{"7":8}'),
+                               ({"7": 19, "9": None}, '{"7":19,"9":null}'),
+                               ({"private-path": b"private-payload", "7": "private-length"}, '{"7":null}')):
+            cases.append(([descriptor(input_report_sizes=sizes)],
+                          f"report 07 unproven; sizes={summary}; not opened"))
+        for inventory, expected in cases:
+            with self.subTest(expected=expected), fixture(inventory=inventory) as bus:
+                provider = R.RapooProvider()
+                self.addCleanup(provider.close)
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(provider.diagnostics(), [expected])
+                self.assertEqual(bus.opened, [])
+                self.assertNotIn("private", " ".join(provider.diagnostics()))
+
+    def test_silence_and_invalid_input_reasons_cover_listen_and_kept_handle(self):
+        for kept in (False, True):
+            with self.subTest(kept=kept), fixture() as bus:
+                provider = R.RapooProvider()
+                self.addCleanup(provider.close)
+                if kept:
+                    provider.poll()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(provider.diagnostics(), ["opened; no input reports; no new measurement"])
+                bus.frames = [report(report_id=6), report(101), report()[:8]]
+                self.assertEqual(provider.poll(), [])
+                expected = "opened; no valid report 07; seen=06/19,07/8,07/19"
+                self.assertEqual(provider.diagnostics(), [expected])
+                # Silence must not erase the evidence that input actually arrived.
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(provider.diagnostics(), [expected])
+                bus.frames = [report(63)]
+                self.assertEqual(provider.poll()[0].level, 63)
+                self.assertEqual(provider.diagnostics(), [])
+                self.assertEqual(provider.poll()[0].level, 63)
+                self.assertEqual(provider.diagnostics(), ["opened; no input reports; no new measurement"])
+                self.assertEqual(len(bus.opened), 1)
+
+    def test_invalid_report_metadata_is_bounded_and_cleared_on_reopen(self):
+        with fixture([report(level=101, report_id=report_id) for report_id in range(40)]) as bus:
+            provider = R.RapooProvider()
+            self.addCleanup(provider.close)
+            provider.poll()
+            provider.poll()
+            self.assertLessEqual(len(provider._seen_inputs[descriptor()["path"]]), 32)
+            self.assertLess(len(provider.diagnostics()[0]), 100)
+            self.assertTrue(provider.diagnostics()[0].endswith(",..."))
+            provider.close()
+            self.assertEqual(provider._seen_inputs, {})
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(provider.diagnostics(), ["opened; no input reports; no new measurement"])
+            self.assertEqual(len(bus.opened), 2)
+
     def test_provider_has_only_open_read_close_device_operations(self):
         tree = ast.parse(Path(R.__file__).read_text(encoding="utf-8"))
         calls = {node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call)

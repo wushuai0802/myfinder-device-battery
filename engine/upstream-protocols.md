@@ -402,9 +402,22 @@ Another protocol again (LennardKittner/HyperHeadset's `cloud_iii_s_wireless`, an
 
 ### HyperX Cloud III Wireless
 
-**Connection:** 2.4 GHz dongle (03F0:05B7, and 03F0:0C9D which the reference also lists)
+**Connection:** 2.4 GHz dongle (03F0:05B7, 03F0:0C9D which the reference also lists,
+and user-verified 03F0:0FCC from #186)
 
-A different protocol from the Cloud II: the vendor collection is `0xFF13:0x0001`, a 62-byte `66 <command> 00 ...` packet goes out (0x66 is the report id) and 62 bytes come back whose second byte is either the command echo or the matching response id - `0x89`/`0x0D` carries the level in byte 4 (only when byte 2 or 3 is non-zero), `0x8A`/`0x0C` carries charging in byte 2 (0 not charging, 1 charging, 2 fully charged). Taken from LennardKittner/HyperHeadset, which lists this product id; that project also documents that some HyperX dongles accept these packets as **feature reports** only on Windows (`write()` fails with "Incorrect function" and the packet is retried with `send_feature_report`, which the diagnostics say either way). **Unverified on hardware** - no Cloud III Wireless was available here
+A different protocol from the Cloud II: the vendor collection is `0xFF13:0x0001`, a 62-byte `66 <command> 00 ...` packet goes out (0x66 is the report id) and 62 bytes come back whose second byte is either the command echo or the matching response id - `0x89`/`0x0D` carries the level in byte 4 (only when byte 2 or 3 is non-zero), `0x8A`/`0x0C` carries charging in byte 2 (0 not charging, 1 charging, 2 fully charged). Taken from LennardKittner/HyperHeadset, which lists this product id; that project also documents that some HyperX dongles accept these packets as **feature reports** only on Windows (`write()` fails with "Incorrect function" and the packet is retried with `send_feature_report`, which the diagnostics say either way).
+
+**用户实机验证，#186；充电态和满电未实测。** On 1.3.8, the
+`03F0:0FCC` receiver's interface 3 exposes consumer (`000C:0001`), telephony
+(`000B:0005`) and vendor (`FF13:0001`) collections. The user sent the existing
+`make_request()` 62-byte output reports to the vendor collection: `66 89 ...`
+returned `66 89 0F CF 5A` (90%), and `66 8A ...` returned `66 8A 00`
+(not charging). `write()` accepted 62 bytes; no feature fallback was used.
+After adding the PID, the user's panel showed 90% and not charging, and two
+background polls remained current/fresh. This is the same request/parser as
+`05B7`/`0C9D`; all three IDs use the existing `hyperx:05b7` icon key. Evidence
+remains level C: active charging, full charge and a comparison with NGENUITY
+were not tested, and this change has no new local hardware verification.
 
 ### JBL Quantum 910 Wireless
 

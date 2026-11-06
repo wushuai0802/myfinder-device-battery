@@ -90,14 +90,14 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-KEYBOARD_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo"}
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
-def keyboard_diagnostics(provider):
+def reader_diagnostics(provider):
     # These new readers emit only bounded, protocol-owned messages (no paths,
     # serials, product strings or raw exception text). Do not expose legacy logs.
-    if provider.name not in KEYBOARD_DIAGNOSTICS:
+    if provider.name not in READER_DIAGNOSTICS:
         return []
     lines = provider.diagnostics()
     return lines if len(lines) <= 16 else lines[:6] + lines[-10:]
@@ -492,8 +492,8 @@ def reader_child():
                             "candidateCount": candidates}
                 if name == "razer":
                     response["failureCode"] = provider.failure_code()
-                if name in KEYBOARD_DIAGNOSTICS:
-                    response["diagnostics"] = keyboard_diagnostics(provider)
+                if name in READER_DIAGNOSTICS:
+                    response["diagnostics"] = reader_diagnostics(provider)
             elif action == "set_dpi":
                 # Only the selected physical receiver reaches the provider. The
                 # provider revalidates identity/current/stages before one write.
@@ -668,12 +668,12 @@ class BatteryEngine:
                        and valid_public_target(key[len("topology:"):]) else None)
                   for key, value in self.health.items()][:128]
         errors = [h["provider"] + ": " + h["errorCode"] for h in health if h.get("errorCode")]
-        # The existing UI renders errorCode in reader health. Project the fixed
+        # The existing UI renders errorCode in reader health. Project the safe
         # diagnostic only onto outgoing copies, after collecting real errors;
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] == "mchose_by_keyboard" and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "rapoo") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -722,8 +722,12 @@ class BatteryEngine:
                                    "state": "ok" if measured else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),
                                    "reason": "" if measured else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
-        if name in KEYBOARD_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
+        if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:200] for line in diagnostics[-16:]]
+            if name == "rapoo" and not measured and diagnostics:
+                # Rapoo emits only fixed text, numeric descriptor sizes and
+                # input report IDs/lengths. No paths, payloads or exceptions.
+                self.health[reader_key]["diagnosticSummary"] = str(diagnostics[0])[:200]
             if name == "mchose_by_keyboard" and not measured:
                 # Feedback needs a short, fixed reason. Keep it separate from
                 # errorCode, which would also populate snapshot errors.
@@ -915,7 +919,7 @@ class BatteryEngine:
                         self._hidlist.enumerate = original
                     misses = getattr(provider, "_misses", {})
                     self._accept(key, provider.name, [replace(s, cached=s.cached or bool(misses.get(s.key, 0))) for s in statuses], utcnow(),
-                                 diagnostics=keyboard_diagnostics(provider),
+                                 diagnostics=reader_diagnostics(provider),
                                  failure_code=provider.failure_code() if provider.name == "razer" else "")
                 except Exception:
                     self._failure(key, provider.name, "read_failed")

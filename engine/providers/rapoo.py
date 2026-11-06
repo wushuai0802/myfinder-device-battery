@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
 import time
 
 import hid
@@ -103,6 +104,20 @@ DRAIN_TIMEOUT_MS = 1   # reading what is already queued, not waiting for more
 MAX_DRAIN = 256        # bounded even if other reports keep arriving
 
 
+def _sizes_summary(sizes):
+    """Only descriptor report IDs and numeric lengths, never arbitrary metadata."""
+    if not isinstance(sizes, dict):
+        return "null"
+    safe = {}
+    for key, value in sizes.items():
+        if (type(key) is int and 0 <= key <= 255
+                or isinstance(key, str) and key.isascii() and key.isdecimal()
+                and len(key) <= 3 and 0 <= int(key) <= 255):
+            safe[str(key)] = value if type(value) is int and 0 <= value <= 4096 else None
+    items = sorted(safe.items(), key=lambda item: (item[0] != "7", int(item[0])))
+    return json.dumps(dict(items[:6]), separators=(",", ":")) + ("..." if len(items) > 6 else "")
+
+
 def parse_battery(raw):
     """Offsets include the ID; never default missing battery bytes to zero.
 
@@ -124,6 +139,7 @@ class RapooProvider(Provider):
         self._last = {}  # physical USB parent -> last DeviceStatus and receive time
         self._paths = {}  # keep history if parent resolution temporarily fails
         self._handles = {}  # physical USB parent -> (collection path, open handle)
+        self._seen_inputs = {}  # path -> bounded ID/length pairs since open/last valid input
 
     def _pick(self, infos):
         candidates = [d for d in infos
@@ -140,9 +156,23 @@ class RapooProvider(Provider):
                 or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                 or max(sizes.values()) != maximum
                 or type(sizes.get("7")) is not int or not 9 <= sizes["7"] <= maximum):
-            self._diag.append("input report 07 length unproven; not opened")
+            self._diag.append(f"report 07 unproven; sizes={_sizes_summary(sizes)}; not opened")
             return None
         return info
+
+    def _observe_input(self, info, raw):
+        seen = self._seen_inputs.setdefault(info["path"], set())
+        if len(seen) < 32:
+            seen.add((raw[0], len(raw)))
+
+    def _no_measurement(self, info):
+        seen = sorted(self._seen_inputs.get(info["path"], ()))
+        if not seen:
+            self._diag.append("opened; no input reports; no new measurement")
+        else:
+            summary = ",".join(f"{report_id:02X}/{length}" for report_id, length in seen[:6])
+            self._diag.append("opened; no valid report 07; seen=" + summary
+                              + (",..." if len(seen) > 6 else ""))
 
     def _drain(self, dev, info):
         """Newest valid battery report already queued on a handle kept open."""
@@ -151,18 +181,21 @@ class RapooProvider(Provider):
             raw = dev.read(info["input_report_length"], DRAIN_TIMEOUT_MS)
             if not raw:
                 break
+            self._observe_input(info, raw)
             if raw[0] != INPUT_ID or len(raw) != info["input_report_sizes"]["7"]:
                 continue
             parsed = parse_battery(raw)
             if parsed is not None:
                 newest = parsed
+                self._seen_inputs.pop(info["path"], None)
         if newest is None:
-            self._diag.append("no queued battery notification; no new measurement")
+            self._no_measurement(info)
         return newest
 
     def _release(self, physical):
         entry = self._handles.pop(physical, None)
         if entry is not None:
+            self._seen_inputs.pop(entry[0], None)
             dev = entry[1]
             try:
                 dev.close()
@@ -189,12 +222,14 @@ class RapooProvider(Provider):
             raw = dev.read(info["input_report_length"], remaining_ms)
             if not raw:
                 break
+            self._observe_input(info, raw)
             if raw[0] != INPUT_ID or len(raw) != info["input_report_sizes"]["7"]:
                 continue
             parsed = parse_battery(raw)
             if parsed is not None:
+                self._seen_inputs.pop(info["path"], None)
                 return parsed
-        self._diag.append("no battery notification; no new measurement")
+        self._no_measurement(info)
         return None
 
     @staticmethod
