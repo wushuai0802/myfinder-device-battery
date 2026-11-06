@@ -44,6 +44,7 @@ class DescriptorCacheTests(unittest.TestCase):
         self.hid.HidD_GetSerialNumberString.side_effect = self.serial
         self.cache = getattr(topology, "_descriptor_cache", {})
         for patcher in (patch.dict(self.cache, clear=True),
+                        patch("battery_hid.hid", SimpleNamespace()),
                         patch.object(topology, "_descriptor_paths", None, create=True),
                         patch.object(topology, "os", SimpleNamespace(name="nt")),
                         patch.object(topology.c, "WinDLL", side_effect=self.dll, create=True)):

@@ -76,6 +76,48 @@ class MoondropBridgeTests(unittest.TestCase):
         self.assertEqual(response["statuses"][0]["level"], 73)
         self.assertEqual(bus.opened, [infos[0]["path"]])
 
+    def test_not_opened_reasons_reach_worker_and_feedback_without_errors(self):
+        cases = [([E.entry(usage=1)], "missing or ambiguous FF02:0002 collection"),
+                 ([E.entry(), E.entry(path=b"private-duplicate")], "missing or ambiguous FF02:0002 collection"),
+                 ([E.entry(physical_id="collection:private")], "physical parent unresolved"),
+                 ([E.entry(path=b"")], "collection path/physical parent unresolved"),
+                 ([E.entry(input_report_sizes=None, input_report_proof="failed",
+                           report_descriptor_error="get_report_descriptor unavailable")],
+                  "input report 4B length unproven; proof=caps+descriptor failed; "
+                  "descriptor=get_report_descriptor unavailable"),
+                 ([E.entry(output_report_sizes=None, output_report_proof="failed",
+                           report_descriptor_error="collection maximum mismatch")],
+                  "output report 4B length unproven; proof=caps+descriptor failed; "
+                  "descriptor=collection maximum mismatch")]
+        for infos, expected in cases:
+            request = dict(action="query", sequence=1, provider="moondrop", inventory=infos,
+                           physicalId=infos[0]["physical_id"])
+            data = (json.dumps(request, default=wire_encode) + "\n").encode()
+            with self.subTest(expected=expected), E.fixture(inventory=infos) as bus, \
+                    patch.object(server.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data))), \
+                    patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+                server.reader_child()
+                response = json.loads(output.getvalue())
+                self.assertEqual(response["statuses"], [])
+                self.assertIn(expected, response["diagnostics"][0])
+                self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+                self.assertNotIn("private", json.dumps(response))
+            engine = server.BatteryEngine([E.P()], include_native=True)
+            self.addCleanup(engine.close)
+            engine._accept("reader", "moondrop", [], server.utcnow(), "receiver-a", 1,
+                           diagnostics=response["diagnostics"])
+            health, = engine._snapshot()["health"]
+            self.assertEqual(health["state"], "unavailable")
+            self.assertIn(expected, health["errorCode"])
+            self.assertEqual(engine._snapshot()["errors"], [])
+            self.assertFalse(engine.failures)
+            self.assertFalse(engine.retry_after)
+            with E.fixture([E.reply()]) as bus:
+                engine.poll()
+            recovered = next(h for h in engine._snapshot()["health"] if h["provider"] == "moondrop"
+                             and h["state"] == "ok")
+            self.assertNotIn("errorCode", recovered)
+
     def descriptor_fixture(self, info):
         case = T.DescriptorCacheTests()
         case.setUp()

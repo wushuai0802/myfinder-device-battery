@@ -21,6 +21,7 @@ import time
 
 import hid
 
+from battery_hid import report_proof_summary
 from . import hidlist
 from .base import DeviceStatus, Provider
 
@@ -156,7 +157,8 @@ class RapooProvider(Provider):
                 or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                 or max(sizes.values()) != maximum
                 or type(sizes.get("7")) is not int or not 9 <= sizes["7"] <= maximum):
-            self._diag.append(f"report 07 unproven; sizes={_sizes_summary(sizes)}; not opened")
+            self._diag.append(f"report 07 unproven; sizes={_sizes_summary(sizes)}"
+                              + report_proof_summary(info, "input") + "; not opened")
             return None
         return info
 
@@ -168,11 +170,12 @@ class RapooProvider(Provider):
     def _no_measurement(self, info):
         seen = sorted(self._seen_inputs.get(info["path"], ()))
         if not seen:
-            self._diag.append("opened; no input reports; no new measurement")
+            self._diag.append("opened; no input reports; no new measurement"
+                              + report_proof_summary(info, "input"))
         else:
             summary = ",".join(f"{report_id:02X}/{length}" for report_id, length in seen[:6])
             self._diag.append("opened; no valid report 07; seen=" + summary
-                              + (",..." if len(seen) > 6 else ""))
+                              + (",..." if len(seen) > 6 else "") + report_proof_summary(info, "input"))
 
     def _drain(self, dev, info):
         """Newest valid battery report already queued on a handle kept open."""
@@ -285,7 +288,8 @@ class RapooProvider(Provider):
                     else:
                         reading = self._drain(entry[1], info)
                 except (OSError, ValueError):
-                    self._diag.append("input read failed; no new measurement")
+                    self._diag.append("input read failed; no new measurement"
+                                      + report_proof_summary(info, "input"))
                     self._release(physical)
             if reading is not None:
                 level, charging, charging_known = reading

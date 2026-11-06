@@ -72,6 +72,16 @@ def fixture(frames=(), inventory=None, *, short=False, error_at=None):
 
 
 class MoondropTests(unittest.TestCase):
+    def test_empty_inventory_and_missing_backend_also_explain_no_open(self):
+        provider = P()
+        with fixture(inventory=[]) as bus:
+            self.assertEqual(provider.poll(), [])
+            self.assertIn("not opened", provider.diagnostics()[0])
+            self.assertEqual(bus.opened, [])
+        with patch.object(H, "hid", None):
+            self.assertEqual(provider.poll(), [])
+            self.assertIn("HID backend", provider.diagnostics()[0])
+
     def test_exact_request_at_each_descriptor_proven_length(self):
         for inp, out in ((10, 4), (64, 64), (65, 33), (128, 65), (4096, 4096)):
             info = entry(input_report_length=inp, output_report_length=out,

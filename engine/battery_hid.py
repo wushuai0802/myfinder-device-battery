@@ -1,8 +1,8 @@
 """Bounded output/input battery queries for exact supported identities.
 
 Lengths include the Windows report-ID slot. Unnumbered hidapi input omits it.
-Only raw byte-array caps are accepted: collection maxima alone cannot prove
-the size of an individual report (APEX5 also has a shorter output report 08).
+Caps prove raw byte arrays; a strict raw-descriptor parser can also prove sizes.
+Collection maxima alone cannot prove the size of an individual report.
 No descriptor discovery here sends device commands or fetches features.
 """
 from __future__ import annotations
@@ -22,6 +22,174 @@ from standardhid import Values
 
 READ_TIMEOUT_MS = 1000
 MAX_READS = 32
+
+
+DESCRIPTOR_FAILURES = frozenset({
+    "invalid descriptor bytes", "descriptor length out of bounds", "long item",
+    "truncated item", "reserved item", "invalid global item", "invalid report ID",
+    "unbalanced global stack", "unsupported local item", "invalid usage",
+    "unknown main item", "invalid main item", "ambiguous collection usage",
+    "duplicate top-level collection", "unbalanced collection", "missing report size/count",
+    "report size out of bounds", "report shared across collections", "mixed report IDs",
+    "non-byte-aligned report", "no reports", "get_report_descriptor unavailable",
+    "descriptor read failed", "descriptor close failed", "collection not found",
+    "collection maximum mismatch", "caps/descriptor disagreement",
+})
+
+
+def parse_report_descriptor(raw):
+    """Pure, fail-closed HID 1.11 sizes by (page, usage), direction and string ID.
+
+    Lengths include one Windows report-ID slot, also for implicit ID 0. Constant
+    padding counts toward the final bit total; no rounding is permitted. Local
+    ranges are accepted for fields, but a collection needs one explicit Usage.
+    Duplicate top-level usages and reports shared across top-level collections
+    are ambiguous for collection selection and are deliberately unsupported.
+    """
+    return report_descriptor_proof(raw)[0]
+
+
+def report_descriptor_proof(raw):
+    """The pure parser plus a fixed, privacy-safe failure reason for diagnostics."""
+    try:
+        return _parse_report_descriptor(raw), None
+    except ValueError as error:
+        return None, str(error)
+
+
+def _parse_report_descriptor(raw):
+    if not isinstance(raw, (bytes, bytearray)):
+        raise ValueError("invalid descriptor bytes")
+    if not 1 <= len(raw) <= 4096:
+        raise ValueError("descriptor length out of bounds")
+    globals_ = {0: None, 7: None, 8: 0, 9: None}
+    stack, collections, usages = [], [], []
+    usage_range = {}
+    result, owners, report_ids = {}, {}, set()
+    offset, numbered = 0, False
+    while offset < len(raw):
+        prefix = raw[offset]
+        offset += 1
+        if prefix == 0xFE:
+            raise ValueError("long item")
+        size = (0, 1, 2, 4)[prefix & 3]
+        kind, tag = (prefix >> 2) & 3, prefix >> 4
+        if offset + size > len(raw):
+            raise ValueError("truncated item")
+        value = int.from_bytes(raw[offset:offset + size], "little")
+        offset += size
+        if kind == 3:
+            raise ValueError("reserved item")
+        if kind == 1:  # Global state survives all Main items, including End Collection.
+            if tag in (10, 11):
+                if size:
+                    raise ValueError("invalid global item")
+                if tag == 10:
+                    stack.append(dict(globals_))
+                elif stack:
+                    globals_ = stack.pop()
+                else:
+                    raise ValueError("unbalanced global stack")
+            elif tag <= 9:
+                if not size or tag == 0 and value > 0xFFFF:
+                    raise ValueError("invalid global item")
+                if tag == 8 and (size != 1 or value == 0):
+                    raise ValueError("invalid report ID")
+                if tag == 8:
+                    numbered = True
+                globals_[tag] = value
+            else:
+                raise ValueError("reserved item")
+        elif kind == 2:
+            # Usage Minimum/Maximum do not affect lengths, but must not be
+            # mistaken for an unambiguous top-level collection Usage.
+            if tag not in (0, 1, 2):
+                raise ValueError("unsupported local item")
+            if not size or size < 4 and globals_[0] is None:
+                raise ValueError("invalid usage")
+            usage = (value >> 16, value & 0xFFFF) if size == 4 else (globals_[0], value)
+            if tag == 0:
+                usages.append(usage)
+            else:
+                if tag in usage_range:
+                    raise ValueError("invalid usage")
+                usage_range[tag] = usage
+        else:  # Main; every Main item consumes/resets local state.
+            if usage_range and (set(usage_range) != {1, 2}
+                                or usage_range[1][0] != usage_range[2][0]
+                                or usage_range[1][1] > usage_range[2][1]):
+                raise ValueError("invalid usage")
+            if tag == 10:  # Collection
+                if size != 1 or 7 <= value < 0x80:
+                    raise ValueError("invalid main item")
+                if not collections:
+                    if len(usages) != 1 or usage_range:
+                        raise ValueError("ambiguous collection usage")
+                    key = usages[0]
+                    if key in result:
+                        raise ValueError("duplicate top-level collection")
+                    result[key] = {"input": {}, "output": {}, "feature": {}}
+                collections.append(collections[0] if collections else key)
+            elif tag == 12:  # End Collection
+                if size:
+                    raise ValueError("invalid main item")
+                if not collections:
+                    raise ValueError("unbalanced collection")
+                collections.pop()
+            elif tag in (8, 9, 11):
+                if not size or value & ~0x1FF or tag == 8 and value & 0x80:
+                    raise ValueError("invalid main item")
+                if not collections:
+                    raise ValueError("unbalanced collection")
+                width, count, report_id = (globals_[n] for n in (7, 9, 8))
+                if width is None or count is None:
+                    raise ValueError("missing report size/count")
+                if not width or not count or width * count > 4095 * 8:
+                    raise ValueError("report size out of bounds")
+                direction = {8: "input", 9: "output", 11: "feature"}[tag]
+                owner_key = direction, report_id
+                key = collections[0]
+                if owner_key in owners and owners[owner_key] != key:
+                    raise ValueError("report shared across collections")
+                owners[owner_key] = key
+                report_ids.add(report_id)
+                fields = result[key][direction]
+                fields[str(report_id)] = fields.get(str(report_id), 0) + width * count
+                if fields[str(report_id)] > 4095 * 8:
+                    raise ValueError("report size out of bounds")
+            else:
+                raise ValueError("unknown main item")
+            usages, usage_range = [], {}
+    if collections:
+        raise ValueError("unbalanced collection")
+    if stack:
+        raise ValueError("unbalanced global stack")
+    if usages or usage_range:
+        raise ValueError("invalid usage")
+    if 0 in report_ids and numbered:
+        raise ValueError("mixed report IDs")
+    if not report_ids:
+        raise ValueError("no reports")
+    for directions in result.values():
+        for fields in directions.values():
+            for report_id, bits in fields.items():
+                if bits % 8:
+                    raise ValueError("non-byte-aligned report")
+                fields[report_id] = bits // 8 + 1
+    return result
+
+
+def report_proof_summary(info, direction):
+    """Render only our known proof codes; never echo arbitrary inventory text."""
+    proof = info.get(direction + "_report_proof")
+    if proof in ("caps", "descriptor"):
+        return "; proof=" + proof
+    if proof == "failed":
+        reason = info.get("report_descriptor_error")
+        if not isinstance(reason, str) or reason not in DESCRIPTOR_FAILURES:
+            reason = "unknown"
+        return "; proof=caps+descriptor failed; descriptor=" + reason
+    return ""
 
 
 def byte_report_sizes(api, data, caps, report_type, *, allow_fixed_usage=False):

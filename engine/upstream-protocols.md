@@ -1870,8 +1870,72 @@ Reuse `fixed_usage_report_size()`, already used for VGN #190, via
 Rapoo allow-list on `FF00:0002`. It proves `{"7": 19}` for these caps by
 checking the lone fixed-usage Data,Array item and `report_count == maximum - 1`.
 Aliases, mixed fields, ranges, constant/variable items and count mismatches
-still fail closed. No byte-for-byte descriptor fallback, extra device open,
-output proof, feature query or new transport operation is introduced.
+still fail closed in this caps proof. The later raw-descriptor fallback below
+handles otherwise unprovable caps without guessing report lengths.
+
+#### #120 / #127: raw HID report-descriptor length proof
+
+**Reported symptoms, not new hardware verification.** In 1.3.9-beta.5, #120's
+VT3 `24AE:1412` exposed `0001:0002 0001:0006 0001:0006 0001:0080 000C:0001
+FF00:0001 FF00:0002 FF00:000E`, yet reported `report 07 unproven; sizes=null;
+not opened` even with the fixed-usage caps opt-in. Plaudern's earlier VT3S
+`24AE:1411` evidence above demonstrates hidapi `get_report_descriptor()` on
+that user's installation, not availability in every hidapi build. #127's
+GM01 Pro `35D8:0133` exposed `000B:0005 000C:0001 000C:0001 FF02:0002` but
+showed `moondrop | unavailable |` without a reason. This does not establish
+GM01's actual report lengths or prove the cause of its missing measurement.
+
+`battery_hid.parse_report_descriptor()` is a pure, bounded HID 1.11 short-item
+parser. It maintains Global Usage Page, Report ID/Size/Count and the full
+Push/Pop state, resolves Local Usage (including an explicit 32-bit page),
+resets local state after each Main item, tracks nested Collection/End
+Collection, and totals Input/Output/Feature bits per top-level `(page, usage)`
+and report ID. Constant padding contributes to the total. Only complete
+byte-aligned totals are accepted; returned lengths include the Windows ID
+slot (also implicit ID 0), and report-ID keys are strings. The supplied
+VT3S descriptor proves input **and output** `{"7": 19}`; Rapoo uses only input.
+
+The parser rejects long/reserved/unknown Main items, unsupported Local items
+(including delimiters), truncated or malformed items, missing Size/Count,
+zero/oversized reports, unbalanced stacks/collections, ambiguous or duplicate
+top-level usages, reports shared across top-level collections, mixed
+numbered/unnumbered reports and non-byte-aligned totals. Usage ranges may
+describe fields but cannot identify a collection. Descriptors and report
+lengths are bounded at 4096 bytes; these are conservative implementation
+limits, not new hardware facts. An unsupported descriptor returns `None`
+with a fixed short diagnostic reason, never raw bytes or a device path.
+
+`topology` tries caps first, retaining the existing fixed-usage Rapoo proof.
+Only a `None` result triggers raw-descriptor retrieval, and only inside the
+existing Rapoo PID + `FF00:0002` gate or the exact MOONDROP
+`35D8:0133 / FF02:0002` gate. A successful caps proof with an unsuitable ID
+does not trigger this fallback. If the current hidapi device has no callable
+`get_report_descriptor`, it skips opening. Otherwise one temporary handle
+opens that same selected path, retrieves metadata and closes, including on
+failure. No input reads, output writes or feature requests occur in this step.
+The selected top-level collection must be unambiguous, its input, output and
+feature maxima must **all** equal HidP's collection maxima, and any already
+proven direction must agree with the parsed report map. Only missing proofs
+are filled; failed proofs stay uncached and can be retried by normal discovery.
+Other providers do not opt in: their existing evidence and proof gates remain
+unchanged. Reader uniqueness/parent/ID/length guards and battery request bytes
+are unchanged; Rapoo remains receive-only.
+
+Rapoo reasons now identify their proof source, for example `opened; no input
+reports; no new measurement; proof=caps` or `proof=descriptor`. A failed proof
+can report `report 07 unproven; sizes=null; proof=caps+descriptor failed;
+descriptor=long item; not opened`. MOONDROP exports its existing refusal/I/O
+diagnostics through the reader child and feedback health, including e.g.
+`input report 4B length unproven; proof=caps+descriptor failed;
+descriptor=get_report_descriptor unavailable; not opened; nothing sent`.
+These are no-measurement explanations, not engine errors or retry backoff.
+
+Verification uses the supplied VT3S bytes, synthetic descriptors, fake Windows
+caps and metadata-only fake handles. GM01 descriptor examples in tests are
+illustrative, not captures. Actual VT3/GM01 descriptors, installed hidapi
+support, device access/sharing, real battery readings and firmware differences
+remain unverified; no hardware/network access or vendor code execution was
+performed for this change.
 
 The user received 18 valid notifications in about 55 s, averaging **3.04 s**
 between reports, all 68% / state `1`; the patched application later showed
@@ -2837,10 +2901,11 @@ includes `FF02:0002`, but does **not** establish its report lengths or prove
 that this collection owns `4B`. The Hub's `tf/vg` selects by output report ID
 and input capability, not a hard-coded usage. Locally, only a **unique
 FF02:0002** collection per resolved physical receiver is a candidate. Passive
-Windows preparsed-data inspection must prove input and output `4B` byte-array
+Windows preparsed-data inspection, or the gated raw-descriptor fallback
+documented under #120 / #127 above, must prove input and output `4B`
 sizes before any query handle opens. Input must hold at least 10 bytes and
 output at least 4, both at most 4096 including ID; `4B` must equal the
-collection maximum in each direction. Unknown, inconsistent, non-byte,
+collection maximum in each direction. Unknown, inconsistent, non-byte-aligned,
 ambiguous, or shorter-than-maximum `4B` descriptors are rejected. Other
 collections are never tried. This is a runtime condition, not a claim that
 #126 or the web snapshot supplies a full descriptor. Unsupported descriptor

@@ -1,4 +1,4 @@
-"""Local physical-instance evidence, without opening device input collections.
+"""Local physical-instance evidence, without reading device input reports.
 
 A USB parent's PnP instance is reliable grouping evidence for its HID
 collections, not a statement that all receiver slots are the same device.
@@ -115,6 +115,66 @@ _descriptor_cache = {}
 _descriptor_paths = None
 
 
+def _read_report_descriptor(path):
+    """Optional hidapi metadata access; no input, output or feature reports."""
+    from battery_hid import hid
+    dev = None
+    raw, reason = None, "get_report_descriptor unavailable"
+    try:
+        if hid is not None and callable(getattr(hid, "device", None)):
+            dev = hid.device()
+            getter = getattr(dev, "get_report_descriptor", None)
+            if callable(getter):
+                dev.open_path(path)
+                raw = getter()
+                reason = None
+    except Exception:
+        raw, reason = None, "descriptor read failed"
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                raw, reason = None, "descriptor close failed"
+    # cython-hidapi versions may return a list instead of bytes. Reject other
+    # objects rather than letting bytes(int) manufacture a zero descriptor.
+    if reason is None and isinstance(raw, (list, tuple)):
+        if len(raw) > 4096 or any(type(n) is not int or not 0 <= n <= 255 for n in raw):
+            return None, "invalid descriptor bytes"
+        raw = bytes(raw)
+    return raw, reason
+
+
+def _descriptor_fallback(info, caps, directions):
+    """Called only inside the existing Rapoo/MOONDROP identity/usage gates."""
+    missing = [d for d in directions if info.get(d + "_report_sizes") is None]
+    for direction in directions:
+        info[direction + "_report_proof"] = "failed" if direction in missing else "caps"
+    if not missing:
+        return
+    from battery_hid import report_descriptor_proof
+    raw, reason = _read_report_descriptor(info["path"])
+    if reason is None:
+        parsed, reason = report_descriptor_proof(raw)
+        if parsed is not None:
+            collection = parsed.get((caps.page, caps.usage))
+            if collection is None:
+                reason = "collection not found"
+            elif any(max(collection[d].values(), default=0) != maximum
+                     for d, maximum in (("input", caps.input), ("output", caps.output),
+                                        ("feature", caps.feature))):
+                reason = "collection maximum mismatch"
+            elif any(info[d + "_report_sizes"] != collection[d]
+                     for d in directions if d not in missing):
+                reason = "caps/descriptor disagreement"
+            else:
+                for direction in missing:
+                    info[direction + "_report_sizes"] = collection[direction]
+                    info[direction + "_report_proof"] = "descriptor"
+                return
+    info["report_descriptor_error"] = reason
+
+
 def discover(paths, excluded=(), *, full=False):
     """Serialized descriptor discovery with native paths excluded BEFORE open.
 
@@ -122,6 +182,8 @@ def discover(paths, excluded=(), *, full=False):
     results are subsequently filtered. Here cfgmgr32 already supplied present
     paths; read only attributes/caps/strings for remaining paths, with access 0.
     No keyboard input reports, feature queries or feature writes are read here.
+    Rapoo/MOONDROP caps failures may additionally open their exact allow-listed
+    collection via hidapi solely to fetch the raw report descriptor, then close.
     Cache complete descriptors while the full path set is unchanged: product
     strings can encode connection state. Partial discoveries always refresh
     their selected paths. enrich recomputes physical identity on every call.
@@ -224,6 +286,8 @@ def discover(paths, excluded=(), *, full=False):
                     (0x37D7, 0x2501, 0xFFA0, 0x0001)):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
+                if (attrs.vendor, attrs.product) == (0x35D8, 0x0133):
+                    _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
@@ -271,6 +335,7 @@ def discover(paths, excluded=(), *, full=False):
                 # Passive Rapoo input only: never query feature/output reports.
                 from battery_hid import byte_report_sizes
                 info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
+                _descriptor_fallback(info, caps, ("input",))
                 caps_complete = bool(info["input_report_sizes"] and "7" in info["input_report_sizes"])
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x1D57, 0xFA60, 0x000A, 0x0000),

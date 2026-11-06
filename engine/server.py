@@ -90,7 +90,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop"}
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -673,7 +673,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "rapoo") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "rapoo", "moondrop") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -724,8 +724,8 @@ class BatteryEngine:
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
             self.health[reader_key]["diagnostics"] = [str(line)[:200] for line in diagnostics[-16:]]
-            if name == "rapoo" and not measured and diagnostics:
-                # Rapoo emits only fixed text, numeric descriptor sizes and
+            if name in ("rapoo", "moondrop") and not measured and diagnostics:
+                # These readers emit only fixed text, numeric descriptor sizes and
                 # input report IDs/lengths. No paths, payloads or exceptions.
                 self.health[reader_key]["diagnosticSummary"] = str(diagnostics[0])[:200]
             if name == "mchose_by_keyboard" and not measured:

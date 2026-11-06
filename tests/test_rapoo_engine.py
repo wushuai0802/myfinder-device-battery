@@ -29,6 +29,17 @@ class RapooDiagnosticBridgeTests(unittest.TestCase):
                   "opened; no valid report 07; seen=06/19,07/8", True),
                  ([descriptor()], [report(101)],
                   "opened; no valid report 07; seen=07/19", True)]
+        for proof in ("caps", "descriptor"):
+            cases.append(([descriptor(input_report_proof=proof)], [],
+                          "opened; no input reports; no new measurement; proof=" + proof, True))
+        cases.append(([descriptor(input_report_sizes=None, input_report_proof="failed",
+                                  report_descriptor_error="long item")], [],
+                      "report 07 unproven; sizes=null; proof=caps+descriptor failed; "
+                      "descriptor=long item; not opened", False))
+        cases.append(([descriptor(input_report_sizes=None, input_report_proof="failed",
+                                  report_descriptor_error="private-path-and-bytes")], [],
+                      "report 07 unproven; sizes=null; proof=caps+descriptor failed; "
+                      "descriptor=unknown; not opened", False))
         for infos, frames, expected, opened in cases:
             command = dict(action="query", sequence=1, provider="rapoo",
                            physicalId="usb:receiver-a", inventory=infos)

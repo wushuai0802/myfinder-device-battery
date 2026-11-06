@@ -8,7 +8,7 @@ initialization, flash, EQ, control-panel or OTA commands. See upstream-protocols
 import math
 import time
 
-from battery_hid import BatteryHidProvider
+from battery_hid import BatteryHidProvider, report_proof_summary
 
 VID = 0x35D8
 PIDS = {0x0133: "MOONDROP GM01 Pro"}
@@ -45,16 +45,22 @@ class MoondropProvider(BatteryHidProvider):
     charging_known = False
     verification_level = "C"
 
+    def poll(self):
+        result = super().poll()
+        if not result and not self._diag:
+            self._diag.append("no eligible GM01 Pro collection or HID backend; not opened; nothing sent")
+        return result
+
     def _pick(self, infos):
         candidates = [info for info in infos
                       if (info.get("vendor_id"), info.get("product_id")) == (VID, 0x0133)
                       and (info.get("usage_page"), info.get("usage")) == COLLECTION]
         if len(candidates) != 1:
-            self._diag.append("missing or ambiguous FF02:0002 collection: nothing sent")
+            self._diag.append("missing or ambiguous FF02:0002 collection; not opened; nothing sent")
             return None
         info = candidates[0]
         if not info.get("path") or not info.get("physical_id"):
-            self._diag.append("collection path/physical parent unresolved: nothing sent")
+            self._diag.append("collection path/physical parent unresolved; not opened; nothing sent")
             return None
         for direction, minimum in (("input", 10), ("output", 4)):
             maximum = info.get(direction + "_report_length")
@@ -65,7 +71,8 @@ class MoondropProvider(BatteryHidProvider):
                     or not isinstance(sizes, dict) or not sizes
                     or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                     or sizes.get(str(REPORT_ID)) != maximum):
-                self._diag.append("input/output 4B byte-array length not proven: nothing sent")
+                self._diag.append(direction + " report 4B length unproven"
+                                  + report_proof_summary(info, direction) + "; not opened; nothing sent")
                 return None
         return info
 
