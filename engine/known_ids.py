@@ -48,6 +48,7 @@ TABLES = {
     "vgn_keyboard": ("PIDS",),
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
+    "fa6x_passive": ("PIDS",),
     "dareu": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
@@ -259,7 +260,8 @@ def build_index(root=None, *, engine_root=None):
         # not generic mentions of model lists or descriptor/collection gates.
         scope = readers.get(entry["provider"], {}).get("matchScope", "")
         if (entry["name"].casefold().endswith("(model identification required)")
-                or "产品全名" in scope or "产品名" in scope):
+                or "产品全名" in scope or "产品名" in scope
+                or entry["provider"] == "fa6x_passive"):
             entry["requiresModelMatch"] = True
         indexed.append(entry)
     return {"vendors": {key: sorted(value) for key, value in sorted(vendors.items())},

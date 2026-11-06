@@ -2856,6 +2856,315 @@ descriptor discovery/caching. No hardware, network or vendor script is used.
 Actual collection/lengths, response headers, standalone cold-start queries,
 freshness while off, charging and sleep/wake remain unverified.
 
+### AULA mice: SC800 Max investigation blocked by collection mismatch
+
+**Not implemented or enrolled (2026-11-06).** The supplied official drivers do
+not establish a battery protocol for the `38A6:28E9 "AULA Receiver"` collections
+reported in issues #173/#175: `FF02:0001`, `FF70:0071`, `FF80:0001`. The Hub
+uses a different collection for that same VID:PID, while the native SC800
+package configures different IDs. Do not substitute either protocol onto the
+reported collections, infer a report size, or use a generic vendor-page probe.
+No new provider, registration, compatibility entry or grade C support claim
+was added. This is a stopped investigation, not a completed mouse adaptation.
+
+#### Pinned evidence and conflicting device routes
+
+The task supplied these files as official downloads acquired on 2026-11-06.
+Inspection was offline: Python parsed the ASAR header/member offsets and
+literal string tables; local Ghidra decompiled the native files. No supplied
+EXE, DLL or JavaScript was executed, and no hardware or network was accessed.
+Hashes below identify the exact evidence, not every release of these drivers.
+
+| Artifact (relative to `.ai/evidence/aula/`) | SHA256 |
+| --- | --- |
+| `hub265/resources/app.asar` | `f2c3296c641693c44cecf27053451c43a6994340177a7630bf9e33922ea8ef18` |
+| ASAR `dist/assets/index-uuESAaqN.js` | `429762c75f7ca1feca13386f22f9addacd09791d324a9ca126b15ba0fe2a3dd7` |
+| ASAR `dist/assets/CmysjeBP.js` | `7acf8d6caffec8110e129d82d7080b757144b2cc3a96996be948d2b4e36ef99b` |
+| ASAR `dist/assets/DB8F-XTB.js` | `35d740d77d0f17feee60f33f5cb2506801c679b8fa3261ae07509718ca5e9da2` |
+| `sc800/unpacked/app/Mouse.exe` | `5d499ec20b371b6336f0d0d871cb1076bd56c19de14e3f6857d00f56ec4ae971` |
+| `sc800/unpacked/app/hiddriver_1.dll` (identical to `_2.dll`) | `f9efbf0630218b3e13e894b132d77ceb16113acef1bc841e25af8ce57eac39f4` |
+| `sc800/unpacked/app/hiddriver_4k.dll` (identical to `_8k.dll`) | `ef551819adebd979a52ac07f9a0a70e0d22c8e028f4e27f7bb1eacaea0b05f2f` |
+
+The ASAR has header words `(4, 170128, 170124, 170117)` and member data begins
+at byte `170136`. In `index-uuESAaqN.js`, the literal device table at member
+byte offset `6879830` contains `pId:0x28e9, vId:0x38a6, wireless:1,
+usage:2, usagePage:0xffa8`. `CmysjeBP.js` maps that wireless PID to
+`AULA-SC800 Max Mouse`, boot PID `28ED`, and the `hx` SDK; its `getDevices`
+also compares VID, PID, product name and collection. The string table was
+decoded as data with rotation 131, checking its literal checksum `0xD694E`.
+
+`CmysjeBP.js` imports `bQ` from `DB8F-XTB.js`; that export is `n1t`, wrapping
+the Infortech/HX SDK. Its plain string table has 1126 entries, rotation 133,
+checksum 582567. The SDK's `we` collection constants independently confirm
+usage `2`, usage page `65448` (`FFA8`). These observations do not prove that
+the issue reporter has this firmware/collection variant.
+
+In the native package, `Mouse.exe` constructor `00406440` initializes the
+backend ID slots to `1D57:1013`, `1D57:FA60`, `1D57:FA65`. Initializer
+`0040C5F0` passes them to the respective `Set_VIDPID` exports. The `_1/_2`
+filter at `10001D70` requires `000A:0000` for monitoring or `000B:0000` for
+Feature I/O. The `_4k/_8k` filter at `10002980` additionally allows
+`FF00:0001` for `Open_ReportDevice`. These traced routes do not connect the
+native package to the reported `38A6:28E9` vendor collections.
+
+#### Hub protocol facts retained for a corrected follow-up
+
+The HX `queryDeviceInfoCmd` returns `[0x81, 0x00]` (`DevGetInfo`).
+`sendCommand` calls WebHID `sendReport(11, new Uint8Array(payload))`: output
+report ID `0B`, payload `81 00`. Thus `0B 81 00` is a hidapi **prefix**, not
+a proven complete padded report. No fixed report lengths or input report ID
+were established. `getDeviceInfo` checks response payload byte 0 equals
+`81` and byte 2 equals zero; `getDataSlice` removes the first three bytes.
+The remaining data's offsets 13, 14 and 15 hold charging (`==1`), percentage,
+and full (`==1`) respectively. These are WebHID payload offsets 16/17/18
+(hidapi offsets 17/18/19 only if an input report ID is present). No synthetic
+fixture is presented as a captured reply or descriptor.
+
+`connectDevice`/`openHidDevice` open and attach an input listener. The SDK's
+`initDevice` subsequently reads device type, receiver lighting configuration,
+connection state, device information and further settings. The direct
+`getDeviceInfo` path has no initialization write or authentication call in
+the traced code, but this does not prove that a cold receiver answers a
+standalone query. Handshake necessity and actual reply freshness remain
+unverified; copying the full driver initialization would not resolve that.
+
+State-changing HX commands identified in the SDK's `H` table include button
+write `84`, configuration `86`, DPI data `88/9B`, pairing `89`, shortcut/macro
+writes `8C/8E`, profile/DPI/mode switches `8F/90/91/92`, factory reset `93`,
+sensor angle `97`, receiver lighting `99/D1`, axis/calibration `A2` through
+`A7`, firmware start/data/finish `C1/C2/C3`, RF band `D3`, and wallpaper `D4`.
+This is a bounded list from the HX SDK, not an exhaustive native-driver
+command inventory. None is authorized as a battery request; no new commands
+are sent by this change.
+
+The first-round AULA investigation left `1D57:FA60` (#239) and `1D57:FA65`
+(#242) unenrolled: the brief records
+cross-brand reuse (#101/#148/#189), and the traced native filter supplies no
+brand/model distinction. Their battery frames, reply parsing and handshake
+were not completed after the primary target mismatch was established.
+SC580 (#208) still lacks an exact diagnostic identity. A follow-up needs
+official evidence matching the target collections and report descriptors,
+plus a safe identity gate before considering the shared `1D57` IDs. Runtime
+length proof, hardware battery/charging behavior and coexistence with the
+official driver remain unverified. Registration and generated compatibility
+documentation were intentionally unchanged by that investigation. The
+second-round receive-only decision for FA60/FA65 is recorded below; it does
+not enable this AULA command path or claim brand identification.
+
+### Shared 1D57:FA60 / FA65 receivers: receive-only battery
+
+**Implemented at grade C (2026-11-06, second-round decision): 只接收，绝不发送。**
+`providers/fa6x_passive.py` listens for the official INPHIC battery prefix with
+exact collection, descriptor-length and web model-table gates. It never calls
+`write`, `send_feature_report` or `get_feature_report`, and performs no vendor
+initialization. This supersedes the first-round decision to leave the IDs
+unenrolled. The tradeoff is deliberate: accepting a matching notification can
+still misinterpret a shared receiver's percentage, but sends no speculative
+command to it. Shared IDs/model bytes do not establish a brand-independent
+contract or globally unique model identity. Cards therefore use the neutral
+names `2.4G 无线鼠标（1D57:FA60）` / `2.4G 无线鼠标（1D57:FA65）`, `kind="mouse"`,
+and always unknown charging. No real hardware validation is claimed.
+
+Runtime matching follows the **web table's per-PID listener and model values**:
+
+| VID:PID | Unique input collection | Accepted model bytes (hex) |
+| --- | --- | --- |
+| `1D57:FA60` | `000A:0000` | `07 76 77 78 79 E8` |
+| `1D57:FA65` | `FF00:0001` | `71 76 77 78 79 90` |
+
+The older native FA65 `000A:0000` route is outside this reader. A proven USB
+parent and a unique matching collection are required. Topology inspects only
+Input descriptor metadata; the input handle is not opened unless Input `03`
+has a proven length of at least five bytes. Each received report must match
+that length exactly and begin `03 <allowed-model> 40/41 <state> <percentage>`.
+Only `1..100` is displayed: zero, out-of-range values, other IDs/events/models
+and short/overlong reports are ignored. State does not change the percentage
+or charging status. There is no assumed five-byte total length or checksum.
+
+As with Rapoo, handles remain open between refreshes so input can queue. The
+first poll listens for up to 1500 ms / 32 non-battery reports; after a valid
+report, and on subsequent polls, it drains with 1 ms reads, bounded to 256
+reads and the same 1500 ms deadline per poll, retaining the newest valid value.
+Silence returns no first reading and no error; existing history keeps its
+original measurement time with unknown connection/charging and
+`no_measurement` health. Descriptor/parent uncertainty retains history but
+closes the input handle; receiver removal clears history. A changed path or
+report length reopens the handle only after revalidation. No fallback writes
+or feature fetches are available.
+
+#### Evidence identity and comparison
+
+Paths below are relative to `.ai/evidence/`. Only local static inspection was
+performed: byte hashes, literal JavaScript parsing and Ghidra 12.1.4 native
+decompilation. No supplied EXE, DLL or JS was executed; no hardware or network
+was accessed. REA's JavaScript call failed with `Transport closed`, so no REA
+Evidence ID is claimed. Native analysis used the installed local Ghidra with
+its project, settings, cache and output under this worktree's ignored `tmp/`.
+Native addresses below are virtual addresses in the named artifact; web offsets
+are zero-based UTF-8 byte offsets in the original file.
+
+| Artifact | SHA256 |
+| --- | --- |
+| `inphic/unpacked/app/INPHIC.exe` | `349d4ecff5dcaad606ce89e36d0124a70d9bdb877a2a71e81d54403594788a8d` |
+| Every `inphic/unpacked/app/hiddriver_1.dll` through `_10.dll` | `f9efbf0630218b3e13e894b132d77ceb16113acef1bc841e25af8ce57eac39f4` |
+| `inphic/unpacked/app/hidapi.dll` | `f4e23fe7182822b57305a8aee056a38e875c047e0785e598c1cfd2c1ab7a92bd` |
+| `inphic/unpacked/app/Data/CONFIG.ini` | `170b124b47a6129db3cf73ede63513459d2f5b601d09fd236e791220a01fb1c4` |
+| `inphic/web/js/page-fdff76e9871af3c5.js` | `4737cf6d5487da0521a5221389323a67e6cb8841a4b6fa58114563d4dfabd482` |
+| `inphic/web/js/webpack-8090df2a20b3dcef.js` | `691f28708a566f6e2013831036db8f41a8859bbc6ba7b784ec82e6c534cb448c` |
+| `inphic/web/js/560-f95779da4a40a4b6.js` | `c0ae2b7ba7957aac2708af752d8a25d8d8637ff17223c82af7ea6b8ea3d8ecaf` |
+
+All ten INPHIC hiddriver files are byte-identical to AULA SC800 `_1/_2.dll`;
+both packages' `hidapi.dll` files are also identical. AULA `_4k/_8k.dll` has the
+different digest recorded in the preceding section. `CONFIG.ini` contains only
+`lanId`, `Startup`, `Feedback` and `LowPower`; it supplies no protocol or model
+allow-list. Similar package layout is not evidence that all backend routes are
+interchangeable.
+
+The shared DLL's `10001D70` filters `000A:0000` for monitoring and `000B:0000`
+for Feature I/O, with VID/PID supplied by `Set_VIDPID` (`10002370`).
+`GetFeature`/`SetFeature` (`10001F20`/`10002340`) are generic wrappers, not
+battery getters. Monitor worker `10001A70` reads the descriptor's input buffer,
+requires first byte `03`, and posts bytes 1..2 and 3..4 as two little-endian
+words. It does not identify the brand or establish a five-byte report length.
+
+#### Collections and passive battery formats
+
+INPHIC.exe has additional hidapi routes beyond that shared DLL:
+
+| Native entry | Identity / communication collection | Status collection and parser |
+| --- | --- | --- |
+| `00412E70` | `1D57:FA60`, `000B:0000` | `000A:0000`; reader `004133B0`, dispatch `00413900` |
+| `004140D0` | `1D57:FA65`, `FF00:0001`, low byte of hidapi `release_number` = `16` | `000A:0000`; reader `00414620`, dispatch `00414B70` |
+| `004156E0` | `1D57:FA65`, `FF01:0002`, release low byte = `18` | `FF00:0001`, also release low byte = `18`; reader `00415C50`, dispatch `004161A0` |
+
+The native dispatchers require Input report ID `03`. Their battery prefix is
+`03 <model> <event> <charge-state> <percentage>`. This is a **prefix**, not a
+descriptor or an assertion that every report is exactly five bytes. The hidapi
+readers allocate 100 bytes; that allocation is not a report length either.
+Model selection initially tests event bit `40`, then uses a fixed model table;
+the downstream handlers make the more specific event checks below.
+
+Examples traced through native constructors and battery handlers:
+
+| Model branch | Event and percentage | Charging/display behavior |
+| --- | --- | --- |
+| IN9 PRO, model `95`, constructor `00438060` | `0043ACC0`: event `40`, byte 4 accepted in `0..100`; FA65 handlers `0043B220` / `0043FA50` accept `1..100` | FA65 state `02` displays 100; state `03` starts charging animation; other states use the percentage. Some FA60 branches also depend on wired/connection state. |
+| IN10 PRO, model `71`, constructor `0049CCD0` | `0049F120`: event `41`, byte 4 in `0..100`; FA65 handlers `0049F680` / `004A31B0` accept `1..100` | Corresponding FA65 `02` / `03` display handling as above. |
+| AULA SC800, model `13` | `Mouse.exe` `00411460` / `00411A20`: packed model/event `4013`, percentage from the high byte of the data word | `00411460` uses `1F` for full and `11` for charging; `00411A20` uses `02` / `03`. The former is reached from `00410FB0` / `00411120`, the latter from `004112E0`. |
+
+The AULA executable identity is pinned in the preceding section. Its two
+charging encodings are direct counterevidence to one undifferentiated parser
+for shared FA6x IDs. These SC800 findings do not establish the SC650/SC680
+variants named in the task. Likewise, native IN10 uses model `93`, whereas
+the newer web table has IN10 `78`; the model namespace is version-specific.
+
+In the web `page` bundle, product table `k=JSON.parse` (byte `2501`) selects:
+
+| PID | Communication / listener | Mapped model bytes (hex) |
+| --- | --- | --- |
+| `FA60` | `000B:0000` Feature / `000A:0000` Input | `76/79` ZHEN, `78` IN10, `77` IN9 PRO V2, `07/E8` X11 SE |
+| `FA65` | `FF01:0002` Output / `FF00:0001` Input | `71` IN10 Pro, `90` IN9 Ultra, `76/79` ZHEN, `78` IN10, `77` IN9 PRO V2 |
+
+`eM` (byte `38544`) listens to WebHID input events. `tL` (`179909`) interprets
+data as `[model,event,charge,percent,...]`, normalizes event `41` to `40`,
+and tolerates an additional leading `03`/`04` in the **payload**.
+`setupReportListener` (`192373`, battery branch `194151`) maps charge `02`
+or `03` to true. UI case `64` (`246741`) accepts percentages `0..100`.
+That parser is shared by this web product table, not established for every
+brand using these receiver IDs. It differs from the native full/animation
+handling; neither fabricated 100 nor an animated value is a fresh measurement.
+WebHID `event.data` excludes the transport report ID, and this listener does
+not validate `event.reportId`. Do not infer Input `04`, a fixed report length,
+or a checksum from its permissive payload parser. No battery checksum check
+was found in these specific native/web notification handlers.
+
+#### Identity, requests and handshake boundary
+
+No active battery/charging request was recovered from the inspected FA6x
+paths; battery values arrive through passive input notifications. Native
+enumeration starts input readers, and web `scanAuthorizedDevices` (`185588`)
+opens endpoints and installs listeners before identification. No mandatory
+battery-enable write or challenge was found in those discovery paths.
+Whether an actual receiver sends fresh battery data without vendor setup,
+after cold start, while idle, or after sleep remains unverified.
+
+Web `matchProductByDeviceId` (`196513`) first matches VID/PID/model and then
+falls back to model byte alone. It has no independent brand authentication.
+The permissive status parser also accepts event `50`, and generic command ACKs
+in `webhid_send_report` (`34732`) start `71 50 <status> <command>`: that `71`
+must not automatically identify an IN10 Pro. Communication input is also fed
+to the observer. This discovery logic cannot be copied as a reliable gate.
+
+The connection handler `ef` (`257233`) subsequently reads version/settings;
+`loadMouseData` (`223224`) explicitly skips onboard reads for IN10/ZHEN
+wireless paths and uses local cached settings. `A0 0B 08 00 00 00 00 00`
+belongs to configuration/version reading, not a proven battery or brand query.
+Do not turn any of these operations into speculative battery initialization.
+
+#### State-changing commands excluded from any future battery reader
+
+The following settings commands are in the web `page` bundle. Its direct
+Feature transport uses the first byte as report ID and sends the remaining
+bytes as payload, padded when descriptor information is available. Its 8K
+Output transport instead wraps the settings command as described below.
+Neither route is a battery request. No command was sent during this investigation.
+
+| Command | Observed writer and UTF-8 byte anchor |
+| --- | --- |
+| `04` | DPI/sensor settings, `setDpiData` at `55540` |
+| `05` | Lighting/sleep settings, `setLightConfig1` at `53179` |
+| `06` | Polling-rate setting at `55328` |
+| `07` | Movement/wake configuration at `61884`, also IN10 `setWakeConfig` |
+| `08` | Button remapping, `setMouseKeys` at `51017` |
+| `09` | Macro data, `sendMacroData` at `59200` and its chunk sender |
+| `0A` | Vibration level at `62052` |
+| `0B` | Countdown reminder at `62652`, frame `0B 08 01 00 00 00 00 00`; distinct from `A0 0B` |
+| `0C` | Active profile, `0C 0A slot ~slot ...` at `59008` |
+| `0D` | OLED writes and the `clearAllMacros` sequence at `62201`; OLED builder module 1860 at `1030960` |
+
+`restoreFactorySettings` (`57500`) combines settings writes.
+`buildChunk8K` (`42683`) wraps inner commands with `04 <5+inner-length>
+<chunk-index> <inner-data> <sum-high> <sum-low>` and zero padding in a
+64-byte application array; `webhid_write_8k` (`35431`) passes it to `hid_write`,
+which sends Output report ID `04` with the remaining 63 bytes as payload.
+That application array is not a hardware descriptor length proof.
+The separate wired-mouse OTA path uses Feature IDs `B1/B2/B3` for start/data/
+reset (`cE` / `cR` at `865043`, `cU.sendFeature` at `868432`), not inner 8K
+commands. Its `usbIds.filter(e=>"mouse"===e.kind)` at `877790` explicitly
+excludes the FA65 entry marked `dongle`. These are forbidden OTA operations,
+not established FA60/FA65 firmware commands. Do not borrow either route for
+a battery poll. Exact pairing commands were not established;
+no generic sender, reset, pairing, firmware, settings, wake or retry fallback
+is implemented.
+
+#### Missing web chunks and remaining work
+
+All four runtime-named chunks absent from the supplied 13 scripts are locale
+resources. Module `471` at the start of `560-f95779da4a40a4b6.js` maps them;
+webpack `l.u` (byte `1441`) and `l.p` (`3126`) give the filename/base rule:
+`https://hubbeta.inphic.cn/_next/static/chunks/<id>.<hash>.js`.
+
+| Missing filename | Declared resource |
+| --- | --- |
+| `234.346fe9d1a0ad8c60.js` | `./cn/common.json` |
+| `821.486b679d596a236f.js` | `./cn/landing.json` |
+| `249.d30f1455bfccc163.js` | `./en/common.json` |
+| `35.099700917d28f3e1.js` | `./en/landing.json` |
+
+These locale files were not downloaded and are not needed by the receive-only
+parser. Protocol/identity gaps remain: cross-brand meaning, notification
+frequency, fresh reports after cold start without vendor setup, sleep/wake,
+charging transitions and coexistence with the official driver are unverified.
+The web model allow-list is a format gate, not a proven global identity.
+Runtime descriptors must prove Input `03` before opening the listener; the
+historical five-byte prefixes and 100-byte read buffers are not length proof.
+Unprovable descriptor shapes fail closed. Future hardware validation needs
+full descriptors and passive samples with independently known percentages.
+Synthetic tests now cover parsing, model/collection/length rejection,
+receive-only AST checks, persistent handles, latest queued values, silent
+history and descriptor-only topology discovery. No supplied evidence code was
+executed and no hardware or network was accessed for this implementation.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver
