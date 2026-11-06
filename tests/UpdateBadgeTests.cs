@@ -35,16 +35,19 @@ static class UpdateBadgeTests {
         Check(!checker.BadgeVisible(true,true)&&checker.CachedRelease==null,"old state loads without a cached update or seen version");
         Check(checker.Check(true,true,now).Version=="99.0.1"&&checker.BadgeVisible(true,true),"new eligible release displays badge");
         Check(checker.MarkNotified("99.0.1")&&!checker.MarkNotified("99.0.1"),"one balloon per version");
-        Check(!checker.BadgeVisible(false,true)&&!checker.BadgeVisible(true,false),"both settings gate badge independently");
-        checker=new UpdateChecker(http,path,"98.0.0",now);Check(checker.BadgeVisible(true,true)&&!checker.MarkNotified("99.0.1"),"unseen badge and balloon dedup survive restart");
-        checker.MarkSeen("99.0.1",false);Check(checker.BadgeVisible(true,true),"automatic presentation does not acknowledge");
-        checker.MarkSeen("99.0.1",true);Check(!checker.BadgeVisible(true,true)&&checker.CachedRelease!=null,"manual viewing clears only tray badge");
-        checker=new UpdateChecker(http,path,"98.0.0",now);Check(!checker.BadgeVisible(true,true)&&checker.CachedRelease!=null,"seen version and panel update survive restart");
-        http.Release=Release("99.0.2");checker.Check(false,false,now.AddMinutes(1));Check(checker.BadgeVisible(true,true),"higher release shows badge again");
+        Check(!checker.BadgeVisible(false,true),"disabled badge setting hides badge");
+        Check(!checker.BadgeVisible(true,false),"disabled automatic checks hide badge");
+        checker=new UpdateChecker(http,path,"98.0.0",now);Check(checker.BadgeVisible(true,true)&&!checker.MarkNotified("99.0.1"),"cached badge and balloon dedup survive restart");
+        checker.MarkSeen("99.0.1",false);Check(checker.BadgeVisible(true,true),"automatic presentation keeps badge");
+        checker.MarkSeen("99.0.1",true);Check(checker.BadgeVisible(true,true)&&checker.CachedRelease!=null,"manual viewing keeps tray badge and panel update");
+        Check(!checker.MarkNotified("99.0.1"),"viewing does not repeat a version's balloon");
+        checker=new UpdateChecker(http,path,"98.0.0",now);Check(checker.BadgeVisible(true,true)&&checker.CachedRelease!=null&&!checker.MarkNotified("99.0.1"),"viewed update keeps badge and balloon dedup after restart");
+        var installed=new UpdateChecker(http,path,"99.0.1",now);Check(!installed.BadgeVisible(true,true)&&installed.CachedRelease==null,"installed version clears cached offer and badge");
+        http.Release=Release("99.0.2");checker.Check(false,false,now.AddMinutes(1));Check(checker.BadgeVisible(true,true),"higher release keeps badge visible");
+        Check(checker.MarkNotified("99.0.2")&&!checker.MarkNotified("99.0.2"),"higher release has its own single balloon");
         checker.MarkSeen("98.0.9",true);Check(checker.BadgeVisible(true,true)&&UpdateJson.ReadFile<UpdateState>(path,65536).SeenVersion=="99.0.1","late older dialog cannot regress seen watermark");
         checker.Skip("99.0.2");Check(!checker.BadgeVisible(true,true)&&checker.CachedRelease==null,"skip clears badge and panel availability");
-        Check(new UpdateChecker(http,path,"98.0.0",now).CachedRelease==null,"skip survives restart");
-        Check(new UpdateChecker(http,path,"99.0.2",now).CachedRelease==null,"installed version cannot restore stale update");
+        checker=new UpdateChecker(http,path,"98.0.0",now);Check(!checker.BadgeVisible(true,true)&&checker.CachedRelease==null,"skip keeps badge and panel update hidden after restart");
         http.Release=Release("99.0.3");checker.Check(false,false,now);Check(!checker.BadgeVisible(true,false)&&checker.CachedRelease.Version=="99.0.3","manual check works with auto checks disabled");
         http.Release=null;checker.Check(false,false,now);Check(checker.CachedRelease==null&&!checker.BadgeVisible(true,true),"successful empty catalog clears cached offer");
         string settings=Path.Combine(output,"settings.json");File.WriteAllText(settings,"{\"SchemaVersion\":1,\"MouseAlias\":\"保留\"}");
@@ -81,11 +84,11 @@ static class UpdateBadgeTests {
             Set(Updates,"started",DateTime.UtcNow.AddDays(-1));Set(Owner,"updates",Updates);
             Popup=new Details(Owner);Set(Owner,"details",Popup);
             Updates.Check(true);Pump(delegate{return Updates.Available&&(int)Field(Updates,"checking")==0;});
-            Check(Balloons==1&&Updates.BadgeVisible,"automatic discovery shows one balloon and unseen badge");
+            Check(Balloons==1&&Updates.BadgeVisible,"automatic discovery shows one balloon and update badge");
         }
         internal List<PopupControl> Rows(PopupPage page){return PopupPages.Build(Owner,new PopupNavigation {Page=page,VisibleChoices=100},false);}
         internal UpdateDialog Dialog {get{return (UpdateDialog)Field(Updates,"dialog");}}
-        internal void Seen(){Pump(delegate{return Dialog!=null&&Dialog.Visible&&!Updates.BadgeVisible&&UpdateJson.ReadFile<UpdateState>(Path.Combine(DirectoryPath,"update-state.json"),65536).SeenVersion=="99.0.1";});Check(Updates.Available&&Rows(PopupPage.More).Exists(r=>r.Id==260),"seen offer remains in panel");Check(UpdateJson.ReadFile<UpdateState>(Path.Combine(DirectoryPath,"update-state.json"),65536).SeenVersion=="99.0.1","exact dialog version persisted");}
+        internal void Seen(){Pump(delegate{return Dialog!=null&&Dialog.Visible&&UpdateJson.ReadFile<UpdateState>(Path.Combine(DirectoryPath,"update-state.json"),65536).SeenVersion=="99.0.1";});Check(Updates.Available&&Rows(PopupPage.More).Exists(r=>r.Id==260),"viewed offer remains in panel");Check(Updates.BadgeVisible==(DeviceSettings.Current.ShowUpdateBadge&&DeviceSettings.Current.AutoCheckUpdates),"viewing preserves badge according to both settings");Check(UpdateJson.ReadFile<UpdateState>(Path.Combine(DirectoryPath,"update-state.json"),65536).SeenVersion=="99.0.1","exact dialog version persisted");}
         public void Dispose(){Owner.ExitThread();Owner.Dispose();if(!Popup.IsDisposed)Popup.Dispose();}
     }
     static void Ui(){
@@ -102,6 +105,9 @@ static class UpdateBadgeTests {
             }
             if(source=="balloon"){((TrayBalloonRoute)Field(f.Owner,"balloonRoute")).Set(TrayBalloonKind.Update);Call(Field(f.Owner,"tray"),"OnBalloonTipClicked");}
             f.Seen();
+            Check(((string)Field(icons.First,"lastKey")).EndsWith("|True|"+f.Owner.UpdateDotColor.ToArgb()+"|"+Style.TaskbarDark),"opening from "+source+" keeps first tray icon badge");
+            var later=(ThemedButton)f.Dialog.Controls.Find("LaterUpdate",true)[0];later.PerformClick();Pump(delegate{return f.Dialog.IsDisposed;});
+            Check(f.Updates.BadgeVisible&&f.Updates.Available,"later keeps badge and update available after opening from "+source);
         }
         using(var f=new Fixture()){
             f.Owner.OpenUpdatedPanel(new TrayPanelAnchor(new Point(900,900),new Rectangle(0,0,1280,960),TaskbarEdge.Bottom));
@@ -109,15 +115,19 @@ static class UpdateBadgeTests {
             Call(f.Updates,"ShowAvailable",false);Pump(delegate{return f.Dialog!=null&&f.Dialog.Visible;});Check(f.Updates.BadgeVisible,"automatic update dialog does not mark seen");
             f.Updates.Open();f.Seen();
             f.Updates.Check(false);Pump(delegate{return f.Transport.Requests==2&&(int)Field(f.Updates,"checking")==0;});Application.DoEvents();
+            Check(f.Updates.BadgeVisible&&f.Balloons==1,"manual recheck keeps badge without another balloon");
+            ((UpdateChecker)Field(f.Updates,"checker")).ForgetLastCheck();f.Updates.Check(true);Pump(delegate{return f.Transport.Requests==3&&(int)Field(f.Updates,"checking")==0;});Application.DoEvents();
+            Check(f.Updates.BadgeVisible&&f.Balloons==1,"automatic recheck keeps badge without another balloon");
             var skip=(ThemedButton)f.Dialog.Controls.Find("SkipUpdate",true)[0];skip.PerformClick();Pump(delegate{return !f.Updates.Available;});
-            Check(!f.Rows(PopupPage.More).Exists(r=>r.Id==260),"skip removes panel entry");
+            Check(!f.Updates.BadgeVisible&&!f.Rows(PopupPage.More).Exists(r=>r.Id==260),"skip removes tray badge and panel entry");
         }
         using(var f=new Fixture()){
             var rows=f.Rows(PopupPage.Preferences);int auto=rows.FindIndex(r=>r.Id==219);Check(rows[auto+1].Id==225&&rows[auto+1].Checked,"badge switch immediately follows auto checks");
             Call(f.Popup,"PerformAction",rows[auto+1]);Check(f.Saves==1&&!f.Updates.BadgeVisible&&f.Updates.Available,"badge switch saves and clears only dot");
-            Call(f.Popup,"PerformAction",rows[auto+1]);Check(f.Updates.BadgeVisible,"reenabling unseen badge restores it");
+            Call(f.Popup,"PerformAction",rows[auto+1]);Check(f.Updates.BadgeVisible,"reenabling badge setting restores it");
             Call(f.Popup,"PerformAction",rows[auto]);Check(!f.Updates.BadgeVisible&&f.Updates.Available,"automatic-check switch suppresses dot");
             f.Updates.Check(false);f.Seen();Check(f.Transport.Requests==2,"manual check still fetches while automatic checks are disabled");
+            Call(f.Popup,"PerformAction",rows[auto]);Check(f.Updates.BadgeVisible,"reenabling automatic checks restores viewed update badge");
         }
     }
     static Rectangle PixelBounds(Bitmap bitmap,Color? color){

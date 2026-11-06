@@ -118,8 +118,7 @@ namespace AtkBattery {
             }catch(Exception){return null;}
         }}}
         internal bool BadgeVisible(bool enabled,bool automatic){lock(gate){
-            var release=CachedRelease;if(!enabled||!automatic||release==null)return false;
-            UpdateVersion seen;return !UpdateVersion.TryParse(state.SeenVersion,out seen)||UpdateVersion.Parse(release.Version).CompareTo(seen)>0;
+            return enabled&&automatic&&CachedRelease!=null;
         }}
         internal void MarkSeen(string version,bool userInitiated){
             if(!userInitiated)return;var next=UpdateVersion.Parse(version);
