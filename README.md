@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.3.9-beta.4**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.3.9-beta.5**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.3.9-beta.5 新增 HyperX Cloud III Wireless 03F0:0FCC，雷柏读取诊断写明原因。
 
 1.3.9-beta.4 新增 ATK/VXE NANO 接收器和 1D57:FA60/FA65 接收器（英菲克等，只接收上报；均待实机验证）。
 
