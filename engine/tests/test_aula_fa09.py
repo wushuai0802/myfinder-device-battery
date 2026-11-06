@@ -78,6 +78,7 @@ class AulaFa09Tests(unittest.TestCase):
                 self.assertEqual(status.key, "mchose_by_keyboard:receiver-a")
                 self.assertFalse(status.charging_known)
                 self.assertFalse(status.charging)
+                self.assertTrue(status.unconfirmed)
                 self.assert_feature_only(bus)
                 self.assertEqual(bus.feature_reads, [(ff04["path"], 6, 8)])
                 self.assertEqual(bus.opened, [ff04["path"]])
@@ -125,6 +126,7 @@ class AulaFa09Tests(unittest.TestCase):
             with self.subTest(frames=frames), aula_fixture(frames, [mixed]) as bus:
                 statuses = P().poll()
                 self.assertEqual(len(statuses), count)
+                self.assertTrue(all(not status.unconfirmed for status in statuses))
                 self.assertEqual(bus.feature_writes, [])
                 self.assertEqual(bus.feature_reads, [])
                 self.assertTrue(all(frame in (M.identity_request(), M.make_request())
@@ -172,9 +174,11 @@ class AulaFa09Tests(unittest.TestCase):
                 statuses = {s.physical_id: s for s in P().poll()}
                 self.assertEqual(statuses["aula"].name, "2.4G 无线键盘（3554:FA09）")
                 self.assertFalse(statuses["aula"].charging_known)
+                self.assertTrue(statuses["aula"].unconfirmed)
                 self.assertEqual(statuses["by"].name, "MCHOSE X75 V2")
                 self.assertTrue(statuses["by"].charging)
                 self.assertTrue(statuses["by"].charging_known)
+                self.assertFalse(statuses["by"].unconfirmed)
                 self.assertEqual(len(bus.feature_writes), 1)
                 self.assertEqual([f for _, f in bus.writes], [M.identity_request(), M.make_request()])
 

@@ -164,6 +164,7 @@ namespace AtkBatteryTray {
             var digits=VisualDesign.BatteryDigitsRect(top);
             DrawLabel(g,text,digits,BatteryTextSize(g,text,view.Approximate?VisualDesign.BatteryApproximateDigitSize:VisualDesign.BatteryDigitSize,digits.Width),true,digit,StringAlignment.Far,StringTrimming.None);
             if(view.Percent.HasValue)DrawLabel(g,"%",VisualDesign.BatteryPercentRect(top),VisualDesign.SubtitleFontSize,false,digit,StringAlignment.Near);
+            if(view.Percent.HasValue&&view.Unconfirmed)DrawLabel(g,"待确认",new RectangleF(meterLeft,top+(VisualDesign.LargeFont?44:38),width-meterLeft-8,VisualDesign.LargeFont?19:17),VisualDesign.SmallFontSize,false,Muted(dark),StringAlignment.Far);
             });
         }
         static void Header(Graphics g,string name,string subtitle,string icon,float top,float height,bool dark,PanelFeedback feedback,int action) {

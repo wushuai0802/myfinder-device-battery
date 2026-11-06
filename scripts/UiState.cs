@@ -9,14 +9,15 @@ namespace AtkBatteryTray {
         public int? Percent;
         public bool Fresh, Charging;
         public bool Approximate;
+        public bool Unconfirmed;
         public bool SystemProvided;
         public DateTime ConfirmedAt,QueriedAt;
         public static string FormatTime(DateTime value){var local=value.ToLocalTime();return value==DateTime.MinValue?"":local.ToString(local.Date==DateTime.Now.Date?"HH:mm":"M/d HH:mm");}
         public string TimeText {get {return FormatTime(ConfirmedAt);}}
         public string QueryText {get{return FormatTime(QueriedAt);}}
-        public string Key {get {return Name+"|"+Percent+"|"+Fresh+"|"+Charging+"|"+Approximate+"|"+SystemProvided+"|"+(!Fresh?TimeText:"")+"|"+(SystemProvided?QueryText:"");}}
+        public string Key {get {return Name+"|"+Percent+"|"+Fresh+"|"+Charging+"|"+Approximate+"|"+Unconfirmed+"|"+SystemProvided+"|"+(!Fresh?TimeText:"")+"|"+(SystemProvided?QueryText:"");}}
         public string Tooltip {get {return TooltipFor(Name);}}
-        public string TooltipFor(string displayName) {return displayName+" "+(Percent.HasValue?(Approximate?"约":"")+Percent+"%":"--")+
+        public string TooltipFor(string displayName) {return displayName+" "+(Percent.HasValue?(Approximate?"约":"")+Percent+"%"+(Unconfirmed?"（待确认）":""):"--")+
             (Percent.HasValue&&!Fresh?SystemProvided?"（系统提供"+(String.IsNullOrEmpty(QueryText)?"":"，最近查询 "+QueryText)+"）":String.IsNullOrEmpty(TimeText)?"（历史读数，时间未知）":"（上次 "+TimeText+"）":Charging?" · 充电中":"");}
     }
     public sealed class TrayView {
@@ -129,7 +130,7 @@ namespace AtkBatteryTray {
         public bool IsLatched(string device) {bool value;return notified.TryGetValue(device,out value)&&value;}
         public void Restore(string device,bool value) {notified[device]=value;}
         public bool Observe(string device,BatteryView battery,bool mayNotify,int threshold=20) {
-            if(!battery.Fresh||!battery.Percent.HasValue)return false;
+            if(battery.Unconfirmed||!battery.Fresh||!battery.Percent.HasValue)return false;
             if(battery.Charging||battery.Percent>=30){notified[device]=false;return false;}
             if(battery.Percent>threshold||IsLatched(device)||!mayNotify)return false;
             notified[device]=true;return true;

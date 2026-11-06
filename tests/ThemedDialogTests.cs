@@ -288,6 +288,42 @@ static class ThemedDialogTests {
         }
         SelectTheme("ocean",false);
     }
+    static void FeedbackFontSetting(string output){
+        var previous=DeviceSettings.Current;var normal=new Dictionary<string,float>();
+        var store=new FeedbackStore(null);store.Change(delegate(FeedbackData data){data.Records.Add(new FeedbackRecord {Number=42,Url=FeedbackClient.IssueUrl(42),Category="device",Summary="设备连接后没有显示电量",CreatedAt=DateTime.UtcNow,LastActivityAt=DateTime.UtcNow});});
+        var service=new FeedbackReplies(store,new FeedbackHttp(),"");
+        try{foreach(string mode in new[]{"normal","large"})foreach(bool dark in new[]{false,true})foreach(float scale in new[]{1f,1.25f,1.5f,2f})WithDpi((int)Math.Round(96*scale),delegate{
+            var pref=previous.Clone();pref.FontSize=mode;DeviceSettings.UseTransientConfiguration(pref);
+            WithWorkArea(new Rectangle(0,0,1024,560),delegate{
+                using(var feedback=new FeedbackForm(Report(),true,dark,delegate{},delegate{},""))
+                using(var history=new MyFeedbackDialog(service,Report(),dark,delegate{},42))
+                using(var supplement=new FeedbackSupplementDialog(service,42,Report(),dark))
+                using(var diagnostic=feedback.CreateDiagnosticsDialog())
+                using(var reference=new ThemedAliasDialog("名称","设备",12)){
+                    reference.Scale(new SizeF(scale,scale));
+                    foreach(var dialog in new ThemedDialog[]{feedback,history,supplement,diagnostic}){
+                        // Exercise the actual preference; overriding Font here hid gaps in earlier DPI fixtures.
+                        dialog.Scale(new SizeF(scale,scale));Show(dialog);NoOverlap(dialog);
+                        string context=dialog.GetType().Name+" / "+dark+" / "+scale;
+                        Check(dialog.Font.SizeInPoints>=reference.Font.SizeInPoints,"feedback body font is no smaller than other dialogs: "+context);
+                        Check(new Rectangle(0,0,1024,560).Contains(dialog.Bounds),"feedback font mode fits the work area: "+context);
+                        var controls=VisibleTree(dialog);controls.Add(dialog);
+                        foreach(var control in controls){
+                            if(!(control is TextBoxBase)&&!(control is ListBox)&&!(control is LinkLabel)&&!(control is CheckBox)&&!(control is Label)&&!(control is ThemedButton)&&control!=dialog)continue;
+                            string key=context+" / "+controls.IndexOf(control)+" / "+ControlPath(control);float size=control.Font.SizeInPoints;
+                            if(mode=="normal")normal[key]=size;else Check(size>normal[key],"larger preference enlarges the actual native control font: "+key);
+                            if(control is TextBoxBase||control is ListBox||control is LinkLabel||control is CheckBox)Check(size>=dialog.Font.SizeInPoints,"native feedback controls inherit body typography: "+key);
+                            var label=control as Label;if(label!=null&&label.AutoSize)Check(label.Height>=label.GetPreferredSize(new Size(label.Width,0)).Height,"feedback label is not clipped: "+key);
+                            var button=control as ThemedButton;if(button!=null){var bounds=button.RectangleToScreen(button.ClientRectangle);for(Control parent=button.Parent;parent!=null;parent=parent.Parent)Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),"feedback action is not clipped: "+key);}
+                        }
+                        foreach(var control in controls){var text=control as TextBoxBase;if(text!=null&&text.Multiline)Check(text.Height>=3*text.Font.Height,"feedback content retains three readable lines: "+context);}
+                        if(output!=null&&scale==1f)using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(output,"feedback-font-"+dialog.GetType().Name+"-"+mode+"-"+(dark?"dark":"light")+".png"));}
+                        dialog.Close();
+                    }
+                }
+            });
+        });}finally{DeviceSettings.UseTransientConfiguration(previous);}
+    }
     static void SegmentClientPixels(){
         SelectTheme("ocean",false);var theme=new DialogTheme(false);
         using(var feedback=new FeedbackForm(Report(),true,false,delegate{},delegate{},"")){
@@ -1209,6 +1245,7 @@ static class Host {
                 Run("caught render exception",delegate{Child("--render \""+Application.ExecutablePath+"\"",ProcessWindowStyle.Hidden,false,"System.IO.IOException");});
                 if(args.Length==1&&args[0]=="--visibility-only"){Console.WriteLine(checks+" visibility/exception checks, "+failures+" failed groups");return failures==0?0:1;}
             }
+            Run("feedback windows follow the actual font preference",delegate{FeedbackFontSetting(args.Length>0&&Directory.Exists(args[0])?args[0]:null);});
             Run("button height is independent of default font",ButtonFontScaling);
             Run("button and segment heights at 96/120/144/192 DPI",ButtonDpiMatrix);Run("window DPI and Graphics fallback",DpiSource);
             if(args.Length==1&&args[0]=="--dpi-only")return failures==0?0:1;

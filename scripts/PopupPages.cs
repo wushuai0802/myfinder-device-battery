@@ -260,7 +260,9 @@ namespace AtkBatteryTray {
             }else if(nav.Page==PopupPage.Device) {
                 var device=Array.Find(owner.WirelessDevices,delegate(WirelessDevice d){return d.Id==nav.SelectedDeviceKey;});
                 rows.Add(Row(222,"显示名称",nav.SelectedDeviceName));
-                if(device!=null){var reading=WirelessLayout.View(device);rows.Add(Info("类型",device.Kind=="keyboard"?"键盘":device.Kind=="mouse"?"鼠标":device.Kind=="headset"?"耳机":device.Kind=="gamepad"?"手柄":"无线设备"));rows.Add(Info("连接",device.Transport));rows.Add(Info("适配验证",String.IsNullOrEmpty(device.VerificationLabel)?"待型号实测":device.VerificationLabel));rows.Add(Info("电量",device.Percent.HasValue?(device.Approximate?"约":"")+device.Percent+"%":"暂不可读"));rows.Add(Info("数据",reading.SystemProvided?"系统提供":reading.Fresh?device.Approximate?"估算 / 档位":"设备上报":"历史读数"));rows.Add(Info(reading.SystemProvided?"最近查询":"最近确认",reading.SystemProvided?reading.QueryText:reading.TimeText));}
+                if(device!=null){var reading=WirelessLayout.View(device);rows.Add(Info("类型",device.Kind=="keyboard"?"键盘":device.Kind=="mouse"?"鼠标":device.Kind=="headset"?"耳机":device.Kind=="gamepad"?"手柄":"无线设备"));rows.Add(Info("连接",device.Transport));rows.Add(Info("适配验证",String.IsNullOrEmpty(device.VerificationLabel)?"待型号实测":device.VerificationLabel));rows.Add(Info("电量",device.Percent.HasValue?(device.Approximate?"约":"")+device.Percent+"%"+(device.Unconfirmed?"（待确认）":""):"暂不可读"));rows.Add(Info("数据",reading.SystemProvided?"系统提供":reading.Fresh?device.Approximate?"估算 / 档位":"设备上报":"历史读数"));rows.Add(Info(reading.SystemProvided?"最近查询":"最近确认",reading.SystemProvided?reading.QueryText:reading.TimeText));
+                    if(device.Unconfirmed){var note=Info("这类接收器的电量字段尚未经过实测确认，读数可能不随电量变化。",null);note.WrapText=true;rows.Add(note);}
+                }
                 else rows.Add(Info("状态","设备已断开"));
                 if(device!=null&&device.Kind=="mouse"&&device.Dpi!=null&&device.Dpi.Supported) {
                     var dpi=device.Dpi;string failure=owner.WirelessDpiFailure(device.Id,dpi.TargetToken)??dpi.Error;bool fresh=WirelessLayout.DpiFresh(device)&&String.IsNullOrEmpty(failure);

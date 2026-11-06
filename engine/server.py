@@ -385,6 +385,7 @@ def normalise(status, previous, now, cached=False):
         "charging": charging, "chargingKnown": charging is not None,
         "online": online, "connectionState": ("connected" if online else "disconnected") if connection_known else "unconfirmed",
         "fresh": fresh, "approximate": bool(status.approx), "provider": status.source or "unknown",
+        **({"unconfirmed": True} if status.unconfirmed or not acquired and old.get("unconfirmed") else {}),
         "transport": "Bluetooth" if status.via == "bluetooth" or system and status.source != "xinput" else "USB / 2.4G",
         "confirmedAtUtc": confirmed, "measuredAtUtc": measured if not system else None,
         "queriedAtUtc": queried,

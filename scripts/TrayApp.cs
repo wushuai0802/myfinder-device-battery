@@ -1250,7 +1250,7 @@ namespace AtkBatteryTray {
                 foreach(var device in WirelessDevices){WirelessDevice cached;
                     // A legacy PID-only key cannot prove which physical device
                     // produced a historical reading, even if only one is here now.
-                    if(pref.RememberReadings&&!device.Percent.HasValue&&wirelessCache.TryGetValue(device.Id,out cached)&&device.SameCacheIdentity(cached)&&(DateTime.UtcNow-cached.ConfirmedTime).TotalDays<=7){device.Percent=cached.Percent;device.ConfirmedAtUtc=cached.ConfirmedAtUtc;device.Fresh=false;device.Approximate=cached.Approximate;device.Charging=null;device.SourceQuality="cached";}
+                    if(pref.RememberReadings&&!device.Percent.HasValue&&wirelessCache.TryGetValue(device.Id,out cached)&&device.SameCacheIdentity(cached)&&(DateTime.UtcNow-cached.ConfirmedTime).TotalDays<=7){device.Percent=cached.Percent;device.ConfirmedAtUtc=cached.ConfirmedAtUtc;device.Fresh=false;device.Approximate=cached.Approximate;device.Unconfirmed=cached.Unconfirmed;device.Charging=null;device.SourceQuality="cached";}
                     if(device.Percent.HasValue)wirelessCache[device.Id]=device.BatteryCacheCopy();
                 }
                 foreach(string key in new List<string>(wirelessCache.Keys))if((DateTime.UtcNow-wirelessCache[key].ConfirmedTime).TotalDays>7)wirelessCache.Remove(key);

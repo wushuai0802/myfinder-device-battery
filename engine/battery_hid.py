@@ -322,6 +322,7 @@ def battery_caps(api, data, caps, *, allow_fixed_usage=False):
 class BatteryHidProvider(Provider):
     """Each subclass supplies one exact identity and one fixed read request."""
     charging_known = False
+    unconfirmed = False
     verification_level = "C"
     read_timeout_ms = READ_TIMEOUT_MS
 
@@ -417,7 +418,8 @@ class BatteryHidProvider(Provider):
                         self.device_name(info), level, charging, True, self.name,
                         approx=approx, kind=self.kind, physical_id=physical,
                         connection_known=True, charging_known=self.charging_known,
-                        verification_level=self.verification_level, level_unavailable=level is None))
+                        verification_level=self.verification_level, level_unavailable=level is None,
+                        unconfirmed=self.unconfirmed))
             except (OSError, ValueError):
                 # Backend exception text can contain private device paths.
                 self._diag.append("battery I/O failed; connection unknown")

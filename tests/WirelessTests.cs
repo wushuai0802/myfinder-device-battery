@@ -55,6 +55,47 @@ static class WirelessTests {
             }
         }finally {VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
     }
+    static void UnconfirmedReadings(TrayContext owner,string output,string legacyJson) {
+        var previous=DeviceSettings.Current;
+        try {
+            foreach(int schema in new[]{1,2}){
+                string json=legacyJson.Replace("\"schema\":1","\"schema\":"+schema);
+                Check(!GenericBatteryWorker.Parse(json).Devices[0].Unconfirmed,"old schema "+schema+" snapshot defaults to confirmed");
+                var parsed=GenericBatteryWorker.Parse(json.Replace("\"percent\":42","\"percent\":42,\"unconfirmed\":true")).Devices[0];
+                Check(parsed.Unconfirmed&&!parsed.Approximate&&parsed.Percent==42,"schema "+schema+" sanitizer preserves independent unconfirmed evidence");
+                string cache=Path.Combine(output,"unconfirmed-cache-"+schema+".json");ReadingCache.SaveWireless(cache,new[]{parsed});
+                Check(ReadingCache.LoadWireless(cache)[0].Unconfirmed,"unconfirmed evidence survives the historical cache");
+            }
+            var device=Device("u","keyboard",10);device.Unconfirmed=true;device.ConnectionState="connected";device.MeasurementState="current";device.Provider="mchose_by_keyboard";
+            var value=WirelessLayout.View(device);Check(value.Fresh&&value.Unconfirmed&&!value.Approximate&&value.Tooltip.Contains("10%（待确认）"),"unconfirmed does not fabricate stale or approximate evidence");
+            var policy=new LowBatteryPolicy();foreach(int level in new[]{0,10,20,100}){value.Percent=level;Check(!policy.Observe(device.Id,value,true)&&!policy.IsLatched(device.Id),"unconfirmed reading cannot trigger or latch a low battery alert at "+level);}
+            policy.Restore(device.Id,true);Check(!policy.Observe(device.Id,value,true)&&policy.IsLatched(device.Id),"unconfirmed readings cannot rearm a prior alert");
+            policy=new LowBatteryPolicy();value.Percent=10;value.Unconfirmed=false;Check(policy.Observe(device.Id,value,true),"confirmed low readings still notify");
+            policy=new LowBatteryPolicy();value.Approximate=true;Check(policy.Observe(device.Id,value,true),"existing approximate readings still notify");
+            owner.WirelessDevices=new[]{device};
+            var rows=PopupPages.Build(owner,new PopupNavigation {Page=PopupPage.Device,SelectedDeviceKey=device.Id,SelectedDeviceName=device.Name,VisibleChoices=100},false);
+            Check(rows.Exists(delegate(PopupControl row){return row.Text=="电量"&&row.Value=="10%（待确认）";}),"device details mark the battery value");
+            Check(rows.Exists(delegate(PopupControl row){return row.WrapText&&row.Text=="这类接收器的电量字段尚未经过实测确认，读数可能不随电量变化。";}),"device details explain the unverified field");
+            Check(owner.DiagnosticSummary().Contains("10%（待确认）")&&owner.CreateFeedbackReport().FullText.Contains("10%（待确认）"),"local and feedback diagnostics disclose unconfirmed readings");
+            device.Percent=100;
+            foreach(string fontSize in new[]{"normal","large"})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true})foreach(float scale in new[]{1f,1.25f,1.5f,2f}){
+                var pref=previous.Clone();pref.FontSize=fontSize;DeviceSettings.UseTransientConfiguration(pref);VisualDesign.HighContrastOverride=contrast;
+                device.Unconfirmed=false;var layout=WirelessLayout.Build(owner,0,1000);string deviceKey=device.Key,batteryKey=layout.Cards[0].Battery.Key;
+                var size=UiState.ScaleSize(layout.Size,scale);
+                using(var before=new Bitmap(size.Width,size.Height))using(var after=new Bitmap(size.Width,size.Height)){
+                    using(var g=Graphics.FromImage(before)){g.ScaleTransform(scale,scale);CompactRenderer.PaintWireless(g,owner,layout,dark,new PanelFeedback());}
+                    device.Unconfirmed=true;layout=WirelessLayout.Build(owner,0,1000);
+                    Check(device.Key!=deviceKey&&layout.Cards[0].Battery.Key!=batteryKey,"unconfirmed evidence invalidates device and battery paint keys");
+                    using(var g=Graphics.FromImage(after)){g.ScaleTransform(scale,scale);CompactRenderer.PaintWireless(g,owner,layout,dark,new PanelFeedback());}
+                    int left=VisualDesign.LargeFont?194:164,top=VisualDesign.LargeFont?44:38;
+                    Check(Changed(before,after,new RectangleF(left*scale,top*scale,(VisualDesign.PanelWidth-left-8)*scale,17*scale)),"card renders a visible unconfirmed marker at "+fontSize+" / "+dark+" / "+contrast+" / "+scale);
+                    if(!contrast&&scale==1f)after.Save(Path.Combine(output,"unconfirmed-"+fontSize+"-"+(dark?"dark":"light")+".png"));
+                }
+                var trayBefore=WirelessLayout.View(device);device.Unconfirmed=false;var trayAfter=WirelessLayout.View(device);
+                using(var before=TrayGlyph.Render(trayBefore.Percent,trayBefore.Charging,dark,!trayBefore.Fresh,32,trayBefore.Approximate))using(var after=TrayGlyph.Render(trayAfter.Percent,trayAfter.Charging,dark,!trayAfter.Fresh,32,trayAfter.Approximate))Check(!Changed(before,after,new RectangleF(0,0,32,32)),"tray digits stay unchanged");
+            }
+        }finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
+    }
     [STAThread] static int Main(string[] args) {
         if(args.Length>0&&args[0]=="-I") {
             string line;while((line=Console.ReadLine())!=null){if(line.Contains("exit"))break;Console.WriteLine("{\"schema\":1,\"devices\":[],\"nativeMousePresent\":false,\"providerCount\":26}");Console.Out.Flush();}return 0;
@@ -74,7 +115,7 @@ static class WirelessTests {
             var cache=Path.Combine(output,"wireless-cache.json");ReadingCache.SaveWireless(cache,snapshot.Devices);var restored=ReadingCache.LoadWireless(cache);
             Check(restored.Length==1&&restored[0].Percent==42&&!restored[0].Fresh&&!restored[0].Online,"disk cache cannot claim a connected device");
             owner=new TrayContext(false,delegate(bool include){return new MouseSnapshot();},delegate(int stage){return null;});
-            owner.NativeMousePresent=false;owner.GenericReady=true;GamepadPresentation(owner,output);
+            owner.NativeMousePresent=false;owner.GenericReady=true;GamepadPresentation(owner,output);UnconfirmedReadings(owner,output,json);
             owner.NativeMousePresent=false;owner.GenericReady=true;owner.WirelessDevices=new[]{Device("1","mouse",75),Device("2","keyboard",42,true),Device("3","headset",19)};
             var navigation=new PopupNavigation();var layout=WirelessLayout.Build(owner,0,500);
             Check(layout.Cards.Count==3&&layout.Size==new Size(260,282),"three generic cards retain their compact geometry above one shared volume row");

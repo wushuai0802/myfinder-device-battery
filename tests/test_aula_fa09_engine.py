@@ -14,6 +14,7 @@ from test_aula_fa09 import P, aula_entry, aula_fixture, aula_reply
 from test_mchose_by_keyboard import entry
 from isolation import wire_encode
 from providers.vgn_beiying import VgnBeiyingProvider
+from providers.base import DeviceStatus
 import server
 
 
@@ -36,6 +37,7 @@ class AulaFa09BridgeTests(unittest.TestCase):
                          ("2.4G 无线键盘（3554:FA09）", 64, False))
         self.assertEqual(status["key"], "mchose_by_keyboard:one:instance:one")
         self.assertEqual(status["legacy_key"], "mchose_by_keyboard:one")
+        self.assertIs(status["unconfirmed"], True)
         self.assertEqual(result["candidateCount"], 1)
         self.assertFalse(result.get("errorCode"))
         self.assertEqual(bus.opened, [infos[0]["path"]])
@@ -51,6 +53,8 @@ class AulaFa09BridgeTests(unittest.TestCase):
         self.assertEqual((first["name"], first["percent"], first["charging"]),
                          ("2.4G 无线键盘（3554:FA09）", 64, None))
         self.assertEqual(first["id"], server.public_id("mchose_by_keyboard:receiver-a"))
+        self.assertIs(first["unconfirmed"], True)
+        self.assertFalse(first["approximate"])
         for frames, options in (([aula_reply(0)], {}), ([], {}),
                                 ([aula_reply()], dict(error_at="feature_read")),
                                 ([aula_reply()], {})):
@@ -60,6 +64,7 @@ class AulaFa09BridgeTests(unittest.TestCase):
             self.assertEqual(stale["id"], first["id"])
             self.assertEqual((stale["percent"], stale["confirmedAtUtc"]), (64, first["confirmedAtUtc"]))
             self.assertFalse(stale["fresh"])
+            self.assertIs(stale["unconfirmed"], True)
             self.assertEqual(stale["connectionState"], "unconfirmed")
             self.assertIsNone(stale["charging"])
             self.assertEqual(snapshot["errors"], [])
@@ -70,6 +75,22 @@ class AulaFa09BridgeTests(unittest.TestCase):
         self.addCleanup(engine2.close)
         with aula_fixture([aula_reply()], error_at="feature_read"):
             self.assertEqual(engine2.poll()["errors"], [])
+
+    def test_unconfirmed_evidence_does_not_spread_to_other_readings(self):
+        now = server.utcnow()
+        for source in (P.name, "mchose", "vgn_keyboard", "logitech"):
+            with self.subTest(source=source):
+                status = DeviceStatus("fixture", "Keyboard", 63, source=source)
+                self.assertFalse(status.unconfirmed)
+                legacy = server.normalise(status, None, now)
+                self.assertNotIn("unconfirmed", legacy)
+                status.unconfirmed = True
+                marked = server.normalise(status, legacy, now)
+                self.assertIs(marked["unconfirmed"], True)
+                self.assertIs(server.historical(marked)["unconfirmed"], True)
+                # A newly acquired confirmed reading replaces the old evidence.
+                status.unconfirmed = False
+                self.assertNotIn("unconfirmed", server.normalise(status, marked, now))
 
     def test_child_rejection_summary_reaches_health_without_behavior_change(self):
         cases = ((entry("one", input_report_sizes=None), "report sizes unproven"),

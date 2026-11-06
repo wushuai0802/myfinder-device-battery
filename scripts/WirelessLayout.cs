@@ -64,7 +64,7 @@ namespace AtkBatteryTray {
             bool system=device.SourceQuality=="system_property";
             bool fresh=device.Fresh&&device.Online&&device.ConnectionState!="unconfirmed"&&device.ConnectionState!="disconnected"&&!system&&device.MeasurementState!="cached"&&UiState.Recent(device.ConfirmedTime,DateTime.UtcNow,90);
             DateTime chargeTime;bool chargeKnown=DateTime.TryParse(device.ChargingCheckedAtUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out chargeTime);
-            return new BatteryView {Name=device.Name,Percent=device.Percent,Fresh=fresh,Charging=fresh&&device.Charging==true&&chargeKnown&&UiState.Recent(chargeTime.ToUniversalTime(),DateTime.UtcNow,90),ConfirmedAt=device.ConfirmedTime,Approximate=device.Approximate,SystemProvided=system,QueriedAt=device.QueryTime};
+            return new BatteryView {Name=device.Name,Percent=device.Percent,Fresh=fresh,Charging=fresh&&device.Charging==true&&chargeKnown&&UiState.Recent(chargeTime.ToUniversalTime(),DateTime.UtcNow,90),ConfirmedAt=device.ConfirmedTime,Approximate=device.Approximate,Unconfirmed=device.Unconfirmed,SystemProvided=system,QueriedAt=device.QueryTime};
         }
         internal static string Subtitle(WirelessDevice device,BatteryView value) {
             if(!value.Fresh&&device.ConnectionState=="unconfirmed")return "连接待确认";

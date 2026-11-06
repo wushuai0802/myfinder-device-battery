@@ -66,7 +66,8 @@ def parse_generic_reply(reply):
 
 
 def parse_aula_reply(reply):
-    # User hardware evidence #224, not a charging/status-bit protocol.
+    # #224 proves the framing, but byte 3 is not yet proven to track battery
+    # level: all reported captures are 100%. Keep the reading unconfirmed.
     if (not reply or len(reply) != 8
             or any(type(n) is not int or not 0 <= n <= 255 for n in reply)
             or reply[0] != 0x06 or reply[1] != 0x87
@@ -190,6 +191,7 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
         return None
 
     def _query(self, dev, info):
+        self.unconfirmed = self._aula
         if self._aula:
             return self._query_aula(dev)
         key = self._key

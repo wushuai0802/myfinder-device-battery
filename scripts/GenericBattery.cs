@@ -31,7 +31,7 @@ namespace AtkBattery {
                 // The worker permits 64 cards, plus the two native readers.
                 if(d==null||devices.Count>=66)continue;
                 string model=d.VendorId.HasValue&&d.ProductId.HasValue&&UnadaptedDevice.Word(d.VendorId.Value)&&UnadaptedDevice.Word(d.ProductId.Value)?" | "+d.VendorId.Value.ToString("X4")+":"+d.ProductId.Value.ToString("X4"):"";
-                devices.Add(clean(d.Name)+" | "+clean(d.Kind)+" | "+clean(d.Provider)+" | "+(d.Percent.HasValue?(d.Approximate?"约":"")+d.Percent+"%":"未知")+" | 当前读数："+(d.MeasurementState=="current"?"是":"否")+model+(d.ModelSource=="pack"?" | 来自数据包，待验证":""));
+                devices.Add(clean(d.Name)+" | "+clean(d.Kind)+" | "+clean(d.Provider)+" | "+(d.Percent.HasValue?(d.Approximate?"约":"")+d.Percent+"%"+(d.Unconfirmed?"（待确认）":""):"未知")+" | 当前读数："+(d.MeasurementState=="current"?"是":"否")+model+(d.ModelSource=="pack"?" | 来自数据包，待验证":""));
             }
             foreach(var d in hidden)if(d!=null&&suppressed.Count<16)suppressed.Add(clean(d.Name)+" | "+clean(d.Kind));
             foreach(var d in unknown)if(d!=null&&unadapted.Count<16&&UnadaptedDevice.Word(d.VendorId)&&UnadaptedDevice.Word(d.ProductId)){
@@ -147,6 +147,7 @@ namespace AtkBattery {
         [DataMember(Name="online")] public bool Online;
         [DataMember(Name="fresh")] public bool Fresh;
         [DataMember(Name="approximate")] public bool Approximate;
+        [DataMember(Name="unconfirmed",EmitDefaultValue=false)] public bool Unconfirmed;
         [DataMember(Name="provider")] public string Provider;
         [DataMember(Name="transport")] public string Transport;
         [DataMember(Name="modelSource",EmitDefaultValue=false)] public string ModelSource;
@@ -166,7 +167,7 @@ namespace AtkBattery {
         public DateTime QueryTime {get{DateTime value;return DateTime.TryParse(QueriedAtUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out value)?value.ToUniversalTime():DateTime.MinValue;}}
         internal bool SameCacheIdentity(WirelessDevice other){return other!=null&&Id==other.Id&&Kind==other.Kind&&Provider==other.Provider;}
         internal WirelessDevice BatteryCacheCopy(){var copy=(WirelessDevice)MemberwiseClone();copy.Dpi=null;return copy;}
-        public string Key {get{return Id+"|"+PhysicalId+"|"+Name+"|"+Percent+"|"+Charging+"|"+Online+"|"+Fresh+"|"+Approximate+"|"+ConfirmedAtUtc+"|"+SourceQuality+"|"+QueriedAtUtc+"|"+(Dpi==null?"":Dpi.Key);}}
+        public string Key {get{return Id+"|"+PhysicalId+"|"+Name+"|"+Percent+"|"+Charging+"|"+Online+"|"+Fresh+"|"+Approximate+"|"+Unconfirmed+"|"+ConfirmedAtUtc+"|"+SourceQuality+"|"+QueriedAtUtc+"|"+(Dpi==null?"":Dpi.Key);}}
     }
     [DataContract] public sealed class ReaderHealth {
         [DataMember(Name="physicalId",EmitDefaultValue=false)] public string PhysicalId;

@@ -45,6 +45,7 @@ class DeviceStatus:
     verification_level: str = ""   # pack row's evidence level, defaults to C
     model_reference: str = ""      # pack's issue/evidence reference, not a command
     level_unavailable: bool = False  # explicit reply invalidates any old percentage
+    unconfirmed: bool = False    # the reported battery field still needs hardware validation
 
 
 class Provider:
