@@ -3,12 +3,14 @@ import ctypes
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine"))
 sys.path.insert(0, str(ROOT / "engine" / "tests"))
 import _hidstub  # noqa: F401
 from providers import fa6x_passive as F
+import topology
 import test_topology_cache as fixtures
 
 
@@ -26,6 +28,90 @@ class Fa6xTopologyTests(unittest.TestCase):
         f.kernel.WriteFile.assert_not_called()
         self.assertTrue(all(call.args[1] == 0 for call in f.kernel.CreateFileW.call_args_list))
         self.assertTrue(all(call.args[0] == 0 for call in f.hid.HidP_GetValueCaps.call_args_list))
+
+    def legacy_descriptor(self, release=0x0116, identity=(0x1D57, 0xFA65), collection=(0x000A, 0), sizes=None):
+        f = self.fixture
+        f.batch3_descriptor(identity, collection, sizes or {3: 8}, {4: 65})
+
+        def attributes(handle, pointer):
+            result = f.attributes(handle, pointer)
+            ctypes.cast(pointer, ctypes.POINTER(topology._Attributes)).contents.release = release
+            return result
+
+        f.hid.HidD_GetAttributes.side_effect = attributes
+
+    def test_legacy_exact_release_and_state_collection_prove_only_input_and_reuse_cache(self):
+        f = self.fixture
+        with patch.object(topology, "_descriptor_fallback", side_effect=AssertionError("no fallback")):
+            for release in (0x0016, 0x0116, 0xFF16):
+                for sizes in ({3: 5}, {3: 8}, {3: 19, 9: 65}):
+                    with self.subTest(release=release, sizes=sizes):
+                        f.cache.clear()
+                        self.legacy_descriptor(release=release, sizes=sizes)
+                        info, = f.scan([fixtures.PATH_A])
+                        self.assertEqual(info["input_report_sizes"], {str(k): v for k, v in sizes.items()})
+                        self.assertNotIn("output_report_sizes", info)
+                        self.assertNotIn("feature_report_sizes", info)
+                        companion = dict(info, usage_page=0xFF00, usage=1, path=b"metadata-only",
+                                         input_report_sizes=None)
+                        selected = F.Fa6xPassiveProvider()._pick([info, companion])
+                        self.assertEqual(selected["path"], info["path"])
+                        before = f.kernel.CreateFileW.call_count
+                        self.assertEqual(f.scan([fixtures.PATH_A]), [info])
+                        self.assertEqual(f.kernel.CreateFileW.call_count, before)
+        self.assert_descriptor_only()
+
+    def test_legacy_other_releases_identities_and_usages_do_not_add_descriptor_probes(self):
+        f = self.fixture
+        cases = [(release, (0x1D57, 0xFA65), (0x000A, 0))
+                 for release in (0, 1, 0x15, 0x18, 0x1618, 0xFFFF)]
+        cases += [(0x16, identity, collection) for identity, collection in (
+            ((0x1D58, 0xFA65), (0x000A, 0)), ((0x1D57, 0xFA93), (0x000A, 0)),
+            ((0x1D57, 0xFA61), (0x000A, 0)), ((0x1D57, 0xFA65), (0x000B, 0)),
+            ((0x1D57, 0xFA65), (0x000A, 1)), ((0x1D57, 0xFA65), (0xFF01, 2)))]
+        for release, identity, collection in cases:
+            with self.subTest(release=release, identity=identity, collection=collection):
+                f.cache.clear()
+                self.legacy_descriptor(release, identity, collection)
+                info, = f.scan([fixtures.PATH_A])
+                self.assertNotIn("input_report_sizes", info)
+        f.hid.HidP_GetValueCaps.assert_not_called()
+        f.hid.HidP_GetButtonCaps.assert_not_called()
+        self.assert_descriptor_only()
+
+    def test_legacy_incomplete_byte_array_proof_retries_without_fallback_or_cache(self):
+        f = self.fixture
+        with patch.object(topology, "_read_report_descriptor", side_effect=AssertionError("no fallback")):
+            for defect in ("no_03", "short", "not_bytes", "alias", "partial", "failure"):
+                with self.subTest(defect=defect):
+                    f.cache.clear()
+                    self.legacy_descriptor(sizes={3: 4} if defect == "short" else {3: 8})
+                    original = f.hid.HidP_GetValueCaps.side_effect
+
+                    def fields(report_type, values, length, data):
+                        result = original(report_type, values, length, data)
+                        if defect == "no_03":
+                            values[0].report = 4
+                        elif defect == "not_bytes":
+                            values[0].bits = 16
+                        elif defect == "alias":
+                            values[0].alias = 1
+                        elif defect == "partial":
+                            ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+                        elif defect == "failure":
+                            return 0
+                        return result
+
+                    f.hid.HidP_GetValueCaps.side_effect = fields
+                    info, = f.scan([fixtures.PATH_A])
+                    self.assertNotIn(fixtures.PATH_A, f.cache)
+                    companion = dict(info, usage_page=0xFF00, usage=1, path=b"metadata-only")
+                    self.assertIsNone(F.Fa6xPassiveProvider()._pick([info, companion]))
+                    self.legacy_descriptor()
+                    recovered, = f.scan([fixtures.PATH_A])
+                    self.assertEqual(recovered["input_report_sizes"], {"3": 8})
+                    self.assertIn(fixtures.PATH_A, f.cache)
+        self.assert_descriptor_only()
 
     def test_exact_collections_prove_input_only_and_cache_complete_descriptors(self):
         f = self.fixture

@@ -90,9 +90,23 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
+FA6X_DIAGNOSTICS = {
+    "missing or ambiguous passive input collection; not opened": "passive input collection missing or ambiguous",
+    "input report 03 length unproven; not opened": "input report 03 length unproven",
+    "no battery notification; no new measurement": "no valid battery notification",
+    "USB parent unproven; collection uniqueness unknown; not opened": "USB parent unproven",
+    "enumeration failed; retaining history": "enumeration failed; retaining history",
+    "input read failed; no new measurement": "input read failed; no new measurement",
+    "HID handle close failed": "HID handle close failed",
+    "legacy FA65 companion missing or ambiguous; not opened": "legacy FA65 companion missing or ambiguous",
+    "legacy FA65 state collection missing or ambiguous; not opened": "legacy FA65 state input missing or ambiguous",
+    "legacy FA65 physical parent unproven; not opened": "legacy FA65 physical parent unproven",
+    "legacy FA65 release unproven; not opened": "legacy FA65 release unproven",
+    "legacy FA65 collection path unproven; not opened": "legacy FA65 collection path unproven",
+}
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -102,6 +116,8 @@ def reader_diagnostics(provider):
     if provider.name not in READER_DIAGNOSTICS:
         return []
     lines = provider.reader_diagnostics() if provider.name in ("mchose", "pulsar") else provider.diagnostics()
+    if provider.name == "fa6x_passive":
+        lines = [line for line in lines if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
     if provider.name == "mchose_headset":
         # Expose only fixed firmware reasons, never this legacy reader's
         # raw I/O exceptions or packet log.
@@ -715,7 +731,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -765,6 +781,10 @@ class BatteryEngine:
                                    "reason": "" if measured else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
+            if name == "fa6x_passive":
+                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
+                if not measured and diagnostics:
+                    self.health[reader_key]["diagnosticSummary"] = FA6X_DIAGNOSTICS[diagnostics[0]]
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
             if name == "mchose" and not measured:
                 # V3-only protocol-owned failures outrank the identity/proof notes.

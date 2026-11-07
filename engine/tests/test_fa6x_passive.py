@@ -27,6 +27,13 @@ def report(level=73, model=0x78, event=0x40, state=2, report_id=3, length=8):
     return ([report_id, model, event, state, level] + [0] * max(0, length - 5))[:length]
 
 
+def legacy_inventory(physical="usb:a", release=0x0116):
+    return [descriptor(0xFA65, physical, usage_page=0x000A, usage=0,
+                       path=physical.encode() + b":state", release_number=release),
+            descriptor(0xFA65, physical, path=physical.encode() + b":comm",
+                       release_number=release, input_report_sizes=None)]
+
+
 class PassiveBus:
     def __init__(self, inventory, frames):
         self.inventory = inventory
@@ -92,6 +99,232 @@ def fixture(frames=(), inventory=None):
 
 
 class Fa6xPassiveTests(unittest.TestCase):
+    def test_web_fa65_release_0118_with_extra_state_reads_only_web(self):
+        web = descriptor(0xFA65, release_number=0x0118)
+        extra = descriptor(0xFA65, usage_page=0x000A, usage=0, path=b"extra-state",
+                           release_number=0x0118, input_report_sizes=None)
+        with fixture([report(62, model=0x78, event=0x40, state=1)],
+                     [web, extra]) as (bus, provider):
+            self.assertEqual([s.level for s in provider.poll()], [62])
+            self.assertEqual(bus.opened, [web["path"]])
+            self.assertTrue(all(path == web["path"] for path, _, _ in bus.reads))
+            self.assertEqual(provider.diagnostics(), [])
+
+    def test_web_fa65_ignores_extra_state_without_valid_legacy_release(self):
+        releases = ({}, *({"release_number": value} for value in (
+            0x18, 0x0118, None, True, False, "22", 22.0, -234, 0x10016, 0)))
+        for web_release in ({}, {"release_number": 0x0118}):
+            for state_release in releases:
+                web = descriptor(0xFA65, **web_release)
+                extra = descriptor(0xFA65, usage_page=0x000A, usage=0, path=b"extra-state",
+                                   input_report_sizes=None, **state_release)
+                with self.subTest(web=web_release, state=state_release), \
+                        fixture([report(62, state=1)], [web, extra]) as (bus, provider):
+                    self.assertEqual([s.level for s in provider.poll()], [62])
+                    self.assertEqual(bus.opened, [web["path"]])
+                    self.assertTrue(all(path == web["path"] for path, _, _ in bus.reads))
+                    self.assertEqual(provider.diagnostics(), [])
+
+    def test_single_sided_legacy_release_never_falls_back_to_usable_web(self):
+        for marker_side in (0, 1):
+            for peer_release in ({}, {"release_number": 0x0118},
+                                 {"release_number": None}, {"release_number": 0x10016}):
+                infos = legacy_inventory()
+                infos[1]["input_report_sizes"] = {"3": 8}
+                del infos[1 - marker_side]["release_number"]
+                infos[1 - marker_side].update(peer_release)
+                with self.subTest(marker_side=marker_side, peer=peer_release), \
+                        fixture([], infos) as (bus, provider):
+                    bus.queues[infos[1]["path"]] = [report(62, state=1)]
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual((bus.opened, bus.reads), ([], []))
+                    self.assertEqual(provider.diagnostics(),
+                                     ["legacy FA65 release unproven; not opened"])
+
+    def test_legacy_complete_shape_reads_only_state_collection(self):
+        infos = legacy_inventory()
+        with fixture([report(67, model=0x93, state=0)], infos) as (bus, provider):
+            statuses = provider.poll()
+            self.assertEqual([s.level for s in statuses], [67])
+            self.assertEqual(bus.opened, [infos[0]["path"]])
+            self.assertTrue(all(path == infos[0]["path"] for path, _, _ in bus.reads))
+            self.assertEqual(provider.diagnostics(), [])
+
+    def test_legacy_real_percentages_and_release_low_byte(self):
+        for release in (0x0016, 0x0116, 0xFF16):
+            for level in range(1, 101):
+                state = (0, 1, 4, 0x11, 0x1F, 255)[level % 6]
+                with self.subTest(release=release, level=level), \
+                        fixture([report(level, model=0x93, state=state)],
+                                legacy_inventory(release=release)) as (_, provider):
+                    status, = provider.poll()
+                    self.assertEqual((status.level, status.name, status.verification_level),
+                                     (level, F.PIDS[0xFA65], "C"))
+                    self.assertEqual((status.charging, status.charging_known, status.kind),
+                                     (False, False, "mouse"))
+
+    def test_legacy_rejects_web_events_other_models_and_synthetic_states(self):
+        invalid = [report(model=0x93, state=0, event=n) for n in (0, 0x41, 0x42, 0xC0, 0xFF)]
+        invalid += [report(model=n, state=0) for n in (0, 0x07, 0x71, 0x78, 0x90, 0x95, 255)]
+        invalid += [report(model=0x93, state=state, level=level)
+                    for state, level in ((2, 1), (2, 100), (3, 73), (3, 100), (0, 0), (0, 101), (0, 255))]
+        invalid += [report(model=0x93, state=0, report_id=n) for n in (0, 4)]
+        with fixture(invalid, legacy_inventory()) as (bus, provider):
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(provider.diagnostics(), ["no battery notification; no new measurement"])
+            bus.queues[bus.inventory[0]["path"]] = [report(48, model=0x93, state=0)] + invalid
+            status, = provider.poll()
+            self.assertEqual(status.level, 48)
+            self.assertEqual(provider.diagnostics(), [])
+            self.assertEqual(len(bus.opened), 1)
+
+    def test_legacy_report_length_is_proven_per_id_and_exact(self):
+        for length in (5, 8, 19, 64, 100, 4096):
+            infos = legacy_inventory()
+            maximum = max(128, length)
+            infos[0].update(input_report_length=maximum, input_report_sizes={"3": length, "9": maximum})
+            invalid = [report(11, model=0x93, state=0, length=n) for n in (4, length - 1, length + 1)]
+            invalid += [report(12, model=0x93, state=0, report_id=9, length=maximum)]
+            with self.subTest(length=length), fixture(invalid, infos) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                bus.queues[infos[0]["path"]] = [report(89, model=0x93, state=0, length=length)]
+                self.assertEqual(provider.poll()[0].level, 89)
+                self.assertTrue(all(size == maximum for _, size, _ in bus.reads))
+
+    def test_legacy_both_releases_must_be_real_uint16_with_low_byte_16(self):
+        for side in (0, 1):
+            for release in (None, True, False, "22", 22.0, -234, 0x10016, 0, 0x0118):
+                infos = legacy_inventory()
+                infos[1]["input_report_sizes"] = {"3": 8}  # A usable web peer must not be tried.
+                infos[side]["release_number"] = release
+                with self.subTest(side=side, release=release), fixture([], infos) as (bus, provider):
+                    bus.queues[infos[1]["path"]] = [report(99)]
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual(bus.opened, [])
+                    self.assertIn("legacy FA65 release unproven; not opened", provider.diagnostics())
+            infos = legacy_inventory()
+            del infos[side]["release_number"]
+            with fixture([], infos) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(bus.opened, [])
+
+    def test_legacy_missing_ambiguous_foreign_or_unresolved_peer_never_falls_back(self):
+        base = legacy_inventory()
+        inventories = [[base[0]], [base[1]],
+                       base + [dict(base[0], path=b"extra-state", release_number=None)],
+                       base + [dict(base[1], path=b"extra-comm", release_number=None)]]
+        for side in (0, 1):
+            for change in ({"vendor_id": 0x1D58}, {"product_id": 0xFA93}, {"product_id": 0xFA60},
+                           {"usage_page": 0xFF01}, {"usage": 2}, {"physical_id": "usb:other"},
+                           {"physical_id": ""}, {"physical_id": "collection:unresolved"},
+                           {"path": None}, {"path": b""}, {"path": 42}, {"path": b"bad\0path"}):
+                infos = [dict(d) for d in base]
+                infos[side].update(change)
+                inventories.append(infos)
+        inventories += [[dict(d, product_id=0xFA93) for d in base],
+                        [dict(d, path=b"same-path") for d in base]]
+        for infos in inventories:
+            with self.subTest(infos=infos), fixture([], infos) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(bus.opened, [])
+        provider = F.Fa6xPassiveProvider()
+        self.assertIsNone(provider._pick([base[0], dict(base[1], physical_id="usb:other")]))
+
+    def test_legacy_unproven_state_does_not_try_proven_communication_input(self):
+        defects = [{"input_report_length": n} for n in (None, True, "8", 4, 4097)]
+        defects += [{"input_report_sizes": sizes} for sizes in (
+            None, {}, {3: 8}, {"4": 8}, {"3": True}, {"3": 4}, {"3": 7}, {"3": 9}, {"3": 8, "4": None})]
+        for change in defects:
+            infos = legacy_inventory()
+            infos[0].update(change)
+            infos[1]["input_report_sizes"] = {"3": 8}
+            with self.subTest(change=change), fixture([], infos) as (bus, provider):
+                bus.queues[infos[1]["path"]] = [report(99)]
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.reads), ([], []))
+
+    def test_legacy_late_notifications_drain_latest_without_reopening_or_renewing_history(self):
+        infos = legacy_inventory()
+        with fixture([], infos) as (bus, provider):
+            self.assertEqual(provider.poll(), [])
+            bus.queues[infos[0]["path"]] = [report(n, model=0x93, state=0) for n in (30, 31)]
+            first, = provider.poll()
+            self.assertEqual(first.level, 31)
+            bus.queues[infos[0]["path"]] = [report(72, model=0x93, state=0), report(100, model=0x93, state=2)]
+            newest, = provider.poll()
+            self.assertEqual(newest.level, 72)
+            stale, = provider.poll()
+            self.assertEqual((stale.level, stale.cached, stale.online, stale.connection_known, stale.charging_known),
+                             (72, True, False, False, False))
+            self.assertEqual((stale.measured_at_utc, stale.queried_at_utc),
+                             (newest.measured_at_utc, newest.queried_at_utc))
+            self.assertEqual(bus.opened, [infos[0]["path"]])
+            self.assertEqual(bus.closed, [])
+            self.assertTrue(all(timeout == 1 for _, _, timeout in bus.reads[1:]))
+            bus.inventory = [dict(d, release_number=None) for d in infos]
+            self.assertTrue(provider.poll()[0].cached)
+            self.assertEqual(bus.closed, bus.opened)
+            bus.inventory = []
+            self.assertEqual(provider.poll(), [])
+
+    def test_legacy_variant_path_peer_release_and_report_proof_changes_revalidate_handle(self):
+        for change in ("state_path", "peer_path", "state_release", "peer_release", "proof", "web"):
+            infos = legacy_inventory()
+            with self.subTest(change=change), fixture([], infos) as (bus, provider):
+                provider.poll()
+                updated = [dict(d) for d in infos]
+                if change == "state_path":
+                    updated[0]["path"] = b"new-state"
+                elif change == "peer_path":
+                    updated[1]["path"] = b"new-peer"
+                elif change.endswith("release"):
+                    updated[0 if change == "state_release" else 1]["release_number"] = 0x0216
+                elif change == "proof":
+                    updated[0]["input_report_sizes"] = {"3": 8, "9": 8}
+                else:
+                    updated = [descriptor(0xFA65, path=infos[0]["path"], release_number=0x18)]
+                bus.inventory = updated
+                provider.poll()
+                self.assertEqual(bus.closed, [infos[0]["path"]])
+                self.assertEqual(bus.opened, [infos[0]["path"], updated[0]["path"]])
+                # Restore legacy on the same original state path: it must reopen.
+                bus.inventory = infos
+                provider.poll()
+                self.assertEqual(len(bus.opened), 3)
+                self.assertEqual(len(bus.closed), 2)
+
+    def test_legacy_two_receivers_do_not_share_peers_handles_or_history(self):
+        first, second = legacy_inventory(), legacy_inventory("usb:b")
+        with fixture([report(13, model=0x93, state=0)], first + second) as (bus, provider):
+            bus.queues[second[0]["path"]] = [report(87, model=0x93, state=0)]
+            statuses = provider.poll()
+            self.assertEqual([(s.physical_id, s.level) for s in statuses], [("usb:a", 13), ("usb:b", 87)])
+            self.assertEqual(bus.opened, [first[0]["path"], second[0]["path"]])
+            bus.inventory = first[:1] + second
+            bus.queues[second[0]["path"]] = [report(88, model=0x93, state=0)]
+            statuses = {s.physical_id: s for s in provider.poll()}
+            self.assertTrue(statuses["usb:a"].cached)
+            self.assertEqual(statuses["usb:b"].level, 88)
+            self.assertIn(first[0]["path"], bus.closed)
+            self.assertNotIn(second[0]["path"], bus.closed)
+            bus.inventory = second
+            self.assertEqual([s.physical_id for s in provider.poll()], ["usb:b"])
+
+    def test_legacy_first_listen_and_drain_use_existing_budgets(self):
+        for delay in (0, 0.3):
+            with fixture([report(model=0x93, state=0, event=0x41)] * 1000,
+                         legacy_inventory()) as (bus, provider):
+                bus.delay = delay
+                self.assertEqual(provider.poll(), [])
+                self.assertLessEqual(bus.now - 100, 1.5)
+                self.assertLessEqual(len(bus.reads), 32)
+        with fixture([], legacy_inventory()) as (bus, provider):
+            provider.poll()
+            bus.queues[bus.inventory[0]["path"]] = [report(22, model=0x93, state=0)] * 1000
+            before = len(bus.reads)
+            self.assertEqual(provider.poll()[0].level, 22)
+            self.assertEqual(len(bus.reads) - before, F.MAX_DRAIN)
+
     def test_exact_web_model_table_and_events(self):
         expected = {0xFA60: {0x07, 0x76, 0x77, 0x78, 0x79, 0xE8},
                     0xFA65: {0x71, 0x76, 0x77, 0x78, 0x79, 0x90}}
@@ -299,6 +532,11 @@ class Fa6xPassiveTests(unittest.TestCase):
         device_calls = {call.attr for call in calls if isinstance(call, ast.Attribute)
                         and isinstance(call.value, ast.Name) and call.value.id == "dev"}
         self.assertEqual(device_calls, {"open_path", "read", "close"})
+        # Legacy adds a parser/identity gate, not another device-I/O call site.
+        names = [call.attr for call in calls if isinstance(call, ast.Attribute)
+                 and isinstance(call.value, ast.Name) and call.value.id == "dev"]
+        self.assertEqual({name: names.count(name) for name in set(names)},
+                         {"open_path": 1, "read": 1, "close": 2})
 
     def test_registration_neutral_index_and_catalog(self):
         self.assertIn(("fa6x_passive", "Fa6xPassiveProvider"), server.PROVIDERS)
