@@ -60,6 +60,121 @@ def comment(body, bot=False):
 
 
 class TriageTests(unittest.TestCase):
+    def test_issue_353_shared_ids_do_not_claim_support(self):
+        body = (ROOT / "tests/fixtures/issue353-body.txt").read_text(encoding="utf-8")
+        result = triage.decide(issue(body, labels=("triage:supported",)), known_ids.build_index())
+        # MagDock is a separate unknown PID with a vendor collection. It remains
+        # a pack candidate; the shared A7/K99 IDs must not claim support.
+        self.assertEqual(result["label"], "triage:pack-candidate")
+        self.assertEqual(result["remove_labels"], ["triage:supported"])
+        self.assertIsNone(result["reply"])
+        self.assertIn("需核对准确型号和接口", result["reason"])
+        restricted_only = "\n".join(line for line in body.splitlines() if not line.startswith("3837:1012"))
+        result = triage.decide(issue(restricted_only), known_ids.build_index())
+        self.assertEqual(result["label"], "triage:insufficient-evidence")
+        self.assertTrue(result["reply"].startswith(triage.MARKER + "\n自动回复："))
+        for text in ("仅部分型号", "准确型号和接口"):
+            self.assertIn(text, result["reply"])
+        for name in ("A7 V3 Pro", "G87", "K99", "Ultra+", "MagDock"):
+            self.assertNotIn(name, result["reply"])
+
+    def test_model_gate_survives_duplicates_and_cross_index_conflicts(self):
+        gated = {"provider": "gated", "source": "builtin", "vendorId": 0x3837,
+                 "productId": 0x3033, "name": "G87 V2", "requiresModelMatch": True}
+        legacy = dict(gated, provider="other", source="pack")
+        del legacy["requiresModelMatch"]
+        explicit_false = dict(legacy, requiresModelMatch=False)
+        cases = [([gated], []), ([], [gated])]
+        for ungated in (legacy, explicit_false):
+            cases.extend([([gated, ungated], []), ([ungated, gated], []),
+                          ([], [gated, ungated]), ([], [ungated, gated]),
+                          ([gated], [ungated]), ([ungated], [gated])])
+        for released, main in cases:
+            for product in ("G87 V2", "K99 V3", "untrusted @someone $(command)"):
+                with self.subTest(released=released, main=main, product=product):
+                    known = {"vendors": {"gated": [0x3837]}, "devices": released}
+                    next_known = {"vendors": {"gated": [0x3837]}, "devices": main}
+                    payload = issue(in_app(report(unknown=f'3837:3033 "{product}" FF31:0074')))
+                    result = triage.decide(payload, known, known_next=next_known)
+                    self.assertEqual(result["label"], "triage:insufficient-evidence")
+                    self.assertIn("仅部分型号", result["reply"])
+                    for text in ("G87", "K99", "untrusted", "@", "$(command)"):
+                        self.assertNotIn(text, result["reply"])
+
+    def test_model_gate_mixed_with_unconditional_hits_keeps_priority_and_names(self):
+        gated = {"vendorId": 0x3837, "productId": 0x3033, "name": "G87 V2",
+                 "requiresModelMatch": True}
+        for released in (True, False):
+            for order in (False, True):
+                with self.subTest(released=released, reversed=order):
+                    known = {"vendors": KNOWN["vendors"], "devices": [gated] + (KNOWN["devices"] if released else [])}
+                    rows = ['3837:3033 "G87 V2" FF31:0074', '373B:1278 "ATK" FF02:0002']
+                    body = in_app(report(unknown="\n".join(reversed(rows) if order else rows)))
+                    result = triage.decide(issue(body), known, known_next=None if released else KNOWN)
+                    self.assertEqual(result["label"], "triage:supported" if released else "triage:in-next-release")
+                    self.assertIn("ATK A9 Air+", result["reply"])
+                    self.assertNotIn("G87", result["reply"])
+                    self.assertIn("需核对准确型号和接口", result["reason"])
+
+    def test_model_gate_keeps_unknown_pid_and_vendor_rules(self):
+        known = {"vendors": {"mchose": [0x3837]}, "devices": [
+            {"vendorId": 0x3837, "productId": 0x3033, "name": "G87 V2", "requiresModelMatch": True}]}
+        for row, label in (('3837:EEEE "unknown" FF31:0074', "pack-candidate"),
+                           ('ABCD:1234 "new" FF00:0001', "new-vendor"),
+                           ('3837:EEEE "standard" 0001:0006', "insufficient-evidence")):
+            with self.subTest(label=label):
+                body = in_app(report(unknown='3837:3033 "K99" FF31:0074\n' + row))
+                result = triage.decide(issue(body), known)
+                self.assertEqual(result["label"], "triage:" + label)
+                self.assertIn("需核对准确型号和接口", result["reason"])
+                if label != "insufficient-evidence":
+                    self.assertIsNone(result["reply"])
+
+    def test_model_gate_reply_preserves_credentials_and_bot_deduplication(self):
+        body = (ROOT / "tests/fixtures/issue353-body.txt").read_text(encoding="utf-8")
+        body = "\n".join(line for line in body.splitlines() if not line.startswith("3837:1012"))
+        known = known_ids.build_index()
+        footer = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
+        legacy = triage.decide(issue(body), known)["reply"]
+        keyed = triage.decide(issue(body + "\n\n" + footer), known)["reply"]
+        self.assertIn("在程序里重新提交反馈，并在描述里写上本条编号", legacy)
+        self.assertIn(triage.SUPPLEMENT_GUIDANCE, keyed)
+        self.assertNotIn("重新提交反馈", keyed)
+        for bot, suppressed in ((True, True), (False, False)):
+            with self.subTest(bot=bot):
+                result = triage.decide(issue(body), known, [[comment("old")], [comment(triage.MARKER, bot)]])
+                self.assertEqual(result["label"], "triage:insufficient-evidence")
+                self.assertEqual(result["reply"] is None, suppressed)
+
+    def test_model_gate_respects_cards_noise_loose_mentions_lock_and_pr(self):
+        known = {"vendors": {"mchose": [0x3837]}, "devices": [
+            {"vendorId": 0x3837, "productId": 0x3033, "name": "G87 V2", "requiresModelMatch": True}]}
+        row = '3837:3033 "G87 V2" FF31:0074'
+        for body in (in_app(report(card="mouse：Mouse 80%", unknown=row)),
+                     in_app(report(card="G87 | keyboard | mchose | 80% | 当前读数：是 | 3837:3033")),
+                     in_app(report(unknown='3837:3033 "Touchpad" FF31:0074')),
+                     in_app(report(unknown='3837:3033 "Receiver" 0001:0002')),
+                     in_app(description=row)):
+            with self.subTest(body=body):
+                result = triage.decide(issue(body), known)
+                self.assertEqual(result["label"], "triage:insufficient-evidence")
+                self.assertIsNone(result["reply"])
+        for payload in (issue(in_app(report(unknown=row)), labels=("triage:locked", "triage:supported")),
+                        dict(issue(in_app(report(unknown=row))), pull_request={})):
+            result = triage.decide(payload, known)
+            self.assertIsNone(result["label"])
+            self.assertIsNone(result["reply"])
+            self.assertEqual(result["remove_labels"], [])
+
+    def test_main_only_reply_does_not_promise_a_future_release(self):
+        result = triage.decide(issue(in_app(report(unknown='373B:1278 "ATK" FF02:0002'))),
+                               {"vendors": {}, "devices": []}, known_next=KNOWN)
+        self.assertEqual(result["label"], "triage:in-next-release")
+        for text in ("开发代码已有读取实现", "当前正式发布尚未包含", "是否提供以实际发布为准", "需实机验证"):
+            self.assertIn(text, result["reply"])
+        for text in ("会随", "下一个测试版", "届时", "通知"):
+            self.assertNotIn(text, result["reply"])
+
     def test_issue_29_release_and_main_have_distinct_support(self):
         next_index = {"vendors": {"mchose_headset": [0x291D]}, "devices": [
             {"provider": "mchose_headset", "vendorId": 0x291D, "productId": 0x385D,

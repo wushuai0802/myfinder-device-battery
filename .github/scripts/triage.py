@@ -21,8 +21,11 @@ NEEDS_INFO_WITH_REPLY = ("自动回复：这次反馈没有带上设备信息，
 SUPPORTED = ("自动回复：报告里的 {models} 在支持列表中。如果还是没有电量，请依次试试："
              "1）唤醒设备后在程序里点重新同步；2）暂时关闭厂商驱动后再试；3）拔插接收器。"
              "仍不行的话，请在这里补充一次新的反馈报告；没有 GitHub 账号的话，可以在程序里重新提交反馈，并在描述里写上本条编号。维护者会尽快查看。")
-IN_NEXT_RELEASE = ("自动回复：报告里的 {models} 已在开发版中加入读取，会随下一个测试版提供，届时会在这里通知。"
-                   "新加入的设备需要实机确认，到时欢迎帮忙对照官方软件的读数。维护者会尽快查看。")
+IN_NEXT_RELEASE = ("自动回复：报告里的 {models} 在开发代码已有读取实现，当前正式发布尚未包含，"
+                   "是否提供以实际发布为准，需实机验证，欢迎对照官方软件的读数。维护者会尽快查看。")
+MODEL_MATCH_REQUIRED = ("自动回复：报告中的设备 ID 仅部分型号可读取电量，需核对准确型号和接口，"
+                        "暂不能仅凭共享 ID 确认支持。请在这里补充一次新的反馈报告；没有 GitHub 账号的话，"
+                        "可以在程序里重新提交反馈，并在描述里写上本条编号。维护者会尽快查看。")
 PAIR = re.compile(r"(?<![\w:])([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})(?![\w:])")
 TYPE = re.compile(r"^[ \t]*(?:\*\*)?类型(?:\*\*)?[ \t]*[：:][ \t]*([^\r\n]+?)[ \t\r]*$", re.MULTILINE)
 DEVICE_TYPES = {"设备不识别", "电量或 DPI 不对"}
@@ -141,6 +144,11 @@ def decide(issue, known, comments=None, known_next=None):
     vendors = {vid for ids in known["vendors"].values() for vid in ids}
     vendors.update(vid for ids in (known_next or {}).get("vendors", {}).values() for vid in ids)
     known_pairs = index.keys() | next_index.keys()
+    # A gate from any provider/source or revision restricts the whole shared ID.
+    # Neither a legacy duplicate nor a matching user product string clears it.
+    gated_pairs = {key for key in known_pairs
+                   if any(device.get("requiresModelMatch") is True
+                          for device in index.get(key, []) + next_index.get(key, []))}
     reported = rows
     has_card = any(row[3] == "card" for row in reported)
     rows, ignored = [], []
@@ -153,9 +161,12 @@ def decide(issue, known, comments=None, known_next=None):
             ignored.append(row)
         else:
             rows.append(row)
-    hits = [(row, index[row[:2]]) for row in rows if row[3] == "unadapted" and row[:2] in index]
+    restricted = [row for row in rows if row[3] == "unadapted" and row[:2] in gated_pairs]
+    hits = [(row, index[row[:2]]) for row in rows
+            if row[3] == "unadapted" and row[:2] in index and row[:2] not in gated_pairs]
     next_hits = [(row, next_index[row[:2]]) for row in rows
-                 if row[3] == "unadapted" and row[:2] not in index and row[:2] in next_index]
+                 if row[3] == "unadapted" and row[:2] not in index and row[:2] in next_index
+                 and row[:2] not in gated_pairs]
     if has_card and (hits or next_hits):
         # A sibling interface of a working card can still appear as unread.
         # Classify the remaining devices, retaining hits only as a fallback.
@@ -185,6 +196,10 @@ def decide(issue, known, comments=None, known_next=None):
     elif new_vendors:
         ids = "、".join(sorted({f"{row[0]:04X}:{row[1]:04X}" for row in new_vendors}))
         label, reason = "new-vendor", "设备厂商 ID 不在当前支持范围：" + ids + "。"
+    elif restricted:
+        label, reason = "insufficient-evidence", "仅命中需型号确认的设备 ID，无法确认本次设备支持情况。"
+        if not has_card:
+            reply = MODEL_MATCH_REQUIRED
     elif (rows and all(row[2] and all(page < 0xFF00 for page, _ in row[2]) for row in rows)) or (ignored and not rows):
         label, reason = "insufficient-evidence", "排除噪声后只看到标准 HID 接口，无法确认私有电量协议。"
     elif category in BUG_TYPES and not rows:
@@ -195,6 +210,9 @@ def decide(issue, known, comments=None, known_next=None):
         label, reason = "insufficient-evidence", "报告仅有已取得电量的卡片设备，缺少待分类设备的证据。"
     else:
         return result
+    if restricted:
+        ids = "、".join(sorted({f"{row[0]:04X}:{row[1]:04X}" for row in restricted}))
+        reason += " 仅部分型号可读取的共享或受限 ID，需核对准确型号和接口：" + ids + "。"
     if ignored:
         ids = "、".join(sorted({f"{row[0]:04X}:{row[1]:04X}" for row in ignored}))
         reason += " 已忽略触摸板、虚拟设备名称或仅含 0001:0002 集合的行：" + ids + "。"
