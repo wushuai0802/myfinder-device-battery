@@ -180,6 +180,32 @@ class ProofFallback2Tests(unittest.TestCase):
             self.backend.device.assert_not_called()
             self.assert_reader([info], s9=s9)
 
+    def test_41e4_by_keyboard_collections_use_descriptor_fallback_only_for_2001(self):
+        by_descriptor = bytes.fromhex(
+            "06 04 ff 09 02 a1 01 85 13 75 08 95 13 81 02 91 02 c0")
+        for page in (0xFF04, 0xFF02):
+            with self.subTest(page=page):
+                self.configure(identity=(0x41E4, 0x2001), collection=(page, 2),
+                               failed=(0, 1), report_id=0x13)
+
+                def caps(data, pointer):
+                    value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                    value.page, value.usage = page, 2
+                    value.input, value.output, value.iv, value.ov = 20, 20, 1, 1
+                    return 0x00110000
+
+                self.case.hid.HidP_GetCaps.side_effect = caps
+                self.dev.get_report_descriptor.return_value = (
+                    by_descriptor[:1] + page.to_bytes(2, "little") + by_descriptor[3:])
+                info = self.scan()
+                self.assertEqual(info["input_report_sizes"], {"19": 20})
+                self.assertEqual(info["output_report_sizes"], {"19": 20})
+                self.assertEqual(info["input_report_proof"], "descriptor")
+                self.assertEqual(info["output_report_proof"], "descriptor")
+        self.configure(identity=(0x41E4, 0x2004), collection=(0xFF04, 2), failed=(0, 1))
+        self.scan()
+        self.backend.device.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

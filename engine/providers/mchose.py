@@ -458,7 +458,10 @@ class MchoseProvider(Provider):
                     or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                     or sizes.get(str(V3_REPORT_ID)) != V3_REPORT_LEN):
                 self._note_v3("V3 " + direction + " report 4D/64 length unproven"
-                              + report_proof_summary(info, direction) + "; not opened; nothing sent")
+                              + report_proof_summary(
+                                  info, direction,
+                                  include_declared=isinstance(info.get("declared_report_sizes"), dict))
+                              + "; not opened; nothing sent")
                 return None
         for direction in ("input", "output"):
             self._note_v3("V3 " + direction + " report 4D/64 proven"
