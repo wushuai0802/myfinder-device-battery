@@ -3342,9 +3342,9 @@ not enable this AULA command path or claim brand identification.
 
 ### Shared 1D57:FA60 / FA65 receivers: receive-only battery
 
-**Implemented at grade C (2026-11-06, second-round decision): 只接收，绝不发送。**
+**Implemented at grade C (web 2026-11-06; exact legacy IN10 route 2026-11-07): 只接收，绝不发送。**
 `providers/fa6x_passive.py` listens for the official INPHIC battery prefix with
-exact collection, descriptor-length and web model-table gates. It never calls
+exact collection, descriptor-length and variant-specific model/event gates. It never calls
 `write`, `send_feature_report` or `get_feature_report`, and performs no vendor
 initialization. This supersedes the first-round decision to leave the IDs
 unenrolled. The tradeoff is deliberate: accepting a matching notification can
@@ -3354,21 +3354,49 @@ contract or globally unique model identity. Cards therefore use the neutral
 names `2.4G 无线鼠标（1D57:FA60）` / `2.4G 无线鼠标（1D57:FA65）`, `kind="mouse"`,
 and always unknown charging. No real hardware validation is claimed.
 
-Runtime matching follows the **web table's per-PID listener and model values**:
+The original **web table's per-PID listener and model values** remain unchanged:
 
 | VID:PID | Unique input collection | Accepted model bytes (hex) |
 | --- | --- | --- |
 | `1D57:FA60` | `000A:0000` | `07 76 77 78 79 E8` |
 | `1D57:FA65` | `FF00:0001` | `71 76 77 78 79 90` |
 
-The older native FA65 `000A:0000` route is outside this reader. A proven USB
-parent and a unique matching collection are required. Topology inspects only
+For these web routes, a proven USB parent and a unique matching collection
+are required. Topology inspects only
 Input descriptor metadata; the input handle is not opened unless Input `03`
-has a proven length of at least five bytes. Each received report must match
+has a proven byte-array length in `5..4096`. Each received report must match
 that length exactly and begin `03 <allowed-model> 40/41 <state> <percentage>`.
 Only `1..100` is displayed: zero, out-of-range values, other IDs/events/models
 and short/overlong reports are ignored. State does not change the percentage
 or charging status. There is no assumed five-byte total length or checksum.
+
+The added **legacy FA65 IN10** route requires one proven physical USB parent
+shared by exactly one `1D57:FA65 / FF00:0001` communication companion and one
+`1D57:FA65 / 000A:0000` status collection. Both `release_number` values must
+be real integers in `0..65535` with low byte `16` (hex), and both paths must
+be valid and distinct. The communication companion is topology metadata only:
+the provider never opens or reads it. Only the status collection is opened,
+after the same Input `03` byte-array and exact report-length proof. New
+topology proof is limited to this exact status identity and release, with no
+Output/Feature inspection or raw-descriptor fallback. Native ATK exclusions
+and descriptor cache semantics are unchanged.
+
+Legacy reports must begin `03 93 40 <state> <percent>`, match the proven length
+exactly and contain `1..100` percent. States `02` and `03` are discarded: the
+native UI synthesizes 100% or a charging animation for them. Other events
+(including `41`), other models (including `95` and the web models), zero and
+out-of-range percentages are ignored. Charging stays unknown. A FA65 status
+collection or a release-`16` communication companion marks a legacy-shaped
+inventory; ambiguity or failed peer/release/path/report proof rejects it
+without trying the web input instead. Without either legacy marker, the web
+selection remains unchanged. No native FA60 models or `1D57:FA93` route are
+enabled.
+
+Issue #264 reports that official INPHIC HUB 1.0.1.24 displays IN10 battery;
+#356 reports an IN10 `FA65` with `000A:0000` and `FF00:0001`, and a separate
+IN10 `FA93` identity. Neither report establishes a successful read by this
+project. The added route remains C, pending real hardware verification; its
+name stays neutral and no confirmed fix is claimed.
 
 As with Rapoo, handles remain open between refreshes so input can queue. The
 first poll listens for up to 1500 ms / 32 non-battery reports; after a valid
@@ -3377,8 +3405,13 @@ reads and the same 1500 ms deadline per poll, retaining the newest valid value.
 Silence returns no first reading and no error; existing history keeps its
 original measurement time with unknown connection/charging and
 `no_measurement` health. Descriptor/parent uncertainty retains history but
-closes the input handle; receiver removal clears history. A changed path or
-report length reopens the handle only after revalidation. No fallback writes
+closes the input handle; receiver removal clears history. A changed protocol
+variant, status/companion identity or report proof reopens the handle only
+after revalidation. Fixed allow-listed diagnostic reasons reach child JSON
+and reader health; their compact summaries fit 48 characters, clear on a new
+measurement and never populate actual errors/failure counts/backoff. Paths,
+serials, products, packets and exception text are excluded from this channel.
+No fallback writes
 or feature fetches are available.
 
 #### Evidence identity and comparison
@@ -3391,6 +3424,15 @@ Evidence ID is claimed. Native analysis used the installed local Ghidra with
 its project, settings, cache and output under this worktree's ignored `tmp/`.
 Native addresses below are virtual addresses in the named artifact; web offsets
 are zero-based UTF-8 byte offsets in the original file.
+
+For the 2026-11-07 extension, the executor independently rechecked the copied
+`.ai/evidence/inphic-legacy/INPHIC.exe` hash and the retained Ghidra text
+`.ai/evidence/inphic-legacy/inphic-exe.txt` (SHA256
+`5e1936ee6d2856136422a037206e64a1df495ce214589f8397495d6ab058c2a1`).
+The EXE matches the digest below; neither importing nor executing it was
+needed. These are observations from an existing decompilation, not original
+vendor source or a hardware capture. The original acquisition notes and
+other artifact digests below are historical, not new inspections in this turn.
 
 | Artifact | SHA256 |
 | --- | --- |
@@ -3433,11 +3475,24 @@ readers allocate 100 bytes; that allocation is not a report length either.
 Model selection initially tests event bit `40`, then uses a fixed model table;
 the downstream handlers make the more specific event checks below.
 
+The legacy text at lines 26421 onward confirms `004140D0`'s enumeration and
+communication release gate. Its status open has no matching release check;
+this project deliberately requires it on both sides. `00414620` (line 26597)
+only `hid_read`s the status handle and associates normalized paths to the
+communication companion; model `93` selects index 2. `00414B70` (line 26878)
+requires report `03` and packs model/event and state/percent into separate
+words before dispatching index 2 to `00460380` (line 84649). That handler
+requires model `93` and event exactly `40`; state `02` forces a 100% display,
+state `03` starts the charging animation, and only the remaining states use
+byte 4 when it is `1..100`. The receive-only parser follows that last branch
+and never applies the web `40/41` normalization to legacy notifications.
+
 Examples traced through native constructors and battery handlers:
 
 | Model branch | Event and percentage | Charging/display behavior |
 | --- | --- | --- |
 | IN9 PRO, model `95`, constructor `00438060` | `0043ACC0`: event `40`, byte 4 accepted in `0..100`; FA65 handlers `0043B220` / `0043FA50` accept `1..100` | FA65 state `02` displays 100; state `03` starts charging animation; other states use the percentage. Some FA60 branches also depend on wired/connection state. |
+| IN10, model `93`, constructor `0045D1B0` | `00460380`: event exactly `40`, byte 4 in `1..100` only outside states `02` / `03` | Constructor at text line 82717 also lists `FA93`, which establishes model association but does not enable that separate PID here. `02` synthesizes 100%; `03` animates charging; neither is used as a measurement. |
 | IN10 PRO, model `71`, constructor `0049CCD0` | `0049F120`: event `41`, byte 4 in `0..100`; FA65 handlers `0049F680` / `004A31B0` accept `1..100` | Corresponding FA65 `02` / `03` display handling as above. |
 | AULA SC800, model `13` | `Mouse.exe` `00411460` / `00411A20`: packed model/event `4013`, percentage from the high byte of the data word | `00411460` uses `1F` for full and `11` for charging; `00411A20` uses `02` / `03`. The former is reached from `00410FB0` / `00411120`, the latter from `004112E0`. |
 
