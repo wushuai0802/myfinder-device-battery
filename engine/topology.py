@@ -302,7 +302,8 @@ def discover(paths, excluded=(), *, full=False):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
                 if (attrs.vendor, attrs.product) in (
-                        (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014)):
+                        (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014),
+                        (0x41E4, 0x2001)):
                     _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _hidstub  # noqa: F401
+import server
 import mchose_keyboard_hid as H
 from providers import mchose, mchose_qhw_keyboard as Q, mchose_glw_keyboard as G
 
@@ -334,6 +335,25 @@ class KeyboardIoTests(unittest.TestCase):
                     self.assertLessEqual(bus.now, 1.001)
                     self.assertLessEqual(len(bus.reads), 32 if delay == 0 else 5)
                     self.assertTrue(all(0 < timeout <= 1000 for _, _, timeout in bus.reads))
+
+
+class KeyboardHealthTests(unittest.TestCase):
+    def test_glw_and_qhw_health_summaries_project_product_mismatch_and_reasons(self):
+        engine = server.BatteryEngine([], include_native=True)
+        self.addCleanup(engine.close)
+        for name, lines, expected in (
+                ("mchose_glw_keyboard",
+                 ["exact product name mismatch or missing: nothing sent",
+                  "missing or ambiguous eligible collection: nothing sent"],
+                 "product name mismatch"),
+                ("mchose_qhw_keyboard",
+                 ["collection mismatch or missing: nothing sent on this collection",
+                  "report IDs unknown, ambiguous or incompatible: nothing sent"],
+                 "report IDs unproven")):
+            with self.subTest(name=name):
+                engine._accept("r", name, [], server.utcnow(), "receiver-a", 1,
+                               diagnostics=lines)
+                self.assertEqual(engine._snapshot()["health"][0]["errorCode"], expected)
 
 
 if __name__ == "__main__":

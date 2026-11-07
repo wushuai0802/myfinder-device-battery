@@ -731,7 +731,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -798,7 +798,12 @@ class BatteryEngine:
                             "V3 power query write failed or short;",
                             "V3 power I/O failed;",
                             "no valid V3 power reply;")):
-                        self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
+                        if "; declared=" in line and line.startswith("V3 "):
+                            compact = line[len("V3 "):].replace(
+                                " report 4D/64 length unproven;", " report 4D length unproven;", 1)
+                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(compact)
+                        else:
+                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
                         break
             if name == "pulsar":
                 # A cached card can keep the existing health state ok while this
@@ -845,6 +850,27 @@ class BatteryEngine:
                     ("device asleep/offline; no new reading; connection unknown", "device asleep/offline"),
                     ("rejected input report length", "input report length rejected"),
                     ("rejected battery reply", "battery reply rejected"),
+                    ("no valid reply within deadline/read limit; connection unknown", "no valid battery reply"),
+                    ("HID handle close failed", "HID handle close failed"),
+                ):
+                    if any(line == message or line.startswith(message + ";")
+                           for line in diagnostics if isinstance(line, str)):
+                        self.health[reader_key]["diagnosticSummary"] = summary
+                        break
+            if name in ("mchose_glw_keyboard", "mchose_qhw_keyboard") and not measured:
+                for message, summary in (
+                    ("exact product name mismatch or missing: nothing sent", "product name mismatch"),
+                    ("input/output descriptor lengths unknown or incompatible: nothing sent", "report sizes unproven"),
+                    ("report IDs unknown, ambiguous or incompatible: nothing sent", "report IDs unproven"),
+                    ("missing or ambiguous eligible collection: nothing sent", "collection missing or ambiguous"),
+                    ("missing collection path: nothing sent", "collection path unresolved"),
+                    ("physical parent unresolved; collection uniqueness unknown: nothing sent", "physical parent unresolved"),
+                    ("enumeration failed: nothing sent", "enumeration failed"),
+                    ("hidapi unavailable: nothing sent", "hidapi unavailable"),
+                    ("battery I/O failed; no measurement, connection unknown", "battery I/O failed"),
+                    ("short/failed output write; no retry", "battery query write short/failed"),
+                    ("rejected input report length", "input report length rejected"),
+                    ("rejected input report ID", "input report ID rejected"),
                     ("no valid reply within deadline/read limit; connection unknown", "no valid battery reply"),
                     ("HID handle close failed", "HID handle close failed"),
                 ):

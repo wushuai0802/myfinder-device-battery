@@ -198,6 +198,25 @@ class MchoseV3HealthTests(unittest.TestCase):
                 self.assertEqual(server.scoped_poll(provider, [], "receiver-a"), [])
             self.assertEqual(server.reader_diagnostics(provider), [])
 
+    def test_v3_length_unproven_with_declared_sizes_projects_compact_declared_summary(self):
+        infos = inventory(0x1018)
+        info = next(d for d in infos if d["usage_page"] == 0xFF01)
+        info.update(input_report_sizes=None, input_report_proof="failed",
+                    report_descriptor_error="collection maximum mismatch",
+                    declared_report_sizes={"output": {"77": 64}, "input": {"1": 16},
+                                           "feature": {}})
+        provider = M.MchoseProvider()
+        with fixture([], infos):
+            statuses = server.scoped_poll(provider, infos, "receiver-a")
+        snapshot = self.accept(provider, infos, statuses)
+        health, = snapshot["health"]
+        self.assertEqual(
+            health["errorCode"],
+            "in:4D unproven;declared=out:4D/64,in:01/16,...")
+        self.assertLessEqual(len(health["errorCode"]), 48)
+        self.assertIn("declared=out:4D/64,in:01/16,feature:none",
+                      " ".join(health["diagnostics"]))
+
 
 if __name__ == "__main__":
     unittest.main()
