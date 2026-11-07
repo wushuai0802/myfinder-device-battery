@@ -99,6 +99,48 @@ def fixture(frames=(), inventory=None):
 
 
 class Fa6xPassiveTests(unittest.TestCase):
+    def test_web_fa65_release_0118_with_extra_state_reads_only_web(self):
+        web = descriptor(0xFA65, release_number=0x0118)
+        extra = descriptor(0xFA65, usage_page=0x000A, usage=0, path=b"extra-state",
+                           release_number=0x0118, input_report_sizes=None)
+        with fixture([report(62, model=0x78, event=0x40, state=1)],
+                     [web, extra]) as (bus, provider):
+            self.assertEqual([s.level for s in provider.poll()], [62])
+            self.assertEqual(bus.opened, [web["path"]])
+            self.assertTrue(all(path == web["path"] for path, _, _ in bus.reads))
+            self.assertEqual(provider.diagnostics(), [])
+
+    def test_web_fa65_ignores_extra_state_without_valid_legacy_release(self):
+        releases = ({}, *({"release_number": value} for value in (
+            0x18, 0x0118, None, True, False, "22", 22.0, -234, 0x10016, 0)))
+        for web_release in ({}, {"release_number": 0x0118}):
+            for state_release in releases:
+                web = descriptor(0xFA65, **web_release)
+                extra = descriptor(0xFA65, usage_page=0x000A, usage=0, path=b"extra-state",
+                                   input_report_sizes=None, **state_release)
+                with self.subTest(web=web_release, state=state_release), \
+                        fixture([report(62, state=1)], [web, extra]) as (bus, provider):
+                    self.assertEqual([s.level for s in provider.poll()], [62])
+                    self.assertEqual(bus.opened, [web["path"]])
+                    self.assertTrue(all(path == web["path"] for path, _, _ in bus.reads))
+                    self.assertEqual(provider.diagnostics(), [])
+
+    def test_single_sided_legacy_release_never_falls_back_to_usable_web(self):
+        for marker_side in (0, 1):
+            for peer_release in ({}, {"release_number": 0x0118},
+                                 {"release_number": None}, {"release_number": 0x10016}):
+                infos = legacy_inventory()
+                infos[1]["input_report_sizes"] = {"3": 8}
+                del infos[1 - marker_side]["release_number"]
+                infos[1 - marker_side].update(peer_release)
+                with self.subTest(marker_side=marker_side, peer=peer_release), \
+                        fixture([], infos) as (bus, provider):
+                    bus.queues[infos[1]["path"]] = [report(62, state=1)]
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual((bus.opened, bus.reads), ([], []))
+                    self.assertEqual(provider.diagnostics(),
+                                     ["legacy FA65 release unproven; not opened"])
+
     def test_legacy_complete_shape_reads_only_state_collection(self):
         infos = legacy_inventory()
         with fixture([report(67, model=0x93, state=0)], infos) as (bus, provider):

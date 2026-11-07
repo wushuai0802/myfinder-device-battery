@@ -85,9 +85,9 @@ class Fa6xPassiveProvider(Provider):
         states = [d for d in infos
                   if (d.get("vendor_id"), d.get("product_id"), d.get("usage_page"), d.get("usage"))
                   == (VID, 0xFA65, 0x000A, 0)]
-        # Either legacy-shaped side blocks web fallback even if its peer or
-        # proof is missing. The shape alone never authorizes opening a handle.
-        if states or any(legacy_release(d) for d in companions):
+        # A proven release-16 marker on either side blocks web fallback even
+        # if its peer or proof is missing; a bare state collection does not.
+        if any(legacy_release(d) for d in companions + states):
             info = self._pick_legacy(companions, states)
             if info is None:
                 return None

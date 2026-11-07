@@ -3385,12 +3385,14 @@ Legacy reports must begin `03 93 40 <state> <percent>`, match the proven length
 exactly and contain `1..100` percent. States `02` and `03` are discarded: the
 native UI synthesizes 100% or a charging animation for them. Other events
 (including `41`), other models (including `95` and the web models), zero and
-out-of-range percentages are ignored. Charging stays unknown. A FA65 status
-collection or a release-`16` communication companion marks a legacy-shaped
-inventory; ambiguity or failed peer/release/path/report proof rejects it
-without trying the web input instead. Without either legacy marker, the web
-selection remains unchanged. No native FA60 models or `1D57:FA93` route are
-enabled.
+out-of-range percentages are ignored. Charging stays unknown. A valid
+release-`16` marker on either the FA65 status collection or communication
+companion selects the strict legacy route; ambiguity or failed
+peer/release/path/report proof rejects it without trying the web input instead.
+Without a valid release-`16` marker on either side, the web selection remains
+unchanged and ignores any extra `000A:0000` collection, including one with
+release `18`, missing release or invalid release. No native FA60 models or
+`1D57:FA93` route are enabled.
 
 Issue #264 reports that official INPHIC HUB 1.0.1.24 displays IN10 battery;
 #356 reports an IN10 `FA65` with `000A:0000` and `FF00:0001`, and a separate
