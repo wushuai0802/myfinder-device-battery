@@ -545,6 +545,52 @@ The same `b0` exchange as the other Nova headsets, asked for with report id `06`
 
 ## Mice
 
+### DELUX M900 Ultra GH8K receiver (3554:FB26)
+
+**Project verification: A, hardware-tested M900 Ultra with DELUX-GH8K receiver,
+2026-11-08. Battery only; charging remains unknown.**
+
+The exact identity is `3554:FB26`, usage page `FF02`, usage `0002`. Require a
+physical device identity and descriptor-proven input and output maps containing
+only report ID `08`, each 17 bytes including the report ID. A second matching
+collection is ambiguous and is not opened. Other DELUX PIDs, connection modes,
+and models sharing an identity have not been verified.
+
+One ordinary battery query is written per poll:
+
+```text
+08 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 49
+```
+
+The final byte makes the sum of all 17 bytes equal `55` modulo 256. Captured
+successful replies from the reporting M900 Ultra:
+
+```text
+08 04 00 00 00 02 5A 00 0F DF 00 00 00 00 00 00 FF
+08 04 00 00 00 02 5A 00 0F E3 00 00 00 00 00 00 FB
+```
+
+Both contain 90% at byte 6 (zero-based); bytes 8–9 are big-endian millivolts
+(4063 and 4067 respectively). The parser accepts only 17-byte frames with an
+`08 04 00` header/command/success status, byte values, a valid checksum,
+0–100 percent, and a plausible 2500–5000 mV reading. It rejects request echoes
+and error replies rather than displaying a false 0%. A valid 0% reply is kept.
+The value `02` observed at byte 5 is not assigned an unverified meaning.
+
+The query uses bounded reads, with at most 32 reply frames, and no write retry.
+No response produces no new reading and leaves the connection unknown; it never
+refreshes an earlier percentage. Errors use fixed diagnostics without HID paths.
+No configuration, DPI, pairing, or firmware command is added. No response bit is
+interpreted as charging; `charging_known` remains false.
+
+Hardware evidence: 27 valid 90% replies at 4063–4067 mV, followed by intermittent
+no-response probes. The installed engine subsequently acquired a fresh 85%
+reading, and the reporting user confirmed the compatibility build works.
+This verifies battery reading on that combination, not charging transitions,
+sustained polling reliability, or every GUI/tray state. Captured frames and
+negative cases are replayed in `engine/tests/test_delux.py`; engine registration,
+identity scope and descriptor fallback are covered in `tests/test_delux_engine.py`.
+
 ### ATK / VXE NANO receiver (373B:1216)
 
 **Verification C: static ATK Hub 3.2.31 evidence and synthetic tests only.**

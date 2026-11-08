@@ -54,6 +54,12 @@ ATK 的协议族匹配仍不保证所有 A9 Air 或同名变体可读：`373B:12
 
 V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机语义沿用 V9 PRO，尚未实测），但当前原生界面仅在有当前百分比时显示充电指示，因此接电时会显示电量未知，尚不显示该指示；完整界面体验仍待后续验证。
 
+## DELUX M900 Ultra / GH8K 接收器
+
+2026-11-08 用户实机验证 `3554:FB26` 的 `FF02:0002` 集合，report `08` 输入/输出各17字节。曾取得90%及4063–4067 mV的有效回复，安装兼容版后重新取得85%，用户确认版本可用。只开放电量读取，充电状态未知；不修改DPI、配对、配置或固件。其他多彩型号、接收器、有线及蓝牙模式未验证，同VID/PID的其他型号也不据此宣称兼容。长期轮询、充电切换和完整界面体验仍需进一步核验。
+
+协议及报文见[DELUX 实测记录](../engine/upstream-protocols.md#delux-m900-ultra-gh8k-receiver-3554fb26)。
+
 <!-- BEGIN GENERATED COMPATIBILITY CATALOG -->
 来源：`engine/compatibility.json`；由 `python engine/catalog.py --markdown` 离线生成。
 
@@ -63,6 +69,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | --- | --- | --- | --- |
 | ATK A9 Air+ / 用户已验证接收器变体 | mouse | A | `373B:1278` / `FF02:0002` / 17字节；固件版本未记录 |
 | HyperX Cloud Alpha Wireless | headset | A | `03F0:098D` / `FF43:0202` / 31字节；固件版本未记录 |
+| DELUX M900 Ultra / GH8K receiver | mouse | A | 本项目历史实机验证；本轮状态仍需复验；仅3554:FB26 / FF02:0002；描述符证明输入/输出均为单一report 08、17字节；仅08 04电量查询；2026-11-08 M900 Ultra/GH8K实机90%（4063–4067mV），安装后复验85%；充电未知；其他型号、接收器及连接模式未验证 |
 | VGN beiying 2.4G 键盘接收器 | keyboard | C | 协议已接入，待本项目实机验证；仅258A:024F/027F/027B、391D:2A01/2A02 / FF02:0002；输入/输出各为描述符证明的单一report 13、20字节；按VGN HUB直接只读4A，不发送型号识别；请求/回复帧尾为前19字节和mod 256，拒绝回显；258A:024F用户实机验证，#190，99%插线/拔线对照证明byte6 bit4为外接电源；其他四条仅官方静态证据且充电未知；满电插线、休眠缓存与本项目实机未测；3554:FA09统一由mchose_by_keyboard负责；有线集合及MCHOSE FF04端点不走此读取器 |
 | VGN 蜻蜓 Dragonfly3 SE 接收器 | mouse | C | 协议已接入，待本项目实机验证；仅391D:1A01 / FF01:0010；描述符证明输入/输出均为唯一ID 0、64字节payload（Windows含ID槽65）；只读55 30，回复payload[8]为百分比、[9]=1时不产生读数；充电未知，回显拒绝；不含FF05集合、其他型号或N75 V2，待实机验证 |
 | Ninjutso Sora V2 旧款 AE1C 接收器 | mouse | C | 协议已接入，待本项目实机验证；仅1915:AE1C / FFA0:0001且产品名Ninjutso Sora V2；描述符逐ID证明Feature 5共32字节、4共704字节；只读活动配置号及配置块中的电量/充电，校验和不符或无回复无读数；不写入/保存/切换配置，不用report 6；排除8K紧凑格式及AE8C/AE8A，待实机验证 |
