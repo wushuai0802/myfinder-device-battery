@@ -31,7 +31,7 @@ BRAND_PROVIDERS = frozenset((
     "g3m", "eweadn", "eweadn_s9pro", "flydigi",
     "vgn_keyboard", "vgn_beiying",
     "vgn_dragonfly3", "ninjutso_legacy",
-    "dareu",
+    "dareu", "delux",
     "fa6x_passive",
     "hyperx", "keychron", "pulsar", "rapoo", "jbl", "logitech", "steelseries", "barracuda",
     "asus", "asus_omni", "gwolves", "lofree", "astro", "corsair", "lamzu", "am_infinity",
