@@ -4,7 +4,7 @@ Only two read commands exist here. Vendor JS is an inert protocol reference,
 never imported/executed. Matching sequences bound ordinary in-process replies;
 they do not prove device sample age or freshness across worker reconstruction.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import threading
 import time
@@ -21,7 +21,7 @@ MAX_FRAME = 1024
 DIAGNOSTICS = frozenset({
     "ZG4 collection missing or ambiguous", "ZG4 parent/path unproven",
     "ZG4 interface/product unverified", "ZG4 CE/CD byte reports unproven",
-    "ZG4 previous transaction unresolved", "ZG4 sequence space exhausted",
+    "ZG4 all 256 FE sequences unresolved",
     "ZG4 query already pending", "ZG4 inventory invalid",
     "ZG4 write short/failed; no retry", "ZG4 no valid reply within limits",
     "ZG4 headset disconnected", "ZG4 input rejected",
@@ -160,8 +160,20 @@ class _Assembler:
 
 @dataclass
 class _Transaction:
-    used: int = 0
+    next_sequence: int = 1
     pending: bool = False
+    # Reserve before attempting FE I/O. Only a complete valid battery reply in
+    # that query releases it; every other outcome retires it for this instance.
+    unresolved: set = field(default_factory=set)
+
+    def reserve(self):
+        for _ in range(256):
+            sequence = self.next_sequence
+            self.next_sequence = (sequence + 1) & 255
+            if sequence not in self.unresolved:
+                self.unresolved.add(sequence)
+                return sequence
+        return None
 
 
 class ZhuAudioProvider(BatteryHidProvider):
@@ -228,78 +240,84 @@ class ZhuAudioProvider(BatteryHidProvider):
         transaction = self._transactions.get(parent)
         if transaction is not None:
             if transaction.pending:
-                self._diag.append("ZG4 previous transaction unresolved")
+                self._diag.append("ZG4 query already pending")
                 return None
-            if transaction.used >= 256:
-                self._diag.append("ZG4 sequence space exhausted")
+            if len(transaction.unresolved) == 256:
+                self._diag.append("ZG4 all 256 FE sequences unresolved")
                 return None
         return info
 
     def _query(self, dev, info):
         transaction = self._transactions.setdefault(info["physical_id"], _Transaction())
-        if transaction.pending or transaction.used >= 256:
-            self._diag.append("ZG4 previous transaction unresolved")
+        if transaction.pending:
+            self._diag.append("ZG4 query already pending")
+            return None
+        if len(transaction.unresolved) == 256:
+            self._diag.append("ZG4 all 256 FE sequences unresolved")
             return None
         transaction.pending = True
-        transaction.used += 1
-        sequence = transaction.used & 255
-        deadline = time.monotonic() + QUERY_SECONDS
-        request = status_request()
-        written = dev.write(request)
-        if type(written) is not int or written != len(request):
-            self._diag.append("ZG4 write short/failed; no retry")
-            return None
-        online, assembler = False, _Assembler()
-        for read_index in range(MAX_READS):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            raw = dev.read(64, max(1, math.ceil(remaining * 1000)))
-            now = time.monotonic()
-            if now >= deadline or not raw:
-                break
-            payload = input_payload(raw)
-            if payload is None:
-                self._diag.append("ZG4 input rejected")
-                continue
-            connected = connection_reply(payload)
-            if connected is False:
-                # Before a device request there is no pending FF transaction.
-                # After it, disconnect does not prove its cancellation.
-                transaction.pending = online
-                self._diag.append("ZG4 headset disconnected")
+        try:
+            deadline = time.monotonic() + QUERY_SECONDS
+            request = status_request()
+            written = dev.write(request)
+            if type(written) is not int or written != len(request):
+                self._diag.append("ZG4 write short/failed; no retry")
                 return None
-            if not online:
-                if connected is True:
-                    if read_index + 1 == MAX_READS:
-                        break  # Do not send a request with no read budget left.
-                    request = battery_request(sequence)
-                    written = dev.write(request)
-                    if type(written) is not int or written != len(request):
-                        self._diag.append("ZG4 write short/failed; no retry")
-                        return None
-                    online = True
-                continue
-            frame = None
-            if payload[0] in (0xEE, 0xEA):
-                frame = assembler.feed(payload, now)
-            elif payload[0] == 0xFF and assembler.started_at is None:
-                end = payload[2] + 4
-                if 5 <= end <= len(payload) and not any(payload[end:]):
-                    frame = payload[:end]
-            reading = battery_reply(frame, sequence)
-            if reading is not None:
-                transaction.pending = False
-                return reading
-            if _ff_frame(frame) is not None:
-                # A complete ACK/old-seq/other-opcode chain is a frame boundary,
-                # not a battery reading. Keep the transaction pending and wait
-                # for its reply. An incomplete/broken chain never resets here.
-                assembler = _Assembler()
-        # No drain/reopen can prove cancellation. Keep this parent quarantined
-        # for this provider's lifetime, including partial writes and I/O errors.
-        self._diag.append("ZG4 no valid reply within limits")
-        return None
+            online, assembler = False, _Assembler()
+            for read_index in range(MAX_READS):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                raw = dev.read(64, max(1, math.ceil(remaining * 1000)))
+                now = time.monotonic()
+                if now >= deadline or not raw:
+                    break
+                payload = input_payload(raw)
+                if payload is None:
+                    self._diag.append("ZG4 input rejected")
+                    continue
+                connected = connection_reply(payload)
+                if connected is False:
+                    # State 02 has no FF sequence. After FE, disconnect cannot
+                    # cancel that sequence; its reservation stays unresolved.
+                    self._diag.append("ZG4 headset disconnected")
+                    return None
+                if not online:
+                    if connected is True:
+                        if read_index + 1 == MAX_READS:
+                            break  # Do not send a request with no read budget left.
+                        sequence = transaction.reserve()
+                        if sequence is None:
+                            self._diag.append("ZG4 all 256 FE sequences unresolved")
+                            return None
+                        request = battery_request(sequence)
+                        written = dev.write(request)
+                        if type(written) is not int or written != len(request):
+                            self._diag.append("ZG4 write short/failed; no retry")
+                            return None
+                        online = True
+                    continue
+                frame = None
+                if payload[0] in (0xEE, 0xEA):
+                    frame = assembler.feed(payload, now)
+                elif payload[0] == 0xFF and assembler.started_at is None:
+                    end = payload[2] + 4
+                    if 5 <= end <= len(payload) and not any(payload[end:]):
+                        frame = payload[:end]
+                reading = battery_reply(frame, sequence)
+                if reading is not None:
+                    transaction.unresolved.remove(sequence)
+                    return reading
+                if _ff_frame(frame) is not None:
+                    # A complete ACK/old-seq/other-opcode chain is a frame boundary,
+                    # not a battery reading. An incomplete/broken chain never resets.
+                    assembler = _Assembler()
+            self._diag.append("ZG4 no valid reply within limits")
+            return None
+        finally:
+            # Release only this call. Silence/close/reopen never cancels an FE
+            # reservation; later calls must skip all unresolved sequences.
+            transaction.pending = False
 
     def diagnostics(self):
         return [safe for reason in self._diag

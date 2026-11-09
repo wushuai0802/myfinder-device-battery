@@ -108,7 +108,7 @@ class FakeBus:
                 bus.now += (bus.read_ms if packets else timeout_ms) / 1000
                 if bus.on_read:
                     bus.on_read()
-                if bus.error_at == "read":
+                if bus.error_at in ("read", "read" + str(len(bus.reads))):
                     raise OSError("synthetic-private-path")
                 return packets.pop(0) if packets else []
 
@@ -385,28 +385,131 @@ class ZhuAudioProviderTests(unittest.TestCase):
             self.assertEqual(P().poll(), [])
             self.assertEqual((len(bus.reads), len(bus.writes)), (32, 1))
 
-    def test_short_writes_are_not_retried_or_reopened(self):
+    def test_status_failures_allow_next_poll_without_consuming_a_sequence(self):
+        cases = [("timeout", [], {}),
+                 ("short write", [connected()], {"write_results": [63]}),
+                 ("invalid write result", [connected()], {"write_results": [64.0]}),
+                 ("write error", [], {"error_at": "write1"}),
+                 ("read error", [], {"error_at": "read"}),
+                 ("offline", [connected(0)], {}),
+                 ("read limit", [report(b"noise")] * 31 + [connected()], {})]
+        for name, packets, options in cases:
+            with self.subTest(name=name):
+                provider = P()
+                with fixture(packets, **options) as first:
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual([p for _, p in first.writes], [STATUS_REQUEST])
+                    self.assertEqual(first.closed, first.opened)
+                # A separate normal oracle, never leftovers from the failure.
+                with fixture([connected(), reply(27, seq=1)]) as second:
+                    statuses = provider.poll()
+                    self.assertEqual(len(statuses), 1)
+                    self.assertEqual(statuses[0].level, 27)
+                    self.assertEqual([p for _, p in second.writes], [STATUS_REQUEST, BATTERY_REQUEST])
+                    self.assertEqual(second.closed, second.opened)
+
+    def test_300_successes_wrap_255_zero_one_without_exhaustion(self):
+        provider = P()
+        sequences = []
+        for count in range(1, 301):
+            seq = count & 255
+            with fixture([connected(), reply(27, seq=seq)]) as bus:
+                statuses = provider.poll()
+                self.assertEqual(len(statuses), 1, f"poll {count}")
+                self.assertEqual(statuses[0].level, 27)
+                self.assertEqual(len(bus.opened), 1)
+                self.assertEqual(bus.closed, bus.opened)
+                sequences.extend(p[7] for _, p in bus.writes if p[1] == 0xEE)
+        self.assertEqual(sequences, [n & 255 for n in range(1, 301)])
+        self.assertEqual(sequences[254:257], [255, 0, 1])
+
+    def test_retired_sequence_late_battery_and_ack_cannot_complete_next_poll(self):
+        for marker in (None, 0xEE, 0xEA):
+            with self.subTest(marker=marker):
+                provider = P()
+                with fixture([connected()]) as first:
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual([p[7] for _, p in first.writes if p[1] == 0xEE], [1])
+                ack = b"\xFF\x01\x01\xFC\xAA"
+                stale = [frame(99, seq=1), ack]
+                packets = [report(f) for f in stale] if marker is None else [
+                    packet for f in stale for packet in fragments(f, marker)]
+                with fixture([connected(), *packets, reply(27, seq=2)]) as second:
+                    statuses = provider.poll()
+                    self.assertEqual(len(statuses), 1)
+                    self.assertEqual(statuses[0].level, 27)
+                    self.assertEqual([p[7] for _, p in second.writes if p[1] == 0xEE], [2])
+                    self.assertEqual(len(second.reads), len(packets) + 2)
+                    self.assertEqual(second.closed, second.opened)
+
+    def test_short_writes_end_query_without_immediate_retry_or_reopen(self):
         for results, count in (([63], 1), ([64, 63], 2), ([64.0], 1), ([64, 64.0], 2)):
             with self.subTest(results=results), fixture([connected(), reply()], write_results=results) as bus:
                 provider = P()
-                self.assertEqual(provider.poll(), [])
                 self.assertEqual(provider.poll(), [])
                 self.assertEqual(len(bus.writes), count)
                 self.assertEqual(len(bus.opened), 1)
                 self.assertEqual(bus.closed, bus.opened)
 
     def test_io_and_close_exceptions_are_private_and_always_attempt_close(self):
-        for error in ("open", "write1", "write2", "read", "close"):
+        for error in ("open", "write1", "write2", "read", "read2", "close"):
             with self.subTest(error=error), fixture([connected(), reply()], error_at=error) as bus:
                 provider = P()
                 self.assertEqual(len(provider.poll()), 1 if error == "close" else 0)
                 self.assertEqual(bus.closed, bus.opened)
                 self.assertTrue(provider.diagnostics())
                 self.assertTrue(all(len(d) <= 48 and "private" not in d for d in provider.diagnostics()))
-                writes = len(bus.writes)
-                if error in ("write1", "write2", "read"):
+            seq = 2 if error in ("write2", "read2", "close") else 1
+            with self.subTest(recovery=error), fixture([connected(), reply(27, seq=seq)]) as bus:
+                statuses = provider.poll()
+                self.assertEqual(len(statuses), 1)
+                self.assertEqual(statuses[0].level, 27)
+                self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE], [seq])
+                self.assertEqual(bus.closed, bus.opened)
+
+    def test_incomplete_fe_attempts_retire_only_the_attempted_sequence(self):
+        partial = fragments(frame(value=b"\x46\x34\x12" + bytes(70)))[:1]
+        cases = [("short FE write", [connected()], {"write_results": [64, 63]}),
+                 ("invalid FE write result", [connected()], {"write_results": [64, 64.0]}),
+                 ("FE write error", [connected()], {"error_at": "write2"}),
+                 ("FE read error", [connected()], {"error_at": "read2"}),
+                 ("timeout and close error", [connected()], {"error_at": "close"}),
+                 ("ACK only", [connected(), report(b"\xFF\x01\x01\xFC\xAA")], {}),
+                 ("short value", [connected(), reply(value=b"\x46\x34")], {}),
+                 ("zero value", [connected(), reply(0)], {}),
+                 ("disconnect", [connected(), connected(0)], {}),
+                 ("partial chain", [connected(), *partial], {}),
+                 ("late value", [connected(), reply()], {"read_ms": 1000})]
+        for name, packets, options in cases:
+            with self.subTest(name=name):
+                provider = P()
+                with fixture(packets, **options) as first:
                     self.assertEqual(provider.poll(), [])
-                    self.assertEqual(len(bus.writes), writes)
+                    self.assertEqual([p[7] for _, p in first.writes if p[1] == 0xEE], [1])
+                    self.assertEqual(first.closed, first.opened)
+                with fixture([connected(), reply(99, seq=1), reply(27, seq=2)]) as second:
+                    statuses = provider.poll()
+                    self.assertEqual(len(statuses), 1)
+                    self.assertEqual(statuses[0].level, 27)
+                    self.assertEqual([p[7] for _, p in second.writes if p[1] == 0xEE], [2])
+                    self.assertEqual(second.closed, second.opened)
+
+    def test_failed_or_incomplete_chain_cannot_restart_until_next_query(self):
+        parts = fragments(frame(value=b"\x46\x34\x12" + bytes(130)))
+        malformed = bytearray(frame())
+        malformed[-1] = 0
+        for prefix in ([parts[0]], [parts[1]], [parts[0], parts[2]],
+                       fragments(malformed)):
+            with self.subTest(prefix=prefix):
+                provider = P()
+                with fixture([connected(), *prefix, *fragments(frame()), reply()]) as first:
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual(len(first.writes), 2)
+                with fixture([connected(), reply(27, seq=2)]) as second:
+                    statuses = provider.poll()
+                    self.assertEqual(len(statuses), 1)
+                    self.assertEqual(statuses[0].level, 27)
+                    self.assertEqual(len(second.writes), 2)
 
     def test_sequence_is_preserved_and_old_success_is_not_current(self):
         provider = P()
@@ -416,14 +519,18 @@ class ZhuAudioProviderTests(unittest.TestCase):
             self.assertEqual(provider.poll()[0].level, 27)
             self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE], [1, 2])
 
-    def test_timeout_keeps_pending_even_if_a_later_queue_contains_old_matching_reply(self):
+    def test_late_retired_reply_alone_never_becomes_a_reading(self):
         provider = P()
         with fixture([connected()]) as bus:
             self.assertEqual(provider.poll(), [])
-            bus.frames += [connected(), reply(seq=1), reply(seq=2)]
+            bus.frames += [connected(), reply(seq=1)]
             self.assertEqual(provider.poll(), [])
-            self.assertEqual((len(bus.opened), len(bus.writes)), (1, 2))
-            self.assertEqual(provider.diagnostics(), ["ZG4 previous transaction unresolved"])
+            self.assertEqual((len(bus.opened), len(bus.writes)), (2, 4))
+            self.assertEqual(provider.diagnostics(), ["ZG4 no valid reply within limits"])
+            self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE], [1, 2])
+            bus.frames += [connected(), reply(seq=2)]
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE], [1, 2, 3])
 
     def test_local_poll_guard_prevents_concurrent_opens(self):
         provider = P()
@@ -436,7 +543,7 @@ class ZhuAudioProviderTests(unittest.TestCase):
             self.assertEqual(len(provider.poll()), 1)
             self.assertEqual(len(bus.opened), 1)
 
-    def test_independent_parents_keep_sequence_and_pending_state_separate(self):
+    def test_independent_parents_keep_sequence_and_unresolved_state_separate(self):
         infos = [entry("one"), entry("two")]
         packets = {infos[0]["path"]: [connected()], infos[1]["path"]: [connected(), reply(72)]}
         with fixture(packets, infos) as bus:
@@ -447,20 +554,62 @@ class ZhuAudioProviderTests(unittest.TestCase):
             bus.frames[infos[1]["path"]] = [connected(), reply(27, seq=1), reply(71, seq=2)]
             second, = provider.poll()
             self.assertEqual((second.physical_id, second.level), ("two", 71))
-            self.assertEqual(bus.opened.count(infos[0]["path"]), 1)
+            self.assertEqual(bus.opened.count(infos[0]["path"]), 2)
             self.assertEqual(bus.opened.count(infos[1]["path"]), 2)
+            for info in infos:
+                self.assertEqual([p[7] for path, p in bus.writes
+                                  if path == info["path"] and p[1] == 0xEE], [1, 2])
+            bus.frames[infos[0]["path"]] = [connected(), reply(26, seq=3)]
+            bus.frames[infos[1]["path"]] = [connected(), reply(70, seq=3)]
+            self.assertEqual([(s.physical_id, s.level) for s in provider.poll()], [("one", 26), ("two", 70)])
 
-    def test_8bit_sequence_wrap_is_unique_then_further_io_is_refused(self):
+    def test_only_256_unresolved_fe_sequences_exhaust_further_io(self):
         provider = P()
         with fixture() as bus:
             for count in range(1, 257):
-                bus.frames += [connected(), reply(seq=count & 255)]
-                self.assertEqual(len(provider.poll()), 1)
+                bus.frames += [connected()]
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(len(bus.opened), count)
             writes = [p[7] for _, p in bus.writes if p[1] == 0xEE]
             self.assertEqual(writes, list(range(1, 256)) + [0])
+            bus.frames += [connected(), reply(seq=1)]
+            bus.now += 100000  # Silence cannot retire/cancel or age out state.
             self.assertEqual(provider.poll(), [])
-            self.assertEqual(provider.diagnostics(), ["ZG4 sequence space exhausted"])
+            self.assertEqual(provider.diagnostics(), ["ZG4 all 256 FE sequences unresolved"])
             self.assertEqual(len(bus.opened), 256)
+            self.assertEqual((len(bus.writes), len(bus.reads)), (512, 512))
+            self.assertEqual(bus.closed, bus.opened)
+
+    def test_300_status_timeouts_leave_all_fe_sequences_available(self):
+        provider = P()
+        with fixture() as bus:
+            for _ in range(300):
+                self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(bus.opened), 300)
+            self.assertEqual([p for _, p in bus.writes], [STATUS_REQUEST] * 300)
+            bus.frames += [connected(), reply(27, seq=1)]
+            self.assertEqual(provider.poll()[0].level, 27)
+            self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE], [1])
+
+    def test_retired_sequence_survives_absence_and_is_skipped_after_successful_wrap(self):
+        provider = P()
+        with fixture([connected()]):
+            self.assertEqual(provider.poll(), [])  # FE seq 1 remains unresolved.
+        with fixture(inventory=[]) as absent:
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(absent.opened, [])
+        available = list(range(2, 256)) + [0]
+        sequences = []
+        for count in range(300):
+            seq = available[count % len(available)]
+            with fixture([connected(), reply(99, seq=1), reply(27, seq=seq)]) as bus:
+                statuses = provider.poll()
+                self.assertEqual(len(statuses), 1, f"poll {count + 1}")
+                self.assertEqual(statuses[0].level, 27)
+                sequences.extend(p[7] for _, p in bus.writes if p[1] == 0xEE)
+        self.assertEqual(sequences, [available[n % len(available)] for n in range(300)])
+        self.assertNotIn(1, sequences)
+        self.assertEqual(sequences[253:256], [255, 0, 2])
 
     def test_enumeration_failure_is_fixed_and_has_zero_io(self):
         with fixture() as bus, patch.object(H.hidlist, "enumerate", side_effect=OSError("private")):

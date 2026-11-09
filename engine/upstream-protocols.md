@@ -3711,15 +3711,25 @@ bytes are not interpreted. ACKs are received only; there is no added host ACK,
 arbitrary command passthrough, Feature, setting, reset, pairing or OTA path.
 
 Both phases share a two-second/32-read deadline and a 1024-byte assembly bound.
-Short writes/errors do not retry. A pending or timed-out transaction prevents
-further opens for that parent in the current provider instance; bounded drains,
-reopens and silence are not cancellation evidence. Per-parent 8-bit sequences
-run 1..255 then 0, then stop before reuse. Worker reconstruction/instance
-eviction/cold start can lose this state; matching seq cannot prove device
-sample age, and cross-session freshness/coexistence remain unverified. Global
-worker/poll budgets and Bluetooth timing are unchanged. Finally-close behavior,
-fixed <=48-character diagnostics, manager/child pack disables and separate
-same-name cards across independent parents use existing engine boundaries.
+Short writes/errors end the current query without an immediate retry. The
+per-call pending guard is always released in finally; status-only failures have
+no FF transaction and consume no sequence. Reserve a per-parent 8-bit sequence
+only when preparing to attempt FE, before its write. An incomplete FE attempt
+(including short write, exception, timeout, ACK-only or incomplete battery frame)
+retires that sequence for this instance. Later polls may use a different free
+sequence; late retired-seq battery/ACK frames neither measure nor free it.
+No drain, reopen, silence or temporary inventory absence cancels reservations.
+Only a complete current-seq valid battery reply releases its reservation.
+Successful sequences may wrap 1..255,0,1; only all 256 unresolved FE sequences
+block further opens, with `ZG4 all 256 FE sequences unresolved` diagnostics.
+Successful reads have no 256-attempt limit. Old duplicate frames after a
+successful wrap remain indistinguishable by sequence alone. Worker
+reconstruction/instance or cache eviction/cold start can lose this local state;
+matching seq cannot prove device sample age or lifetime reply ownership, and
+cross-session freshness/coexistence remain unverified. Global worker/poll
+budgets and Bluetooth timing are unchanged. Finally-close behavior, fixed
+<=48-character diagnostics, manager/child pack disables and separate same-name
+cards across independent parents use existing engine boundaries.
 
 No valid battery frame preserves history without renewing confirmation or
 measurement times and clears charging knowledge. The official UI can retain

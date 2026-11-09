@@ -98,14 +98,31 @@ class ZhuAudioEngineTests(unittest.TestCase):
         self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE], [1, 1, 2])
         self.assertEqual(bus.closed, bus.opened)
 
-    def test_child_keeps_timeout_pending_and_does_not_consume_later_old_reply(self):
-        # The child keeps the provider object between requests. Reopening is
-        # not used as a cancellation claim, even when old frames are available.
-        with F.fixture([F.connected(), [], F.connected(), F.reply(seq=1)]) as bus:
-            first, second = self.child_many(["receiver-a", "receiver-a"], [F.entry()])
-        self.assertEqual((first["statuses"], second["statuses"]), ([], []))
-        self.assertIn("ZG4 previous transaction unresolved", second["diagnostics"])
-        self.assertEqual((len(bus.opened), len(bus.writes)), (1, 2))
+    def test_child_retries_with_new_sequence_and_preserves_retirement_across_queries(self):
+        # Each [] ends a read. The persistent child must distinguish a timed-out
+        # FE from a later status-only timeout, and reject the retired FE reply.
+        packets = [F.connected(), [], F.connected(), F.reply(99, seq=1),
+                   F.report(b"\xFF\x01\x01\xFC\xAA"), F.reply(27, seq=2),
+                   [], F.connected(), F.reply(99, seq=1), F.reply(26, seq=3)]
+        with F.fixture(packets) as bus:
+            first, second, third, fourth = self.child_many(["receiver-a"] * 4, [F.entry()])
+        self.assertEqual((first["statuses"], third["statuses"]), ([], []))
+        self.assertEqual([r["statuses"][0]["level"] for r in (second, fourth)], [27, 26])
+        self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE], [1, 2, 3])
+        self.assertEqual((len(bus.opened), len(bus.writes)), (4, 7))
+        self.assertEqual(bus.closed, bus.opened)
+
+    def test_child_keeps_reading_for_300_queries_across_sequence_wrap(self):
+        packets = [packet for n in range(1, 301)
+                   for packet in (F.connected(), F.reply(27, seq=n & 255))]
+        with F.fixture(packets) as bus:
+            responses = self.child_many(["receiver-a"] * 300, [F.entry()])
+        self.assertTrue(all(len(r["statuses"]) == 1 for r in responses))
+        self.assertEqual([r["statuses"][0]["level"] for r in responses], [27] * 300)
+        self.assertEqual([p[7] for _, p in bus.writes if p[1] == 0xEE],
+                         [n & 255 for n in range(1, 301)])
+        self.assertEqual((len(bus.opened), len(bus.writes)), (300, 600))
+        self.assertEqual(bus.closed, bus.opened)
 
     def test_public_percent_charging_evidence_and_history_times_remain_separate(self):
         for charging in (False, True):

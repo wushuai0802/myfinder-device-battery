@@ -128,7 +128,7 @@ CHERRY_DIAGNOSTICS = {
 ZHUAUDIO_DIAGNOSTICS = frozenset({
     "ZG4 collection missing or ambiguous", "ZG4 parent/path unproven",
     "ZG4 interface/product unverified", "ZG4 CE/CD byte reports unproven",
-    "ZG4 previous transaction unresolved", "ZG4 sequence space exhausted",
+    "ZG4 all 256 FE sequences unresolved",
     "ZG4 query already pending", "ZG4 inventory invalid",
     "ZG4 write short/failed; no retry", "ZG4 no valid reply within limits",
     "ZG4 headset disconnected", "ZG4 input rejected",
