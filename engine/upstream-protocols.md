@@ -1459,6 +1459,38 @@ are cited here, with no driver implementation copied.
 
 The same exchange as the Razer mice above: the 90-byte feature report, command class `0x07`, command `0x80`, transaction ids from OpenRazer's device entries. Pro Click, Pro Click V2 and V2 Vertical, Naga, Viper, DeathAdder, Basilisk, Mamba, Lancehead and others - `KNOWN` in `providers/razer.py` holds the full list. Battery is only read for the models OpenRazer itself reads.
 
+**Conditional recovery from persistent mismatched replies (#489).** A success
+status for a different command is still rejected as `STATUS_FOREIGN`; it is
+never battery or charging evidence. Previously, this could pin an unverified
+interface/transaction ID indefinitely, hiding a healthy existing alternative.
+Two fake regressions failed against the original provider: eight polls never
+opened the healthy second interface, and six polls never reached an existing
+working `0x1F` after persistent foreign replies on preferred `0x3F`.
+
+The first two consecutive foreign reads retain the candidate briefly. The
+third removes it from the cache and starts a cursor over the existing ranked
+interfaces and allowed transaction IDs. Recovery makes at most two `_read`
+calls per poll (at most three including the old cache read), continues across
+polls, and wraps even with one allowed candidate. Only a valid battery reply
+restores the working cache and clears recovery; ordinary timeout/sleep replies
+retain the existing sleeping-cache behavior. Normal successful cache reads
+still make one `_read` for battery plus charging. No request, reply matching,
+transaction/model table, one-second query wait, three-send limit, or outer
+seven-second isolation budget changes. Pack profiles keep their single
+approved transaction ID and exact collection constraints. Inventory changes
+cannot query an absent cached/cursor path; recovery state is cleared on group
+removal or pack reconfiguration and remains scoped to the device group and
+physical reader instance.
+
+Offline Clock/Bus tests cover both regressions, bounded all-foreign walks,
+transient failures, single-candidate and profile-only recovery, sleep, busy,
+short replies, I/O failures, cooldown, inventory changes, pack disable/rematch,
+group/parent isolation, unchanged history/charging, and private failure codes.
+**Hardware cause remains unconfirmed:** #489's diagnostics identify
+`1532:007D` (DeathAdder V2 Pro), alongside separate `1532:007E` (Mouse Dock).
+The conditional fake defect does not establish that it caused the reported
+failure, or that Synapse caused the mismatched replies. No real HID was tested.
+
 ### SteelSeries Aerox 3 Wireless
 
 **Connection:** 2.4 GHz dongle (1038:1838)

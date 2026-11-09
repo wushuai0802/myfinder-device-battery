@@ -107,6 +107,8 @@ class RazerProvider(Provider):
 
     def __init__(self, device_pack=None):
         self._cache: Dict[Tuple[int, str], _Cand] = {}
+        self._foreign: Dict[Tuple[int, str], int] = {}
+        self._rediscovery: Dict[Tuple[int, str], Tuple[bytes, int]] = {}
         self._dead: Dict[bytes, float] = {}   # interfaces known not to respond
         self._diag: List[str] = []
         self._failing: Dict[str, str] = {}    # key -> reason of the ongoing failure
@@ -126,6 +128,8 @@ class RazerProvider(Provider):
         self._known = {pid: row for pid, row in self._known.items()
                        if not self.device_pack.is_disabled(self.name, RAZER_VID, pid)}
         self._cache.clear()
+        self._foreign.clear()
+        self._rediscovery.clear()
         self._dead.clear()
         self._last.clear()
         self._failing.clear()
@@ -208,9 +212,7 @@ class RazerProvider(Provider):
                 continue
             if is_foreign:
                 # a success status on somebody else's packet is not an answer to ours
-                self._diag.append("    every reply was for another command: another app "
-                                  "(Synapse, Chroma or other RGB software) is using this "
-                                  "collection; close it to read the battery")
+                self._diag.append("    reply command did not match; cause unconfirmed")
                 return STATUS_FOREIGN, None
             return status, value
 
@@ -299,6 +301,10 @@ class RazerProvider(Provider):
             if not serial and len(named.get(pid, [])) == 1:
                 groups[(pid, named[pid][0])] += groups.pop((pid, serial))
 
+        for gkey in set(self._foreign) | set(self._rediscovery):
+            if gkey not in groups:
+                self._clear_foreign(gkey)
+
         out: List[DeviceStatus] = []
         for (pid, serial), ifaces in groups.items():
             pack_entry = self._pack_entries.get(pid)
@@ -347,7 +353,7 @@ class RazerProvider(Provider):
                 # failed poll: the details go to the log once, when the device stops
                 # answering (or the reason changes), not on every poll while it is off
                 reason = ("no reply" if st is None else
-                          "only replies for another app" if st[0] == STATUS_FOREIGN else
+                          "reply command mismatch; cause unconfirmed" if st[0] == STATUS_FOREIGN else
                           f"status {st[0]:02x}")
                 if self._failing.get(key) != reason:
                     self._failing[key] = reason
@@ -390,13 +396,35 @@ class RazerProvider(Provider):
                 if (entry := self._pack_entries.get(int(status.key.split(":")[1], 16))) else status
                 for status in out]
 
+    def _clear_foreign(self, gkey):
+        self._foreign.pop(gkey, None)
+        self._rediscovery.pop(gkey, None)
+
     def _poll_group(self, gkey, ifaces, pref_tid, profile_only=False):
+        tids = [pref_tid] if pref_tid else []
+        if not profile_only:
+            tids += [t for t in TRANSACTION_IDS if t not in tids]
         cached = self._cache.get(gkey)
+        if cached and (cached.path not in {d["path"] for d in ifaces} or cached.tid not in tids):
+            self._cache.pop(gkey, None)
+            self._clear_foreign(gkey)
+            cached = None
         if cached:
             status, level, charging = self._read(cached.path, cached.tid)
-            if status in (STATUS_OK, STATUS_TIMEOUT, STATUS_FOREIGN):
+            if status in (STATUS_OK, STATUS_TIMEOUT):
+                self._clear_foreign(gkey)
                 return status, level, charging
             self._cache.pop(gkey, None)
+            if status == STATUS_FOREIGN:
+                self._foreign[gkey] = self._foreign.get(gkey, 0) + 1
+                if self._foreign[gkey] < 3:
+                    self._cache[gkey] = cached
+                    return status, None, None
+                # Three consecutive foreign reads only throttle recovery; they do
+                # not prove this interface works, or that a device was cancelled.
+                self._rediscovery[gkey] = (cached.path, cached.tid)
+            else:
+                self._clear_foreign(gkey)
 
         # Probe order: vendor / main collection interfaces first, then the rest.
         # Collections Windows re-parented (interface number -1) go last.
@@ -409,13 +437,13 @@ class RazerProvider(Provider):
                 iface = 99
             return (0 if iface == want else 1, 0 if up in (0x0001, 0xFF00) else 1, iface)
 
-        tids = [pref_tid] if pref_tid else []
-        if not profile_only:
-            tids += [t for t in TRANSACTION_IDS if t not in tids]
+        ifaces = sorted(ifaces, key=rank)
+        if gkey in self._rediscovery:
+            return self._rediscover_group(gkey, ifaces, tids)
         now = time.time()
         timeout_hit = None
         attempted = False
-        for d in sorted(ifaces, key=rank):
+        for d in ifaces:
             path = d["path"]
             if self._dead.get(path, 0) > now:
                 continue
@@ -431,22 +459,70 @@ class RazerProvider(Provider):
                 answered = True
                 if status == STATUS_OK:
                     self._cache[gkey] = _Cand(path, tid)
+                    self._clear_foreign(gkey)
                     return status, level, charging
                 if status == STATUS_TIMEOUT:
                     timeout_hit = (status, None, None)
                     self._cache[gkey] = _Cand(path, tid)
                     break
                 if status == STATUS_FOREIGN:
-                    # Another app's replies arrive here, so this is the collection that
-                    # takes the Razer commands. The other transaction ids and interfaces
-                    # would only cost another second each: keep this one and stop.
+                    # Keep a transient mismatch briefly, without treating it as
+                    # evidence of a working battery interface/transaction id.
                     self._cache[gkey] = _Cand(path, tid)
+                    self._foreign[gkey] = 1
                     return status, None, None
             if not answered:
                 self._dead[path] = now + 300   # leave this interface alone for 5 minutes
         if not attempted:
             self._read_errors.add("interfaces_cooling_down" if ifaces else "no_usable_interface")
         return timeout_hit
+
+    def _rediscover_group(self, gkey, ifaces, tids):
+        # Rebuild from today's allowed inventory; a cursor is an identity, not
+        # an index into yesterday's ranking. Wrap even with just one candidate.
+        candidates = [(d["path"], tid) for d in ifaces for tid in tids]
+        if not candidates:
+            self._clear_foreign(gkey)
+            self._read_errors.add("no_usable_interface")
+            return None
+        cursor = self._rediscovery[gkey]
+        start = (candidates.index(cursor) + 1) % len(candidates) if cursor in candidates else 0
+        now = time.time()
+        skipped = set()
+        reads = 0
+        foreign_hit = None
+        timeout_hit = None
+        for offset in range(len(candidates)):
+            path, tid = candidates[(start + offset) % len(candidates)]
+            if path in skipped or self._dead.get(path, 0) > now:
+                continue
+            self._rediscovery[gkey] = (path, tid)
+            status, level, charging = self._read(path, tid)
+            reads += 1
+            if status == STATUS_OK:
+                self._cache[gkey] = _Cand(path, tid)
+                self._clear_foreign(gkey)
+                return status, level, charging
+            if status is None or status == STATUS_TIMEOUT:
+                # As in initial discovery, reject the remaining TIDs on an
+                # unusable/asleep interface. Reaching a later TID already means
+                # this interface answered during the current walk.
+                if status is None and tid == tids[0]:
+                    self._dead[path] = now + 300
+                if status == STATUS_TIMEOUT:
+                    timeout_hit = (status, None, None)
+                    self._cache[gkey] = _Cand(path, tid)
+                skipped.add(path)
+                self._rediscovery[gkey] = (path, tids[-1])
+            elif status == STATUS_FOREIGN:
+                foreign_hit = (status, None, None)
+            if reads >= 2:
+                break
+        if timeout_hit is not None:
+            self._clear_foreign(gkey)
+        if not reads:
+            self._read_errors.add("interfaces_cooling_down")
+        return timeout_hit or foreign_hit
 
     def _poll_2020(self, ifaces):
         """Only the 0xFF00 collection accepts the 2020 feature report."""
