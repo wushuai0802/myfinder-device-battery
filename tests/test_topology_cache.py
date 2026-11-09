@@ -14,12 +14,13 @@ sys.path.insert(0, str(ENGINE / "tests"))
 import _hidstub
 import server
 import topology
-from providers import audeze, rapoo
+from providers import audeze, rapoo, zhuaudio
 from standardhid import Caps
 
 
 PATH_A = r"\\?\hid#vid_388d&pid_0025&mi_01#fixture-a"
 PATH_B = r"\\?\hid#vid_388d&pid_0025&mi_01#fixture-b"
+ZG4_PATH = r"\\?\hid#vid_3654&pid_5055&mi_04#synthetic-zg4"
 
 
 class DescriptorCacheTests(unittest.TestCase):
@@ -345,6 +346,121 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.assertNotIn("output_report_sizes", info)
                 self.hid.HidP_GetButtonCaps.assert_not_called()
                 self.hid.HidP_GetValueCaps.assert_not_called()
+        self.assert_cherry_descriptor_only()
+        before = self.kernel.CreateFileW.call_count
+        self.assertEqual(self.scan([r"\\?\hid#vid_373b&pid_1278&mi_01#native"]), [])
+        self.assertEqual(self.kernel.CreateFileW.call_count, before)
+
+    def zg4_descriptor(self, *, identity=(0x3654, 0x5055), collection=(0xFF05, 1),
+                       mode="button", ids=(0xCE, 0xCD), lengths=(64, 64), field_changes=None):
+        self.identities[ZG4_PATH] = identity
+        self.products[ZG4_PATH] = "ZhuAudio ZG4"
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.input, value.output = lengths
+            if mode == "button":
+                value.ib = value.ob = 1
+            else:
+                value.iv = value.ov = 1
+            return 0x00110000
+
+        def fields(report_type, values, length, data):
+            field = values[0]
+            field.report = ids[report_type]
+            if mode == "button":
+                field.report_count = 63
+                field.usage_min = field.usage_max = 2 + report_type
+            else:
+                field.bits, field.count = 8, 63
+            for key, value in (field_changes or {}).items():
+                setattr(field, key, value)
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetButtonCaps.side_effect = fields
+        self.hid.HidP_GetValueCaps.side_effect = fields
+
+    def test_zg4_fixed_usage_array_ce_cd_is_metadata_only_and_cached(self):
+        for mode in ("button", "value"):
+            with self.subTest(mode=mode), patch.object(topology, "_read_report_descriptor") as raw:
+                self.cache.clear()
+                self.zg4_descriptor(mode=mode)
+                first, = self.scan([ZG4_PATH])
+                before = self.kernel.CreateFileW.call_count
+                second, = self.scan([ZG4_PATH])
+                self.assertEqual(first, second)
+                self.assertEqual(self.kernel.CreateFileW.call_count, before)
+                self.assertEqual(first["input_report_sizes"], {"206": 64})
+                self.assertEqual(first["output_report_sizes"], {"205": 64})
+                self.assertEqual((first["input_report_proof"], first["output_report_proof"]), ("caps", "caps"))
+                self.assertEqual(zhuaudio.ZhuAudioProvider()._pick([first]), first)
+                raw.assert_not_called()
+        self.assert_cherry_descriptor_only()
+
+    def test_zg4_failed_or_partial_caps_in_each_direction_are_not_cached_and_recover(self):
+        for mode, getter in (("button", "HidP_GetButtonCaps"), ("value", "HidP_GetValueCaps")):
+            for direction in (0, 1):
+                for failure in ("status", "partial"):
+                    with self.subTest(mode=mode, direction=direction, failure=failure), \
+                            patch.object(topology, "_read_report_descriptor") as raw:
+                        self.cache.clear()
+                        self.zg4_descriptor(mode=mode)
+                        fn = getattr(self.hid, getter)
+                        original = fn.side_effect
+
+                        def fail(report_type, values, length, data):
+                            result = original(report_type, values, length, data)
+                            if report_type == direction:
+                                if failure == "status":
+                                    return 0
+                                ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+                            return result
+
+                        fn.side_effect = fail
+                        first, = self.scan([ZG4_PATH])
+                        key = ("input" if direction == 0 else "output") + "_report_sizes"
+                        self.assertIsNone(first[key])
+                        self.assertNotIn(ZG4_PATH, self.cache)
+                        fn.side_effect = original
+                        before = self.kernel.CreateFileW.call_count
+                        recovered, = self.scan([ZG4_PATH])
+                        self.assertEqual(recovered[key], {str((0xCE, 0xCD)[direction]): 64})
+                        self.assertEqual(self.kernel.CreateFileW.call_count, before + 1)
+                        self.assertIn(ZG4_PATH, self.cache)
+                        raw.assert_not_called()
+        self.assert_cherry_descriptor_only()
+
+    def test_zg4_wrong_ids_maxima_and_non_byte_fields_do_not_become_cached_proof(self):
+        cases = [dict(ids=(0xCD, 0xCE)), dict(ids=(0, 0)), dict(ids=(0xC0, 0xC0)),
+                 dict(lengths=(63, 64)), dict(lengths=(64, 65)),
+                 dict(field_changes={"report_count": 62}), dict(field_changes={"field": 2}),
+                 dict(field_changes={"alias": 1}), dict(field_changes={"is_range": 1}),
+                 dict(mode="value", field_changes={"bits": 16}),
+                 dict(mode="value", field_changes={"count": 62})]
+        for changes in cases:
+            with self.subTest(changes=changes), patch.object(topology, "_read_report_descriptor") as raw:
+                self.cache.clear()
+                self.zg4_descriptor(**changes)
+                self.scan([ZG4_PATH])
+                self.assertNotIn(ZG4_PATH, self.cache)
+                raw.assert_not_called()
+        self.assert_cherry_descriptor_only()
+
+    def test_zg4_metadata_opt_in_never_expands_to_ff02_other_pid_vendor_or_native(self):
+        for changes in (dict(identity=(0x3654, 0x5054)), dict(identity=(0x1234, 0x5055)),
+                        dict(collection=(0xFF02, 2)), dict(collection=(0xFF05, 2)),
+                        dict(collection=(1, 1))):
+            with self.subTest(changes=changes), patch.object(topology, "_read_report_descriptor") as raw:
+                self.cache.clear()
+                self.zg4_descriptor(**changes)
+                info, = self.scan([ZG4_PATH])
+                self.assertNotIn("input_report_sizes", info)
+                self.assertNotIn("output_report_sizes", info)
+                self.hid.HidP_GetButtonCaps.assert_not_called()
+                self.hid.HidP_GetValueCaps.assert_not_called()
+                raw.assert_not_called()
         self.assert_cherry_descriptor_only()
         before = self.kernel.CreateFileW.call_count
         self.assertEqual(self.scan([r"\\?\hid#vid_373b&pid_1278&mi_01#native"]), [])

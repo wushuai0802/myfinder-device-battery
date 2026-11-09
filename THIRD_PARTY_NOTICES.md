@@ -34,6 +34,16 @@ no standalone root LICENSE file. This declaration is not verification of the
 complete copyright and permission text. The reference does not assert that
 an upstream license-text review or maintainer hardware acceptance has passed.
 
+The ZG4 battery-only provider is an independent project implementation based
+on protocol facts in ZhuAudio's official [Z HUB](https://drive.zhuaudio.cn/web/)
+`main.dart.js`, SHA256
+`04bee7a730669e758dd3e01df12e1823c18f262b2be4df43879595b6413bab3d`,
+and the sanitized raw descriptor supplied in
+[#459](https://github.com/wushuai0802/myfinder-device-battery/issues/459#issuecomment-6745518125).
+The vendor JavaScript is read as inert text, not executed, copied into the
+provider or distributed with it. No vendor license review or hardware
+acceptance is asserted. Exact evidence and limitations: `docs/zhuaudio-zg4.md`.
+
 The Windows distribution bundles the official CPython embeddable runtime and
 the `hidapi` Python wheel, with their original license files. Versions, original
 download URLs and SHA256 hashes are pinned in `engine/dependencies.lock.json`.

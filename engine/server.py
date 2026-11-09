@@ -28,6 +28,7 @@ PROVIDERS = (
     ("mchose_headset", "MchoseHeadsetProvider"),
     ("atk_headset", "AtkHeadsetProvider"),
     ("moondrop", "MoondropProvider"),
+    ("zhuaudio", "ZhuAudioProvider"),
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
     ("eweadn_s9pro", "EweadnS9ProProvider"),
     ("vgn_keyboard", "VgnKeyboardProvider"),
@@ -62,6 +63,7 @@ PROVIDER_VIDS = {
     "mchose_headset": (0x291D, 0x3837),
     "atk_headset": (0x373B,),
     "moondrop": (0x35D8,),
+    "zhuaudio": (0x3654,),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "eweadn_s9pro": (0x372E,),
     "vgn_keyboard": (0x320F,),
@@ -92,7 +94,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "zhuaudio"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -123,6 +125,16 @@ CHERRY_DIAGNOSTICS = {
     "no valid reply within deadline/read limit; connection unknown": "no valid battery reply",
     "HID handle close failed": "HID handle close failed",
 }
+ZHUAUDIO_DIAGNOSTICS = frozenset({
+    "ZG4 collection missing or ambiguous", "ZG4 parent/path unproven",
+    "ZG4 interface/product unverified", "ZG4 CE/CD byte reports unproven",
+    "ZG4 previous transaction unresolved", "ZG4 sequence space exhausted",
+    "ZG4 query already pending", "ZG4 inventory invalid",
+    "ZG4 write short/failed; no retry", "ZG4 no valid reply within limits",
+    "ZG4 headset disconnected", "ZG4 input rejected",
+    "ZG4 parent unresolved", "ZG4 enumeration failed", "ZG4 battery I/O failed",
+    "HID handle close failed",
+})
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -132,6 +144,8 @@ def reader_diagnostics(provider):
     if provider.name not in READER_DIAGNOSTICS:
         return []
     lines = provider.reader_diagnostics() if provider.name in ("mchose", "pulsar") else provider.diagnostics()
+    if provider.name == "zhuaudio":
+        lines = [line for line in lines if isinstance(line, str) and line in ZHUAUDIO_DIAGNOSTICS]
     if provider.name == "cherry":
         lines = [reason for line in lines if isinstance(line, str)
                  for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
@@ -209,7 +223,7 @@ def suppress_bluetooth_xinput(devices):
 def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
-        if (a.get("provider") == "cherry"
+        if (a.get("provider") in ("cherry", "zhuaudio")
                 or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
@@ -751,7 +765,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry", "zhuaudio") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -801,6 +815,10 @@ class BatteryEngine:
                                    "reason": "" if measured else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
+            if name == "zhuaudio":
+                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in ZHUAUDIO_DIAGNOSTICS]
+                if not measured and diagnostics:
+                    self.health[reader_key]["diagnosticSummary"] = diagnostics[0]
             if name == "cherry":
                 diagnostics = [reason for line in diagnostics if isinstance(line, str)
                                for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
