@@ -52,8 +52,10 @@ than by model list, which is what this provider does as well. The diagnostics in
 read on the *short* 0x11 report, so both report ids are tried before a poll gives up.
 Exception: A7 V3's 3837:1018 and 3837:1014 receivers share the collection but use
 output report 0x4D and a different command set (OpenMouse's V3 codec). Its separate
-read-only path below requires FF01:0001 and proven 64-byte input/output report 4D; it never
-falls back to a legacy exchange. See the V3 source/license notes in upstream-protocols.md.
+read-only path below prefers FF01:0001 with proven 64-byte input/output report 4D.
+Only 1018 may use a uniquely proven FF0B:00C4 on the same USB parent when FF01 is
+absent or definitively excludes 4D/64. It never falls back to a legacy exchange.
+See the V3 source/license notes in upstream-protocols.md.
 3837:600A is the V9 Turbo+ headset (mchose_headset); 3837:6008 is its lighting
 device. Both are excluded before any mouse I/O (用户实机抓包，#61).
 
@@ -78,6 +80,7 @@ in every reading so far).
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -102,6 +105,7 @@ V3_PIDS = {
     0x1014: "MCHOSE A7 V3 Ultra+",  # Fallback; #276 verified this model, not every 1014.
 }
 V3_USAGE = (0xFF01, 0x0001)
+V3_ALTERNATE_USAGE = (0xFF0B, 0x00C4)  # 1018 only; actual #493 placement unknown.
 V3_REPORT_ID, V3_REPORT_LEN = 0x4D, 64  # includes the report ID; body is 63 bytes
 V3_CMD_POWER = 0x0900
 V3_TIMEOUT_MS = 1500                  # upstream observed deferred replies at ~1 s
@@ -441,23 +445,65 @@ class MchoseProvider(Provider):
     def reader_diagnostics(self):
         return list(self._v3_diag)
 
-    def _pick_v3(self, ifaces):
-        cols = [d for d in ifaces if (d.get("usage_page"), d.get("usage")) == V3_USAGE]
-        if len(cols) != 1:
-            self._note_v3("V3 missing or ambiguous FF01:0001 collection; not opened; nothing sent")
-            return None
-        info = cols[0]
-        if not info.get("path"):
-            self._note_v3("V3 collection path unresolved; not opened; nothing sent")
-            return None
+    @staticmethod
+    def _v3_report_proven(info, direction, *, alternate=False):
+        maximum = info.get(direction + "_report_length")
+        sizes = info.get(direction + "_report_sizes")
+        if (type(maximum) is not int or maximum != V3_REPORT_LEN
+                or not isinstance(sizes, dict) or not sizes
+                or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
+                or sizes.get(str(V3_REPORT_ID)) != V3_REPORT_LEN):
+            return False
+        if alternate:
+            declared = info.get("declared_report_sizes")
+            return (all(isinstance(key, str) and key.isascii() and key.isdecimal()
+                        and len(key) <= 3 and str(int(key)) == key and 0 <= int(key) <= 255
+                        for key in sizes)
+                    and info.get(direction + "_report_proof") in ("caps", "descriptor")
+                    and not info.get("report_descriptor_error")
+                    and (declared is None or isinstance(declared, dict)
+                         and declared.get(direction) == sizes))
+        return True
+
+    @staticmethod
+    def _v3_primary_excludes_4d(info):
+        # Maxima below 64 exclude the transport even when byte-array discovery
+        # failed. Otherwise only a complete, consistent per-ID map can exclude
+        # it. Missing maps at max 64, partial maps and contradictions are unknown.
+        if info.get("report_descriptor_error") in (
+                "collection maximum mismatch", "caps/descriptor disagreement"):
+            return False
+        excluded = False
         for direction in ("input", "output"):
             maximum = info.get(direction + "_report_length")
             sizes = info.get(direction + "_report_sizes")
-            if (type(maximum) is not int or maximum != V3_REPORT_LEN
-                    or not isinstance(sizes, dict) or not sizes
-                    or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
-                    or sizes.get(str(V3_REPORT_ID)) != V3_REPORT_LEN):
+            if type(maximum) is not int or not 2 <= maximum <= 4096:
+                return False
+            if sizes is not None:
+                if (not isinstance(sizes, dict) or not sizes
+                        or any(not isinstance(key, str) or not key.isascii() or not key.isdecimal()
+                               or len(key) > 3 or str(int(key)) != key or not 0 <= int(key) <= 255
+                               or type(n) is not int or not 2 <= n <= maximum
+                               for key, n in sizes.items())
+                        or max(sizes.values()) != maximum):
+                    return False
+                declared = info.get("declared_report_sizes")
+                if declared is not None and (not isinstance(declared, dict)
+                                             or declared.get(direction) != sizes):
+                    return False
+                excluded |= sizes.get(str(V3_REPORT_ID)) != V3_REPORT_LEN
+            excluded |= maximum < V3_REPORT_LEN
+        return excluded
+
+    def _check_v3(self, info, *, alternate=False):
+        collection = "; collection=" + ("FF0B:00C4" if alternate else "FF01:0001")
+        if not info.get("path"):
+            self._note_v3("V3 collection path unresolved" + collection + "; not opened; nothing sent")
+            return None
+        for direction in ("input", "output"):
+            if not self._v3_report_proven(info, direction, alternate=alternate):
                 self._note_v3("V3 " + direction + " report 4D/64 length unproven"
+                              + collection
                               + report_proof_summary(
                                   info, direction,
                                   include_declared=isinstance(info.get("declared_report_sizes"), dict))
@@ -465,8 +511,61 @@ class MchoseProvider(Provider):
                 return None
         for direction in ("input", "output"):
             self._note_v3("V3 " + direction + " report 4D/64 proven"
+                          + collection
                           + report_proof_summary(info, direction))
         return info
+
+    def _pick_v3(self, ifaces):
+        cols = [d for d in ifaces if (d.get("usage_page"), d.get("usage")) == V3_USAGE]
+        exact_1018 = bool(ifaces) and all(
+            type(d.get("vendor_id")) is int and type(d.get("product_id")) is int
+            and (d["vendor_id"], d["product_id"]) == (V3_VID, V3_PID) for d in ifaces)
+        if len(cols) > 1 or not cols and not exact_1018:
+            self._note_v3("V3 missing or ambiguous FF01:0001 collection; not opened; nothing sent")
+            return None
+        primary = cols[0] if cols else None
+        if primary is not None:
+            if (not primary.get("path")
+                    or all(self._v3_report_proven(primary, d) for d in ("input", "output"))
+                    or not exact_1018 or not self._v3_primary_excludes_4d(primary)):
+                return self._check_v3(primary)
+
+        # WebHID selects the device by its collection list, then sends by report
+        # ID. Windows needs a single, independently proven collection binding.
+        alternates = [d for d in ifaces
+                      if (d.get("usage_page"), d.get("usage")) == V3_ALTERNATE_USAGE]
+        if len(alternates) != 1:
+            self._note_v3("V3 FF0B:00C4 missing or ambiguous; not opened; nothing sent")
+            if primary is not None:
+                self._check_v3(primary)
+            else:
+                self._note_v3("V3 missing or ambiguous FF01:0001 collection; not opened; nothing sent")
+            return None
+        info = alternates[0]
+        parent = info.get("physical_id")
+        path = info.get("path")
+        if isinstance(path, bytes):
+            try:
+                path = path.decode("ascii")
+            except UnicodeDecodeError:
+                path = None
+        if (not isinstance(parent, str)
+                or re.fullmatch(r"pnp:usb\\vid_3837&pid_1018(?:&rev_[0-9a-f]{4})?\\[^\\\s]+",
+                                parent, re.I) is None
+                or any(d.get("physical_id") != parent for d in ifaces)
+                or not isinstance(path, str)
+                or re.fullmatch(r"\\\\\?\\hid#vid_3837&pid_1018(?:&[a-z0-9_]+)*#[^\\\s]+",
+                                path, re.I) is None
+                or any(type(info.get(field)) is not int for field in ("usage_page", "usage"))):
+            self._note_v3("V3 FF0B:00C4 USB parent/path unproven or inconsistent; not opened; nothing sent")
+            if primary is None:
+                self._note_v3("V3 missing or ambiguous FF01:0001 collection; not opened; nothing sent")
+            else:
+                self._check_v3(primary)
+            return None
+        self._note_v3("V3 FF01:0001 " + ("excludes 4D/64" if primary is not None else "absent")
+                      + "; considering FF0B:00C4")
+        return self._check_v3(info, alternate=True)
 
     def _read_v3(self, path: bytes) -> Optional[Tuple[int, bool]]:
         """One power query per poll; ignore unrelated input within a bounded wait."""

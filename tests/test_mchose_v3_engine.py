@@ -1,17 +1,83 @@
 """V3 power and its verification boundary through the public engine bridge."""
 from pathlib import Path
+import io
+import json
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine" / "tests"))
-from test_mchose_v3 import M, CHARGING, ULTRA_42, REQUEST, fixture, inventory
+from test_mchose_v3 import M, CHARGING, ULTRA_42, REQUEST, alternate_inventory, fixture, inventory
+from device_pack import parse_pack
+from isolation import wire_encode
 from known_ids import build_index
 import server
 
 
 class MchoseV3EngineTests(unittest.TestCase):
+    def test_two_usb_parents_choose_their_own_proven_alternate_and_keep_c_level(self):
+        first, second = alternate_inventory("synthetic-a"), alternate_inventory("synthetic-b")
+        infos = first + second
+        public_ids = set()
+        for collections in (first, second):
+            parent = collections[0]["physical_id"]
+            provider = M.MchoseProvider()
+            with self.subTest(parent=parent), fixture([CHARGING], infos) as bus:
+                status, = server.scoped_poll(provider, infos, parent)
+                public = server.normalise(status, None, server.utcnow())
+                self.assertEqual(bus.opened, [collections[1]["path"]])
+                self.assertEqual(bus.sent, [REQUEST])
+                self.assertEqual((public["percent"], public["verificationLevel"]), (85, "C"))
+                self.assertIsNone(public["dpi"])
+                self.assertEqual(status.physical_id, parent)
+                public_ids.add(public["id"])
+        self.assertEqual(len(public_ids), 2)
+        # A provider given mixed parents cannot borrow one parent's collection
+        # even if the other parent's alternate was omitted from the inventory.
+        mixed = [first[0], second[1]]
+        with fixture([CHARGING], mixed) as bus:
+            self.assertEqual(M.MchoseProvider().poll(), [])
+            self.assertEqual((bus.opened, bus.sent, bus.reads), ([], [], []))
+
+    def test_disabled_1018_blocks_both_parents_without_affecting_original_1014(self):
+        pack = parse_pack(json.dumps({
+            "format": "myfinder-device-pack", "loader": 1, "packVersion": 2026110401,
+            "keyId": "pack-2026a", "createdAt": "2026-11-04T10:00:00Z", "entries": [],
+            "disabled": [{"provider": "mchose", "vendorId": "3837", "productId": "1018",
+                          "reason": "synthetic test"}]}))
+        self.assertTrue(pack.loaded, pack.rejected)
+        infos = alternate_inventory("synthetic-a") + alternate_inventory("synthetic-b")
+        for parent in {d["physical_id"] for d in infos}:
+            provider = M.MchoseProvider()
+            with self.subTest(parent=parent), fixture([CHARGING], infos) as bus, \
+                    patch.object(provider, "poll", side_effect=AssertionError("disabled reader polled")):
+                self.assertEqual(server.scoped_poll(provider, infos, parent, pack), [])
+                self.assertEqual((bus.opened, bus.sent, bus.reads), ([], [], []))
+        original = [dict(d, physical_id="old-1014") for d in inventory(0x1014)]
+        with fixture([ULTRA_42], infos + original) as bus:
+            status, = server.scoped_poll(M.MchoseProvider(), infos + original, "old-1014", pack)
+            self.assertEqual(status.level, 42)
+            self.assertEqual(bus.opened, [next(d["path"] for d in original if d["usage_page"] == 0xFF01)])
+            self.assertEqual(bus.sent, [REQUEST])
+
+    def test_child_alternate_proof_crosses_json_boundary_without_private_identity(self):
+        infos = alternate_inventory("PRIVATE-SERIAL")
+        infos[1]["input_report_sizes"] = None
+        parent = infos[0]["physical_id"]
+        request = dict(action="query", sequence=1, provider="mchose", physicalId=parent, inventory=infos)
+        data = (json.dumps(request, default=wire_encode) + "\n").encode()
+        with fixture([], infos) as bus, \
+                patch.object(server.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data))), \
+                patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+            server.reader_child()
+            response = json.loads(output.getvalue())
+            self.assertEqual((response["statuses"], response["candidateCount"]), ([], 1))
+            self.assertIn("collection=FF0B:00C4", " ".join(response["diagnostics"]))
+            self.assertNotIn("PRIVATE", output.getvalue())
+            self.assertEqual((bus.opened, bus.sent, bus.reads), ([], [], []))
+
     def test_ultra_identity_c_level_and_safe_reader_diagnostics(self):
         row, = [r for r in build_index()["devices"] if r["provider"] == "mchose"
                 and (r["vendorId"], r["productId"]) == (0x3837, 0x1014)]

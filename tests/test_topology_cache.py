@@ -1468,6 +1468,168 @@ class LingbaoDescriptorTests(unittest.TestCase):
                 self.assertEqual(self.scan()["feature_report_sizes"], {"15": 33})
 
 
+class MchoseV3AlternateTopologyTests(unittest.TestCase):
+    """Synthetic FF0B 4D layout, not a #493 descriptor or hardware capture."""
+    descriptor = bytes.fromhex(
+        "06 0b ff 09 c4 a1 01 85 4d 75 08 95 3f 81 02 91 02 c0")
+
+    def setUp(self):
+        import battery_hid as H
+        self.case = DescriptorCacheTests()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        self.dev = Mock(spec=["open_path", "get_report_descriptor", "close"])
+        self.backend = SimpleNamespace(device=Mock(return_value=self.dev))
+        patcher = patch.object(H, "hid", self.backend)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def configure(self, failed=(0, 1), identity=(0x3837, 0x1018), collection=(0xFF0B, 0xC4),
+                  inp=None, raw=None, maxima=None):
+        self.case.cache.clear()
+        self.dev.reset_mock(side_effect=True)
+        self.backend.device.reset_mock()
+        self.case.hid.HidP_GetValueCaps.reset_mock()
+        self.case.batch3_descriptor(identity, collection, inp or {77: 64}, {77: 64})
+        original_fields = self.case.hid.HidP_GetValueCaps.side_effect
+        self.case.hid.HidP_GetValueCaps.side_effect = (
+            lambda report_type, *args: 0 if report_type in failed else original_fields(report_type, *args))
+        if maxima is not None:
+            original_caps = self.case.hid.HidP_GetCaps.side_effect
+
+            def caps(data, pointer):
+                result = original_caps(data, pointer)
+                value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                value.input, value.output, value.feature = maxima
+                return result
+
+            self.case.hid.HidP_GetCaps.side_effect = caps
+        self.dev.get_report_descriptor.return_value = self.descriptor if raw is None else raw
+
+    def scan(self):
+        info, = self.case.scan([PATH_A])
+        self.case.hid.HidD_GetFeature.assert_not_called()
+        self.case.hid.HidD_SetFeature.assert_not_called()
+        self.case.kernel.ReadFile.assert_not_called()
+        self.case.kernel.WriteFile.assert_not_called()
+        return info
+
+    def test_alternate_both_caps_and_each_missing_direction_are_proven_and_cached(self):
+        for failed in ((), (0,), (1,), (0, 1)):
+            with self.subTest(failed=failed):
+                self.configure(failed=failed)
+                info = self.scan()
+                for index, direction in enumerate(("input", "output")):
+                    self.assertEqual(info[direction + "_report_sizes"], {"77": 64})
+                    self.assertEqual(info[direction + "_report_proof"],
+                                     "descriptor" if index in failed else "caps")
+                self.assertEqual(self.scan(), info)
+                if failed:
+                    self.dev.open_path.assert_called_once_with(PATH_A.encode())
+                    self.dev.get_report_descriptor.assert_called_once_with()
+                    self.dev.close.assert_called_once_with()
+                else:
+                    self.backend.device.assert_not_called()
+
+    def test_alternate_unknown_or_partial_proof_retries_and_recovers(self):
+        self.configure(raw=b"\x85")
+        for _ in range(2):
+            info = self.scan()
+            self.assertIsNone(info["input_report_sizes"])
+            self.assertIsNone(info["output_report_sizes"])
+            self.assertEqual(info["report_descriptor_error"], "truncated item")
+            self.assertNotIn(PATH_A, self.case.cache)
+        self.dev.get_report_descriptor.return_value = self.descriptor
+        recovered = self.scan()
+        self.assertEqual(recovered["input_report_sizes"], {"77": 64})
+        self.assertEqual(recovered["output_report_sizes"], {"77": 64})
+        self.assertEqual(self.dev.close.call_count, 3)
+        self.configure(failed=())
+        original = self.case.hid.HidP_GetValueCaps.side_effect
+
+        def partial(report_type, fields, length, data):
+            result = original(report_type, fields, length, data)
+            ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+            return result
+
+        self.case.hid.HidP_GetValueCaps.side_effect = partial
+        recovered = self.scan()
+        self.assertEqual(recovered["input_report_proof"], "descriptor")
+        self.assertEqual(recovered["output_report_proof"], "descriptor")
+
+    def test_alternate_non_64_caps_never_open_raw_descriptor_even_on_repeated_scans(self):
+        for maxima in ((41, 41, 0), (41, 64, 0), (64, 41, 0), (0, 0, 0),
+                       (0, 64, 0), (64, 0, 0), (63, 64, 0), (64, 65, 0)):
+            with self.subTest(maxima=maxima):
+                self.configure(maxima=maxima)
+                for _ in range(2):
+                    info = self.scan()
+                    self.assertEqual((info["input_report_length"], info["output_report_length"]), maxima[:2])
+                self.backend.device.assert_not_called()
+
+    def test_alternate_fallback_rejects_conflicting_maxima_caps_duplicate_and_shared_tlcs(self):
+        shared = self.descriptor + self.descriptor.replace(b"\x06\x0b\xff", b"\x06\x01\xff")
+        cases = [(self.descriptor.replace(b"\x95\x3f", b"\x95\x28"),
+                  None, (0, 1), "collection maximum mismatch"),
+                 (self.descriptor[:-1] + bytes.fromhex("85 06 95 07 b1 02 c0"),
+                  None, (0, 1), "collection maximum mismatch"),
+                 (self.descriptor, {76: 64}, (1,), "caps/descriptor disagreement"),
+                 (self.descriptor * 2, None, (0, 1), "duplicate top-level collection"),
+                 (shared, None, (0, 1), "report shared across collections"),
+                 (self.descriptor.replace(b"\x09\xc4", b"\x09\xc5"),
+                  None, (0, 1), "collection not found")]
+        for raw, inp, failed, reason in cases:
+            with self.subTest(reason=reason):
+                self.configure(raw=raw, inp=inp, failed=failed)
+                info = self.scan()
+                self.assertEqual(info["report_descriptor_error"], reason)
+                self.assertIsNone(info["output_report_sizes"])
+                self.assertNotIn(PATH_A, self.case.cache)
+                self.dev.close.assert_called_once_with()
+
+    def test_alternate_metadata_failures_close_and_do_not_expose_exceptions(self):
+        for method in ("open_path", "get_report_descriptor", "close"):
+            with self.subTest(method=method):
+                self.configure()
+                getattr(self.dev, method).side_effect = OSError("PRIVATE-SERIAL-PATH")
+                info = self.scan()
+                self.assertIsNone(info["input_report_sizes"])
+                self.assertIsNone(info["output_report_sizes"])
+                self.assertNotIn("PRIVATE", str(info))
+                self.dev.close.assert_called_once_with()
+
+    def test_alternate_does_not_expand_other_pid_vendor_or_usage(self):
+        for identity, collection in (((0x3837, 0x1014), (0xFF0B, 0xC4)),
+                                     ((0x3837, 0x1019), (0xFF0B, 0xC4)),
+                                     ((0x3838, 0x1018), (0xFF0B, 0xC4)),
+                                     ((0x5253, 0x1018), (0xFF0B, 0xC4)),
+                                     ((0x3837, 0x1018), (0xFF0B, 0x104)),
+                                     ((0x3837, 0x1018), (0xFF0B, 1)),
+                                     ((0x3837, 0x1018), (0xFF02, 0xC4))):
+            with self.subTest(identity=identity, collection=collection):
+                self.configure(identity=identity, collection=collection)
+                info = self.scan()
+                self.assertNotIn("input_report_sizes", info)
+                self.assertNotIn("output_report_sizes", info)
+                self.case.hid.HidP_GetValueCaps.assert_not_called()
+                self.backend.device.assert_not_called()
+
+    def test_both_original_ff01_identities_keep_caps_and_fallback_proof(self):
+        descriptor = self.descriptor.replace(b"\x06\x0b\xff\x09\xc4", b"\x06\x01\xff\x09\x01")
+        for pid in (0x1014, 0x1018):
+            for failed in ((), (0,), (1,), (0, 1)):
+                with self.subTest(pid=pid, failed=failed):
+                    self.configure(identity=(0x3837, pid), collection=(0xFF01, 1),
+                                   failed=failed, raw=descriptor)
+                    info = self.scan()
+                    self.assertEqual(info["input_report_sizes"], {"77": 64})
+                    self.assertEqual(info["output_report_sizes"], {"77": 64})
+                    if failed:
+                        self.dev.get_report_descriptor.assert_called_once_with()
+                    else:
+                        self.backend.device.assert_not_called()
+
+
 class Fa09DescriptorFallbackTests(unittest.TestCase):
     """Exact #476 transport proof using fake DLLs and metadata-only HID."""
     descriptor = bytes.fromhex(
