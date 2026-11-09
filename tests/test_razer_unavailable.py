@@ -47,6 +47,8 @@ class Bus:
         self.modes = modes
         self.opens = []
         self.requests = []
+        self.sent = []
+        self.closes = []
 
     def device(self):
         bus = self
@@ -54,36 +56,45 @@ class Bus:
         class Device:
             def open_path(self, path):
                 bus.opens.append(path)
+                self.path = path
                 self.mode = bus.modes.get(path, "open_failed")
                 if self.mode == "open_failed":
                     raise OSError("private-path private-serial private-os-error")
 
+            def current_mode(self):
+                return (self.mode.get(self.request[1], "foreign_reply")
+                        if isinstance(self.mode, dict) else self.mode)
+
             def send_feature_report(self, report):
-                if self.mode == "send_failed":
-                    raise OSError("private-os-error")
                 self.request = bytes(report[1:])
+                if self.current_mode() == "send_failed":
+                    raise OSError("private-os-error")
                 bus.requests.append(self.request)
+                bus.sent.append((self.path, self.request))
                 return len(report)
 
             def get_feature_report(self, report_id, size):
-                if self.mode == "get_failed":
+                mode = self.current_mode()
+                if mode == "get_failed":
                     raise OSError("private-os-error")
-                if self.mode == "short_reply":
+                if mode == "short_reply":
                     return [0, 2]
                 reply = bytearray(90)
                 reply[1:8] = self.request[1:8]
                 reply[0] = 2
                 reply[9] = 181 if self.request[7] == 0x80 else 0
-                if isinstance(self.mode, int):
-                    reply[0] = self.mode
-                elif self.mode == "foreign_reply":
+                if mode == "ok_charging" and self.request[7] == 0x84:
+                    reply[9] = 1
+                if isinstance(mode, int):
+                    reply[0] = mode
+                elif mode == "foreign_reply":
                     reply[6:8] = b"\x0f\x03"
-                elif self.mode == "charging_failed" and self.request[7] == 0x84:
+                elif mode == "charging_failed" and self.request[7] == 0x84:
                     raise OSError("private-os-error")
                 return [0] + list(reply)
 
             def close(self):
-                pass
+                bus.closes.append(self.path)
 
         return Device()
 
@@ -95,6 +106,408 @@ def fixture(inventory, modes):
             patch.object(R.hidlist, "enumerate", return_value=inventory), \
             patch.object(R, "time", clock):
         yield bus, clock
+
+
+class RazerForeignRecoveryTests(unittest.TestCase):
+    @staticmethod
+    def inventory(paths=(b"a", b"b")):
+        return [dict(vendor_id=0x1532, product_id=0x007D,
+                     product_string="Razer DeathAdder V2 Pro", path=path,
+                     serial_number="fake", physical_id="fake-parent",
+                     interface_number=i, usage_page=1, usage=0)
+                for i, path in enumerate(paths)]
+
+    @staticmethod
+    def pack(profile="hyperspeed-mouse-1f", match=None, denies=None):
+        from test_device_pack import document, entry, pack
+        values = {"profile": profile}
+        if match is not None:
+            values["match"] = match
+        result = pack(document([entry(**values)], denies))
+        if not result.loaded or result.rejected:
+            raise AssertionError(result.rejected)
+        return result
+
+    def test_persistent_foreign_reaches_healthy_approved_interface(self):
+        infos = self.inventory()
+        with fixture(infos, {b"a": "foreign_reply", b"b": "ok"}) as (bus, _):
+            provider = R.RazerProvider()
+            result = []
+            for _ in range(8):
+                result = provider.poll()
+                if result:
+                    break
+            self.assertIn(b"b", bus.opens)
+            status, = result
+            self.assertEqual((status.level, status.online), (71, True))
+            self.assertEqual(provider._cache[(0x007D, "fake")].path, b"b")
+            self.assertEqual(provider.failure_code(), "")
+            opened, sent = len(bus.opens), len(bus.requests)
+            self.assertTrue(provider.poll()[0].online)
+            self.assertEqual(bus.opens[opened:], [b"b"])
+            self.assertEqual(len(bus.requests) - sent, 2)
+            self.assertEqual((provider._foreign, provider._rediscovery, provider._failing), ({}, {}, {}))
+
+    def test_persistent_foreign_reaches_next_existing_tid(self):
+        infos = self.inventory((b"a",))
+        modes = {b"a": {0x3F: "foreign_reply", 0x1F: "ok"}}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider()
+            result = []
+            for _ in range(6):
+                result = provider.poll()
+                if result:
+                    break
+            self.assertIn(0x1F, [r[1] for r in bus.requests])
+            status, = result
+            self.assertEqual((status.level, status.online), (71, True))
+            self.assertEqual(provider._cache[(0x007D, "fake")].tid, 0x1F)
+
+    def test_all_foreign_walks_existing_space_with_bounded_cost(self):
+        infos = self.inventory()
+        with fixture(infos, {b"a": "foreign_reply", b"b": "foreign_reply"}) as (bus, clock):
+            provider = R.RazerProvider()
+            for poll in range(14):
+                opened, sent, before = len(bus.opens), len(bus.requests), clock.time()
+                self.assertEqual(provider.poll(), [])
+                reads = len(bus.opens) - opened
+                self.assertGreater(reads, 0)
+                self.assertLessEqual(reads, 1 if poll < 2 else 3 if poll == 2 else 2)
+                self.assertEqual(len(bus.requests) - sent, reads * 3)
+                self.assertLessEqual(clock.time() - before, reads * 1.1)
+                self.assertLess(clock.time() - before, 7)
+                self.assertEqual(provider.failure_code(), "razer_foreign_reply")
+                self.assertEqual(provider._last, {})
+                if poll >= 2:
+                    self.assertNotIn((0x007D, "fake"), provider._cache)
+                clock.sleep(101)
+            self.assertEqual({(path, r[1]) for path, r in bus.sent},
+                             {(path, tid) for path in (b"a", b"b") for tid in R.TRANSACTION_IDS})
+            for request in bus.requests:
+                self.assertEqual(request, R.build_request(request[1], 7, 0x80))
+            self.assertEqual(bus.closes, bus.opens)
+
+    def test_normal_cache_and_transient_foreign_cost_one_read(self):
+        infos = self.inventory()
+        modes = {b"a": "ok_charging", b"b": "ok"}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider()
+            for _ in range(3):
+                opened, sent = len(bus.opens), len(bus.requests)
+                status, = provider.poll()
+                self.assertEqual((status.level, status.charging, status.online), (71, True, True))
+                self.assertEqual(bus.opens[opened:], [b"a"])
+                self.assertEqual([r[7] for r in bus.requests[sent:]], [0x80, 0x84])
+            modes[b"a"] = "foreign_reply"
+            for _ in range(2):
+                opened = len(bus.opens)
+                self.assertFalse(provider.poll()[0].online)
+                self.assertEqual(bus.opens[opened:], [b"a"])
+                self.assertFalse(provider._rediscovery)
+            modes[b"a"] = "ok_charging"
+            opened, sent = len(bus.opens), len(bus.requests)
+            self.assertTrue(provider.poll()[0].online)
+            self.assertEqual(bus.opens[opened:], [b"a"])
+            self.assertEqual(len(bus.requests) - sent, 2)
+            self.assertEqual((provider._foreign, provider._rediscovery, provider._failing), ({}, {}, {}))
+
+    def test_single_interface_recovers_after_bounded_walk(self):
+        infos = self.inventory((b"a",))
+        modes = {b"a": "foreign_reply"}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider()
+            for _ in range(4):
+                self.assertEqual(provider.poll(), [])
+            modes[b"a"] = {0x3F: "ok"}
+            result = []
+            for _ in range(4):
+                opened = len(bus.opens)
+                result = provider.poll()
+                self.assertGreater(len(bus.opens) - opened, 0)
+                self.assertLessEqual(len(bus.opens) - opened, 2)
+                if result:
+                    break
+            self.assertTrue(result[0].online)
+            self.assertEqual(provider._cache[(0x007D, "fake")].tid, 0x3F)
+
+    def test_profile_only_retries_single_candidate_and_reaches_other_interface(self):
+        for paths in ((b"a",), (b"a", b"b")):
+            infos = [dict(d, product_id=0xFE01) for d in self.inventory(paths)]
+            modes = {path: "foreign_reply" for path in paths}
+            with self.subTest(paths=paths), fixture(infos, modes) as (bus, _):
+                provider = R.RazerProvider(self.pack())
+                for _ in range(10):
+                    opened = len(bus.opens)
+                    self.assertEqual(provider.poll(), [])
+                    self.assertGreater(len(bus.opens) - opened, 0)
+                    self.assertLessEqual(len(bus.opens) - opened, 3)
+                modes[paths[-1]] = "ok"
+                result = []
+                for _ in range(2):
+                    result = provider.poll()
+                    if result:
+                        break
+                self.assertTrue(result[0].online)
+                self.assertEqual(result[0].model_source, "pack")
+                self.assertEqual({r[1] for r in bus.requests}, {0x1F})
+                self.assertEqual((provider._foreign, provider._rediscovery), ({}, {}))
+
+    def test_foreign_never_refreshes_history_or_queries_charging(self):
+        infos = self.inventory()
+        modes = {b"a": "ok_charging", b"b": "foreign_reply"}
+        with fixture(infos, modes) as (bus, clock):
+            provider = R.RazerProvider()
+            provider.poll()
+            last = dict(provider._last)
+            modes[b"a"] = "foreign_reply"
+            sent = len(bus.requests)
+            for _ in range(10):
+                clock.sleep(5)
+                status, = provider.poll()
+                self.assertEqual((status.level, status.charging, status.online), (71, True, False))
+                self.assertEqual(provider._last, last)
+            clock.sleep(301)
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(provider._last, last)
+            self.assertEqual({r[7] for r in bus.requests[sent:]}, {0x80})
+
+    def test_timeout_resets_foreign_streak_without_scanning(self):
+        infos = self.inventory()
+        modes = {b"a": "ok", b"b": "ok"}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider()
+            provider.poll()
+            last = dict(provider._last)
+            for mode in ("foreign_reply", "foreign_reply", 4, 4, "foreign_reply", "foreign_reply"):
+                modes[b"a"] = mode
+                opened = len(bus.opens)
+                self.assertFalse(provider.poll()[0].online)
+                self.assertEqual(bus.opens[opened:], [b"a"])
+                self.assertEqual(provider._last, last)
+                self.assertFalse(provider._rediscovery)
+            self.assertEqual(provider.failure_code(), "razer_foreign_reply")
+
+    def test_busy_alone_preserves_legacy_walk_without_foreign_recovery(self):
+        with fixture(self.inventory((b"a",)), {b"a": 1}) as (bus, clock):
+            provider = R.RazerProvider()
+            before = clock.time()
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(bus.requests), len(R.TRANSACTION_IDS))
+            self.assertLess(clock.time() - before, 7)
+            self.assertEqual(provider.failure_code(), "razer_busy_timeout")
+            self.assertEqual((provider._foreign, provider._rediscovery), ({}, {}))
+
+    def test_timeout_during_recovery_returns_to_sleeping_cache(self):
+        infos = self.inventory()
+        modes = {b"a": "foreign_reply", b"b": "foreign_reply"}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider()
+            for _ in range(3):
+                provider.poll()
+            modes.update({b"a": 4, b"b": 5})
+            opened = len(bus.opens)
+            self.assertEqual(provider.poll(), [])
+            self.assertLessEqual(len(bus.opens) - opened, 2)
+            self.assertEqual((provider._foreign, provider._rediscovery), ({}, {}))
+            for _ in range(3):
+                opened, sent = len(bus.opens), len(bus.requests)
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(bus.opens[opened:], [b"a"])
+                self.assertEqual(len(bus.requests) - sent, 1)
+                self.assertEqual(provider.failure_code(), "razer_device_timeout_04")
+
+    def test_recovery_handles_busy_short_replies_and_io_failures(self):
+        for mode in (1, "open_failed", "send_failed", "get_failed", "short_reply"):
+            infos = self.inventory()
+            modes = {b"a": "foreign_reply", b"b": "foreign_reply"}
+            with self.subTest(mode=mode), fixture(infos, modes) as (bus, clock):
+                provider = R.RazerProvider()
+                for _ in range(3):
+                    self.assertEqual(provider.poll(), [])
+                modes.update({b"a": mode, b"b": "ok"})
+                result = []
+                for _ in range(4):
+                    opened, before = len(bus.opens), clock.time()
+                    result = provider.poll()
+                    self.assertLessEqual(len(bus.opens) - opened, 2)
+                    self.assertLess(clock.time() - before, 7)
+                    if result:
+                        break
+                self.assertEqual((result[0].level, result[0].online), (71, True))
+                self.assertEqual(provider.failure_code(), "")
+
+    def test_recovery_respects_cooldown_and_preserves_unrelated_dead_entries(self):
+        infos = self.inventory()
+        modes = {b"a": "foreign_reply", b"b": "foreign_reply"}
+        with fixture(infos, modes) as (bus, clock):
+            provider = R.RazerProvider()
+            for _ in range(3):
+                provider.poll()
+            deadline = clock.time() + 300
+            provider._dead.update({b"a": deadline, b"b": deadline, b"unrelated": deadline + 1000})
+            opened = len(bus.opens)
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(bus.opens), opened)
+            self.assertEqual(provider.failure_code(), "razer_interfaces_cooling_down")
+            clock.sleep(301)
+            modes[b"b"] = "ok"
+            result = []
+            for _ in range(4):
+                result = provider.poll()
+                if result:
+                    break
+            self.assertTrue(result[0].online)
+            self.assertEqual(provider._dead[b"unrelated"], deadline + 1000)
+
+    def test_unresponsive_interface_enters_cooldown_during_recovery(self):
+        infos = self.inventory()
+        modes = {b"a": "foreign_reply", b"b": "foreign_reply"}
+        with fixture(infos, modes) as (bus, clock):
+            provider = R.RazerProvider()
+            for _ in range(3):
+                provider.poll()
+            modes[b"a"] = "open_failed"
+            for _ in range(6):
+                opened = len(bus.opens)
+                self.assertEqual(provider.poll(), [])
+                self.assertLessEqual(len(bus.opens) - opened, 2)
+                if b"a" in provider._dead:
+                    break
+            self.assertGreater(provider._dead[b"a"], clock.time())
+            opened = len(bus.opens)
+            modes[b"a"] = "ok"
+            for _ in range(6):
+                self.assertEqual(provider.poll(), [])
+            self.assertNotIn(b"a", bus.opens[opened:])
+            clock.sleep(301)
+            result = []
+            for _ in range(6):
+                result = provider.poll()
+                if result:
+                    break
+            self.assertTrue(result[0].online)
+
+    def test_foreign_streaks_are_independent_for_device_groups(self):
+        infos = self.inventory()
+        infos[1]["serial_number"] = "second"
+        modes = {b"a": "foreign_reply", b"b": "foreign_reply"}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider()
+            provider.poll()
+            modes[b"a"] = "ok"
+            for _ in range(2):
+                opened = len(bus.opens)
+                status, = provider.poll()
+                self.assertTrue(status.online)
+                self.assertEqual(status.key, "razer:007d:fake")
+                self.assertEqual(bus.opens[opened:].count(b"a"), 1)
+                self.assertLessEqual(bus.opens[opened:].count(b"b"), 3)
+            self.assertNotIn((0x007D, "fake"), provider._foreign)
+            self.assertIn((0x007D, "second"), provider._rediscovery)
+            self.assertNotIn("razer:007d:second", provider._last)
+
+    def test_inventory_removal_and_replacement_do_not_open_stale_paths(self):
+        for polls in (1, 3):
+            infos = self.inventory()
+            modes = {b"a": "foreign_reply", b"b": "foreign_reply", b"new": "ok"}
+            with self.subTest(polls=polls), fixture(infos, modes) as (bus, _):
+                provider = R.RazerProvider()
+                for _ in range(polls):
+                    provider.poll()
+                opened = len(bus.opens)
+                infos[:] = self.inventory((b"new",))
+                self.assertTrue(provider.poll()[0].online)
+                self.assertEqual(bus.opens[opened:], [b"new"])
+                modes[b"new"] = "foreign_reply"
+                for _ in range(3):
+                    provider.poll()
+                infos.clear()
+                opened = len(bus.opens)
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(len(bus.opens), opened)
+                self.assertEqual((provider._foreign, provider._rediscovery), ({}, {}))
+
+    def test_reordered_inventory_uses_candidate_identity(self):
+        infos = self.inventory()
+        modes = {b"a": "foreign_reply", b"b": "foreign_reply"}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider()
+            for _ in range(3):
+                provider.poll()
+            # Move a behind b without removing the cursor's path/TID.
+            infos[0]["interface_number"] = 3
+            modes[b"b"] = "ok"
+            result = []
+            for _ in range(4):
+                opened = len(bus.opens)
+                result = provider.poll()
+                self.assertLessEqual(len(bus.opens) - opened, 2)
+                if result:
+                    break
+            self.assertTrue(result[0].online)
+            self.assertEqual(provider._cache[(0x007D, "fake")].path, b"b")
+
+    def test_pack_reconfiguration_clears_cursor_and_enforces_new_match_and_tid(self):
+        infos = [dict(d, product_id=0xFE01) for d in self.inventory()]
+        match = dict(vendorId="1532", productId="FE01", interfaceNumber=0)
+        modes = {b"a": "foreign_reply", b"b": "ok"}
+        with fixture(infos, modes) as (bus, _):
+            provider = R.RazerProvider(self.pack(match=match))
+            for _ in range(3):
+                self.assertEqual(provider.poll(), [])
+            self.assertTrue(provider._rediscovery)
+            self.assertEqual(set(bus.opens), {b"a"})
+            provider.configure_pack(self.pack("hyperspeed-mouse-3f", dict(match, interfaceNumber=1)))
+            for state in (provider._cache, provider._foreign, provider._rediscovery, provider._dead,
+                          provider._last, provider._failing):
+                self.assertEqual(state, {})
+            opened, sent = len(bus.opens), len(bus.requests)
+            self.assertTrue(provider.poll()[0].online)
+            self.assertEqual(bus.opens[opened:], [b"b"])
+            self.assertEqual({r[1] for r in bus.requests[sent:]}, {0x3F})
+            from test_device_pack import disabled
+            provider.configure_pack(self.pack(denies=[disabled("FE01")]))
+            opened = len(bus.opens)
+            for _ in range(4):
+                self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(bus.opens), opened)
+            self.assertEqual((provider._foreign, provider._rediscovery), ({}, {}))
+
+    def test_reader_child_keeps_recovery_isolated_by_physical_parent(self):
+        infos = self.inventory((b"private-path-a", b"private-path-b"))
+        for d, parent in zip(infos, ("private-parent-a", "private-parent-b")):
+            d.update(physical_id=parent, serial_number="private-serial")
+        commands = [dict(action="query", sequence=i, provider="razer", inventory=infos,
+                         physicalId=infos[i % 2]["physical_id"]) for i in range(10)]
+        data = "".join(json.dumps(c, default=wire_encode) + "\n" for c in commands).encode()
+        instances = []
+
+        def create(device_pack=None):
+            provider = R.RazerProvider(device_pack)
+            instances.append(provider)
+            return provider
+
+        with fixture(infos, {infos[0]["path"]: "foreign_reply", infos[1]["path"]: "ok"}) as (bus, _), \
+                patch.object(server, "provider_class", return_value=create), \
+                patch.object(server.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data))), \
+                patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+            server.reader_child()
+        responses = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len(responses), 10)
+        self.assertEqual(len(instances), 2)
+        self.assertTrue(instances[0]._rediscovery)
+        self.assertEqual((instances[1]._foreign, instances[1]._rediscovery), ({}, {}))
+        for i, result in enumerate(responses):
+            self.assertEqual(result["sequence"], i)
+            if i % 2 == 0:
+                self.assertEqual(result["statuses"], [])
+                self.assertEqual(result["failureCode"], "razer_foreign_reply")
+                self.assertNotIn("private-", json.dumps(result))
+            else:
+                self.assertEqual(result["failureCode"], "")
+                self.assertEqual(result["statuses"][0]["level"], 71)
+        self.assertEqual(instances[0]._last, {})
+        self.assertEqual(len([p for p in bus.opens if p == infos[1]["path"]]), 5)
 
 
 class RazerUnavailableTests(unittest.TestCase):
