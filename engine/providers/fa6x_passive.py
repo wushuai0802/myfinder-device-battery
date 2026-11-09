@@ -23,9 +23,10 @@ PIDS = {
     0xFA65: "2.4G 无线鼠标（1D57:FA65）",
 }
 COLLECTIONS = {0xFA60: (0x000A, 0x0000), 0xFA65: (0xFF00, 0x0001)}
-# INPHIC web page bundle k=JSON.parse, byte 2501; see upstream-protocols.md.
+# INPHIC web page bundle k=JSON.parse, byte 2501; FA60 8E: #490 user samples.
+# See upstream-protocols.md; the added model has a narrower prefix below.
 MODELS = {
-    0xFA60: frozenset((0x07, 0x76, 0x77, 0x78, 0x79, 0xE8)),
+    0xFA60: frozenset((0x07, 0x76, 0x77, 0x78, 0x79, 0x8E, 0xE8)),
     0xFA65: frozenset((0x71, 0x76, 0x77, 0x78, 0x79, 0x90)),
 }
 INPUT_ID = 0x03
@@ -43,6 +44,10 @@ def parse_battery(raw, pid):
     """
     if (len(raw) < 5 or raw[0] != INPUT_ID or raw[1] not in MODELS.get(pid, ())
             or raw[2] not in (0x40, 0x41) or not 1 <= raw[4] <= 100):
+        return None
+    # Only the 40/01 prefix was reported for SC650; other models retain their
+    # existing 40/41 and state rules. This is not evidence of charging state.
+    if raw[1] == 0x8E and (raw[2], raw[3]) != (0x40, 0x01):
         return None
     return raw[4]
 

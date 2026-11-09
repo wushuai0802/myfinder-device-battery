@@ -192,7 +192,7 @@ def discover(paths, excluded=(), *, full=False):
     results are subsequently filtered. Here cfgmgr32 already supplied present
     paths; read only attributes/caps/strings for remaining paths, with access 0.
     No keyboard input reports, feature queries or feature writes are read here.
-    Rapoo/MOONDROP/MCHOSE V3/BY/S9 PRO caps failures may open their allow-listed
+    Rapoo/MOONDROP/MCHOSE V3/BY/S9 PRO/exact FA60 caps failures may open their allow-listed
     collection via hidapi solely to fetch the raw report descriptor, then close.
     Cache complete descriptors while the full path set is unchanged: product
     strings can encode connection state. Partial discoveries always refresh
@@ -381,6 +381,9 @@ def discover(paths, excluded=(), *, full=False):
                 # FA6x is receive-only: prove Input 03 from descriptor metadata.
                 from battery_hid import byte_report_sizes
                 info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0)
+                if (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                        0x1D57, 0xFA60, 0x000A, 0x0000) and info["input_report_sizes"] is None:
+                    _descriptor_fallback(info, caps, ("input",))
                 caps_complete = bool(info["input_report_sizes"]
                                      and info["input_report_sizes"].get("3", 0) >= 5)
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (

@@ -78,6 +78,44 @@ class Fa6xLegacyEngineTests(unittest.TestCase):
         self.assert_safe(snapshot["health"])
         self.assert_safe(snapshot["devices"])
 
+    def test_sc650_reported_samples_and_invalid_lengths_cross_json_without_refresh(self):
+        infos = [descriptor(input_report_length=5, input_report_sizes={"3": 5})]
+        broken = [dict(infos[0], input_report_sizes=None)]
+        commands = [self.query(selected, n)
+                    for n, selected in enumerate((broken, infos, infos, infos, []), 1)]
+        frames = [[3, 0x8E, 0x40, 1, 91], [], [3, 0x8E, 0x40, 1, 49], [],
+                  [3, 0x8E, 0x40, 1], [3, 0x8E, 0x40, 1, 91, 0],
+                  [3, 0x8E, 0x41, 1, 91]]
+        with fixture(frames, infos) as (bus, _):
+            replies = child_replies(commands)
+            self.assertEqual(bus.opened, [infos[0]["path"]])
+            self.assertEqual(bus.closed, bus.opened)
+        self.assertEqual([r["candidateCount"] for r in replies], [1, 1, 1, 1, 0])
+        self.assertEqual(replies[0]["diagnostics"], ["input report 03 length unproven; not opened"])
+        engine = self.engine(infos, replies)
+        rejected = self.poll(engine)
+        self.assertEqual(rejected["devices"], [])
+        self.assertEqual(self.health(rejected)["errorCode"], "input report 03 length unproven")
+        self.assert_not_failure(engine, rejected)
+        for percent in (91, 49):
+            fresh = self.poll(engine)
+            self.assertEqual(self.health(fresh)["state"], "ok")
+            device, = fresh["devices"]
+            self.assertEqual((device["percent"], device["fresh"], device["name"], device["verificationLevel"]),
+                             (percent, True, F.PIDS[0xFA60], "C"))
+            self.assertIsNone(device["charging"])
+            self.assertIsNone(device["dpi"])
+            self.assert_not_failure(engine, fresh)
+        silent = self.poll(engine)
+        historical, = silent["devices"]
+        self.assertEqual((historical["percent"], historical["fresh"], historical["chargingKnown"]),
+                         (49, False, False))
+        self.assertEqual((historical["measuredAtUtc"], historical["confirmedAtUtc"]),
+                         (device["measuredAtUtc"], device["confirmedAtUtc"]))
+        self.assertEqual(self.health(silent)["reason"], "no_measurement")
+        self.assert_not_failure(engine, silent)
+        self.assert_not_failure(engine, self.poll(engine))
+
     def test_child_proof_failure_recovery_silence_and_removal_cross_json(self):
         infos = legacy_inventory()
         broken = [dict(infos[0], input_report_sizes=None), infos[1]]
