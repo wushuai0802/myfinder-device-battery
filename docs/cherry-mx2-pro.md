@@ -1,6 +1,6 @@
 # CHERRY MX 2.0S WL Pro 电量适配边界
 
-本项目独立实现精确 USB / 2.4G 电量查询。贡献者在 HaloBattery #482 报告了多档百分比和插拔线充电对照；证据等级保持 C，待本项目维护者实机验证。离线自动化测试使用合成帧和 fake 设备，不构成硬件验收。
+本项目独立实现精确 USB / 2.4G 电量查询。贡献者在本仓库 #482 报告了多档百分比和插拔线充电对照；证据等级保持 C，待本项目维护者实机验证。离线自动化测试使用合成帧和 fake 设备，不构成硬件验收。
 
 | 连接 | VID:PID | 精确产品全名 |
 | --- | --- | --- |
@@ -23,4 +23,4 @@
 
 BLE `0687:01DE` 不进入 CHERRY 私有读取器。贡献者报告过系统百分比与 `180F/2A19`；蓝牙继续使用既有 Windows 系统属性路径，充电未知，系统查询时间不是设备采样时间。不新增 GATT 探针。此适配不包含键盘活动监听、打字后即时补读或全局后台轮询时钟变更。
 
-协议事实参考固定提交 [`zcmk123/cherry-battery-state@af82d4d98cbad872a586302ba44e6a6b75ba65f4`](https://github.com/zcmk123/cherry-battery-state/tree/af82d4d98cbad872a586302ba44e6a6b75ba65f4) 及 [贡献者 #482](https://github.com/HeyOkay/HaloBattery/issues/482)。本项目未复制上游应用代码。主管通过 GitHub contents API 核对该提交 README 声明 MIT License、根目录无独立 LICENSE；这不等于完整版权/许可文本核验通过。既有组件归属保留于 `THIRD_PARTY_NOTICES.md`。
+协议事实参考固定提交 [`zcmk123/cherry-battery-state@af82d4d98cbad872a586302ba44e6a6b75ba65f4`](https://github.com/zcmk123/cherry-battery-state/tree/af82d4d98cbad872a586302ba44e6a6b75ba65f4) 及 [贡献者 #482](https://github.com/wushuai0802/myfinder-device-battery/issues/482)。本项目未复制上游应用代码。主管通过 GitHub contents API 核对该提交 README 声明 MIT License、根目录无独立 LICENSE；这不等于完整版权/许可文本核验通过。既有组件归属保留于 `THIRD_PARTY_NOTICES.md`。

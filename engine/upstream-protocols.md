@@ -3615,7 +3615,7 @@ executed and no hardware or network was accessed for this implementation.
 
 Independent battery-only implementation based on protocol facts from
 `zcmk123/cherry-battery-state@af82d4d98cbad872a586302ba44e6a6b75ba65f4`
-and contributor [#482](https://github.com/HeyOkay/HaloBattery/issues/482),
+and contributor [#482](https://github.com/wushuai0802/myfinder-device-battery/issues/482),
 not copied upstream application code. The supervisor's contents-API check found
 an MIT License declaration in that commit's README and no standalone root
 LICENSE. This is not a complete copyright/permission-text verification.
