@@ -232,6 +232,32 @@ class DescriptorCacheTests(unittest.TestCase):
         self.hid.HidP_GetCaps.side_effect = caps
         self.hid.HidP_GetValueCaps.side_effect = fields
 
+    def test_cherry_exact_ids_are_descriptor_only_and_fail_closed(self):
+        for pid in (0x01E0, 0x01DE):
+            for inp, out in (((4,), (4,)), ((4, 5), (4,)), ((4,), (5,))):
+                with self.subTest(pid=pid, inp=inp, out=out):
+                    self.cache.clear()
+                    self.keyboard_descriptor(input_ids=inp, output_ids=out)
+                    self.identities[PATH_A] = (0x046A, pid)
+                    previous = self.hid.HidP_GetCaps.side_effect
+
+                    def caps(data, pointer):
+                        result = previous(data, pointer)
+                        value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                        value.page, value.usage, value.input, value.output = 0xFF1C, 0x0092, 64, 64
+                        return result
+
+                    self.hid.HidP_GetCaps.side_effect = caps
+                    info, = self.scan([PATH_A])
+                    self.assertEqual(info["input_report_sizes"], {"4": 64} if inp == (4,) else None)
+                    self.assertEqual(info["output_report_sizes"], {"4": 64} if out == (4,) else None)
+                    self.assertEqual(PATH_A in self.cache, inp == out == (4,))
+                    self.assertEqual(self.kernel.CreateFileW.call_args.args[1], 0)
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
     def dareu_descriptor(self, identity=(0x260D, 0x1074), collection=(0xFF02, 2)):
         self.identities[PATH_A] = identity
 

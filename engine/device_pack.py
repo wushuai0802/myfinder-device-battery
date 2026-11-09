@@ -25,7 +25,7 @@ BRAND_PROVIDERS = frozenset((
     "mchose_qhw_keyboard", "mchose_glw_keyboard",
     "mchose_by_keyboard",
     "moondrop",
-    "g3m", "eweadn", "eweadn_s9pro", "flydigi",
+    "g3m", "eweadn", "eweadn_s9pro", "flydigi", "cherry",
     "vgn_keyboard", "vgn_beiying",
     "vgn_dragonfly3", "ninjutso_legacy",
     "dareu",

@@ -11,6 +11,7 @@ static class MouseActivityTests {
     static void Check(bool value,string name){if(!value)throw new Exception("FAIL: "+name);checks++;}
     static MouseActivitySource Logitech(){return MouseActivitySource.FromUsbParent(@"\\?\HID#VID_046D&PID_C547&MI_00#7&demo&0&0000#{mouse}",@"USB\VID_046D&PID_C547\5&DEMO&0&2");}
     static MouseActivitySource Atk(){return MouseActivitySource.FromUsbParent(@"\\?\HID#VID_373B&PID_1278&MI_01#7&demo&0&0001#{mouse}",@"USB\VID_373B&PID_1278\SERIAL-A");}
+    static MouseActivitySource Cherry(){return MouseActivitySource.FromUsbParent(@"\\?\HID#VID_046A&PID_01E0&MI_00#keyboard",@"USB\VID_046A&PID_01E0\5&CHERRY&0&2",true);}
     sealed class ManualQueue {
         internal readonly Queue<Action> Actions=new Queue<Action>();
         internal int Posts;
@@ -30,7 +31,7 @@ static class MouseActivityTests {
             if(Headers.TryGetValue(input,out header)){type=header.Type;device=header.Device;return true;}
             type=0;device=EchoHandle?input:IntPtr.Zero;return EchoHandle;
         }
-        public MouseActivitySource Resolve(IntPtr device){Resolutions++;if(ThrowResolver)throw new InvalidOperationException("Injected metadata failure");if(Resolver!=null)return Resolver(device);MouseActivitySource value;return Sources.TryGetValue(device,out value)?value:null;}
+        public MouseActivitySource Resolve(IntPtr device,bool keyboard){Resolutions++;if(ThrowResolver)throw new InvalidOperationException("Injected metadata failure");if(Resolver!=null)return Resolver(device);MouseActivitySource value;return Sources.TryGetValue(device,out value)&&value!=null&&value.IsKeyboard==keyboard?value:null;}
         public bool Register(IntPtr target){Registrations++;Target=target;return true;}
         public void Unregister(){Unregistrations++;}
         public void Dispose(){Disposals++;}
@@ -72,7 +73,9 @@ static class MouseActivityTests {
     }
     static void NativeContract() {
         var registration=MouseActivityNative.RegistrationFor(new IntPtr(42),false);var remove=MouseActivityNative.RegistrationFor(new IntPtr(99),true);
-        Check(registration.UsagePage==1&&registration.Usage==2&&registration.Target==new IntPtr(42)&&registration.Flags==0x2100,"only the mouse TLC is registered for background input and device notifications");
+        Check(registration.UsagePage==1&&registration.Usage==2&&registration.Target==new IntPtr(42)&&registration.Flags==0x2100,"mouse TLC is registered for background input and device notifications");
+        var keyboard=MouseActivityNative.RegistrationFor(new IntPtr(42),false,6);var removeKeyboard=MouseActivityNative.RegistrationFor(IntPtr.Zero,true,6);
+        Check(keyboard.UsagePage==1&&keyboard.Usage==6&&keyboard.Flags==0x2100&&removeKeyboard.Usage==6&&removeKeyboard.Flags==1&&removeKeyboard.Target==IntPtr.Zero,"keyboard TLC uses the same background header-only registration and REMOVE contract");
         Check((registration.Flags&0x30)==0&&(registration.Flags&0x200)==0,"registration never suppresses legacy mouse messages or captures other windows");
         Check(remove.Flags==1&&remove.Target==IntPtr.Zero,"unregistration follows the required REMOVE and null-target contract");
         Check(Marshal.SizeOf(typeof(MouseActivityNative.RawHeader))==(IntPtr.Size==8?24:16)&&Marshal.OffsetOf(typeof(MouseActivityNative.RawHeader),"Device").ToInt32()==8,"RAWINPUTHEADER size and device offset follow native pointer width");
@@ -80,14 +83,28 @@ static class MouseActivityTests {
         Check(MouseActivityNative.HeaderCommand==0x10000005&&MouseActivityNative.DeviceNameCommand==0x20000007,"the native adapter asks for header and descriptor name rather than input payload");
         using(var f=new Fixture(true)) {
             Check(f.Listener.Registered,"registration state is observable without native diagnostics I/O");
-            f.Message(0x400,0);f.Map(1,10,1,Logitech());f.Message(MouseActivityListener.InputMessage,1);f.Map(2,0,0,Logitech());f.Message(MouseActivityListener.InputMessage,2);f.Message(MouseActivityListener.DeviceChangeMessage,10);
-            Check(f.Defaults==4&&f.Native.HeaderReads==2&&f.Native.Resolutions==0,"keyboard, zero-device and topology messages all reach normal default processing without a lookup");
+            f.Message(0x400,0);f.Map(1,10,2,Logitech());f.Message(MouseActivityListener.InputMessage,1);f.Map(2,0,0,Logitech());f.Message(MouseActivityListener.InputMessage,2);f.Message(MouseActivityListener.DeviceChangeMessage,10);
+            Check(f.Defaults==4&&f.Native.HeaderReads==2&&f.Native.Resolutions==0,"other HID, zero-device and topology messages all reach normal default processing without a lookup");
             Check(f.Listener.RawInputMessages==2&&f.Listener.MousePackets==0&&f.Listener.HeaderReadFailures==0,"diagnostics distinguish received messages from eligible mouse headers");
             f.Native.ThrowHeader=true;bool threw=false;try{f.Packet(1);}catch(InvalidOperationException){threw=true;}Check(threw&&f.Defaults==5,"default processing still runs if a packet reader fails");
             Check(f.Listener.RawInputMessages==3&&f.Listener.HeaderReadFailures==1&&f.Listener.MousePackets==0,"a failed header is counted without becoming mouse activity");
             f.Listener.Dispose();f.Listener.Dispose();Check(f.Native.Registrations==1&&f.Native.Target==new IntPtr(42)&&f.Native.Unregistrations==1&&f.Native.Disposals==1,"registered disposal unregisters exactly once and is idempotent");
             Check(!f.Listener.Registered,"registered state becomes false on disposal");
             int reads=f.Native.HeaderReads;f.Packet(1);Check(f.Native.HeaderReads==reads&&f.Defaults==6,"after disposal the listener ignores packets while preserving default processing");
+        }
+    }
+    static void KeyboardActivity() {
+        using(var f=new Fixture()) {
+            f.Map(1,10,1,Cherry());for(int i=0;i<1000;i++)f.Packet(1);f.ResolveAndDeliver();
+            Check(f.Listener.KeyboardPackets==1000&&f.Listener.MousePackets==0&&f.Native.Resolutions==1&&f.Delivered.Count==1&&f.Delivered[0].IsKeyboard,"a keyboard burst resolves its receiver once and coalesces without reading key payloads");
+            f.Now=500;f.Packet(1);f.ResolveAndDeliver();Check(f.Delivered.Count==2,"continued typing supplies bounded keyboard activity callbacks");
+        }
+        foreach(bool keyboardFirst in new[]{true,false})using(var f=new Fixture()) {
+            var keyboard=Cherry();var mouse=new MouseActivitySource(keyboard.PhysicalId,false,0x046A,0x01E0);
+            f.Map(1,10,1,keyboard);f.Map(2,11,0,mouse);
+            f.Packet(keyboardFirst?1:2);f.ResolveAndDeliver();
+            f.Now=500;f.Packet(keyboardFirst?2:1);f.ResolveAndDeliver();
+            Check(f.Delivered.Count==2&&f.Delivered[0].IsKeyboard==keyboardFirst&&f.Delivered[1].IsKeyboard!=keyboardFirst,"composite receiver input retains its actual type in either arrival order");
         }
     }
     static void CoalescingAndIsolation() {
@@ -156,7 +173,7 @@ static class MouseActivityTests {
         }
     }
     [STAThread] static int Main() {
-        try {Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);PhysicalIdentity();NativeContract();CoalescingAndIsolation();EpochAndDisposal();FailureAndBounds();HotPathBenchmark();Console.WriteLine("PASS "+checks+" mouse activity checks; injected raw headers, clock, metadata and dispatcher only, no native input registration or hardware access");return 0;}
+        try {Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);PhysicalIdentity();NativeContract();KeyboardActivity();CoalescingAndIsolation();EpochAndDisposal();FailureAndBounds();HotPathBenchmark();Console.WriteLine("PASS "+checks+" input activity checks; injected raw headers, clock, metadata and dispatcher only, no native input registration or hardware access");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
 }

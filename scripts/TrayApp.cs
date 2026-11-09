@@ -1099,7 +1099,7 @@ namespace AtkBatteryTray {
             if(source.IsNativeAtk)NativeMousePresent=true;
             DateTime now=activityClock();
             // Independent from refresh scheduling: a fresh reading makes Record return false.
-            if((activePhysicalId!=source.PhysicalId||activeNative!=source.IsNativeAtk)&&(activeSwitchedAt==DateTime.MinValue||(now-activeSwitchedAt).TotalSeconds>=3)) {
+            if(!source.IsKeyboard&&(activePhysicalId!=source.PhysicalId||activeNative!=source.IsNativeAtk)&&(activeSwitchedAt==DateTime.MinValue||(now-activeSwitchedAt).TotalSeconds>=3)) {
                 activePhysicalId=source.PhysicalId;activeNative=source.IsNativeAtk;activeSwitchedAt=now;
                 var pref=DeviceSettings.Current;
                 if(pref.TraySource=="active"||pref.TrayGroups.Exists(delegate(TrayGroup group){return group.Source=="active";}))UpdateIcon();
@@ -1114,7 +1114,7 @@ namespace AtkBatteryTray {
         bool FreshActivitySource(string physicalId,bool native){
             DateTime now=activityClock();
             if(native)return Current!=null&&String.IsNullOrEmpty(ErrorMessage)&&UiState.Recent(Current.TimestampUtc,now,90);
-            bool found=false;foreach(var device in WirelessDevices)if(device.PhysicalId==physicalId&&device.Kind=="mouse"){
+            bool found=false;foreach(var device in WirelessDevices)if(device.PhysicalId==physicalId&&(device.Kind=="mouse"||device.Kind=="keyboard")){
                 found=true;if(!device.Online||device.ConnectionState!="connected"||!device.Fresh||!device.Percent.HasValue||device.SourceQuality=="cached"||device.SourceQuality=="system_property"||!UiState.Recent(device.ConfirmedTime,now,90))return false;
             }
             return found;
@@ -1131,13 +1131,13 @@ namespace AtkBatteryTray {
         void CompleteNativeActivity(){
             var request=nativeActivityInFlight;if(request==null)return;nativeActivityInFlight=null;activityRefresh.Complete(request,FreshActivitySource(request.PhysicalId,true),false,activityClock());
         }
-        static bool HealthyPhysicalWithoutMouse(WirelessSnapshot snapshot,string physicalId){
+        static bool HealthyPhysicalWithoutInput(WirelessSnapshot snapshot,string physicalId){
             if(snapshot==null||!String.IsNullOrEmpty(snapshot.Error))return false;
-            foreach(var device in snapshot.Devices??new WirelessDevice[0])if(device.PhysicalId==physicalId&&device.Kind=="mouse")return false;
-            // A reader can have a mouse even when its card was suppressed.
+            foreach(var device in snapshot.Devices??new WirelessDevice[0])if(device.PhysicalId==physicalId&&(device.Kind=="mouse"||device.Kind=="keyboard"))return false;
+            // A reader can have an input device even when its card was suppressed.
             // Do not disable activity recovery based on presentation alone.
-            bool hiddenMouse=Array.Exists(snapshot.Suppressed??new SuppressedDevice[0],delegate(SuppressedDevice d){return d!=null&&d.Kind=="mouse";});
-            bool matched=false;foreach(var health in snapshot.Health??new ReaderHealth[0])if(health.PhysicalId==physicalId){matched=true;if(hiddenMouse&&health.DeviceCount>0||health.State!="ok"&&health.State!="unsupported"&&health.State!="no_devices")return false;}
+            bool hiddenInput=Array.Exists(snapshot.Suppressed??new SuppressedDevice[0],delegate(SuppressedDevice d){return d!=null&&(d.Kind=="mouse"||d.Kind=="keyboard");});
+            bool matched=false;foreach(var health in snapshot.Health??new ReaderHealth[0])if(health.PhysicalId==physicalId){matched=true;if(hiddenInput&&health.DeviceCount>0||health.State!="ok"&&health.State!="unsupported"&&health.State!="no_devices")return false;}
             return matched;
         }
         void ApplyWirelessRead(WirelessSnapshot snapshot,bool complete,bool physical){bool previous=applyingPhysicalSnapshot;applyingPhysicalSnapshot=physical;try{ApplyWireless(snapshot,complete);}finally{applyingPhysicalSnapshot=previous;}}
@@ -1203,7 +1203,7 @@ namespace AtkBatteryTray {
                     catch(Exception){snapshot=new WirelessSnapshot {Error="DPI控制结果未确认。",DpiResult=new WirelessDpiResult {DeviceId=request.DeviceId,TargetToken=request.TargetToken,RequestedDpi=request.Dpi,OutcomeUnknown=true,Error="DPI控制结果未确认。"}};}
                     if(disposed)return;
                     try{dispatch.BeginInvoke((MethodInvoker)delegate{
-                        if(disposed)return;genericBusy=0;genericTarget=null;wirelessDpiInFlight=null;genericChecked=DateTime.UtcNow;
+                        if(disposed)return;genericBusy=0;genericTarget=null;wirelessDpiInFlight=null;
                         if(request.Epoch==wirelessDpiEpoch){
                             lastWirelessDpiResult=snapshot.DpiResult;
                             ApplyWireless(snapshot,true);
@@ -1222,14 +1222,15 @@ namespace AtkBatteryTray {
             if(clearingHistory){genericQueued=true;genericQueuedTarget=null;return;}
             if(!genericWorker.Available){GenericError="请使用完整发行包以启用通用设备识别。";return;}
             if(genericBusy!=0){if(force){genericQueuedTarget=genericQueued&&genericQueuedTarget!=deviceId?null:deviceId;genericQueued=true;}return;}
-            if(!force&&(DateTime.UtcNow-genericChecked).TotalSeconds<(panelOpen?8:DeviceSettings.Current.BackgroundSeconds))return;
+            // The background timer sets the interval; gating from completion skips its next tick.
+            if(!force&&panelOpen&&(DateTime.UtcNow-genericChecked).TotalSeconds<8)return;
             genericBusy=1;genericTarget=deviceId;genericPhysicalTarget=physicalId;int epoch=historyGeneration;bool parkEmptyReaders=!panelOpen;var activity=genericActivityInFlight;
             ThreadPool.QueueUserWorkItem(delegate {
                 var snapshot=genericWorker.Poll(force,deviceId,delegate(WirelessSnapshot partial){if(disposed)return;try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed&&epoch==historyGeneration)ApplyWirelessRead(partial,false,physicalId!=null);});}catch(InvalidOperationException){}},parkEmptyReaders,physicalId);if(disposed)return;
                 try{dispatch.BeginInvoke((MethodInvoker)delegate {
-                    if(disposed)return;genericBusy=0;genericTarget=null;genericPhysicalTarget=null;genericChecked=DateTime.UtcNow;
+                    if(disposed)return;genericBusy=0;genericTarget=null;genericPhysicalTarget=null;if(deviceId==null&&physicalId==null)genericChecked=DateTime.UtcNow;
                     if(epoch==historyGeneration)ApplyWirelessRead(snapshot,true,physicalId!=null);
-                    if(activity!=null){genericActivityInFlight=null;activityRefresh.Complete(activity,FreshActivitySource(activity.PhysicalId,false),epoch==historyGeneration&&HealthyPhysicalWithoutMouse(snapshot,activity.PhysicalId),activityClock());}
+                    if(activity!=null){genericActivityInFlight=null;activityRefresh.Complete(activity,FreshActivitySource(activity.PhysicalId,false),epoch==historyGeneration&&HealthyPhysicalWithoutInput(snapshot,activity.PhysicalId),activityClock());}
                     UpdateIcon();ContinueWirelessQueue();
                 });}catch(InvalidOperationException){}
             });
@@ -1242,7 +1243,7 @@ namespace AtkBatteryTray {
                 GenericReady=true;GenericError=null;WirelessDevices=snapshot.Devices??new WirelessDevice[0];GenericHealth=snapshot.Health??new ReaderHealth[0];GenericFailureCount=0;GenericIdleCount=0;
                 if(snapshot.Unadapted!=null)unadaptedDevices=snapshot.Unadapted;
                 if(snapshot.Suppressed!=null)suppressedDevices=snapshot.Suppressed;
-                foreach(var device in WirelessDevices)if(device.Kind=="mouse")activityRefresh.ObserveMouse(device.PhysicalId);
+                foreach(var device in WirelessDevices)if(device.Kind=="mouse"||device.Kind=="keyboard")activityRefresh.ObserveInput(device.PhysicalId);
                 foreach(var health in GenericHealth)if(health.State=="unavailable"&&health.Reason=="no_measurement")GenericIdleCount++;else if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
                 GenericIdleSummary=GenericIdleCount>0&&GenericFailureCount==0?GenericIdleCount+" 台设备休眠中，动一下即可刷新":null;

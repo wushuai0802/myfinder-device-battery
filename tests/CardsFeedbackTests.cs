@@ -90,7 +90,7 @@ static class CardsFeedbackTests {
             Check(!owner.CanSetWirelessDpi(B,new string('a',64)),"hidden card cannot target DPI");
             Check(!(bool)Call(owner,"FreshActivitySource",B,false),"hidden connection remains eligible for activity refresh");
             snapshot.Health=new[]{new ReaderHealth {PhysicalId=B,Provider="logitech",State="ok",DeviceCount=1}};
-            var withoutMouse=typeof(TrayContext).GetMethod("HealthyPhysicalWithoutMouse",BindingFlags.Static|BindingFlags.NonPublic);
+            var withoutMouse=typeof(TrayContext).GetMethod("HealthyPhysicalWithoutInput",BindingFlags.Static|BindingFlags.NonPublic);
             Check(!(bool)withoutMouse.Invoke(null,new object[]{snapshot,B}),"first seen suppressed mouse is not marked permanently unsupported");
             Check(owner.DiagnosticSummary().Contains("已隐藏的重复连接")&&owner.DiagnosticSummary().Contains("Old Mouse"),"suppressed cards appear in diagnostics");
             Check(!owner.BuildStatusJson().Contains("Old Mouse")&&!owner.BuildStatusJson().Contains("suppressed"),"suppression stays out of status.json");

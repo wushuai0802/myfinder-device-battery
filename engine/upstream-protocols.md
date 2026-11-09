@@ -3611,6 +3611,22 @@ receive-only AST checks, persistent handles, latest queued values, silent
 history and descriptor-only topology discovery. No supplied evidence code was
 executed and no hardware or network was accessed for this implementation.
 
+### CHERRY MX 2.0S WL Pro
+
+Exact identities: USB `046A:01DE` / `MX 2.0S WL Pro`, receiver `046A:01E0` /
+`MX 2.0S Pro Dongle`, interface 1, collection `FF1C:0092`. Both directions
+must prove sole report ID `04`, 64 bytes. Request `04 20 00 1A 06` padded to
+64 bytes; matching replies carry percent at byte 8, status 0 at byte 7, and
+charging 0/1 at byte 9. Zero and other charging values are rejected.
+
+Protocol facts: [zcmk123/cherry-battery-state](https://github.com/zcmk123/cherry-battery-state/tree/af82d4d98cbad872a586302ba44e6a6b75ba65f4),
+whose README declares MIT. No application code copied; the implementation
+uses this project's existing bounded output/input HID reader. Local user
+tests on 2026-11-09 covered cable in/out and wired replies. BLE uses the
+existing Windows system-property reader; service 180F only exposed 2A19,
+with no charging characteristic. Detailed evidence and remaining gaps:
+[CHERRY adaptation](../docs/cherry-mx2-pro.md). Verification remains C.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

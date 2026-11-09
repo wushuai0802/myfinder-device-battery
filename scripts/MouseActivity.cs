@@ -13,17 +13,18 @@ using System.Windows.Forms;
 namespace AtkBatteryTray {
     public sealed class MouseActivitySource {
         readonly string physicalId;
-        readonly bool nativeAtk;
+        readonly bool nativeAtk,keyboard;
         readonly ushort vendorId,productId;
         public string PhysicalId {get{return physicalId;}}
         public bool IsNativeAtk {get{return nativeAtk;}}
+        public bool IsKeyboard {get{return keyboard;}}
         public ushort VendorId {get{return vendorId;}}
         public ushort ProductId {get{return productId;}}
-        internal MouseActivitySource(string physicalId,bool isNativeAtk,ushort vendorId,ushort productId) {
-            if(!Regex.IsMatch(physicalId??"",@"^device-[a-f0-9]{24}$")||vendorId==0||productId==0||isNativeAtk!=(vendorId==0x373b&&productId==0x1278))throw new ArgumentException("Unresolved mouse activity source.");
-            this.physicalId=physicalId;nativeAtk=isNativeAtk;this.vendorId=vendorId;this.productId=productId;
+        internal MouseActivitySource(string physicalId,bool isNativeAtk,ushort vendorId,ushort productId,bool isKeyboard=false) {
+            if(!Regex.IsMatch(physicalId??"",@"^device-[a-f0-9]{24}$")||vendorId==0||productId==0||isNativeAtk!=(!isKeyboard&&vendorId==0x373b&&productId==0x1278))throw new ArgumentException("Unresolved input activity source.");
+            this.physicalId=physicalId;nativeAtk=isNativeAtk;keyboard=isKeyboard;this.vendorId=vendorId;this.productId=productId;
         }
-        internal static MouseActivitySource FromUsbParent(string rawPath,string parentInstance) {
+        internal static MouseActivitySource FromUsbParent(string rawPath,string parentInstance,bool keyboard=false) {
             if(String.IsNullOrEmpty(rawPath)||String.IsNullOrEmpty(parentInstance)||rawPath.Length>32768||parentInstance.Length>4096)return null;
             string path=rawPath.ToLowerInvariant(),parent=parentInstance.ToLowerInvariant();
             if(!path.StartsWith(@"\\?\hid#",StringComparison.Ordinal)&&!path.StartsWith(@"\??\hid#",StringComparison.Ordinal))return null;
@@ -36,7 +37,7 @@ namespace AtkBatteryTray {
             ushort vendor=UInt16.Parse(usb.Groups[1].Value,NumberStyles.HexNumber,CultureInfo.InvariantCulture),product=UInt16.Parse(usb.Groups[2].Value,NumberStyles.HexNumber,CultureInfo.InvariantCulture);
             if(vendor==0||product==0)return null;
             string id;using(var sha=SHA256.Create())id="device-"+BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes("pnp:"+parent))).Replace("-","").ToLowerInvariant().Substring(0,24);
-            return new MouseActivitySource(id,vendor==0x373b&&product==0x1278,vendor,product);
+            return new MouseActivitySource(id,!keyboard&&vendor==0x373b&&product==0x1278,vendor,product,keyboard);
         }
     }
 
@@ -48,14 +49,14 @@ namespace AtkBatteryTray {
     }
     internal interface IMouseActivityNative:IDisposable {
         bool ReadHeader(IntPtr rawInput,out uint type,out IntPtr device);
-        MouseActivitySource Resolve(IntPtr device);
+        MouseActivitySource Resolve(IntPtr device,bool keyboard);
         bool Register(IntPtr window);
         void Unregister();
     }
 
     // Only the real TrayContext constructor creates the native registration.
     // The packet path uses a fixed header buffer, two bounded lookups and a
-    // monotonic guard. It neither reads mouse coordinates nor keyboard data.
+    // monotonic guard. It never reads coordinates, key codes or input payloads.
     internal sealed class MouseActivityListener:IDisposable {
         internal const int InputMessage=0x00ff,DeviceChangeMessage=0x00fe;
         internal const long CoalesceMilliseconds=500;
@@ -71,23 +72,25 @@ namespace AtkBatteryTray {
         readonly Queue<HandleEntry> unresolved=new Queue<HandleEntry>();
         ActivityWindow window;
         long epoch;
-        long rawInputMessages,mousePackets,headerReadFailures,resolvedSourceCount,unresolvedSourceCount;
+        long rawInputMessages,mousePackets,keyboardPackets,headerReadFailures,resolvedSourceCount,unresolvedSourceCount;
         bool disposed,resolverRunning,registered;
         internal bool Registered {get{lock(gate)return registered&&!disposed;}}
         internal long RawInputMessages {get{return Interlocked.Read(ref rawInputMessages);}}
         internal long MousePackets {get{return Interlocked.Read(ref mousePackets);}}
+        internal long KeyboardPackets {get{return Interlocked.Read(ref keyboardPackets);}}
         internal long HeaderReadFailures {get{return Interlocked.Read(ref headerReadFailures);}}
         internal long ResolvedSourceCount {get{return Interlocked.Read(ref resolvedSourceCount);}}
         internal long UnresolvedSourceCount {get{return Interlocked.Read(ref unresolvedSourceCount);}}
         sealed class HandleEntry {
-            internal readonly IntPtr Handle;internal readonly long Epoch;
+            internal readonly IntPtr Handle;internal readonly long Epoch;internal readonly bool Keyboard;
             internal MouseActivitySource Source;internal PhysicalEntry Physical;
-            internal HandleEntry(IntPtr handle,long epoch){Handle=handle;Epoch=epoch;}
+            internal HandleEntry(IntPtr handle,long epoch,bool keyboard){Handle=handle;Epoch=epoch;Keyboard=keyboard;}
         }
         sealed class PhysicalEntry {
             internal readonly MouseActivitySource Source;internal readonly long Epoch;internal readonly Action Deliver;
+            internal readonly string Key;
             internal bool Pending,HasAttempt;internal long LastAttempt;
-            internal PhysicalEntry(MouseActivityListener owner,MouseActivitySource source,long epoch){Source=source;Epoch=epoch;Deliver=delegate{owner.Deliver(this);};}
+            internal PhysicalEntry(MouseActivityListener owner,MouseActivitySource source,long epoch){Source=source;Epoch=epoch;Key=source.PhysicalId+(source.IsKeyboard?":keyboard":":mouse");Deliver=delegate{owner.Deliver(this);};}
         }
         static readonly WaitCallback RunWork=delegate(object state){((Action)state)();};
         static void Background(Action action){ThreadPool.QueueUserWorkItem(RunWork,action);}
@@ -118,16 +121,19 @@ namespace AtkBatteryTray {
                 uint type;IntPtr device;
                 bool valid;try{valid=native.ReadHeader(message.LParam,out type,out device);}catch{Interlocked.Increment(ref headerReadFailures);throw;}
                 if(!valid){Interlocked.Increment(ref headerReadFailures);return;}
-                if(type==0&&device!=IntPtr.Zero){Interlocked.Increment(ref mousePackets);Observe(device);}
+                if(device!=IntPtr.Zero&&(type==0||type==1)){
+                    if(type==0)Interlocked.Increment(ref mousePackets);else Interlocked.Increment(ref keyboardPackets);
+                    Observe(device,type==1);
+                }
             }finally {defaultProcedure(ref message);}
         }
-        void Observe(IntPtr device) {
+        void Observe(IntPtr device,bool keyboard) {
             Action notification=null;bool startResolver=false;
             lock(gate) {
                 if(disposed)return;HandleEntry entry;
                 if(!handles.TryGetValue(device,out entry)) {
                     if(handles.Count>=MaximumHandles)return;
-                    entry=new HandleEntry(device,epoch);handles.Add(device,entry);unresolved.Enqueue(entry);
+                    entry=new HandleEntry(device,epoch,keyboard);handles.Add(device,entry);unresolved.Enqueue(entry);
                     if(!resolverRunning){resolverRunning=true;startResolver=true;}
                 }else if(entry.Physical!=null)notification=Prepare(entry.Physical);
             }
@@ -146,15 +152,17 @@ namespace AtkBatteryTray {
         void ResolveQueued() {
             for(;;) {
                 HandleEntry entry;lock(gate){if(disposed||unresolved.Count==0){resolverRunning=false;return;}entry=unresolved.Dequeue();}
-                MouseActivitySource source=null;try{source=native.Resolve(entry.Handle);}catch(Exception){}
+                MouseActivitySource source=null;try{source=native.Resolve(entry.Handle,entry.Keyboard);}catch(Exception){}
                 if(source==null)Interlocked.Increment(ref unresolvedSourceCount);else Interlocked.Increment(ref resolvedSourceCount);
                 Action notification=null;
                 lock(gate) {
                     HandleEntry current;
                     if(disposed||entry.Epoch!=epoch||!handles.TryGetValue(entry.Handle,out current)||!Object.ReferenceEquals(entry,current))continue;
                     entry.Source=source;if(source==null)continue;
-                    PhysicalEntry group;
-                    if(!physical.TryGetValue(source.PhysicalId,out group)){group=new PhysicalEntry(this,source,epoch);physical.Add(source.PhysicalId,group);}
+                    // A composite receiver can expose mouse and keyboard input.
+                    // Keep their immutable types distinct for active-mouse selection.
+                    PhysicalEntry group;string key=source.PhysicalId+(source.IsKeyboard?":keyboard":":mouse");
+                    if(!physical.TryGetValue(key,out group)){group=new PhysicalEntry(this,source,epoch);physical.Add(key,group);}
                     else if(group.Source.VendorId!=source.VendorId||group.Source.ProductId!=source.ProductId)continue;
                     entry.Physical=group;notification=Prepare(group);
                 }
@@ -165,7 +173,7 @@ namespace AtkBatteryTray {
             MouseActivitySource source;
             lock(gate) {
                 PhysicalEntry current;
-                if(disposed||entry.Epoch!=epoch||!physical.TryGetValue(entry.Source.PhysicalId,out current)||!Object.ReferenceEquals(entry,current))return;
+                if(disposed||entry.Epoch!=epoch||!physical.TryGetValue(entry.Key,out current)||!Object.ReferenceEquals(entry,current))return;
                 entry.Pending=false;long now=clock();if(now<entry.LastAttempt)return;entry.LastAttempt=now;source=entry.Source;
             }
             callback(source);
@@ -197,25 +205,25 @@ namespace AtkBatteryTray {
         [DllImport("setupapi.dll")] static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
         [DllImport("cfgmgr32.dll")] static extern uint CM_Get_Parent(out uint parent,uint instance,uint flags);
         [DllImport("cfgmgr32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)] static extern uint CM_Get_Device_IDW(uint instance,StringBuilder buffer,uint count,uint flags);
-        internal static Registration RegistrationFor(IntPtr target,bool remove){return new Registration {UsagePage=1,Usage=2,Flags=remove?Remove:InputSink|DeviceNotify,Target=remove?IntPtr.Zero:target};}
+        internal static Registration RegistrationFor(IntPtr target,bool remove,ushort usage=2){return new Registration {UsagePage=1,Usage=usage,Flags=remove?Remove:InputSink|DeviceNotify,Target=remove?IntPtr.Zero:target};}
         public bool Register(IntPtr target) {
-            lock(registrationGate){if(registrationOwner!=null||target==IntPtr.Zero)return false;var value=RegistrationFor(target,false);if(!RegisterRawInputDevices(new[]{value},1,(uint)Marshal.SizeOf(typeof(Registration))))return false;registrationOwner=this;return true;}
+            lock(registrationGate){if(registrationOwner!=null||target==IntPtr.Zero)return false;var values=new[]{RegistrationFor(target,false),RegistrationFor(target,false,6)};if(!RegisterRawInputDevices(values,2,(uint)Marshal.SizeOf(typeof(Registration))))return false;registrationOwner=this;return true;}
         }
-        public void Unregister(){lock(registrationGate){if(!Object.ReferenceEquals(registrationOwner,this))return;var value=RegistrationFor(IntPtr.Zero,true);RegisterRawInputDevices(new[]{value},1,(uint)Marshal.SizeOf(typeof(Registration)));registrationOwner=null;}}
+        public void Unregister(){lock(registrationGate){if(!Object.ReferenceEquals(registrationOwner,this))return;var values=new[]{RegistrationFor(IntPtr.Zero,true),RegistrationFor(IntPtr.Zero,true,6)};RegisterRawInputDevices(values,2,(uint)Marshal.SizeOf(typeof(Registration)));registrationOwner=null;}}
         public bool ReadHeader(IntPtr input,out uint type,out IntPtr device) {
             type=UInt32.MaxValue;device=IntPtr.Zero;if(header==IntPtr.Zero||input==IntPtr.Zero)return false;
             uint size=HeaderSize;uint copied=GetRawInputData(input,HeaderCommand,header,ref size,HeaderSize);
             if(copied!=HeaderSize||size<HeaderSize||(uint)Marshal.ReadInt32(header,4)<HeaderSize)return false;
             type=(uint)Marshal.ReadInt32(header);device=Marshal.ReadIntPtr(header,8);return true;
         }
-        public MouseActivitySource Resolve(IntPtr device) {
+        public MouseActivitySource Resolve(IntPtr device,bool keyboard) {
             if(device==IntPtr.Zero)return null;uint count=0;
             if(GetRawInputDeviceInfoW(device,DeviceNameCommand,IntPtr.Zero,ref count)==UInt32.MaxValue||count<1||count>32768)return null;
             var path=new StringBuilder((int)count+1);uint capacity=(uint)path.Capacity;
             if(GetRawInputDeviceInfoW(device,DeviceNameCommand,path,ref capacity)==UInt32.MaxValue||capacity>path.Capacity)return null;
             string name=path.ToString();if(name.StartsWith(@"\??\",StringComparison.Ordinal))name=@"\\?\"+name.Substring(4);
             if(!name.StartsWith(@"\\?\HID#",StringComparison.OrdinalIgnoreCase))return null;
-            string parent=UsbParent(name);return parent==null?null:MouseActivitySource.FromUsbParent(name,parent);
+            string parent=UsbParent(name);return parent==null?null:MouseActivitySource.FromUsbParent(name,parent,keyboard);
         }
         static string UsbParent(string path) {
             IntPtr set=SetupDiCreateDeviceInfoList(IntPtr.Zero,IntPtr.Zero);if(set==IntPtr.Zero||set==new IntPtr(-1))return null;

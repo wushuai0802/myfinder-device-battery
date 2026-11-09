@@ -38,7 +38,7 @@ static class ActivityRefreshTests {
         policy.Record(PhysB,false,false,now.AddSeconds(2));var second=policy.Take(now.AddSeconds(2),delegate{return false;},delegate{return true;});
         Check(second!=null&&second.PhysicalId==PhysB,"one source's cooldown never suppresses another receiver");
         policy.Complete(second,false,true,now.AddSeconds(2));policy.Record(PhysB,false,false,now.AddDays(1));Check(policy.Pending==0&&policy.UnsupportedSkipped==1,"healthy unsupported sources stay suppressed until topology changes");
-        policy.TopologyChanged();policy.ObserveMouse(PhysA);policy.Record(PhysA,false,false,now);first=policy.Take(now,delegate{return false;},delegate{return true;});policy.Complete(first,false,true,now);
+        policy.TopologyChanged();policy.ObserveInput(PhysA);policy.Record(PhysA,false,false,now);first=policy.Take(now,delegate{return false;},delegate{return true;});policy.Complete(first,false,true,now);
         Check(policy.Pending==1,"a receiver previously seen with a mouse is not made unsupported when a sleeping slot disappears");
         policy.TopologyChanged();Check(policy.Pending==0,"topology invalidates old pending work and negative knowledge");
         policy.Record(PhysB,false,false,now);first=policy.Take(now,delegate{return true;},delegate{return true;});Check(first==null&&policy.Pending==0,"a timer or an existing read can satisfy queued activity without duplicate I/O");
@@ -88,10 +88,11 @@ static class ActivityRefreshTests {
                 Set(context,"busy",0);Call(context,"DrainActivityRefresh");Check(context.NativeMousePresent,"dispatch reasserts exact-source presence after an intervening full snapshot hides the receiver");
                 Pump(delegate{return !context.IsRefreshing&&Policy(context).Pending==0;});
                 Check(nativeReads==reads+1&&Requests(folder).Length==total&&context.Current.TimestampUtc==now,"stale ATK activity coalesces into exactly one real native read without generic traffic");
-                context.WirelessDevices[0].Fresh=false;context.WirelessDevices[1].Fresh=false;var nativeDpi=context.Dpi;reads=nativeReads;context.NativeMousePresent=true;
+                context.WirelessDevices[0].Fresh=false;context.WirelessDevices[1].Fresh=false;var nativeDpi=context.Dpi;reads=nativeReads;context.NativeMousePresent=true;var globalChecked=(DateTime)Field(context,"genericChecked");
                 context.HandleMouseActivity(Source(PhysA));context.HandleMouseActivity(Source(PhysB));for(int i=0;i<100;i++)context.HandleMouseActivity(Source(PhysA));
                 Pump(delegate{return !context.GenericScanning&&Policy(context).Pending==0;});
                 Check(PhysicalRequests(folder,PhysA)==1&&PhysicalRequests(folder,PhysB)==1&&nativeReads==reads,"two active sources serialize receiver-specific reads without reading the other/native receiver");
+                Check((DateTime)Field(context,"genericChecked")==globalChecked,"targeted activity never postpones the full-device poll clock");
                 Check(context.NativeMousePresent,"a receiver-scoped response cannot overwrite native presence using its old global metadata");
                 Check(Object.ReferenceEquals(nativeDpi,context.Dpi)&&context.WirelessDevices[0].Fresh&&context.WirelessDevices[1].Fresh,"activity never selects DPI or changes the native DPI model");
                 now=now.AddSeconds(6);var first=context.WirelessDevices[0];var stale=GenericBatteryWorker.Parse(Frame(9,(int)Field(context,"wirelessDpiGeneration"),Device(IdB,PhysA,false))).Devices[0];context.WirelessDevices=new[]{first,stale};
@@ -100,10 +101,31 @@ static class ActivityRefreshTests {
                 Check(PhysicalRequests(folder)==before&&!((System.Windows.Forms.Timer)Field(context,"activityTimer")).Enabled,"session lock suppresses new activity and retry scheduling");
                 Set(context,"sessionLocked",false);context.HandleMouseActivity(Source(PhysA));Pump(delegate{return !context.GenericScanning&&Policy(context).Pending==0;});
                 Check(PhysicalRequests(folder)==before+1,"activity can refresh the stale receiver after unlocking");
-                reads=nativeReads;total=Requests(folder).Length;Set(context,"genericChecked",DateTime.MinValue);var timer=(System.Windows.Forms.Timer)Field(context,"refresh");Call(timer,"OnTick",EventArgs.Empty);
+                reads=nativeReads;total=Requests(folder).Length;Set(context,"genericChecked",DateTime.UtcNow);var timer=(System.Windows.Forms.Timer)Field(context,"refresh");Call(timer,"OnTick",EventArgs.Empty);
                 Pump(delegate{return !context.IsRefreshing&&!context.GenericScanning;});Check(nativeReads==reads+1&&Requests(folder).Length==total+1,"the original background timer remains an independent read fallback");
                 reads=nativeReads;total=Requests(folder).Length;context.ExitThread();context.HandleMouseActivity(Source(PhysNative,true));context.HandleMouseActivity(Source(PhysA));Call(context,"DrainActivityRefresh");
                 Check(nativeReads==reads&&Requests(folder).Length==total,"disposed context rejects late activity and deferred work");context=null;
+            }finally{if(context!=null)context.ExitThread();}
+        }
+    }
+    static void KeyboardWake(string root){
+        string folder=MakeWorker(root,"keyboard");using(var worker=new GenericBatteryWorker(folder,false,2500)){
+            TrayContext context=null;DateTime now=DateTime.UtcNow;
+            try{
+                context=Context(worker,delegate{return new MouseSnapshot {Dpi=NativeDpi(),Battery=new BatteryReading {Percent=60,TimestampUtc=now}};},delegate{return now;});
+                Pump(delegate{return !context.GenericScanning&&!context.IsRefreshing;});
+                var keyboard=new MouseActivitySource(PhysA,false,0x046A,0x01E0,true);object active=Field(context,"activePhysicalId");
+                Check(!(bool)Field(context,"panelOpen")&&context.WirelessDevices[0].Kind=="keyboard"&&!(bool)Call(context,"FreshActivitySource",PhysA,false),"sleeping keyboard needs a new device reply with the panel closed");
+                context.HandleMouseActivity(keyboard);Pump(delegate{return !context.GenericScanning&&Policy(context).Pending==0;});
+                Check(PhysicalRequests(folder,PhysA)==1&&context.WirelessDevices[0].Fresh&&(bool)Call(context,"FreshActivitySource",PhysA,false),"a keyboard wake refreshes its receiver without opening the panel");
+                Check(Object.Equals(active,Field(context,"activePhysicalId")),"typing does not replace the active-mouse tray selection");
+                for(int i=0;i<100;i++)context.HandleMouseActivity(keyboard);
+                Check(PhysicalRequests(folder,PhysA)==1&&Policy(context).FreshSkipped==100,"continued typing with a fresh keyboard causes no extra battery queries");
+                now=now.AddSeconds(6);context.WirelessDevices[0].Fresh=false;context.WirelessDevices[0].ConnectionState="unconfirmed";
+                context.HandleMouseActivity(keyboard);Pump(delegate{return !context.GenericScanning&&Policy(context).Pending==0;});
+                Check(PhysicalRequests(folder,PhysA)==2&&context.WirelessDevices[0].Fresh,"typing recovers an unavailable keyboard while the panel stays closed");
+                var empty=new WirelessSnapshot {Devices=new WirelessDevice[0],Health=new[]{new ReaderHealth {PhysicalId=PhysA,State="ok",DeviceCount=1}},Suppressed=new[]{new SuppressedDevice {Kind="keyboard"}}};
+                Check(!(bool)typeof(TrayContext).GetMethod("HealthyPhysicalWithoutInput",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{empty,PhysA}),"a suppressed keyboard card never marks its receiver unsupported");
             }finally{if(context!=null)context.ExitThread();}
         }
     }
@@ -155,6 +177,7 @@ static class ActivityRefreshTests {
                 string devices=(unsupported||unavailable?"":Device(IdA,PhysA,mode.StartsWith("stale")?a:false,"mouse",dpi)+",")+Device(IdB,PhysB,b);
                 if(forget)devices=Device(IdA,PhysA,false,"keyboard")+","+Device(IdB,PhysB,b);
                 if(mode.StartsWith("dpi"))devices=Device(IdA,PhysA,a,"mouse",dpi)+","+Device(IdB,PhysB,b);
+                if(mode.StartsWith("keyboard"))devices=Device(IdA,PhysA,a,"keyboard");
                 string state=unavailable?"unavailable":unsupported?"unsupported":"ok";string health=physical.Length==0?"":Health(physical,state);
                 string frame=Frame(id,generation,devices,health,result);if(physical.Length>0)frame=frame.Replace("\"nativeMousePresent\":true","\"nativeMousePresent\":false");output.WriteLine(frame);
             }
@@ -165,7 +188,7 @@ static class ActivityRefreshTests {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.NonPublic|BindingFlags.Static);object previous=cached.GetValue(null);
         try{
             DeviceSettings.UseTransientConfiguration(new AudioBindings {RememberReadings=false});string root=Path.Combine(Path.GetFullPath(args.Length>0?args[0]:"tmp"),"activity-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
-            Policy();Transport(root);Controller(root);BoundedFailures(root);DpiBusy(root);
+            Policy();Transport(root);Controller(root);KeyboardWake(root);BoundedFailures(root);DpiBusy(root);
             Console.WriteLine("PASS "+checks+" activity refresh policy/physical IPC/deferred/DPI-safety checks; no live input or HID access");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{cached.SetValue(null,previous);}

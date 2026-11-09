@@ -24,6 +24,13 @@ Upstream protocol references and model verification notes are retained in
 `engine/upstream-credits.md`. A protocol implementation or a listed USB ID does
 not by itself establish hardware validation.
 
+The CHERRY battery-query facts are referenced from
+[zcmk123/cherry-battery-state](https://github.com/zcmk123/cherry-battery-state),
+commit `af82d4d98cbad872a586302ba44e6a6b75ba65f4` (README declares MIT).
+The provider uses this project's existing HID reader; no upstream application
+code was copied. Local USB, receiver and Bluetooth evidence is recorded in
+`docs/cherry-mx2-pro.md`.
+
 The Windows distribution bundles the official CPython embeddable runtime and
 the `hidapi` Python wheel, with their original license files. Versions, original
 download URLs and SHA256 hashes are pinned in `engine/dependencies.lock.json`.
