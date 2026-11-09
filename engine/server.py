@@ -32,6 +32,7 @@ PROVIDERS = (
     ("eweadn_s9pro", "EweadnS9ProProvider"),
     ("vgn_keyboard", "VgnKeyboardProvider"),
     ("cherry", "CherryProvider"),
+    ("lingbao", "LingbaoProvider"),
     ("vgn_beiying", "VgnBeiyingProvider"),
     ("vgn_dragonfly3", "VgnDragonfly3Provider"),
     ("ninjutso_legacy", "NinjutsoLegacyProvider"),
@@ -66,6 +67,7 @@ PROVIDER_VIDS = {
     "eweadn_s9pro": (0x372E,),
     "vgn_keyboard": (0x320F,),
     "cherry": (0x046A,),
+    "lingbao": (0x088D,),
     "vgn_beiying": (0x258A, 0x391D),
     "vgn_dragonfly3": (0x391D,), "ninjutso_legacy": (0x1915,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
@@ -92,7 +94,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -123,6 +125,19 @@ CHERRY_DIAGNOSTICS = {
     "no valid reply within deadline/read limit; connection unknown": "no valid battery reply",
     "HID handle close failed": "HID handle close failed",
 }
+LINGBAO_DIAGNOSTICS = {
+    "HID handle close failed": "HID handle close failed",
+    "HID backend unavailable": "HID backend unavailable",
+    "enumeration failed": "enumeration failed",
+    "physical parent unproven; not opened": "physical parent unproven",
+    "collection missing or ambiguous; not opened": "collection missing or ambiguous",
+    "identity/interface unverified; not opened": "identity/interface unverified",
+    "collection path unproven; not opened": "collection path unproven",
+    "Feature 0F/33 unproven; not opened": "Feature 0F/33 unproven",
+    "battery I/O failed": "battery I/O failed",
+    "charging placeholder; no new reading": "charging placeholder; no new reading",
+    "invalid battery reply; no new reading": "invalid battery reply; no new reading",
+}
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -137,6 +152,8 @@ def reader_diagnostics(provider):
                  for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
     if provider.name == "fa6x_passive":
         lines = [line for line in lines if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
+    if provider.name == "lingbao":
+        lines = [line for line in lines if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
     if provider.name == "mchose_headset":
         # Expose only fixed firmware reasons, never this legacy reader's
         # raw I/O exceptions or packet log.
@@ -209,7 +226,7 @@ def suppress_bluetooth_xinput(devices):
 def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
-        if (a.get("provider") == "cherry"
+        if (a.get("provider") in ("cherry", "lingbao")
                 or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
@@ -751,7 +768,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry", "lingbao") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -813,6 +830,12 @@ class BatteryEngine:
                 diagnostics = [line for line in diagnostics if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
                 if not measured and diagnostics:
                     self.health[reader_key]["diagnosticSummary"] = FA6X_DIAGNOSTICS[diagnostics[0]]
+            if name == "lingbao":
+                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
+                for reason, summary in LINGBAO_DIAGNOSTICS.items():
+                    if reason in diagnostics:
+                        self.health[reader_key]["diagnosticSummary"] = summary
+                        break
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
             if name == "mchose" and not measured:
                 # V3-only protocol-owned failures outrank the identity/proof notes.

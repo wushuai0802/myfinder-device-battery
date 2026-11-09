@@ -293,6 +293,15 @@ def discover(paths, excluded=(), *, full=False):
                         {"4": 64} if ids[direction + "_report_ids"] == (4,) and maximum == 64 else None)
                 caps_complete = all(info[key] is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x088D, 0x052F, 0xFF00, 0x0001)
+                    and info["interface_number"] == 1 and info["product_string"] == "Wireless-Receiver"):
+                # #171: metadata only, access 0. The collection maximum alone
+                # cannot authorize a Feature fetch; use the full existing proof.
+                from battery_hid import byte_report_sizes
+                info.update(feature_report_length=caps.feature,
+                            feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True))
+                caps_complete = (caps.feature == 33 and info["feature_report_sizes"] == {"15": 33})
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3837, 0x1018, 0xFF01, 0x0001),
                     (0x3837, 0x1014, 0xFF01, 0x0001),

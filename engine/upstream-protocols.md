@@ -3680,6 +3680,51 @@ properties with unknown charging, no private query, new GATT probe or name-based
 USB/BLE merging. Keyboard activity hooks and global polling-clock changes are
 excluded. Details: `docs/cherry-mx2-pro.md`.
 
+### Lingbao M1 Pro (088D:052F)
+
+Independent project implementation from contributor evidence in this repository's
+[#171](https://github.com/wushuai0802/myfinder-device-battery/issues/171), with related
+request [#95](https://github.com/wushuai0802/myfinder-device-battery/issues/95).
+Neither issue is a HaloBattery protocol reference. No vendor application code is
+copied. Grade C: contributor captures and observations, not maintainer hardware
+acceptance.
+
+Only `088D:052F`, exact product name `Wireless-Receiver`, MI_01 and a unique
+FF00:0001 collection within a proven USB parent. Nonempty path/parent and no
+collection fallback are mandatory. Discovery uses access 0, the existing complete
+`byte_report_sizes` caps proof for Feature (report type 2), and fixed-usage arrays
+only within that exact gate. Maximum 33 plus the sole map `{"15":33}` are required;
+unknown/partial/failed/mismatching proofs stay uncached. The raw HID Report
+Descriptor is missing; a maximum alone never authorizes a query or a fallback.
+
+Each eligible query performs only one `get_feature_report(0x0F, 33)` and closes
+in finally. No SET_FEATURE, Output, initialization, configuration, pairing,
+firmware or DPI operation. Replies must be exactly 33 integer bytes, report ID
+0F, bytes7..10=`M536`, bytes13..14=`LX`; bools and out-of-range bytes are refused.
+No unproven header constants or byte21 semantics are imposed.
+
+The two complete contributor frames both carry byte18/19=`41/00` (65%, flag0),
+differing only at byte4. Separately, the contributor's table reports wireless
+65→68→66 and frozen 100 when charging flag1. The latter scenarios in tests are
+synthetic mutations, not full captures. First candidate accepts flag0 and 1..100
+only; flag1, including 100, yields no new reading with the fixed charging
+placeholder reason. Unknown flags and zero are refused. Charging and mouse RF
+connection remain unknown, and rejected reads cannot refresh history timestamps.
+
+The original Device Descriptor has zero-based offsets14/15/16=`01/02/00`,
+consistent with no serial number; the contributor's field table mixed offsets.
+Configuration A0 has remote-wakeup bit5 set despite the accompanying wording.
+These corrections do not replace or invalidate the Feature bytes.
+
+RF freshness/receiver caching, sleep/off behavior, cold start/reconnect, official
+software coexistence, firmware variants and actual device sample time remain
+unverified. Existing schema timestamps for accepted replies are host query
+evidence, not device measurement-clock or RF-online proof. Fixed diagnostics
+reach child/manager/compact health without adding real errors/backoff. Independent
+parents stay separate; pack disable rules block manager and child queries. No
+downloadable private profile is added. Complete literal frames, synthetic-test
+distinctions and acceptance limits: `docs/lingbao-m1pro.md`.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

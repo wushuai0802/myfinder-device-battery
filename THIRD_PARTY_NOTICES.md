@@ -34,6 +34,15 @@ no standalone root LICENSE file. This declaration is not verification of the
 complete copyright and permission text. The reference does not assert that
 an upstream license-text review or maintainer hardware acceptance has passed.
 
+The Lingbao M1 Pro battery-only provider is an independent project implementation
+based on user-contributed protocol frames and observations in this repository's
+[#171](https://github.com/wushuai0802/myfinder-device-battery/issues/171), with related
+request [#95](https://github.com/wushuai0802/myfinder-device-battery/issues/95).
+No vendor application implementation is copied, and these issue references do
+not originate from HaloBattery. Contributor evidence remains grade C pending
+maintainer hardware acceptance; complete raw frames and synthetic table-based
+test variants are distinguished in `docs/lingbao-m1pro.md`.
+
 The Windows distribution bundles the official CPython embeddable runtime and
 the `hidapi` Python wheel, with their original license files. Versions, original
 download URLs and SHA256 hashes are pinned in `engine/dependencies.lock.json`.
