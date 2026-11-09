@@ -3725,6 +3725,66 @@ parents stay separate; pack disable rules block manager and child queries. No
 downloadable private profile is added. Complete literal frames, synthetic-test
 distinctions and acceptance limits: `docs/lingbao-m1pro.md`.
 
+### ZhuAudio ZG4 (3654:5055)
+
+Independent grade-C, read-only candidate based on official Z HUB static
+protocol facts and #459's raw descriptor. Official reference:
+<https://drive.zhuaudio.cn/web/main.dart.js>, SHA256
+`04bee7a730669e758dd3e01df12e1823c18f262b2be4df43879595b6413bab3d`.
+Source anchors `cxF/cxE/cxD`, `bP2/cvR/cvQ`, `aaX.bnv/bmb/a7I`,
+`afq.bGW`, `pw`, `lU.JQ/b29/b3O` and `c_m` were reread as inert text;
+no vendor code or device probe was executed. No vendor JS is bundled or copied
+as application code. This supersedes the unstarted FF02/CD selection proposal.
+
+Only `3654:5055`, full product name `ZhuAudio ZG4`, MI04 / `FF05:0001`,
+with a unique exact FF05 collection on a proven parent, may query. Runtime
+byte-array caps must prove precisely Input `CE/64` and Output `CD/64`,
+including the Windows ID slot. #459's descriptor binds these different IDs;
+the other two FF02 collections (unnumbered/64 data and C0/63 data) are never
+protocol-opened or used as fallbacks. Fixed-Usage Data,Array caps opt-in is
+limited to that exact VID/PID/FF05; shared parsers, native exclusions and cache
+semantics are unchanged. Failed APIs/partial counts are uncached and retried
+by existing discovery. No new raw-descriptor I/O fallback is added.
+
+The only requests are zero-parameter dongle `02` (`CD 07 AA 5A CC 80 51 01 02`
+plus 55 zeros; ARC-shaped CRC16 initial zero/poly A001), followed only on a
+CRC-proven online state by `FE` property `07` (`CD EE 80 00 06 00 FF seq 02 FE 07 AA`
+plus 52 zeros). Complete matching-seq `FF ... AA` replies, direct or assembled
+from strict EE/EA fragments, accept cmd `07` or `FE/07`, value length at least
+three, low-seven-bit level 1..100 and bit7 charging. Unknown trailing value
+bytes are not interpreted. ACKs are received only; there is no added host ACK,
+arbitrary command passthrough, Feature, setting, reset, pairing or OTA path.
+
+Both phases share a two-second/32-read deadline and a 1024-byte assembly bound.
+Short writes/errors end the current query without an immediate retry. The
+per-call pending guard is always released in finally; status-only failures have
+no FF transaction and consume no sequence. Reserve a per-parent 8-bit sequence
+only when preparing to attempt FE, before its write. An incomplete FE attempt
+(including short write, exception, timeout, ACK-only or incomplete battery frame)
+retires that sequence for this instance. Later polls may use a different free
+sequence; late retired-seq battery/ACK frames neither measure nor free it.
+No drain, reopen, silence or temporary inventory absence cancels reservations.
+Only a complete current-seq valid battery reply releases its reservation.
+Successful sequences may wrap 1..255,0,1; only all 256 unresolved FE sequences
+block further opens, with `ZG4 all 256 FE sequences unresolved` diagnostics.
+Successful reads have no 256-attempt limit. Old duplicate frames after a
+successful wrap remain indistinguishable by sequence alone. Worker
+reconstruction/instance or cache eviction/cold start can lose this local state;
+matching seq cannot prove device sample age or lifetime reply ownership, and
+cross-session freshness/coexistence remain unverified. Global worker/poll
+budgets and Bluetooth timing are unchanged. Finally-close behavior, fixed
+<=48-character diagnostics, manager/child pack disables and separate same-name
+cards across independent parents use existing engine boundaries.
+
+No valid battery frame preserves history without renewing confirmation or
+measurement times and clears charging knowledge. The official UI can retain
+old batteryInfo; 100% is not proof of a fresh round. The user's idle eight-second
+silence is not proof that unsolicited reports never occur. All test replies are
+synthetic, not hardware captures. No actual target replies, firmware seq echo,
+charging/sleep/cold-start/reconnect or official-software coexistence were
+validated. Sources, exact byte/line anchors, descriptor attachment hash and
+remaining hardware acceptance are recorded in `docs/zhuaudio-zg4.md`.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

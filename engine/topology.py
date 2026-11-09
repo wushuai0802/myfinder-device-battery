@@ -302,6 +302,19 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(feature_report_length=caps.feature,
                             feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True))
                 caps_complete = (caps.feature == 33 and info["feature_report_sizes"] == {"15": 33})
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x3654, 0x5055, 0xFF05, 0x0001):
+                # #459's fixed-Usage Data,Array, CE input / CD output. This
+                # exact opt-in never touches either FF02 or reads HID reports.
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
+                for direction in ("input", "output"):
+                    info[direction + "_report_proof"] = (
+                        "caps" if info[direction + "_report_sizes"] is not None else "failed")
+                # Failed APIs/partial counts and incompatible IDs stay uncached.
+                caps_complete = (caps.input == caps.output == 64
+                                 and info["input_report_sizes"] == {"206": 64}
+                                 and info["output_report_sizes"] == {"205": 64})
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3837, 0x1018, 0xFF01, 0x0001),
                     (0x3837, 0x1014, 0xFF01, 0x0001),
