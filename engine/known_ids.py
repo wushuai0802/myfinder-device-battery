@@ -47,6 +47,7 @@ TABLES = {
     "eweadn_s9pro": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
     "cherry": ("PIDS",),
+    "lingbao": ("PIDS",),
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
     "fa6x_passive": ("PIDS",),

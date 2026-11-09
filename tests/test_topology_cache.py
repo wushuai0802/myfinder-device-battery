@@ -1182,6 +1182,176 @@ class DescriptorCacheTests(unittest.TestCase):
         self.kernel.CreateFileW.assert_called_once()
 
 
+class LingbaoDescriptorTests(unittest.TestCase):
+    """Exact #171 Feature proof using full fake caps and access-zero handles."""
+    def setUp(self):
+        self.case = DescriptorCacheTests()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        raw = patch.object(topology, "_read_report_descriptor")
+        self.raw = raw.start()
+        self.addCleanup(raw.stop)
+
+    def configure(self, *, identity=(0x088D, 0x052F), collection=(0xFF00, 1),
+                  product="Wireless-Receiver", path=PATH_A, maximum=33,
+                  buttons=None, values=(), counts=None):
+        self.case.cache.clear()
+        self.path = path
+        self.case.identities[path] = identity
+        self.case.products[path] = product
+        buttons = ((dict(report=15, usage_min=1, usage_max=1, report_count=32),)
+                   if buttons is None else buttons)
+
+        def caps(data, pointer):
+            if self.case.handles[data.value] in self.case.fail_caps:
+                return 0
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.feature = maximum
+            value.fb, value.fv = (counts or {}).get("fb", len(buttons)), (counts or {}).get("fv", len(values))
+            return 0x00110000
+
+        def fields(definitions, report_type, fields, length, data):
+            self.assertEqual(report_type, 2)
+            for field, definition in zip(fields, definitions):
+                for key, value in definition.items():
+                    setattr(field, key, value)
+            return 0x00110000
+
+        self.case.hid.HidP_GetCaps.side_effect = caps
+        self.case.hid.HidP_GetButtonCaps.side_effect = lambda *args: fields(buttons, *args)
+        self.case.hid.HidP_GetValueCaps.side_effect = lambda *args: fields(values, *args)
+        self.case.hid.HidP_GetButtonCaps.reset_mock()
+        self.case.hid.HidP_GetValueCaps.reset_mock()
+
+    def scan(self):
+        result, = self.case.scan([self.path])
+        self.assertTrue(all(call.args[1] == 0 for call in self.case.kernel.CreateFileW.call_args_list))
+        self.case.hid.HidD_GetFeature.assert_not_called()
+        self.case.hid.HidD_SetFeature.assert_not_called()
+        self.case.kernel.ReadFile.assert_not_called()
+        self.case.kernel.WriteFile.assert_not_called()
+        self.raw.assert_not_called()
+        self.assertEqual(self.case.kernel.CloseHandle.call_count, self.case.kernel.CreateFileW.call_count)
+        self.assertLessEqual(self.case.hid.HidD_FreePreparsedData.call_count, self.case.kernel.CreateFileW.call_count)
+        return result
+
+    def assert_refused(self, info):
+        import test_lingbao as F
+        with F.fixture([F.CAPTURES[0]], [info]) as bus:
+            self.assertEqual(F.P().poll(), [])
+            self.assertEqual(bus.calls, [])
+
+    def test_lingbao_fixed_usage_and_value_arrays_prove_exact_report_and_cache(self):
+        cases = [dict(), dict(buttons=(), values=(dict(report=15, bits=8, count=32),)),
+                 dict(buttons=(dict(report=15, is_range=1, usage_min=0, usage_max=255),))]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                self.configure(**changes)
+                before = self.case.kernel.CreateFileW.call_count
+                first = self.scan()
+                self.assertEqual(first["feature_report_length"], 33)
+                self.assertEqual(first["feature_report_sizes"], {"15": 33})
+                self.assertEqual(self.scan(), first)
+                self.assertEqual(self.case.kernel.CreateFileW.call_count, before + 1)
+                self.assertIn(self.path, self.case.cache)
+                calls = (self.case.hid.HidP_GetButtonCaps.call_args_list
+                         + self.case.hid.HidP_GetValueCaps.call_args_list)
+                self.assertTrue(calls)
+                self.assertEqual({call.args[0] for call in calls}, {2})
+                self.assertTrue(all(len(call.args[1]) == 1 for call in calls))
+                import test_lingbao as F
+                with F.fixture([F.CAPTURES[0]], [first]) as bus:
+                    status, = F.P().poll()
+                    self.assertEqual(status.level, 65)
+                    self.assertEqual(bus.feature_reads, [(first["path"], 15, 33)])
+
+    def test_lingbao_unknown_partial_and_failed_feature_caps_retry_then_recover(self):
+        for mode in ("button", "value"):
+            for failure in ("status", "short", "extra"):
+                with self.subTest(mode=mode, failure=failure):
+                    changes = {} if mode == "button" else dict(buttons=(), values=(dict(report=15, bits=8, count=32),))
+                    self.configure(**changes)
+                    getter = getattr(self.case.hid, "HidP_GetButtonCaps" if mode == "button" else "HidP_GetValueCaps")
+                    original = getter.side_effect
+
+                    def fail(report_type, fields, length, data):
+                        result = original(report_type, fields, length, data)
+                        if failure == "status":
+                            return 0
+                        ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0 if failure == "short" else 2
+                        return result
+
+                    getter.side_effect = fail
+                    before = self.case.kernel.CreateFileW.call_count
+                    failed = self.scan()
+                    self.assertIsNone(failed["feature_report_sizes"])
+                    self.assertNotIn(self.path, self.case.cache)
+                    self.assert_refused(failed)
+                    getter.side_effect = original
+                    self.assertEqual(self.scan()["feature_report_sizes"], {"15": 33})
+                    self.assertIn(self.path, self.case.cache)
+                    self.assertEqual(self.case.kernel.CreateFileW.call_count, before + 2)
+
+    def test_lingbao_complete_fixed_usage_field_validation_is_not_bypassed(self):
+        base = dict(report=15, usage_min=1, usage_max=1, report_count=32)
+        for field, value in (("alias", 1), ("field", 1), ("field", 2), ("is_range", 1),
+                             ("usage_max", 2), ("report_count", 31), ("report_count", 33)):
+            with self.subTest(field=field, value=value):
+                self.configure(buttons=(dict(base, **{field: value}),))
+                info = self.scan()
+                self.assertIsNone(info["feature_report_sizes"])
+                self.assertNotIn(self.path, self.case.cache)
+                self.assert_refused(info)
+
+    def test_lingbao_value_fields_wrong_report_maps_counts_and_maxima_never_authorize(self):
+        cases = [dict(buttons=(), values=(dict(report=15, bits=7, count=32),)),
+                 dict(buttons=(), values=(dict(report=15, bits=8, count=32, alias=1),)),
+                 dict(buttons=(), values=(dict(report=15, bits=8, count=0),)),
+                 dict(buttons=(), values=(dict(report=14, bits=8, count=32),)),
+                 dict(buttons=(), values=(dict(report=15, bits=8, count=32), dict(report=16, bits=8, count=1))),
+                 dict(buttons=(), values=(dict(report=15, bits=8, count=32), dict(report=15, bits=8, count=1))),
+                 dict(values=(dict(report=15, bits=8, count=32),)),
+                 dict(counts={"fb": 2}), dict(counts={"fb": 0}),
+                 dict(buttons=(), counts={"fv": 33})]
+        cases += [dict(maximum=n) for n in (0, 32, 34, 64)]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                self.configure(**changes)
+                info = self.scan()
+                self.assertNotIn(self.path, self.case.cache)
+                self.assert_refused(info)
+
+    def test_lingbao_metadata_proof_does_not_expand_identity_product_interface_or_usage(self):
+        cases = [dict(identity=(0x088D, 0x0530)), dict(identity=(0x089D, 0x052F)),
+                 dict(identity=(0x1234, 0x5678)), dict(collection=(1, 1)),
+                 dict(collection=(0xFF00, 2)), dict(product="Wireless-Receiver "),
+                 dict(product=""), dict(path=PATH_A.replace("&mi_01", "&mi_02")),
+                 dict(path=PATH_A.replace("&mi_01", ""))]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                self.configure(**changes)
+                info = self.scan()
+                self.assertNotIn("feature_report_sizes", info)
+                self.assertNotIn("feature_report_length", info)
+                self.case.hid.HidP_GetButtonCaps.assert_not_called()
+                self.case.hid.HidP_GetValueCaps.assert_not_called()
+                self.assert_refused(info)
+
+    def test_lingbao_preparsed_and_caps_failure_stay_uncached_and_recover(self):
+        for name in ("fail_preparsed", "fail_caps"):
+            with self.subTest(name=name):
+                self.configure()
+                failure = getattr(self.case, name)
+                failure.add(self.path)
+                info = self.scan()
+                self.assertNotIn("feature_report_sizes", info)
+                self.assertNotIn(self.path, self.case.cache)
+                self.assert_refused(info)
+                failure.clear()
+                self.assertEqual(self.scan()["feature_report_sizes"], {"15": 33})
+
+
 class Fa09DescriptorFallbackTests(unittest.TestCase):
     """Exact #476 transport proof using fake DLLs and metadata-only HID."""
     descriptor = bytes.fromhex(
