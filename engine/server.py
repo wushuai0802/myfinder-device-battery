@@ -31,6 +31,7 @@ PROVIDERS = (
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
     ("eweadn_s9pro", "EweadnS9ProProvider"),
     ("vgn_keyboard", "VgnKeyboardProvider"),
+    ("cherry", "CherryProvider"),
     ("vgn_beiying", "VgnBeiyingProvider"),
     ("vgn_dragonfly3", "VgnDragonfly3Provider"),
     ("ninjutso_legacy", "NinjutsoLegacyProvider"),
@@ -64,6 +65,7 @@ PROVIDER_VIDS = {
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "eweadn_s9pro": (0x372E,),
     "vgn_keyboard": (0x320F,),
+    "cherry": (0x046A,),
     "vgn_beiying": (0x258A, 0x391D),
     "vgn_dragonfly3": (0x391D,), "ninjutso_legacy": (0x1915,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
@@ -90,7 +92,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -107,6 +109,20 @@ FA6X_DIAGNOSTICS = {
     "legacy FA65 release unproven; not opened": "legacy FA65 release unproven",
     "legacy FA65 collection path unproven; not opened": "legacy FA65 collection path unproven",
 }
+CHERRY_DIAGNOSTICS = {
+    "report IDs/lengths unknown or incompatible: nothing sent": "report sizes unproven",
+    "single report 04/64 not proven: nothing sent": "single report 04/64 unproven",
+    "unverified CHERRY interface/product: nothing sent": "CHERRY interface/product unverified",
+    "physical parent unresolved; uniqueness unknown: nothing sent": "physical parent unresolved",
+    "missing or ambiguous eligible collection: nothing sent": "collection missing or ambiguous",
+    "enumeration failed: nothing sent": "enumeration failed",
+    "battery I/O failed; connection unknown": "battery I/O failed",
+    "short/failed battery query write; no retry": "battery query write short/failed",
+    "rejected input report length": "input report length rejected",
+    "rejected battery reply": "battery reply rejected",
+    "no valid reply within deadline/read limit; connection unknown": "no valid battery reply",
+    "HID handle close failed": "HID handle close failed",
+}
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
@@ -116,6 +132,9 @@ def reader_diagnostics(provider):
     if provider.name not in READER_DIAGNOSTICS:
         return []
     lines = provider.reader_diagnostics() if provider.name in ("mchose", "pulsar") else provider.diagnostics()
+    if provider.name == "cherry":
+        lines = [reason for line in lines if isinstance(line, str)
+                 for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
     if provider.name == "fa6x_passive":
         lines = [line for line in lines if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
     if provider.name == "mchose_headset":
@@ -190,7 +209,8 @@ def suppress_bluetooth_xinput(devices):
 def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
-        if (a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
+        if (a.get("provider") == "cherry"
+                or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
                 or a.get("percent") is None or b.get("percent") is None
@@ -731,7 +751,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -781,6 +801,14 @@ class BatteryEngine:
                                    "reason": "" if measured else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
         if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
+            if name == "cherry":
+                diagnostics = [reason for line in diagnostics if isinstance(line, str)
+                               for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
+                if not measured:
+                    for reason, summary in CHERRY_DIAGNOSTICS.items():
+                        if reason in diagnostics:
+                            self.health[reader_key]["diagnosticSummary"] = summary
+                            break
             if name == "fa6x_passive":
                 diagnostics = [line for line in diagnostics if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
                 if not measured and diagnostics:

@@ -282,6 +282,17 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(keyboard_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_ids", "output_report_ids"))
+            if caps_complete and attrs.vendor == 0x046A and attrs.product in (0x01E0, 0x01DE) and (
+                    caps.page, caps.usage) == (0xFF1C, 0x0092):
+                from mchose_keyboard_hid import keyboard_caps
+                ids = keyboard_caps(hid, data, caps)
+                # Only a unique ID gives the collection maximum an exact owner.
+                # Include every button/value cap in each direction; no raw fallback.
+                for direction, maximum in (("input", caps.input), ("output", caps.output)):
+                    info[direction + "_report_sizes"] = (
+                        {"4": 64} if ids[direction + "_report_ids"] == (4,) and maximum == 64 else None)
+                caps_complete = all(info[key] is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3837, 0x1018, 0xFF01, 0x0001),
                     (0x3837, 0x1014, 0xFF01, 0x0001),

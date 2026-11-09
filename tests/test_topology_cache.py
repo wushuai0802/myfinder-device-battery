@@ -208,6 +208,148 @@ class DescriptorCacheTests(unittest.TestCase):
         self.scan([PATH_A])
         self.hid.HidP_GetValueCaps.assert_not_called()
 
+    def cherry_descriptor(self, *, identity=(0x046A, 0x01E0), collection=(0xFF1C, 0x0092),
+                          input_buttons=(4,), input_values=(), output_buttons=(4,), output_values=(),
+                          lengths=(64, 64), counts=None):
+        self.identities[PATH_A] = identity
+        self.products[PATH_A] = "MX 2.0S Pro Dongle" if identity[1] == 0x01E0 else "MX 2.0S WL Pro"
+        reports = {"ib": input_buttons, "iv": input_values, "ob": output_buttons, "ov": output_values}
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.input, value.output = lengths
+            for field, ids in reports.items():
+                setattr(value, field, (counts or {}).get(field, len(ids)))
+            return 0x00110000
+
+        def fields(kind, report_type, values, length, data):
+            key = ("i" if report_type == 0 else "o") + kind
+            for value, report_id in zip(values, reports[key]):
+                value.report = report_id
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetButtonCaps.side_effect = lambda *args: fields("b", *args)
+        self.hid.HidP_GetValueCaps.side_effect = lambda *args: fields("v", *args)
+
+    def assert_cherry_descriptor_only(self):
+        self.assertTrue(all(call.args[1] == 0 for call in self.kernel.CreateFileW.call_args_list))
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+        self.assertEqual(self.kernel.CloseHandle.call_count, self.kernel.CreateFileW.call_count)
+        self.assertEqual(self.hid.HidD_FreePreparsedData.call_count, self.kernel.CreateFileW.call_count)
+
+    def test_cherry_both_pids_all_button_reports_are_proven_and_cached_without_io(self):
+        for pid in (0x01E0, 0x01DE):
+            with self.subTest(pid=pid), patch.object(topology, "_read_report_descriptor") as raw:
+                self.cache.clear()
+                self.cherry_descriptor(identity=(0x046A, pid))
+                before = self.kernel.CreateFileW.call_count
+                first, = self.scan([PATH_A])
+                second, = self.scan([PATH_A])
+                self.assertEqual(first, second)
+                self.assertEqual(first["input_report_sizes"], {"4": 64})
+                self.assertEqual(first["output_report_sizes"], {"4": 64})
+                self.assertEqual(self.kernel.CreateFileW.call_count, before + 1)
+                self.assertEqual({call.args[0] for call in self.hid.HidP_GetButtonCaps.call_args_list}, {0, 1})
+                self.hid.HidP_GetValueCaps.assert_not_called()
+                raw.assert_not_called()
+        self.assert_cherry_descriptor_only()
+
+    def test_cherry_mixed_button_value_caps_enumerate_every_field_in_both_directions(self):
+        self.cherry_descriptor(input_buttons=(4, 4), input_values=(4, 4),
+                               output_buttons=(4, 4), output_values=(4, 4))
+        first, = self.scan([PATH_A])
+        self.assertEqual(first["input_report_sizes"], {"4": 64})
+        self.assertEqual(first["output_report_sizes"], {"4": 64})
+        for getter in (self.hid.HidP_GetButtonCaps, self.hid.HidP_GetValueCaps):
+            self.assertEqual({call.args[0] for call in getter.call_args_list}, {0, 1})
+            self.assertTrue(all(len(call.args[1]) == 2 for call in getter.call_args_list))
+        self.assert_cherry_descriptor_only()
+
+    def test_cherry_multiple_or_wrong_ids_and_wrong_maxima_never_prove_or_cache(self):
+        cases = [dict(input_buttons=(4, 5)), dict(output_buttons=(4, 5)),
+                 dict(input_buttons=(5,)), dict(output_buttons=(5,)),
+                 dict(input_values=(5,)), dict(output_values=(5,))]
+        cases += [dict(lengths=lengths) for lengths in ((63, 64), (65, 64), (64, 63), (64, 65))]
+        for changes in cases:
+            with self.subTest(changes=changes), patch.object(topology, "_read_report_descriptor") as raw:
+                self.cache.clear()
+                self.cherry_descriptor(**changes)
+                info, = self.scan([PATH_A])
+                self.assertTrue(info["input_report_sizes"] is None or info["output_report_sizes"] is None)
+                self.assertNotIn(PATH_A, self.cache)
+                raw.assert_not_called()
+        self.assert_cherry_descriptor_only()
+
+    def test_cherry_each_direction_button_value_api_failure_or_short_count_retries_and_recovers(self):
+        for name in ("HidP_GetButtonCaps", "HidP_GetValueCaps"):
+            for direction in (0, 1):
+                for failure in ("status", "short"):
+                    with self.subTest(name=name, direction=direction, failure=failure):
+                        self.cache.clear()
+                        self.cherry_descriptor(input_values=(4,), output_values=(4,))
+                        getter = getattr(self.hid, name)
+                        original = getter.side_effect
+
+                        def fail(report_type, values, length, data):
+                            result = original(report_type, values, length, data)
+                            if report_type == direction:
+                                if failure == "status":
+                                    return 0
+                                ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0
+                            return result
+
+                        getter.side_effect = fail
+                        before = self.kernel.CreateFileW.call_count
+                        info, = self.scan([PATH_A])
+                        key = ("input" if direction == 0 else "output") + "_report_sizes"
+                        self.assertIsNone(info[key])
+                        self.assertNotIn(PATH_A, self.cache)
+                        getter.side_effect = original
+                        recovered, = self.scan([PATH_A])
+                        self.assertEqual(recovered[key], {"4": 64})
+                        self.assertIn(PATH_A, self.cache)
+                        self.assertEqual(self.kernel.CreateFileW.call_count, before + 2)
+        self.assert_cherry_descriptor_only()
+
+    def test_cherry_zero_or_over_512_caps_stay_unproven_without_partial_api_guess(self):
+        for direction in ("i", "o"):
+            for count in (0, 513):
+                with self.subTest(direction=direction, count=count):
+                    self.cache.clear()
+                    self.hid.HidP_GetButtonCaps.reset_mock()
+                    self.hid.HidP_GetValueCaps.reset_mock()
+                    self.cherry_descriptor(counts={direction + "b": count})
+                    info, = self.scan([PATH_A])
+                    self.assertIsNone(info[("input" if direction == "i" else "output") + "_report_sizes"])
+                    self.assertNotIn(PATH_A, self.cache)
+                    self.assertNotIn(0 if direction == "i" else 1,
+                                     [call.args[0] for call in self.hid.HidP_GetButtonCaps.call_args_list])
+                    self.hid.HidP_GetValueCaps.assert_not_called()
+        self.assert_cherry_descriptor_only()
+
+    def test_cherry_caps_proof_does_not_expand_vid_pid_usage_or_ble_and_keeps_native_excluded(self):
+        cases = [dict(identity=(0x0687, 0x01DE)), dict(identity=(0x1234, 0x01E0)),
+                 dict(identity=(0x046A, 0xFFFF)), dict(collection=(1, 0x0092)),
+                 dict(collection=(0xFF1C, 1))]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                self.cache.clear()
+                self.cherry_descriptor(**changes)
+                info, = self.scan([PATH_A])
+                self.assertNotIn("input_report_sizes", info)
+                self.assertNotIn("output_report_sizes", info)
+                self.hid.HidP_GetButtonCaps.assert_not_called()
+                self.hid.HidP_GetValueCaps.assert_not_called()
+        self.assert_cherry_descriptor_only()
+        before = self.kernel.CreateFileW.call_count
+        self.assertEqual(self.scan([r"\\?\hid#vid_373b&pid_1278&mi_01#native"]), [])
+        self.assertEqual(self.kernel.CreateFileW.call_count, before)
+
     def test_full_topology_change_reopens_all_selected_paths(self):
         self.scan([PATH_A])
         self.kernel.CreateFileW.reset_mock()

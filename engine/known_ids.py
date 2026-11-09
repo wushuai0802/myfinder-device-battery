@@ -46,6 +46,7 @@ TABLES = {
     "g3m": ("PIDS",), "eweadn": ("PIDS",), "flydigi": ("PIDS",),
     "eweadn_s9pro": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
+    "cherry": ("PIDS",),
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
     "fa6x_passive": ("PIDS",),

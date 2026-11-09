@@ -3642,6 +3642,44 @@ receive-only AST checks, persistent handles, latest queued values, silent
 history and descriptor-only topology discovery. No supplied evidence code was
 executed and no hardware or network was accessed for this implementation.
 
+### CHERRY MX 2.0S WL Pro (046A:01E0 / 01DE)
+
+Independent battery-only implementation based on protocol facts from
+`zcmk123/cherry-battery-state@af82d4d98cbad872a586302ba44e6a6b75ba65f4`
+and contributor [#482](https://github.com/wushuai0802/myfinder-device-battery/issues/482),
+not copied upstream application code. The supervisor's contents-API check found
+an MIT License declaration in that commit's README and no standalone root
+LICENSE. This is not a complete copyright/permission-text verification.
+
+Only USB `046A:01E0` (`MX 2.0S Pro Dongle`) and `046A:01DE`
+(`MX 2.0S WL Pro`), MI_01, FF1C:0092, one eligible collection per proven
+physical parent. Each direction must enumerate all button/value caps and prove
+only ID 04 with collection maximum 64 bytes. Discovery is metadata-only,
+access 0, with failed proof uncached and no new raw-descriptor fallback.
+The single request is `04 20 00 1A 06` plus 59 zeros; the 64-byte reply must
+have that five-byte prefix, byte7=0, byte8=1..100 and byte9=0/1
+(not charging/charging). Echoes, zero and unknown enums produce no new reading.
+No handshake, settings, pairing, firmware or DPI operations are included.
+
+Grade C: #482's contributor reported 55% unplugged, 58% charging, 63% wired,
+and later 59% matching the official UI. Earlier 60–61% versus official 64%
+after a connection change leaves a transient 3–4 percentage-point discrepancy
+of unknown cause; the screenshots are not simultaneous. These are contributor
+comparisons, not maintainer hardware acceptance or complete raw captures.
+Synthetic tests pad reported prefixes with zero tails and do not inherit the
+contributor's historical test counts or build claims.
+
+Zero/low battery, full-charge termination, sleep, cold start/reconnect,
+firmware differences, official-driver coexistence, multiple keyboards and
+simultaneous transports remain unverified. There is no transaction/sample-time
+proof to distinguish otherwise valid stale frames. Existing query/round/slot
+budgets and history expiry remain unchanged; silence retains old confirmation
+times and clears charging knowledge. Independent parents remain separate even
+at similar percentages. BLE `0687:01DE` stays on existing Windows system
+properties with unknown charging, no private query, new GATT probe or name-based
+USB/BLE merging. Keyboard activity hooks and global polling-clock changes are
+excluded. Details: `docs/cherry-mx2-pro.md`.
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver
