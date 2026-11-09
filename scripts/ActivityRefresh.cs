@@ -13,7 +13,7 @@ namespace AtkBatteryTray {
     // reading, online flag, measurement timestamp, tray preference or DPI queue.
     internal sealed class ActivityRefreshPolicy:IDisposable {
         sealed class Source {
-            internal string Id;internal bool Native,Pending,InFlight,Retry,RetryAvailable,Unsupported,SeenMouse,Deferred;
+            internal string Id;internal bool Native,Pending,InFlight,Retry,RetryAvailable,Unsupported,SeenInput,Deferred;
             internal DateTime Due,Cooldown;internal int Failures,Epoch;
         }
         readonly Dictionary<string,Source> sources=new Dictionary<string,Source>(StringComparer.Ordinal);
@@ -21,7 +21,7 @@ namespace AtkBatteryTray {
         internal long Events,FreshSkipped,Coalesced,CooldownSkipped,UnsupportedSkipped,Reads,Retries,Failures,Deferred;
         static bool Valid(string id){return Regex.IsMatch(id??"",@"^device-[a-f0-9]{24}$");}
         Source Get(string id,bool native){Source state;if(!sources.TryGetValue(id,out state)&&sources.Count<256){state=new Source {Id=id,Native=native,Epoch=epoch};sources.Add(id,state);}return state;}
-        internal void ObserveMouse(string id){if(disposed||!Valid(id))return;var state=Get(id,false);if(state!=null){state.SeenMouse=true;state.Unsupported=false;}}
+        internal void ObserveInput(string id){if(disposed||!Valid(id))return;var state=Get(id,false);if(state!=null){state.SeenInput=true;state.Unsupported=false;}}
         internal bool Record(string id,bool native,bool fresh,DateTime now){
             if(disposed||!Valid(id))return false;Events++;
             Source state;sources.TryGetValue(id,out state);
@@ -44,11 +44,11 @@ namespace AtkBatteryTray {
             }
             return null;
         }
-        internal void Complete(ActivityRefreshRequest request,bool fresh,bool healthyWithoutMouse,DateTime now){
+        internal void Complete(ActivityRefreshRequest request,bool fresh,bool healthyWithoutInput,DateTime now){
             Source state;if(disposed||request==null||!sources.TryGetValue(request.PhysicalId,out state)||state.Epoch!=request.Epoch)return;
             state.InFlight=false;
             if(fresh){state.Failures=0;state.RetryAvailable=false;state.Cooldown=now.AddSeconds(5);return;}
-            if(!state.Native&&healthyWithoutMouse&&!state.SeenMouse){state.Unsupported=true;state.Pending=false;state.RetryAvailable=false;return;}
+            if(!state.Native&&healthyWithoutInput&&!state.SeenInput){state.Unsupported=true;state.Pending=false;state.RetryAvailable=false;return;}
             Failures++;
             if(state.RetryAvailable){state.RetryAvailable=false;state.Pending=true;state.Retry=true;state.Due=now.AddMilliseconds(1500);state.Deferred=false;return;}
             state.Failures=Math.Min(6,state.Failures+1);state.Cooldown=now.AddSeconds(Math.Min(300,15*Math.Pow(2,state.Failures-1)));state.Pending=false;

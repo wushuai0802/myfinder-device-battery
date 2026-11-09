@@ -326,6 +326,17 @@ def discover(paths, excluded=(), *, full=False):
                                      for key in ("input_report_sizes", "output_report_sizes"))
                                  or (not any((caps.input, caps.output, caps.ib, caps.iv, caps.ob, caps.ov))
                                      and info["feature_report_sizes"] is not None))
+            # CHERRY declares the payload as buttons: only one ID per
+            # direction makes the 64-byte collection maximum unambiguous.
+            if caps_complete and attrs.vendor == 0x046A and attrs.product in (0x01E0, 0x01DE) and (
+                    caps.page, caps.usage) == (0xFF1C, 0x0092):
+                from mchose_keyboard_hid import keyboard_caps
+                ids = keyboard_caps(hid, data, caps)
+                for direction, maximum in (("input", caps.input), ("output", caps.output)):
+                    info[direction + "_report_sizes"] = (
+                        {"4": 64} if ids[direction + "_report_ids"] == (4,) and maximum == 64 else None)
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             # #305's V9 PRO sibling: prove the read-only AA firmware report
             # before the provider may open it. Max length alone is not proof.
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
