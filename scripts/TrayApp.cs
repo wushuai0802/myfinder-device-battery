@@ -103,6 +103,12 @@ namespace AtkBatteryTray {
         int hoverAction=-1,pressedAction=-1;
         PopupControl pressedControl;
         PopupPage pressedPage;
+        bool pinnedDesktop;
+        bool pinnedLoaded;
+        Point pinnedPoint;
+        bool draggingPanel;
+        Point dragStartScreen;
+        Point dragPanelStart;
         bool draggingVolume;
         bool volumeCollapsed;
         string volumeEndpoint;
@@ -155,6 +161,7 @@ namespace AtkBatteryTray {
             MouseCaptureChanged+=delegate {if(!Capture){CancelPointerInteraction();Invalidate();}};
             MouseDown+=delegate(object sender,MouseEventArgs e) {
                 if(e.Button!=MouseButtons.Left||closing)return;
+                if(pinnedDesktop){dragStartScreen=PointToScreen(e.Location);dragPanelStart=Location;draggingPanel=false;}
                 keyboardFocusVisible=false;HidePointerTip();
                 CancelPointerInteraction(false);
                 pressedControl=PopupPages.Hit(ControlsForPage(),PanelPoint(e.Location));pressedPage=navigation.Page;
@@ -164,6 +171,7 @@ namespace AtkBatteryTray {
             };
             MouseUp+=delegate(object sender,MouseEventArgs e) {
                 if(e.Button!=MouseButtons.Left||closing)return;
+                if(draggingPanel){draggingPanel=false;pinnedPoint=Location;anchor=new Point(pinnedPoint.X+Width/2,pinnedPoint.Y+Height/2);SavePinnedPoint();CancelPointerInteraction();Invalidate();return;}
                 var target=PopupPages.Hit(ControlsForPage(),PanelPoint(e.Location));
                 var pressed=pressedControl;var page=pressedPage;bool wasDragging=draggingVolume;
                 int value=navigation.VolumePreview;string endpoint=volumeEndpoint;
@@ -176,6 +184,18 @@ namespace AtkBatteryTray {
                 Invalidate();
             };
             MouseMove+=delegate(object sender,MouseEventArgs e) {
+                if(pinnedDesktop&&!draggingVolume&&e.Button==MouseButtons.Left){
+                    var screenPoint=PointToScreen(e.Location);
+                    int dx=screenPoint.X-dragStartScreen.X,dy=screenPoint.Y-dragStartScreen.Y;
+                    if(draggingPanel||Math.Abs(dx)+Math.Abs(dy)>4){
+                        draggingPanel=true;
+                        pinnedPoint=ClampToScreen(new Point(dragPanelStart.X+dx,dragPanelStart.Y+dy));
+                        anchor=new Point(pinnedPoint.X+Width/2,pinnedPoint.Y+Height/2);
+                        animation.Stop();
+                        Location=pinnedPoint;
+                        return;
+                    }
+                }
                 var point=PanelPoint(e.Location);
                 if(draggingVolume&&pressedControl!=null){navigation.VolumePreview=PopupPages.VolumeAt(pressedControl.Rect,point.X);Invalidate();return;}
                 var controls=ControlsForPage();var target=PopupPages.Hit(controls,point);int next=target==null?-1:target.Id;
@@ -193,6 +213,50 @@ namespace AtkBatteryTray {
                 if(navigation.Page!=PopupPage.Main){navigation.Offset=Math.Max(0,navigation.Offset+(e.Delta<0?1:-1));UpdateLayoutSize();Invalidate();}
                 else if(navigation.Page==PopupPage.Main&&owner.UseWirelessLayout){navigation.DeviceScroll=Math.Max(0,navigation.DeviceScroll+(e.Delta<0?1:-1));UpdateLayoutSize();Invalidate();}
             };
+            LoadPinnedPoint();
+        }
+        static string PinPath {get{return System.IO.Path.Combine(DeviceSettings.DataDirectory,"panel-pinned.txt");}}
+        Point ClampToScreen(Point p) {
+            var screen=Screen.FromPoint(p).WorkingArea;
+            int w=Math.Max(1,Width),h=Math.Max(1,Height);
+            int x=Math.Max(screen.Left,Math.Min(p.X,screen.Right-w));
+            int y=Math.Max(screen.Top,Math.Min(p.Y,screen.Bottom-h));
+            return new Point(x,y);
+        }
+        void LoadPinnedPoint() {
+            pinnedLoaded=true;
+            try {
+                if(!System.IO.File.Exists(PinPath))return;
+                var parts=System.IO.File.ReadAllText(PinPath).Split(',');
+                int x,y;
+                if(parts.Length>=2&&Int32.TryParse(parts[0].Trim(),out x)&&Int32.TryParse(parts[1].Trim(),out y))pinnedPoint=new Point(x,y);
+                if(parts.Length>=3)pinnedDesktop=parts[2].Trim()=="1";
+            } catch(Exception){}
+            if(pinnedDesktop){pinnedLoaded=true;TopMost=true;}
+        }
+        void SavePinnedPoint() {
+            try {
+                System.IO.Directory.CreateDirectory(DeviceSettings.DataDirectory);
+                System.IO.File.WriteAllText(PinPath,pinnedPoint.X+","+pinnedPoint.Y+","+(pinnedDesktop?"1":"0"));
+            } catch(Exception){}
+        }
+        public bool PinnedDesktop {get{return pinnedDesktop;}}
+        public void SetPinnedDesktop(bool value) {
+            if(!pinnedLoaded)LoadPinnedPoint();
+            pinnedDesktop=value;
+            if(value){
+                if(pinnedPoint.X==0&&pinnedPoint.Y==0){
+                    var screen=Screen.PrimaryScreen.WorkingArea;
+                    int w=Math.Max(1,Width),h=Math.Max(1,Height);
+                    pinnedPoint=new Point(Math.Max(screen.Left,screen.Right-w-16),Math.Max(screen.Top,screen.Top+16));
+                }
+                CancelDeferredDeactivation();
+                TopMost=true;
+                if(!Visible)Reveal();
+                else {PositionForSize(0);Activate();}
+            } else {updatedAnchor=null;TopMost=false;}
+            SavePinnedPoint();
+            if(!IsDisposed)Invalidate();
         }
         void CancelPointerInteraction(bool releaseCapture=true) {
             draggingVolume=false;navigation.VolumePreview=-1;volumeEndpoint=null;pressedControl=null;pressedAction=-1;pressedPage=navigation.Page;
@@ -480,6 +544,7 @@ namespace AtkBatteryTray {
             }
         }
         void PositionForSize(int slideY) {
+            if(pinnedDesktop&&pinnedLoaded){Location=ClampToScreen(pinnedPoint);return;}
             if(updatedAnchor.HasValue){var placement=updatedAnchor.Value;Location=TrayPanelPlacement.Position(anchor,placement.WorkArea,Size,placement.Edge);return;}
             var screen=PanelWorkArea;
             int margin=(int)Math.Round(8*dpiScale);
@@ -502,6 +567,7 @@ namespace AtkBatteryTray {
         internal bool IsClosing {get{return closing;}}
         internal bool DeferredDeactivationPending {get{return deferredDeactivation;}}
         internal void HandleDeactivation() {
+            if(pinnedDesktop){CancelDeferredDeactivation();return;}
             if(ignoreDeactivate||closing||!LivePopupHandle)return;
             CancelPointerInteraction();
             CancelDeferredDeactivation();
@@ -516,6 +582,7 @@ namespace AtkBatteryTray {
             if(!disposingPopup&&!Disposing&&!IsDisposed)deactivateRelease.Stop();
         }
         internal void CheckDeferredDeactivation() {
+            if(pinnedDesktop){CancelDeferredDeactivation();return;}
             if(!LivePopupHandle){CancelDeferredDeactivation();return;}
             if(!deferredDeactivation||owner.LeftButtonPressed)return;
             deactivateRelease.Stop();int epoch=deactivationEpoch,shown=presentationEpoch;IntPtr handle=Handle;
@@ -853,6 +920,15 @@ namespace AtkBatteryTray {
             var menu=new ContextMenuStrip();
             var detail=new ToolStripMenuItem("设备电量与音频");detail.Click+=delegate {ShowDetails();};menu.Items.Add(detail);
             var update=new ToolStripMenuItem("\u5237\u65b0");update.Click+=delegate {RefreshBattery();};menu.Items.Add(update);
+            var pinItem=new ToolStripMenuItem("\u56FA\u5B9A\u5230\u684C\u9762"){CheckOnClick=true};
+            pinItem.Click+=delegate {
+                if(pinItem.Checked&&(details==null||details.IsDisposed))ShowDetails();
+                var d=details;
+                if(d==null||d.IsDisposed){pinItem.Checked=!pinItem.Checked;return;}
+                d.SetPinnedDesktop(pinItem.Checked);
+            };
+            menu.Items.Add(pinItem);
+            menu.Opening+=delegate {var d=details;pinItem.Checked=d!=null&&!d.IsDisposed&&d.PinnedDesktop;};
             menu.Items.Add(audioSettingsMenu);menu.Opening+=delegate {BuildAudioSettingsMenu();};
             var settingsItem=new ToolStripMenuItem("设置…");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
             var checkUpdates=new ToolStripMenuItem("检查更新…");checkUpdates.Click+=delegate{if(UpdateAvailable)OpenUpdate();else CheckUpdates();};menu.Items.Add(checkUpdates);
