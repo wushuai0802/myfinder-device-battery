@@ -1,6 +1,7 @@
 """Synthetic AULA worker/history/diagnostic checks; no hardware access."""
 import io
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
 sys.path.insert(0, str(ENGINE / "tests"))
 from test_aula_fa09 import P, aula_entry, aula_fixture, aula_reply
-from test_mchose_by_keyboard import entry
+from test_mchose_by_keyboard import entry, identity, reply
 from isolation import wire_encode
 from providers.vgn_beiying import VgnBeiyingProvider
 from providers.base import DeviceStatus
@@ -28,29 +29,31 @@ class AulaFa09BridgeTests(unittest.TestCase):
             server.reader_child()
         return json.loads(output.getvalue())
 
-    def test_child_preserves_feature_descriptor_and_physical_scope(self):
+    def test_child_rejects_feature_only_with_preserved_descriptor_and_physical_scope(self):
         infos = [aula_entry("one"), aula_entry("two")]
         with aula_fixture([aula_reply()], infos) as bus:
             result = self.child(infos)
-        status, = result["statuses"]
-        self.assertEqual((status["name"], status["level"], status["charging_known"]),
-                         ("2.4G 无线键盘（3554:FA09）", 64, False))
-        self.assertEqual(status["key"], "mchose_by_keyboard:one:instance:one")
-        self.assertEqual(status["legacy_key"], "mchose_by_keyboard:one")
-        self.assertIs(status["unconfirmed"], True)
+        self.assertEqual(result["statuses"], [])
         self.assertEqual(result["candidateCount"], 1)
         self.assertFalse(result.get("errorCode"))
-        self.assertEqual(bus.opened, [infos[0]["path"]])
-        self.assertEqual(bus.opened, bus.closed)
-        self.assertEqual(len(bus.feature_writes), 1)
+        self.assertEqual((bus.opened, bus.closed, bus.writes, bus.reads,
+                          bus.feature_writes, bus.feature_reads), ([], [], [], [], [], []))
+        self.assertIn("Feature06 battery path disabled: field does not track battery; nothing sent",
+                      result["diagnostics"])
 
-    def test_zero_silence_io_failure_and_backoff_keep_history_without_errors(self):
+    def test_disabled_feature_path_keeps_explicit_old_history_without_refresh_or_errors(self):
         infos = [aula_entry(), entry(path=b"other-collection", usage_page=0xFF02,
                                     input_report_sizes=None)]
         engine = server.BatteryEngine([P(), VgnBeiyingProvider()], include_native=True)
         self.addCleanup(engine.close)
-        with aula_fixture([aula_reply()], infos):
-            first, = engine.poll()["devices"]
+        # Seed an old-version record explicitly; the disabled provider cannot
+        # manufacture a historical Feature reading for this fixture.
+        old = DeviceStatus("mchose_by_keyboard:receiver-a", "2.4G 无线键盘（3554:FA09）", 64,
+                           source=P.name, kind="keyboard", physical_id="receiver-a",
+                           charging_known=False, unconfirmed=True)
+        stamp = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        first = server.normalise(old, None, stamp)
+        engine.previous[first["id"]] = server.historical(first)
         self.assertEqual((first["name"], first["percent"], first["charging"]),
                          ("2.4G 无线键盘（3554:FA09）", 64, None))
         self.assertEqual(first["id"], server.public_id("mchose_by_keyboard:receiver-a"))
@@ -59,7 +62,7 @@ class AulaFa09BridgeTests(unittest.TestCase):
         for frames, options in (([aula_reply(0)], {}), ([], {}),
                                 ([aula_reply()], dict(error_at="feature_read")),
                                 ([aula_reply()], {})):
-            with self.subTest(frames=frames, options=options), aula_fixture(frames, infos, **options):
+            with self.subTest(frames=frames, options=options), aula_fixture(frames, infos, **options) as bus:
                 snapshot = engine.poll()
             stale, = snapshot["devices"]
             self.assertEqual(stale["id"], first["id"])
@@ -70,12 +73,14 @@ class AulaFa09BridgeTests(unittest.TestCase):
             self.assertIsNone(stale["charging"])
             self.assertEqual(snapshot["errors"], [])
             self.assertFalse(engine.failures)
-        # A fresh reader that actually encounters an I/O exception also stays
-        # non-error; the preceding sequence may already be backing off.
+            self.assertEqual((bus.opened, bus.writes, bus.reads,
+                              bus.feature_writes, bus.feature_reads), ([], [], [], [], []))
+        # Even a backend configured to raise must remain completely unopened.
         engine2 = server.BatteryEngine([P()], include_native=True)
         self.addCleanup(engine2.close)
-        with aula_fixture([aula_reply()], error_at="feature_read"):
-            self.assertEqual(engine2.poll()["errors"], [])
+        with aula_fixture([aula_reply()], error_at="feature_read") as bus:
+            self.assertEqual((engine2.poll()["devices"], engine2.failures), ([], {}))
+            self.assertEqual(bus.opened, [])
 
     def test_unconfirmed_evidence_does_not_spread_to_other_readings(self):
         now = server.utcnow()
@@ -96,7 +101,7 @@ class AulaFa09BridgeTests(unittest.TestCase):
     def test_child_rejection_summary_reaches_health_without_behavior_change(self):
         cases = ((entry("one", input_report_sizes=None), "report sizes unproven"),
                  (aula_entry("one", feature_report_sizes=None), "report sizes unproven"),
-                 (aula_entry("one", product_string="AULA F87"), "receiver name unrecognized"))
+                 (entry("one", product_string="AULA F87"), "receiver name unrecognized"))
         for info, summary in cases:
             with self.subTest(info=info), aula_fixture([aula_reply()], [info]) as bus:
                 result = self.child([info])
@@ -135,7 +140,7 @@ class AulaFa09BridgeTests(unittest.TestCase):
                             (P.name, [])):
             engine._accept("r", name, [], server.utcnow(), "p", 1, lines)
             self.assertNotIn("diagnosticSummary", engine.health["r"])
-        with aula_fixture([aula_reply()]):
+        with aula_fixture([identity(), reply()], [entry()]):
             statuses = P().poll()
         engine._accept("r", P.name, statuses, server.utcnow(), "p", 1, diagnostics)
         self.assertEqual(engine.health["r"]["state"], "ok")

@@ -524,7 +524,7 @@ class DescriptorCacheTests(unittest.TestCase):
         self.hid.HidP_GetCaps.side_effect = caps
         self.hid.HidP_GetValueCaps.side_effect = fields
 
-    def test_aula_feature_proof_coexists_with_by_and_is_cached_without_commands(self):
+    def test_aula_feature_proof_is_cached_without_commands_but_only_by_is_eligible(self):
         from providers.mchose_by_keyboard import MchoseByKeyboardProvider
         for by in (False, True):
             with self.subTest(by=by):
@@ -536,8 +536,10 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.assertEqual(info["input_report_sizes"], {"19": 20} if by else {})
                 self.assertEqual(info["output_report_sizes"], {"19": 20} if by else {})
                 provider = MchoseByKeyboardProvider()
-                self.assertEqual(provider._pick([info]), info)
-                self.assertEqual(provider._aula, not by)
+                self.assertEqual(provider._pick([info]), info if by else None)
+                if not by:
+                    self.assertIn("Feature06 battery path disabled: field does not track battery; nothing sent",
+                                  provider.diagnostics())
                 self.kernel.CreateFileW.reset_mock()
                 self.assertEqual(self.scan([PATH_A]), [info])
                 self.kernel.CreateFileW.assert_not_called()
@@ -575,7 +577,9 @@ class DescriptorCacheTests(unittest.TestCase):
                 self.assertNotIn(PATH_A, self.cache)
                 self.aula_descriptor()
                 recovered, = self.scan([PATH_A])
-                self.assertEqual(MchoseByKeyboardProvider()._pick([recovered]), recovered)
+                self.assertEqual(recovered["feature_report_sizes"], {"6": 8})
+                self.assertIn(PATH_A, self.cache)
+                self.assertIsNone(MchoseByKeyboardProvider()._pick([recovered]))
 
     def test_aula_zero_io_length_with_nonzero_field_counts_is_not_absence(self):
         from providers.mchose_by_keyboard import MchoseByKeyboardProvider
@@ -1034,6 +1038,152 @@ class DescriptorCacheTests(unittest.TestCase):
         self.kernel.CreateFileW.assert_not_called()
         self.scan([PATH_B], full=False)
         self.kernel.CreateFileW.assert_called_once()
+
+
+class Fa09DescriptorFallbackTests(unittest.TestCase):
+    """Exact #476 transport proof using fake DLLs and metadata-only HID."""
+    descriptor = bytes.fromhex(
+        "06 02 ff 09 02 a1 01 85 13 75 08 95 13 81 02 91 02 c0")
+
+    def setUp(self):
+        import battery_hid as H
+        self.case = DescriptorCacheTests()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        self.case.parent.side_effect = lambda path: "receiver-a"
+        self.dev = Mock(spec=["open_path", "get_report_descriptor", "close"])
+        self.backend = SimpleNamespace(device=Mock(return_value=self.dev))
+        patcher = patch.object(H, "hid", self.backend)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def configure(self, failed=(0, 1), identity=(0x3554, 0xFA09), collection=(0xFF02, 2),
+                  inp=None, raw=None):
+        self.case.cache.clear()
+        self.dev.reset_mock(side_effect=True)
+        self.backend.device.reset_mock()
+        self.case.products[PATH_A] = "2.4G Wireless Receiver"
+        self.case.batch3_descriptor(identity, collection, inp or {19: 20}, {19: 20})
+        original = self.case.hid.HidP_GetValueCaps.side_effect
+
+        def fields(report_type, *args):
+            return 0 if report_type in failed else original(report_type, *args)
+
+        self.case.hid.HidP_GetValueCaps.side_effect = fields
+        self.dev.get_report_descriptor.return_value = self.descriptor if raw is None else raw
+
+    def scan(self):
+        info, = self.case.scan([PATH_A])
+        self.case.hid.HidD_GetFeature.assert_not_called()
+        self.case.hid.HidD_SetFeature.assert_not_called()
+        self.case.kernel.ReadFile.assert_not_called()
+        self.case.kernel.WriteFile.assert_not_called()
+        return info
+
+    def test_fa09_ff02_descriptor_proof_enables_g75pro_by_only(self):
+        from test_aula_fa09 import P, aula_entry, aula_fixture, identity, reply
+        for failed in ((), (0,), (1,), (0, 1)):
+            with self.subTest(failed=failed):
+                self.configure(failed=failed)
+                info = self.scan()
+                for index, direction in enumerate(("input", "output")):
+                    self.assertEqual(info[direction + "_report_sizes"], {"19": 20})
+                    self.assertEqual(info[direction + "_report_proof"],
+                                     "descriptor" if index in failed else "caps")
+                self.assertEqual(self.scan(), info)
+                if failed:
+                    self.dev.open_path.assert_called_once_with(PATH_A.encode())
+                    self.dev.get_report_descriptor.assert_called_once_with()
+                    self.dev.close.assert_called_once_with()
+                else:
+                    self.backend.device.assert_not_called()
+                with aula_fixture([identity("030000000115"), reply(100, 1)],
+                                  [aula_entry(path=b"feature-ff04"), info]) as bus:
+                    status, = P().poll()
+                    self.assertEqual((status.name, status.level, status.charging),
+                                     ("MCHOSE G75 Pro", 100, False))
+                    self.assertEqual(bus.opened, [info["path"]])
+                    self.assertEqual(bus.opened, bus.closed)
+                    self.assertEqual((bus.feature_writes, bus.feature_reads), ([], []))
+
+    def assert_reader_rejected(self, info):
+        from test_aula_fa09 import P, aula_entry, aula_fixture, identity, reply
+        with aula_fixture([identity("030000000115"), reply()],
+                          [aula_entry(path=b"feature-ff04"), info]) as bus:
+            self.assertEqual(P().poll(), [])
+            self.assertEqual((bus.opened, bus.writes, bus.reads,
+                              bus.feature_writes, bus.feature_reads), ([], [], [], [], []))
+
+    def test_fa09_ff02_bad_descriptor_never_uses_maximum_as_report_proof_and_retries(self):
+        cases = ((b"\x85", None),
+                 (self.descriptor.replace(b"\x06\x02\xff", b"\x06\x04\xff"), "collection not found"),
+                 (self.descriptor.replace(b"\x95\x13", b"\x95\x12"), "collection maximum mismatch"),
+                 (self.descriptor[:-1] + bytes.fromhex("85 06 95 07 b1 02 c0"),
+                  "collection maximum mismatch"))
+        for raw, reason in cases:
+            with self.subTest(raw=raw):
+                self.configure(raw=raw)
+                info = self.scan()
+                self.assertEqual((info["input_report_length"], info["output_report_length"]), (20, 20))
+                self.assertIsNone(info["input_report_sizes"])
+                self.assertIsNone(info["output_report_sizes"])
+                self.assertEqual(info["input_report_proof"], "failed")
+                self.assertIn("report_descriptor_error", info)
+                if reason:
+                    self.assertEqual(info["report_descriptor_error"], reason)
+                self.assertNotIn(PATH_A, self.case.cache)
+                self.assert_reader_rejected(info)
+                self.dev.get_report_descriptor.return_value = self.descriptor
+                recovered = self.scan()
+                self.assertEqual(recovered["input_report_sizes"], {"19": 20})
+                self.assertEqual(recovered["output_report_sizes"], {"19": 20})
+                self.assertIn(PATH_A, self.case.cache)
+                self.assertEqual(self.dev.close.call_count, 2)
+
+    def test_fa09_ff02_wrong_or_multiple_reports_still_reject_query(self):
+        cases = (self.descriptor.replace(b"\x85\x13", b"\x85\x12"),
+                 self.descriptor[:-1] + bytes.fromhex("85 14 81 02 91 02 c0"))
+        for raw in cases:
+            with self.subTest(raw=raw):
+                self.configure(raw=raw)
+                info = self.scan()
+                self.assertEqual(info["input_report_proof"], "descriptor")
+                self.assertNotEqual(info["input_report_sizes"], {"19": 20})
+                self.assert_reader_rejected(info)
+
+    def test_fa09_ff02_caps_descriptor_disagreement_cannot_fill_missing_direction(self):
+        # Caps prove input 12, descriptor declares 13; equal maxima prove nothing.
+        self.configure(failed=(1,), inp={18: 20})
+        info = self.scan()
+        self.assertEqual(info["input_report_sizes"], {"18": 20})
+        self.assertIsNone(info["output_report_sizes"])
+        self.assertEqual(info["report_descriptor_error"], "caps/descriptor disagreement")
+        self.assertNotIn(PATH_A, self.case.cache)
+        self.assert_reader_rejected(info)
+
+    def test_fa09_ff02_descriptor_io_failure_closes_without_commands_or_private_text(self):
+        for method in ("open_path", "get_report_descriptor", "close"):
+            with self.subTest(method=method):
+                self.configure()
+                getattr(self.dev, method).side_effect = OSError("private-device-path")
+                info = self.scan()
+                self.assertIsNone(info["input_report_sizes"])
+                self.assertIsNone(info["output_report_sizes"])
+                self.assertNotIn(PATH_A, self.case.cache)
+                self.assertNotIn("private-device-path", str(info))
+                self.dev.close.assert_called_once_with()
+                self.assert_reader_rejected(info)
+
+    def test_fa09_ff02_fallback_never_expands_identity_or_collection_scope(self):
+        for identity, collection in (((0x3554, 0xFA07), (0xFF02, 2)),
+                                     ((0x41E4, 0xFA09), (0xFF02, 2)),
+                                     ((0x3554, 0xFA09), (0xFF02, 1)),
+                                     ((0x3554, 0xFA09), (0xFF04, 2)),
+                                     ((0x3554, 0xFA09), (0xFF04, 1))):
+            with self.subTest(identity=identity, collection=collection):
+                self.configure(identity=identity, collection=collection)
+                self.scan()
+                self.backend.device.assert_not_called()
 
 
 if __name__ == "__main__":

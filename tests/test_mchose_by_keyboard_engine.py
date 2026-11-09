@@ -1,6 +1,7 @@
 """BY scoped-worker and history tests using synthetic replies, never hardware."""
 import io
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ sys.path.insert(0, str(ENGINE / "tests"))
 from test_mchose_by_keyboard import P, entry, fixture, identity, reply, notification
 from test_aula_fa09 import aula_entry, aula_fixture, aula_reply
 from providers.vgn_beiying import VgnBeiyingProvider
+from providers.base import DeviceStatus
 from catalog import verification_for
 from device_pack import BRAND_PROVIDERS
 from isolation import wire_encode
@@ -133,16 +135,28 @@ class SharedFa09BridgeTests(unittest.TestCase):
         self.addCleanup(engine.close)
         ff04 = aula_entry(path=b"ff04")
         ff02 = entry(path=b"ff02", usage_page=0xFF02)
-        with aula_fixture([aula_reply()], [ff04]):
-            first, = engine.poll()["devices"]
+        old = DeviceStatus("mchose_by_keyboard:receiver-a", "2.4G 无线键盘（3554:FA09）", 100,
+                           source=P.name, kind="keyboard", physical_id="receiver-a",
+                           charging_known=False, unconfirmed=True)
+        stamp = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        first = server.normalise(old, None, stamp)
+        engine.previous[first["id"]] = server.historical(first)
         self.assertTrue(first["unconfirmed"])
+        with aula_fixture([aula_reply()], [ff04]) as bus:
+            stale, = engine.poll()["devices"]
+        self.assertEqual(stale["confirmedAtUtc"], first["confirmedAtUtc"])
+        self.assertFalse(stale["fresh"])
+        self.assertTrue(stale["unconfirmed"])
+        self.assertEqual((bus.opened, bus.feature_writes, bus.feature_reads), ([], [], []))
         with aula_fixture([identity("030000000115"), notification()], [ff04, ff02]) as bus:
             current, = engine.poll()["devices"]
         self.assertEqual((current["id"], current["name"], current["percent"]),
                          (first["id"], "MCHOSE G75 Pro", 95))
         self.assertNotIn("unconfirmed", current)
+        self.assertTrue(current["fresh"])
+        self.assertNotEqual(current["confirmedAtUtc"], first["confirmedAtUtc"])
         self.assertEqual(bus.opened, [b"ff02"])
-        self.assertEqual(bus.feature_writes, [])
+        self.assertEqual((bus.feature_writes, bus.feature_reads), ([], []))
         with aula_fixture([notification(0)], [ff04, ff02]):
             stale, = engine.poll()["devices"]
         self.assertEqual(stale["confirmedAtUtc"], current["confirmedAtUtc"])
