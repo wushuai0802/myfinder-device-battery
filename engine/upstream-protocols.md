@@ -1322,15 +1322,19 @@ The supplied LICENSE is GNU AGPL version 3, compatible with this project's AGPL-
 license. Only the battery framing/decoding subset was adapted; no upstream file
 was copied into the tracked tree or executed, and no network fetch was needed.
 
-The match requires **`3837:1018` or `3837:1014`, one `FF01:0001` collection**,
-with both input/output maxima and per-report `4D` lengths proven as **64 bytes
-including the ID** (63-byte body). Discovery tries HidP's per-ID caps first;
-if either report map is `None`, it uses the bounded raw-descriptor parser below.
-All three collection maxima must match HidP, and any successful caps map must
-agree with the descriptor. Unknown lengths are never accepted as 64. If the
-proof still fails, the battery reader does not open or send. Other collections
-and legacy protocols are never tried for these IDs, including after invalid
-replies or timeouts. No other V3 receiver/wired IDs are added. V3-only sanitized
+The match keeps **`3837:1018` or `3837:1014`, one proven `FF01:0001` collection**
+as the preferred route. Both output/input report `0x4D` lengths and collection
+maxima must be proven as **64 bytes including the ID** (63-byte body). Only
+`1018` may instead use one `FF0B:00C4`, under the additional gates below.
+Discovery tries HidP's per-ID byte-array caps first; if either report map is
+`None`, it uses the bounded raw-descriptor parser below. On the alternate,
+raw fallback is attempted only when both caps maxima are 64; a known 41-byte
+or zero-capacity alternate gets no raw-descriptor handle. All three collection
+maxima must match HidP, and any successful caps map must agree with the
+descriptor. Unknown lengths are never accepted as 64. If proof still fails,
+the battery reader does not open or send. An attempted V3 query never tries
+another collection or a legacy protocol after invalid replies or timeouts.
+No other V3 receiver/wired IDs are added. V3-only sanitized
 reasons reach reader health, including `V3 input report 4D/64 length unproven;
 proof=caps+descriptor failed; descriptor=collection maximum mismatch; not
 opened; nothing sent`; successful proofs state `proof=caps/descriptor` by
@@ -1364,6 +1368,42 @@ limit; it does not add errors, retries or backoff. Legacy logs remain private.
 This changes observability and displayed names only: collection/report proof and
 all HID exchanges remain unchanged. Neither issue's hardware cause nor successful
 battery reading is established by the synthetic tests; both models still need hardware checks.
+
+**2026-11-10 strict alternate candidate, still C:** the local official M HUB
+`main-DCRwBIvm.js` was statically rechecked at SHA-256
+`405102805e2adeb93073ee2186f6d0193ca1317a6b4657d636e4e611bd25a446`
+(9,375,649 bytes). UTF-16 string offsets `917243` and `1845993` respectively
+filter exact decimal `14391:4120` (`3837:1018`) for a WebHID device containing
+FF01 **or** FF0B, then send `buffer[0]` as the report ID and `buffer.slice(1)`
+as payload. This is device selection plus sending by report ID, not proof that
+Windows binds 4D to FF01 or FF0B. No vendor JavaScript was executed.
+
+#493 reports `3837:1018 / A7 V3 Pro+`, with FF01 declarations Output `13/41`
+and Input `11/41` (hex IDs, decimal lengths including the ID), and an FF0B:C4
+sibling without its per-report data. This excludes that FF01 layout from the
+existing 4D/64 exchange, not evidence for a new 41-byte battery protocol.
+The alternate is allowed only if FF01 is absent or trustworthy maxima/complete,
+consistent per-ID maps definitively exclude 4D/64. An unknown primary is not
+absence; duplicate FF01 collections always refuse. A fully proven primary
+wins even if alternates are unknown or duplicated. `1014` keeps its old route.
+
+The `1018` alternate must be unique before filtering by proof, match exact
+`FF0B:00C4`, carry a real Windows USB HID path and matching USB PnP parent for
+`3837:1018`, and agree with every collection in the scoped parent's group.
+Both maxima must be integer 64 and both complete caps/descriptor byte-array
+maps must prove ID 4D at 64; malformed, conflicting or partial proof refuses.
+No feature 11/13 request, legacy fallback or padding of 41-byte frames is used.
+Full safe diagnostics name the refused FF01/FF0B collection; existing compact
+health remains within 48 characters and real errors keep precedence. Successful
+fresh reads clear earlier summaries without refreshing failed historical reads.
+
+The positive two-TLC descriptor (FF01 Output13/Input11 at 41, FF0B 4D/64) is
+**synthetic**, not #493's captured descriptor or a complete captured reply.
+The actual #493 FF0B's 4D placement remains unknown. Test-build diagnostics with
+complete per-report proof and comparison against the official reader are still
+needed; this is not a verified #493 hardware fix or support for every A7 model.
+#496 shares the PID/collections but supplied no matching report layout, so #493's
+41-byte observation is not transferred to that device.
 
 Only `readDeviceInfo`, command **`0x0900`**, is sent: full frame
 `4d 01 01 00 00 09 00 00 08`, then zeros to 64 bytes. Full-frame offsets are

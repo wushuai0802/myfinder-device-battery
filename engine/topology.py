@@ -295,6 +295,7 @@ def discover(paths, excluded=(), *, full=False):
                                     for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3837, 0x1018, 0xFF01, 0x0001),
+                    (0x3837, 0x1018, 0xFF0B, 0x00C4),
                     (0x3837, 0x1014, 0xFF01, 0x0001),
                     (0x373B, 0x1262, 0xFF90, 0x0001),
                     (0x373B, 0x12D6, 0xFF90, 0x0001),
@@ -315,7 +316,12 @@ def discover(paths, excluded=(), *, full=False):
                 if (attrs.vendor, attrs.product) in (
                         (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014),
                         (0x41E4, 0x2001), (0x3554, 0xFA09)):
-                    _descriptor_fallback(info, caps, ("input", "output"))
+                    # The alternate 1018 collection is useful only at 4D/64.
+                    # Do not repeatedly open a known 41-byte/zero-capacity TLC
+                    # for raw metadata. Keep all prior primary/provider gates.
+                    if ((caps.page, caps.usage) != (0xFF0B, 0x00C4)
+                            or caps.input == caps.output == 64):
+                        _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (

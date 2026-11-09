@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine" / "tests"))
-from test_mchose_v3 import M, BUSY, CHARGING, REQUEST, fixture, inventory as v3_inventory
+from test_mchose_v3 import (M, BUSY, CHARGING, REQUEST, alternate_inventory,
+                           fixture, inventory as v3_inventory)
 from isolation import wire_encode
 import server
 
@@ -24,13 +25,90 @@ class MchoseV3HealthTests(unittest.TestCase):
         self.addCleanup(self.engine.close)
         self.reader = "mchose|receiver-a"
 
-    def accept(self, provider, infos, statuses=(), candidate_count=None):
+    def accept(self, provider, infos, statuses=(), candidate_count=None, physical="receiver-a"):
         if candidate_count is None:
             candidate_count = server.recognized_candidate_count("mchose", infos)
         self.engine._accept(self.reader, "mchose", statuses, server.utcnow(),
-                            physical="receiver-a", candidate_count=candidate_count,
+                            physical=physical, candidate_count=candidate_count,
                             diagnostics=server.reader_diagnostics(provider))
         return self.engine._snapshot()
+
+    def test_primary_and_alternate_refusals_are_distinct_safe_and_compact(self):
+        for target in (0, 1):
+            infos = alternate_inventory("PRIVATE-PARENT")
+            parent = infos[0]["physical_id"]
+            self.reader = "mchose|" + parent
+            infos[target].update(input_report_length=64, output_report_length=64,
+                                 input_report_sizes=None, output_report_sizes=None)
+            provider = M.MchoseProvider()
+            with self.subTest(target=target), fixture([], infos) as bus:
+                statuses = server.scoped_poll(provider, infos, parent)
+                snapshot = self.accept(provider, infos, statuses, physical=parent)
+                health, = snapshot["health"]
+                diagnostic = " ".join(health["diagnostics"])
+                self.assertIn("collection=" + ("FF01:0001" if target == 0 else "FF0B:00C4"), diagnostic)
+                self.assertIn("4D unproven", health["errorCode"])
+                self.assertLessEqual(len(health["errorCode"]), 48)
+                self.assertEqual((health["state"], snapshot["errors"]), ("unavailable", []))
+                self.assertNotIn("PRIVATE", json.dumps(snapshot))
+                self.assertEqual((bus.opened, bus.sent, bus.reads), ([], [], []))
+
+    def test_alternate_failure_keeps_history_time_and_recovery_clears_summary(self):
+        infos = alternate_inventory()
+        parent = infos[0]["physical_id"]
+        self.reader = "mchose|" + parent
+        provider = M.MchoseProvider()
+        with fixture([CHARGING], infos):
+            statuses = server.scoped_poll(provider, infos, parent)
+        first = self.accept(provider, infos, statuses, physical=parent)
+        measured_at = first["devices"][0]["measuredAtUtc"]
+        previous = dict(provider._last)
+        with fixture([], infos, fail="read") as bus:
+            statuses = server.scoped_poll(provider, infos, parent)
+            self.assertEqual(bus.sent, [REQUEST])
+        failed = self.accept(provider, infos, statuses, physical=parent)
+        stale, = failed["devices"]
+        self.assertEqual((stale["percent"], stale["fresh"], stale["measuredAtUtc"]),
+                         (85, False, measured_at))
+        self.assertEqual(provider._last, previous)
+        self.assertIn("V3 power I/O failed", " ".join(failed["health"][0]["diagnostics"]))
+        self.assertEqual(failed["errors"], [])
+        # A gate refusal removes the provider cache, while the engine retains
+        # historical power without changing its measurement time.
+        infos[1]["input_report_sizes"] = None
+        with fixture([], infos):
+            statuses = server.scoped_poll(provider, infos, parent)
+        refused = self.accept(provider, infos, statuses, physical=parent)
+        self.assertIn("4D unproven", refused["health"][0]["errorCode"])
+        self.assertEqual(refused["devices"][0]["measuredAtUtc"], measured_at)
+        self.assertFalse(refused["devices"][0]["fresh"])
+        infos[1]["input_report_sizes"] = {"77": 64}
+        with fixture([CHARGING], infos):
+            statuses = server.scoped_poll(provider, infos, parent)
+        recovered = self.accept(provider, infos, statuses, physical=parent)
+        self.assertTrue(recovered["devices"][0]["fresh"])
+        self.assertEqual(recovered["devices"][0]["verificationLevel"], "C")
+        self.assertNotIn("errorCode", recovered["health"][0])
+        self.assertNotIn("diagnosticSummary", self.engine.health[self.reader])
+        self.assertNotIn("V3 power I/O failed", " ".join(recovered["health"][0]["diagnostics"]))
+        self.assertEqual((self.engine.failures, self.engine.retry_after), ({}, {}))
+
+    def test_alternate_diagnostic_never_outranks_real_timeout(self):
+        infos = alternate_inventory()
+        parent = infos[0]["physical_id"]
+        self.reader = "mchose|" + parent
+        infos[1]["input_report_sizes"] = None
+        provider = M.MchoseProvider()
+        with fixture([], infos):
+            statuses = server.scoped_poll(provider, infos, parent)
+        self.accept(provider, infos, statuses, physical=parent)
+        summary = self.engine.health[self.reader]["diagnosticSummary"]
+        self.engine._failure(self.reader, "mchose", "timeout")
+        self.engine.health[self.reader]["diagnosticSummary"] = summary
+        snapshot = self.engine._snapshot()
+        health, = snapshot["health"]
+        self.assertEqual((health["state"], health["errorCode"]), ("timeout", "timeout"))
+        self.assertEqual(snapshot["errors"], ["mchose: timeout"])
 
     def test_exact_v3_candidates_are_counted_once_per_vid_pid(self):
         for pid in (0x1014, 0x1018):
