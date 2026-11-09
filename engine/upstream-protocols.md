@@ -2606,8 +2606,15 @@ Addresses below are virtual addresses; the cited `.text` file offsets are
 | `app/config.xml:4-8` | F-NB98 uses `05AC:024F "KB98 Dongle"`, `MI_03`, mode 2. The same pair also has wired `"XS75T"`, `MI_00`. No usage page/usage or report descriptor is declared. |
 | Battery routine `0x435eb0`; request at `0x435f42` (file `0x35342`) | Mode 2, approximately 15-second query interval, request begins `00 20 01`; calls `0x4501c0`. This is not the requested `06 87` frame. |
 | `0x435f64` (file `0x35364`), `0x435f81` | After reply byte 0 equals `20`, reads byte 3, skips zero, caps at 100 and calls `MUI::BatteryCtrl::SetBatteryInfo`. A shared byte offset alone does not establish the same protocol. |
-| `0x4501c0` -> `0x451df0` / `0x451ed0` | Appends a checksum at offset `20`, passes length `21` to a `WriteFile` wrapper (which may pad to HID caps), then uses `ReadFile`. |
-| Feature sender `0x452010`, length at `0x452023` (file `0x51423`) | Calls dynamically resolved `HidD_SetFeature` with length `41` (65 bytes), not eight. `HidD_GetFeature` / `HidD_SetFeature` names occur at file offsets `0x16f1f4` / `0x16f204`. |
+| `0x4501c0` -> `0x451df0` / `0x451ed0` | Appends an additive checksum at offset `0x20` (32 decimal), passes length `0x21` (33 decimal) to a `WriteFile` wrapper (which may pad to its stored HID target length), then uses `ReadFile`. These are hexadecimal constants, not 20/21 decimal bytes. |
+| Feature sender `0x452010`, length at `0x452023` (file `0x51423`) | Calls dynamically resolved `HidD_SetFeature` with length `0x41` (65 decimal bytes), not eight. `HidD_GetFeature` / `HidD_SetFeature` names occur at file offsets `0x16f1f4` / `0x16f204`. |
+
+Follow-up static decompilation of the same binary confirms a zero-initialized
+65-byte caller buffer beginning `00 20 01`, the 33-byte pre-padding send above,
+and removal of a leading zero report-ID slot by the receive wrapper before
+testing reply `0x20` and percentage byte 3. The dynamic final write length and
+binding among the user's two FF60 collections still lack per-ID caps and a
+normal official-refresh capture. No device query is enabled from this finding.
 
 The exact eight-byte AULA request literal was not found in this binary. That
 bounded search does not prove no other routine can construct it. The identified
