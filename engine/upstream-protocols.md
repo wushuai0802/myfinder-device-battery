@@ -3373,8 +3373,8 @@ not enable this AULA command path or claim brand identification.
 
 ### Shared 1D57:FA60 / FA65 receivers: receive-only battery
 
-**Implemented at grade C (web 2026-11-06; exact legacy IN10 route 2026-11-07): 只接收，绝不发送。**
-`providers/fa6x_passive.py` listens for the official INPHIC battery prefix with
+**Implemented at grade C (web 2026-11-06; exact legacy IN10 route 2026-11-07; SC650 user prefix 2026-11-10): 只接收，绝不发送。**
+`providers/fa6x_passive.py` listens for the INPHIC and reported SC650 battery prefixes with
 exact collection, descriptor-length and variant-specific model/event gates. It never calls
 `write`, `send_feature_report` or `get_feature_report`, and performs no vendor
 initialization. This supersedes the first-round decision to leave the IDs
@@ -3400,6 +3400,38 @@ that length exactly and begin `03 <allowed-model> 40/41 <state> <percentage>`.
 Only `1..100` is displayed: zero, out-of-range values, other IDs/events/models
 and short/overlong reports are ignored. State does not change the percentage
 or charging status. There is no assumed five-byte total length or checksum.
+
+Issue [#490](https://github.com/wushuai0802/myfinder-device-battery/issues/490)
+adds a separate C-level candidate for a user-reported AULA SC650 on exactly
+`1D57:FA60 / 000A:0000`: `03 8E 40 01 5B` (91%, 2026-11-05) and
+`03 8E 40 01 31` (49%, 2026-11-09). These are user-supplied samples, not
+official software acceptance or this repository's hardware verification. The
+reported local `aula_sc650` reader is the user's own branch, not an existing
+adapter here. Only model `8E` on FA60 is added, with event **exactly `40` and
+byte 3 exactly `01`**; `41`, other states and FA65/8E remain rejected. The
+five bytes are a prefix: runtime Input `03` proof and exact received length
+still apply. The two samples do not establish support for every SC650,
+other shared receivers or charging; neutral names and unknown charging remain.
+
+For exactly `1D57:FA60 / 000A:0000`, topology first tries the existing
+`byte_report_sizes` caps proof. Only when that Input proof is missing may the
+existing strict raw Report Descriptor fallback call hidapi's optional
+`get_report_descriptor` as read-only metadata, then close its metadata handle.
+It parses the entire descriptor and requires the matching collection, all
+Input/Output/Feature maxima and any existing proof to agree. Truncation,
+duplicate top-level collections, report IDs shared across collections and
+caps contradictions remain rejected. Complete proof is cached normally;
+failed proof is retried without caching a complete entry. This adds no
+Feature/Output, initialization, pairing or firmware command, and no fallback
+for FA65, other identities or collections; native exclusions stay unchanged.
+
+The user's failed `HidD_GetPhysicalDescriptor` reads a **Physical Descriptor**,
+not a **HID Report Descriptor**; it does not prove the latter is unavailable.
+If the real Report Descriptor is also unavailable or invalid, black-box
+collections remain refused with `input report 03 length unproven; not opened`.
+There is no maximum-only assumption or opt-in bypass. Fake DLL/getter/listener
+fixtures verify the boundary, not actual descriptor availability, notification
+frequency, cold start, sleep/wake or official-driver coexistence on hardware.
 
 The added **legacy FA65 IN10** route requires one proven physical USB parent
 shared by exactly one `1D57:FA65 / FF00:0001` communication companion and one

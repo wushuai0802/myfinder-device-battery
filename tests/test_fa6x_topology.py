@@ -2,8 +2,9 @@
 import ctypes
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine"))
@@ -12,6 +13,9 @@ import _hidstub  # noqa: F401
 from providers import fa6x_passive as F
 import topology
 import test_topology_cache as fixtures
+import battery_hid as H
+from standardhid import Caps
+from test_fa6x_passive import fixture
 
 
 class Fa6xTopologyTests(unittest.TestCase):
@@ -179,6 +183,179 @@ class Fa6xTopologyTests(unittest.TestCase):
         f.hid.HidP_GetValueCaps.assert_not_called()
         f.hid.HidP_GetButtonCaps.assert_not_called()
         self.assert_descriptor_only()
+
+
+class Sc650DescriptorFallbackTests(unittest.TestCase):
+    """All Windows DLLs, raw metadata getters and listening handles are fake."""
+    raw = bytes.fromhex("05 0a 09 00 a1 01 85 03 75 08 95 04 81 02 c0")
+
+    def setUp(self):
+        self.case = fixtures.DescriptorCacheTests()
+        self.addCleanup(self.case.doCleanups)
+        self.case.setUp()
+        self.dev = Mock(spec=["open_path", "get_report_descriptor", "close"])
+        self.backend = SimpleNamespace(device=Mock(return_value=self.dev))
+        patcher = patch.object(H, "hid", self.backend)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def configure(self, identity=(0x1D57, 0xFA60), collection=(0x000A, 0),
+                  maxima=(5, 0, 0), raw=None, counts=(0, 0, 0)):
+        f = self.case
+        f.cache.clear()
+        self.dev.reset_mock(side_effect=True)
+        self.backend.device.reset_mock()
+        f.identities[fixtures.PATH_A] = identity
+        self.dev.get_report_descriptor.return_value = self.raw if raw is None else raw
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.input, value.output, value.feature = maxima
+            value.iv, value.ov, value.fv = counts
+            return 0x00110000
+
+        f.hid.HidP_GetCaps.side_effect = caps
+
+    def scan(self):
+        f = self.case
+        info, = f.scan([fixtures.PATH_A])
+        f.hid.HidD_GetFeature.assert_not_called()
+        f.hid.HidD_SetFeature.assert_not_called()
+        f.hid.HidD_GetPhysicalDescriptor.assert_not_called()
+        f.kernel.ReadFile.assert_not_called()
+        f.kernel.WriteFile.assert_not_called()
+        self.assertTrue(all(call.args[1] == 0 for call in f.kernel.CreateFileW.call_args_list))
+        return info
+
+    def assert_no_listener(self, info):
+        with fixture([[3, 0x8E, 0x40, 1, 49]], [info]) as (bus, provider):
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual((bus.opened, bus.reads), ([], []))
+            return provider.diagnostics()
+
+    def test_sc650_caps_none_raw_input03_recovers_listens_and_caches(self):
+        self.configure()
+        info = self.scan()
+        self.assertEqual(info["input_report_sizes"], {"3": 5})
+        self.assertEqual(info["input_report_proof"], "descriptor")
+        self.assertEqual(info["declared_report_sizes"], {"input": {"3": 5}, "output": {}, "feature": {}})
+        self.assertNotIn("output_report_sizes", info)
+        self.assertNotIn("feature_report_sizes", info)
+        self.assertIn(fixtures.PATH_A, self.case.cache)
+        before = self.case.kernel.CreateFileW.call_count
+        self.assertEqual(self.scan(), info)
+        self.assertEqual(self.case.kernel.CreateFileW.call_count, before)
+        self.dev.open_path.assert_called_once_with(fixtures.PATH_A.encode())
+        self.dev.get_report_descriptor.assert_called_once_with()
+        self.dev.close.assert_called_once_with()
+        with fixture([[3, 0x8E, 0x40, 1, 91], [3, 0x8E, 0x40, 1, 49]], [info]) as (bus, provider):
+            status, = provider.poll()
+            self.assertEqual((status.level, status.charging_known, status.verification_level), (49, False, "C"))
+            self.assertEqual(bus.opened, [info["path"]])
+
+    def test_sc650_bad_raw_proof_rejects_and_retries_until_recovered(self):
+        cases = (self.raw.replace(b"\x85\x03", b"\x85\x04"),
+                 self.raw.replace(b"\x05\x0a", b"\x05\x0b"),
+                 self.raw.replace(b"\x95\x04", b"\x95\x03"),
+                 self.raw[:-1], b"\x85", self.raw + self.raw,
+                 self.raw + self.raw.replace(b"\x09\x00", b"\x09\x01"),
+                 self.raw + b"\x85")
+        for raw in cases:
+            with self.subTest(raw=raw):
+                self.configure(raw=raw)
+                info = self.scan()
+                self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                self.assertEqual(self.assert_no_listener(info),
+                                 ["input report 03 length unproven; not opened"])
+                self.dev.get_report_descriptor.return_value = self.raw
+                recovered = self.scan()
+                self.assertEqual(recovered["input_report_sizes"], {"3": 5})
+                self.assertIn(fixtures.PATH_A, self.case.cache)
+                self.assertEqual(self.dev.close.call_count, 2)
+
+    def test_sc650_all_maxima_and_partial_caps_must_agree(self):
+        # Some caps fields exist, but input per-ID proof fails. Neither input
+        # nor other-direction maxima may be contradicted by a raw descriptor.
+        for maxima in ((8, 0, 0), (5, 7, 0), (5, 0, 7)):
+            with self.subTest(maxima=maxima):
+                self.configure(maxima=maxima, counts=(2, 1, 1))
+                self.case.hid.HidP_GetValueCaps.side_effect = lambda *args: 0
+                info = self.scan()
+                self.assertIsNone(info["input_report_sizes"])
+                self.assertEqual(info["report_descriptor_error"], "collection maximum mismatch")
+                self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                self.assert_no_listener(info)
+
+    def test_sc650_proven_caps_are_never_overridden_by_raw_descriptor(self):
+        for report_id in (3, 4):
+            with self.subTest(report_id=report_id):
+                self.configure()
+                self.case.batch3_descriptor((0x1D57, 0xFA60), (0x000A, 0), {report_id: 5}, {4: 7})
+                info = self.scan()
+                self.assertEqual(info["input_report_sizes"], {str(report_id): 5})
+                self.backend.device.assert_not_called()
+                if report_id == 4:
+                    self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                    self.assert_no_listener(info)
+
+    def test_sc650_missing_or_failing_raw_getter_never_opens_listener_or_caches(self):
+        for failure in ("missing", "open_path", "get_report_descriptor", "close"):
+            with self.subTest(failure=failure):
+                self.configure()
+                dev = (Mock(spec=["open_path", "close"]) if failure == "missing" else self.dev)
+                self.backend.device.return_value = dev
+                if failure != "missing":
+                    getattr(dev, failure).side_effect = OSError("private-device-path")
+                info = self.scan()
+                self.assertIsNone(info["input_report_sizes"])
+                self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                self.assertNotIn("private-device-path", str(info))
+                self.assertEqual(self.assert_no_listener(info),
+                                 ["input report 03 length unproven; not opened"])
+                dev.close.assert_called_once_with()
+                if failure == "missing":
+                    dev.open_path.assert_not_called()
+                self.backend.device.return_value = self.dev
+                self.dev.reset_mock(side_effect=True)
+                self.dev.get_report_descriptor.return_value = self.raw
+                self.assertEqual(self.scan()["input_report_sizes"], {"3": 5})
+
+    def test_sc650_raw_fallback_does_not_expand_identity_or_collection_scope(self):
+        cases = (((0x1D57, 0xFA65), (0xFF00, 1)),
+                 ((0x1D57, 0xFA65), (0x000A, 0)),
+                 ((0x1D58, 0xFA60), (0x000A, 0)),
+                 ((0x1D57, 0xFA61), (0x000A, 0)),
+                 ((0x1D57, 0xFA60), (0x000B, 0)),
+                 ((0x1D57, 0xFA60), (0x000A, 1)),
+                 ((0x1D57, 0xFA60), (0xFF00, 1)))
+        for identity, collection in cases:
+            with self.subTest(identity=identity, collection=collection):
+                self.configure(identity=identity, collection=collection)
+                self.assert_no_listener(self.scan())
+                self.backend.device.assert_not_called()
+        # The legacy FA65 state route also stays caps-only.
+        self.configure(identity=(0x1D57, 0xFA65))
+        original = self.case.hid.HidD_GetAttributes.side_effect
+
+        def attributes(handle, pointer):
+            result = original(handle, pointer)
+            ctypes.cast(pointer, ctypes.POINTER(topology._Attributes)).contents.release = 0x0116
+            return result
+
+        self.case.hid.HidD_GetAttributes.side_effect = attributes
+        self.assert_no_listener(self.scan())
+        self.backend.device.assert_not_called()
+
+    def test_sc650_native_exclusion_still_precedes_all_handle_opens(self):
+        self.configure()
+        native = r"\\?\hid#vid_373b&pid_1278&mi_01#native"
+        self.assertEqual(self.case.scan([native]), [])
+        self.case.kernel.CreateFileW.assert_not_called()
+        self.backend.device.assert_not_called()
+        with fixture([], []) as (bus, provider):
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(bus.opened, [])
 
 
 if __name__ == "__main__":

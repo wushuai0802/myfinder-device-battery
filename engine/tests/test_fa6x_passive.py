@@ -99,6 +99,71 @@ def fixture(frames=(), inventory=None):
 
 
 class Fa6xPassiveTests(unittest.TestCase):
+    def test_sc650_reported_prefixes_follow_passive_lifecycle(self):
+        info = descriptor(input_report_length=5, input_report_sizes={"3": 5})
+        with fixture([[3, 0x8E, 0x40, 1, 0x5B]], [info]) as (bus, provider):
+            first, = provider.poll()
+            self.assertEqual((first.level, first.name, first.verification_level),
+                             (91, F.PIDS[0xFA60], "C"))
+            self.assertEqual((first.charging, first.charging_known, first.cached), (False, False, False))
+            bus.queues[info["path"]] = [[3, 0x8E, 0x40, 1, 0x5B], [3, 0x8E, 0x40, 1, 0x31]]
+            newest, = provider.poll()
+            self.assertEqual(newest.level, 49)
+            stale, = provider.poll()
+            self.assertEqual((stale.level, stale.cached, stale.online, stale.charging_known),
+                             (49, True, False, False))
+            self.assertEqual((stale.measured_at_utc, stale.queried_at_utc),
+                             (newest.measured_at_utc, newest.queried_at_utc))
+            self.assertEqual(bus.opened, [info["path"]])
+            self.assertEqual(bus.closed, [])
+            self.assertTrue(all(timeout == 1 for _, _, timeout in bus.reads[2:]))
+            bus.inventory = []
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(bus.closed, bus.opened)
+
+    def test_sc650_only_fa60_event40_state01_is_accepted(self):
+        for pid in F.PIDS:
+            for event in (0, 0x40, 0x41, 0x42, 0xFF):
+                for state in (0, 1, 2, 3, 4, 255):
+                    raw = report(49, model=0x8E, event=event, state=state)
+                    expected = 49 if (pid, event, state) == (0xFA60, 0x40, 1) else None
+                    with self.subTest(pid=pid, event=event, state=state):
+                        self.assertEqual(F.parse_battery(raw, pid), expected)
+                        with fixture([raw], [descriptor(pid)]) as (_, provider):
+                            self.assertEqual([s.level for s in provider.poll()],
+                                             [] if expected is None else [expected])
+        for level in (0, 101, 255):
+            self.assertIsNone(F.parse_battery(report(level, model=0x8E, state=1), 0xFA60))
+
+    def test_sc650_actual_length_must_equal_per_id_proof_without_refreshing_history(self):
+        for length in (5, 8, 19, 64, 100, 4096):
+            maximum = max(128, length)
+            info = descriptor(input_report_length=maximum,
+                              input_report_sizes={"3": length, "9": maximum})
+            invalid = [report(91, model=0x8E, state=1, length=n)
+                       for n in (4, length - 1, length + 1)]
+            invalid += [report(91, model=0x8E, state=1, report_id=9, length=maximum)]
+            with self.subTest(length=length), fixture(invalid, [info]) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                bus.queues[info["path"]] = [report(49, model=0x8E, state=1, length=length)]
+                first, = provider.poll()
+                self.assertEqual(first.level, 49)
+                bus.queues[info["path"]] = invalid + [report(91, model=0x8E, event=0x41,
+                                                           state=1, length=length)]
+                stale, = provider.poll()
+                self.assertTrue(stale.cached)
+                self.assertEqual((stale.level, stale.measured_at_utc, stale.queried_at_utc),
+                                 (49, first.measured_at_utc, first.queried_at_utc))
+                self.assertTrue(all(size == maximum for _, size, _ in bus.reads))
+
+    def test_sc650_no_per_id_proof_never_opens(self):
+        for sizes in (None, {}, {"9": 5}, {"3": 4}, {"3": 6}):
+            info = descriptor(input_report_length=5, input_report_sizes=sizes)
+            with self.subTest(sizes=sizes), fixture([[3, 0x8E, 0x40, 1, 49]], [info]) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.reads), ([], []))
+                self.assertEqual(provider.diagnostics(), ["input report 03 length unproven; not opened"])
+
     def test_web_fa65_release_0118_with_extra_state_reads_only_web(self):
         web = descriptor(0xFA65, release_number=0x0118)
         extra = descriptor(0xFA65, usage_page=0x000A, usage=0, path=b"extra-state",
@@ -328,7 +393,7 @@ class Fa6xPassiveTests(unittest.TestCase):
     def test_exact_web_model_table_and_events(self):
         expected = {0xFA60: {0x07, 0x76, 0x77, 0x78, 0x79, 0xE8},
                     0xFA65: {0x71, 0x76, 0x77, 0x78, 0x79, 0x90}}
-        self.assertEqual(F.MODELS, expected)
+        self.assertEqual(F.MODELS, {**expected, 0xFA60: expected[0xFA60] | {0x8E}})
         for pid, models in expected.items():
             for model in range(256):
                 for event in (0x40, 0x41):
