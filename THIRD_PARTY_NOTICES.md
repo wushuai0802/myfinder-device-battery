@@ -24,6 +24,16 @@ Upstream protocol references and model verification notes are retained in
 `engine/upstream-credits.md`. A protocol implementation or a listed USB ID does
 not by itself establish hardware validation.
 
+The CHERRY battery-only provider is an independent project implementation.
+Protocol facts reference [zcmk123/cherry-battery-state](https://github.com/zcmk123/cherry-battery-state/tree/af82d4d98cbad872a586302ba44e6a6b75ba65f4),
+commit `af82d4d98cbad872a586302ba44e6a6b75ba65f4`, and contributor
+[#482](https://github.com/HeyOkay/HaloBattery/issues/482). No upstream
+application code is copied for this adaptation. The supervisor's GitHub
+contents check found an MIT License declaration in that commit's README but
+no standalone root LICENSE file. This declaration is not verification of the
+complete copyright and permission text. The reference does not assert that
+an upstream license-text review or maintainer hardware acceptance has passed.
+
 The Windows distribution bundles the official CPython embeddable runtime and
 the `hidapi` Python wheel, with their original license files. Versions, original
 download URLs and SHA256 hashes are pinned in `engine/dependencies.lock.json`.
