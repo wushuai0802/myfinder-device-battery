@@ -1,4 +1,4 @@
-"""Synthetic #224 protocol/descriptor fixtures; no real HID or vendor code."""
+"""Synthetic FA09 rejection/BY fixtures; no real HID or vendor code."""
 from contextlib import contextmanager
 from types import SimpleNamespace
 import unittest
@@ -58,46 +58,43 @@ def aula_fixture(frames=(), inventory=None, **kwargs):
 
 
 class AulaFa09Tests(unittest.TestCase):
-    def assert_feature_only(self, bus, count=1):
-        self.assertEqual(bus.writes, [])
-        self.assertEqual(bus.reads, [])
-        self.assertEqual(len(bus.feature_writes), count)
-        self.assertTrue(all(frame == bytes.fromhex("06 87 00 00 01 00 02 00")
-                            for _, frame in bus.feature_writes))
-        self.assertTrue(all((rid, length) == (6, 8) for _, rid, length in bus.feature_reads))
-        self.assertEqual(bus.opened, bus.closed)
+    def test_disproven_feature06_values_never_open_or_query(self):
+        for level in (100, 64, 48):
+            with self.subTest(level=level), aula_fixture([aula_reply(level)]) as bus:
+                provider = P()
+                self.assertEqual(provider.poll(), [], "Feature06 byte3 is not a battery reading")
+                self.assertEqual(bus.opened, [])
+                self.assertEqual((bus.writes, bus.reads, bus.feature_writes, bus.feature_reads),
+                                 ([], [], [], []))
+                self.assertIn("Feature06 battery path disabled: field does not track battery; nothing sent",
+                              provider.diagnostics())
+                self.assertNotIn("receiver-a", str(provider.diagnostics()))
 
-    def test_exact_frame_name_unknown_charging_and_only_one_card(self):
+    def assert_no_io(self, bus):
+        self.assertEqual((bus.opened, bus.closed, bus.writes, bus.reads,
+                          bus.feature_writes, bus.feature_reads), ([], [], [], [], [], []))
+
+    def test_feature_only_with_unproven_ff02_never_produces_card_in_either_order(self):
         ff04 = aula_entry(path=b"feature-ff04")
         ff02 = entry(path=b"by-ff02", usage_page=0xFF02, input_report_sizes=None)
         for factories in ((P, VgnBeiyingProvider), (VgnBeiyingProvider, P)):
             with self.subTest(order=factories), aula_fixture([aula_reply()], [ff02, ff04]) as bus:
-                status, = [s for factory in factories for s in factory().poll()]
-                self.assertEqual((status.name, status.level, status.kind, status.verification_level),
-                                 ("2.4G 无线键盘（3554:FA09）", 64, "keyboard", "C"))
-                self.assertEqual(status.key, "mchose_by_keyboard:receiver-a")
-                self.assertFalse(status.charging_known)
-                self.assertFalse(status.charging)
-                self.assertTrue(status.unconfirmed)
-                self.assert_feature_only(bus)
-                self.assertEqual(bus.feature_reads, [(ff04["path"], 6, 8)])
-                self.assertEqual(bus.opened, [ff04["path"]])
+                self.assertEqual([s for factory in factories for s in factory().poll()], [])
+                self.assert_no_io(bus)
 
-    def test_reply_validation_and_zero_suppression(self):
-        for level in (1, 64, 99, 100):
-            self.assertEqual(M.parse_aula_reply(aula_reply(level)), (level, False, ""))
-        invalid = [None, [], aula_reply()[:-1], aula_reply() + [0],
-                   M.AULA_REQUEST, M.make_request(), identity()]
+    def test_feature_frames_including_malformed_values_never_open_or_query(self):
+        frames = [aula_reply(level) for level in (1, 48, 64, 99, 100)]
+        frames += [None, [], aula_reply()[:-1], aula_reply() + [0],
+                   bytes.fromhex("06 87 00 00 01 00 02 00"), M.make_request(), identity()]
         for offset, value in ((0, 0), (0, 0x13), (1, 0x88), (3, 0), (3, -1),
                               (3, 101), (3, 255), (3, True), (3, 64.0), (7, 256)):
             frame = aula_reply()
             frame[offset] = value
-            invalid.append(frame)
-        for frame in invalid:
+            frames.append(frame)
+        for frame in frames:
             with self.subTest(frame=frame), aula_fixture([frame]) as bus:
-                self.assertIsNone(M.parse_aula_reply(frame))
                 self.assertEqual(P().poll(), [])
-                self.assert_feature_only(bus)
+                self.assert_no_io(bus)
 
     def test_unproven_feature_or_absent_io_caps_never_open_or_send(self):
         defects = [dict(feature_report_length=n) for n in (None, 0, 7, 8.0, 9, 20)]
@@ -117,8 +114,7 @@ class AulaFa09Tests(unittest.TestCase):
         for infos in inventories:
             with self.subTest(infos=infos), aula_fixture([aula_reply()], infos) as bus:
                 self.assertEqual(P().poll(), [])
-                self.assertEqual(bus.opened, [])
-                self.assert_feature_only(bus, 0)
+                self.assert_no_io(bus)
 
     def test_proven_by_wins_if_feature_exists_and_never_falls_back(self):
         mixed = entry(feature_report_length=8, feature_report_sizes={"6": 8})
@@ -132,20 +128,66 @@ class AulaFa09Tests(unittest.TestCase):
                 self.assertTrue(all(frame in (M.identity_request(), M.make_request())
                                     for _, frame in bus.writes))
 
-    def test_issue312_ff02_by_precedes_feature06_and_silence_does_not_fall_back(self):
+    def test_g75pro_ff02_precedes_feature06_and_failure_never_falls_back(self):
         infos = [aula_entry(path=b"ff04-feature"), entry(path=b"ff02-by", usage_page=0xFF02)]
-        for frames, count in (([identity("030000000115"), notification()], 1), ([], 0),
-                              ([identity("030000000115"), notification(0)], 0)):
+        # Canonical model fixture; unlike #476's raw 05 frame, bytes 5..10
+        # contain the exact G75 Pro code. Notification padding is synthetic.
+        for frames, level in (([identity("030000000115"), notification()], 95), ([], None),
+                              ([identity("030000000115"), notification(0)], None),
+                              ([identity("030000000115"), reply(0)], None)):
             for factories in ((P, VgnBeiyingProvider), (VgnBeiyingProvider, P)):
                 with self.subTest(frames=frames, order=factories), aula_fixture(frames, infos) as bus:
                     statuses = [s for factory in factories for s in factory().poll()]
-                    self.assertEqual(len(statuses), count)
-                    if count:
-                        self.assertEqual((statuses[0].name, statuses[0].level), ("MCHOSE G75 Pro", 95))
+                    self.assertEqual(len(statuses), int(level is not None))
+                    if level is not None:
+                        self.assertEqual((statuses[0].name, statuses[0].level), ("MCHOSE G75 Pro", level))
+                        self.assertTrue(statuses[0].charging_known)
+                        self.assertFalse(statuses[0].charging)
                         self.assertFalse(statuses[0].unconfirmed)
                     self.assertEqual(bus.opened, [b"ff02-by"])
                     self.assertEqual(bus.opened, bus.closed)
                     self.assertEqual((bus.feature_reads, bus.feature_writes), ([], []))
+                    self.assertEqual([frame for _, frame in bus.writes],
+                                     [M.identity_request(), M.make_request()] if frames
+                                     else [M.identity_request()])
+
+    def test_issue476_raw_identity_is_unknown_but_fa09_generic4a_remains_readable(self):
+        infos = [aula_entry(path=b"ff04-feature"), entry(path=b"ff02-by", usage_page=0xFF02)]
+        # Complete raw literals from #476, without inserting or shifting bytes.
+        model476 = list(bytes.fromhex("13 05 01 00 03 00 00 00 01 15 00 00 00 00 00 00 00 00 00 00"))
+        battery476 = list(bytes.fromhex("13 4A 01 00 02 64 01 00 00 00 00 00 00 00 00 00 00 00 00 00"))
+        self.assertEqual(bytes(model476[5:11]).hex(), "000000011500")
+        self.assertIsNone(M.parse_model(model476), "raw #476 identity must not be guessed as G75 Pro")
+        for battery, level in ((battery476, 100), (notification(0), None), (reply(0), None)):
+            for factories in ((P, VgnBeiyingProvider), (VgnBeiyingProvider, P)):
+                with self.subTest(battery=battery, order=factories), \
+                        aula_fixture([model476, battery], infos) as bus:
+                    statuses = [s for factory in factories for s in factory().poll()]
+                    self.assertEqual(len(statuses), int(level is not None))
+                    if level is not None:
+                        status, = statuses
+                        self.assertEqual((status.name, status.level), ("2.4G 无线键盘（3554:FA09）", 100))
+                        self.assertFalse(status.charging_known)
+                        self.assertFalse(status.charging)
+                        self.assertFalse(status.unconfirmed)
+                    self.assertEqual(bus.opened, [b"ff02-by"])
+                    self.assertEqual(bus.opened, bus.closed)
+                    self.assertEqual((bus.feature_reads, bus.feature_writes), ([], []))
+                    self.assertEqual([frame for _, frame in bus.writes],
+                                     [M.identity_request(), M.make_request()])
+
+    def test_duplicate_or_unproven_ff02_with_feature_only_ff04_never_opens(self):
+        ff04 = aula_entry(path=b"feature-ff04")
+        ff02 = entry(path=b"by-ff02", usage_page=0xFF02)
+        inventories = [[ff04, ff02, dict(ff02, path=b"duplicate-ff02")],
+                       [ff04, dict(ff04, path=b"duplicate-ff04"), ff02]]
+        for direction in ("input", "output"):
+            inventories += [[ff04, dict(ff02, **{direction + "_report_sizes": sizes})]
+                            for sizes in (None, {}, {"19": 19}, {"18": 20}, {"19": 20, "20": 20})]
+        for infos in inventories:
+            with self.subTest(infos=infos), aula_fixture([identity(), reply()], infos) as bus:
+                self.assertEqual(P().poll(), [])
+                self.assert_no_io(bus)
 
     def test_failures_never_send_dangerous_commands_or_retry_in_same_poll(self):
         for options in (dict(error_at="open"), dict(error_at="feature_write"),
@@ -154,47 +196,41 @@ class AulaFa09Tests(unittest.TestCase):
             with self.subTest(options=options), aula_fixture([aula_reply()], **options) as bus:
                 provider = P()
                 self.assertEqual(provider.poll(), [])
-                self.assert_feature_only(bus, int(options.get("error_at") != "open"))
-                self.assertEqual(len(bus.feature_reads), int(options.get("error_at") == "feature_read"))
+                self.assert_no_io(bus)
                 self.assertNotIn("private-device-path", str(provider.diagnostics()))
 
-    def test_silence_backoff_recovery_and_removal(self):
+    def test_repeated_polls_and_replug_never_retry_disabled_feature_path(self):
         provider = P()
-        for now, frames, sends, levels in ((0, [], 1, []), (5, [], 1, []),
-                                           (60, [aula_reply()], 0, []), (66, [], 1, []),
-                                           (180, [aula_reply()], 0, []),
-                                           (187, [aula_reply()], 1, [64]),
-                                           (188, [aula_reply(70)], 1, [70])):
+        for now, frames in ((0, []), (5, []), (60, [aula_reply()]), (66, []),
+                            (180, [aula_reply()]), (187, [aula_reply()]), (188, [aula_reply(70)])):
             with self.subTest(now=now), aula_fixture(frames) as bus:
                 bus.now = now
-                self.assertEqual([s.level for s in provider.poll()], levels)
-                self.assert_feature_only(bus, sends)
+                self.assertEqual(provider.poll(), [])
+                self.assert_no_io(bus)
         with aula_fixture([]):
             provider.poll()
             provider.poll()
         with aula_fixture([], []):
             provider.poll()
         with aula_fixture([aula_reply()]) as bus:
-            self.assertEqual(len(provider.poll()), 1)
-            self.assert_feature_only(bus)
+            self.assertEqual(provider.poll(), [])
+            self.assert_no_io(bus)
 
-    def test_by_and_aula_receivers_do_not_leak_name_or_charging(self):
+    def test_disabled_feature_receiver_does_not_block_by_or_leak_state(self):
         for reverse in (False, True):
             infos = [aula_entry("aula"), entry("by")]
-            frames = [aula_reply(), identity(), reply(63, 0x10)]
+            frames = [identity(), reply(63, 0x10)]
             if reverse:
                 infos.reverse()
-                frames = [identity(), reply(63, 0x10), aula_reply()]
             with self.subTest(reverse=reverse), aula_fixture(frames, infos) as bus:
                 statuses = {s.physical_id: s for s in P().poll()}
-                self.assertEqual(statuses["aula"].name, "2.4G 无线键盘（3554:FA09）")
-                self.assertFalse(statuses["aula"].charging_known)
-                self.assertTrue(statuses["aula"].unconfirmed)
+                self.assertEqual(set(statuses), {"by"})
                 self.assertEqual(statuses["by"].name, "MCHOSE X75 V2")
                 self.assertTrue(statuses["by"].charging)
                 self.assertTrue(statuses["by"].charging_known)
                 self.assertFalse(statuses["by"].unconfirmed)
-                self.assertEqual(len(bus.feature_writes), 1)
+                self.assertEqual((bus.feature_writes, bus.feature_reads), ([], []))
+                self.assertEqual(bus.opened, [entry("by")["path"]])
                 self.assertEqual([f for _, f in bus.writes], [M.identity_request(), M.make_request()])
 
 

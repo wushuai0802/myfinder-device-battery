@@ -2240,6 +2240,18 @@ the above runtime descriptor proof, FF02 handles both `05` and `4A`. Its
 notification prefix is decoded below; #312 does not supply a complete raw
 descriptor or all 20 reply bytes, so this task does not claim hardware acceptance.
 
+Issue [#476](https://github.com/wushuai0802/myfinder-device-battery/issues/476)
+also reports FF04 as Feature-only and FF02 as 20-byte input/output, but maximum
+lengths alone do not prove report IDs or byte-array fields. For exactly
+`3554:FA09 / FF02:0002`, missing caps field proof may use the existing strict
+raw-report-descriptor fallback. It opens only to fetch the descriptor and closes
+without input reads, output writes or Feature commands. The descriptor must
+match the collection and all caps maxima and agree with any already proven caps
+direction; the reader still requires a unique byte-array report `13`, 20 bytes
+in each direction. Malformed, wrong-collection, mismatched or incomplete proof
+is rejected and not cached as complete. This does not enable another USB ID or
+remove the FF04 marker, exact-name or physical-sibling gates.
+
 M HUB does **not** read battery on every FA09 receiver. For the exact generic
 names `2.4G Wireless Receiver` and `MCHOSE 2.4G Wireless`, its identification
 path (`Va`, `getPassWord`, `keyboardPwds`, `Ba` in `getDeviceMap`) reads a
@@ -2391,8 +2403,9 @@ proven as a raw byte array by `battery_caps` (including the single byte-selector
 array case). This is a conservative local acceptance boundary, not a claim that
 the script proves all FA09 input IDs/lengths. Unknown/multiple IDs, split/aliased
 fields, unproven lengths, wrong collection or duplicate eligible collections
-cause zero opens/sends. Topology uses preparsed descriptor data only; no feature
-request or output query is used to discover capabilities.
+cause zero query opens/sends. Topology uses preparsed descriptor data, with the
+exact allow-listed raw descriptor fallback above when caps proof is missing;
+no feature request or output query is used to discover capabilities.
 
 Each exchange sends once and reads at most 32 packets/2200 ms (M HUB's
 `retryTime:2` budget). A silent/asleep receiver or invalid battery reply creates
@@ -2400,7 +2413,30 @@ no new reading and no engine error; unknown FA09 identities use the generic
 path above, while unknown `41E4:2001` identities remain blocked. There is no invented sleep byte or
 offline 0%. The protocol has no nonce; cached receiver replies, delayed packets,
 sleep freshness, charge transitions and concurrent M HUB ownership are untested.
-All new reply fixtures are **synthetic**, including their trailer values.
+Reply fixtures are **synthetic**, including their trailer values, except the
+two complete #476 literals retained verbatim below.
+
+##### #476 raw frames do not establish G75 Pro identification
+
+The supplied issue evidence records these complete frames, without inserting
+bytes or substituting a canonical model fixture:
+
+```text
+05 reply: 13 05 01 00 03 00 00 00 01 15 00 00 00 00 00 00 00 00 00 00
+4A reply: 13 4A 01 00 02 64 01 00 00 00 00 00 00 00 00 00 00 00 00 00
+```
+
+Under the established `reply[5:19]` payload rule, the six identity bytes are
+`000000011500`, not the issue's claimed `030000000115` (G75 Pro). Offset 4 is
+metadata, not evidence of a missing length byte. The discrepancy needs a checked
+capture; no decoder change, alternate-offset search or real-device automatic
+G75 Pro identification is justified. The raw identity is unknown, so the
+existing FA09 generic `4A` path reads the raw battery frame as **100%, neutral
+`2.4G 无线键盘（3554:FA09）` name, charging unknown**, with no Feature I/O.
+This is offline interpretation of user-supplied bytes, not project hardware
+acceptance. Independently, the canonical synthetic
+`identity("030000000115") + notification()` remains a strict G75 Pro / 95%
+regression; its envelope and notification padding are not the #476 raw capture.
 
 #### Asynchronous `0A` battery notifications (#312)
 
@@ -2462,64 +2498,56 @@ does not supply their exact target usage/report descriptor variants or prove
 which named devices take feature vs output transport. They are **recorded only,
 not enabled**. FA07 and other keyboard/mouse identities are also excluded.
 
-#### Shared FA09 feature-only variant: user hardware evidence #224 / #108
+#### Shared FA09 Feature06 battery path disabled (#99 / #485 / #477)
 
-**C / 用户实机验证，#224；待本项目实机验证。** The supplied issue
+**C / Feature06 电量路径已停用；独立证明的 BY 范围不变，待本项目实机验证。**
+Earlier evidence in
 `.ai/evidence/issue-224.md` reports F87 on Windows 11, six stable 100%
 reads matching Aula Hub, with the same generic product string for F75/F87.
 It attributes the query to Aula Hub 2.2.3 `getKeyboardPower()`; that Hub bundle
-was not supplied or independently inspected here. The concrete F87 result is
-user evidence, not a hardware test performed by this task or proof of every F75.
+was not supplied or independently inspected here. Those constant samples did
+not prove the field tracks battery depletion.
 
 Issue #108 also reports a non-AULA SCC100 keyboard reading 100% through this
-Feature 06 path on 1.3.9-beta.3. This user result shows the path is shared across
-brands; it does not identify every compatible model or establish charging semantics.
+Feature06 path on 1.3.9-beta.3. These are historical user reports of displayed
+values, not current compatibility or charging proof. Newer feedback disproves
+using byte 3 as a battery measurement:
 
-The unified owner remains `mchose_by_keyboard`. The Feature 06 path requires exactly
-`3554:FA09`, one eligible `FF04:0002` collection, the existing exact generic-name
-gate, descriptor-proven **Feature report 06 of 8 bytes**, and **input/output
-maximum lengths both zero with proven empty input/output report-size maps**.
-Topology requires zero field counts as well as zero lengths to prove absence;
-failed proofs (`None`) and unknown lengths are not absence. This deliberately accepts only #224's feature-only
-shape, not arbitrary additional reports. A proven 20-byte BY input/output pair
-on FF04 or the same receiver's FF02 takes priority even if Feature 06 exists. Ambiguous
-collections or failed proofs cause no query handle open or send; neither path
-falls back to the other following an I/O failure. Topology collects both forms
-of report-size evidence from preparsed data without any device command, and
-does not cache a failed feature-only proof as successful discovery.
+- [#99](https://github.com/wushuai0802/myfinder-device-battery/issues/99):
+  NEWMEN X75 Fn+Alt lights fell from 1–9 to 1–8 while the card stayed 100%.
+- [#485](https://github.com/wushuai0802/myfinder-device-battery/issues/485):
+  KZZI K75's keyboard screen showed 48% while the program showed 100% (待确认).
+- [#477](https://github.com/wushuai0802/myfinder-device-battery/issues/477):
+  AULA F99 on 2.4G was reported to remain at 100%.
 
-Only one complete Feature request is allowed:
+The following frames are retained **only as historical evidence; neither
+SET_FEATURE nor GET_FEATURE is sent by this reader now**:
 
 ```text
-SET_FEATURE: 06 87 00 00 01 00 02 00
-GET_FEATURE: report ID 06, length 8
+old SET_FEATURE: 06 87 00 00 01 00 02 00
+old GET_FEATURE: report ID 06, length 8
 #224 reply: 06 87 02 64 64 64 AB 82
 ```
 
-Replies must be exactly eight bytes, report ID 06, command 87, and byte 3 in
-0..100. Zero is suppressed consistently with BY; 1..100 produces
-`2.4G 无线键盘（3554:FA09）` with unknown charging, matching the unknown-model
-BY path's neutral name. The provider key remains `mchose_by_keyboard:<physical>`
-(or the existing path representation when physical identity is absent); the
-isolated worker retains its existing `:instance:<physical>` suffix and legacy
-key. The display name participates in neither key nor the public-ID hash, so
-the rename preserves history, aliases and hidden settings. Other reply bytes have no
-inferred checksum, charging or connection-bit meanings. Short/failed sends
-do not trigger GET_FEATURE or another request. Silence, exceptions and invalid
-replies produce no new reading or engine error; unsuccessful Feature queries
-reuse the existing first immediate retry, then 60-second exponential back-off
-capped at 30 minutes, per physical receiver/path and cleared on removal or
-successful recovery. Historical readings retain their confirmation timestamp
-and become unconfirmed. The existing isolated worker bounds blocking Feature
-I/O; this code adds no claim of native synchronous-call cancellation.
-
 #312 adds the counterexample `06 87 02 00 F7 00 FC 51` from G75 Pro: byte 3
-stays zero after wake/replug while FF02 BY identifies `030000000115` and reports
-the `0A` 95% notification. F87's #224 byte 3 remains `64` (hex, 100%). These
-constant samples do not prove Feature byte 3 tracks battery. Keep Feature
-readings **待确认** (`unconfirmed=True`) and use them only when no proven BY
-transport is available; a failed/silent selected BY exchange does not trigger
-Feature I/O in the same poll. No new Feature offset is guessed.
+stays zero after wake/replug while FF02 BY is reported to identify
+`030000000115` and supply the `0A` 95% notification. No alternative Feature
+offset or charging/checksum/connection-bit meaning is inferred.
+
+The unified owner remains `mchose_by_keyboard`. Even fully proven
+`3554:FA09 / FF04:0002` Feature06/8-only collections with proven empty
+input/output maps are rejected **before query-handle open**, with zero reads,
+writes or Feature calls. Unknown and malformed capability proofs remain
+rejected. Independently proven BY on FF04 or its same-physical FF02 sibling
+remains eligible under all existing gates. A failed, silent or zero-valued BY
+exchange never falls back to Feature06. No Feature query/parser/back-off path
+remains; no new Feature reading or card is manufactured.
+
+Existing historical records retain their key, percentage, confirmation time
+and unconfirmed/stale state through the unchanged history layer. Tests seed
+these old records explicitly instead of obtaining them through the disabled
+path. A later valid BY read may refresh the same physical card with its proven
+model name and charging evidence; both provider orders still yield one card.
 
 For #231 feedback, fixed rejection text such as `report sizes unproven`,
 `receiver name unrecognized` or `collection missing or ambiguous` is carried
@@ -2552,15 +2580,16 @@ Addresses below are virtual addresses; the cited `.text` file offsets are
 The exact eight-byte AULA request literal was not found in this binary. That
 bounded search does not prove no other routine can construct it. The identified
 official battery path and configuration **do not prove Feature 06/87 or the
-required collection for 05AC:024F**, so that pair remains disabled. FA09 support
-rests on #224 at level C, not an invented official-driver confirmation.
+required collection for 05AC:024F**, so that pair remains disabled. The old
+FA09 Feature06 evidence does not establish battery validity; that path is now
+disabled. Independently proven BY retains level C.
 
 State-changing operations are present in the official package and excluded:
 
 - Configuration/lighting write paths at `0x4346d3`, `0x4346f2`, `0x43474e`,
   `0x434778` construct prefixes `04 18`, `04 13`, `04 02`, `04 F0` and use
   `0x44faa0` -> the 65-byte Feature sender. Individual prefix semantics have
-  not all been recovered; none is permitted by the AULA request whitelist.
+  not all been recovered; none is permitted by this reader.
 - `language/1033.lan:34-36,87-106` contains lighting, Reset Keyboard, Factory
   Reset, clear-all-data confirmation and Firmware Update UI. Reset branch
   `0x414450` schedules internal operations 6/13 by mode; factory-reset branch
@@ -2572,12 +2601,14 @@ State-changing operations are present in the official package and excluded:
   `0x16ddb0` / `0x16dd70`). No updater or firmware payload was executed.
 - No explicit pairing command was established in this bounded inspection.
   Pairing, firmware, reset, lighting, settings and every other Feature request
-  are excluded by allowing only the full eight-byte battery query above.
+  remain excluded; this reader sends no Feature request.
 
-Synthetic tests cover descriptor selection and rejection, mixed BY/Feature
-capabilities, exact send traces, malformed/zero/out-of-range replies, silence
-back-off/recovery, independent receiver state, one FA09 card in either provider
-order, worker serialization, stale history and diagnostic summaries. This task
+Offline tests cover descriptor selection and rejection, mixed BY/Feature
+capabilities, Feature-only zero opens/I/O, exact BY send traces,
+malformed/zero/out-of-range BY replies, BY silence back-off/recovery,
+independent receiver state, one FA09 card in either provider order, worker
+serialization, explicitly seeded old history and diagnostic summaries. They
+separate #476's unchanged raw literals from canonical synthetic model fixtures. This task
 did not access hardware or network. Actual F75 firmware, repeated standalone
 polling, delayed/cached replies, charging transitions, sleep/wake and coexistence
 with Aula Hub remain unverified by this project; native feedback rendering was
