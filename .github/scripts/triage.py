@@ -26,6 +26,8 @@ IN_NEXT_RELEASE = ("自动回复：报告里的 {models} 在开发代码已有�
 MODEL_MATCH_REQUIRED = ("自动回复：报告中的设备 ID 仅部分型号可读取电量，需核对准确型号和接口，"
                         "暂不能仅凭共享 ID 确认支持。请在这里补充一次新的反馈报告；没有 GitHub 账号的话，"
                         "可以在程序里重新提交反馈，并在描述里写上本条编号。维护者会尽快查看。")
+UNSUPPORTED = "自动回复：这款设备目前还读不到电量。请先确认已升级到最新正式版；如果电脑上有官方软件能显示它的电量，请在这里回复软件名称、版本和下载地址，有了这个我们才能研究。维护者会定期查看。"
+BUG_ACK = "自动回复：收到你的反馈，维护者会定期查看并在这里回复。如果方便，请写清楚操作步骤和看到的现象，有截图更好。"
 PAIR = re.compile(r"(?<![\w:])([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})(?![\w:])")
 TYPE = re.compile(r"^[ \t]*(?:\*\*)?类型(?:\*\*)?[ \t]*[：:][ \t]*([^\r\n]+?)[ \t\r]*$", re.MULTILINE)
 DEVICE_TYPES = {"设备不识别", "电量或 DPI 不对"}
@@ -210,6 +212,11 @@ def decide(issue, known, comments=None, known_next=None):
         label, reason = "insufficient-evidence", "报告仅有已取得电量的卡片设备，缺少待分类设备的证据。"
     else:
         return result
+    if reply is None:
+        if label in ("pack-candidate", "new-vendor", "insufficient-evidence"):
+            reply = UNSUPPORTED
+        elif label == "bug":
+            reply = BUG_ACK
     if restricted:
         ids = "、".join(sorted({f"{row[0]:04X}:{row[1]:04X}" for row in restricted}))
         reason += " 仅部分型号可读取的共享或受限 ID，需核对准确型号和接口：" + ids + "。"
@@ -224,6 +231,9 @@ def decide(issue, known, comments=None, known_next=None):
             reply = (NEEDS_INFO_WITH_REPLY if label == "needs-info" else reply.replace(
                 "请在这里补充一次新的反馈报告；没有 GitHub 账号的话，可以在程序里重新提交反馈，并在描述里写上本条编号。",
                 SUPPLEMENT_GUIDANCE))
+            if reply == UNSUPPORTED:
+                reply = reply.replace("请在这里回复软件名称、版本和下载地址",
+                                      "请在程序里打开‘我的反馈’，选中这条后点‘补充资料’，写上软件名称、版本和下载地址")
         result["reply"] = MARKER + "\n" + reply
     return result
 
