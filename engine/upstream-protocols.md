@@ -3492,6 +3492,14 @@ five bytes are a prefix: runtime Input `03` proof and exact received length
 still apply. The two samples do not establish support for every SC650,
 other shared receivers or charging; neutral names and unknown charging remain.
 
+SC650 #490 additionally reports the no-Report-ID descriptor
+`05 0A 09 00 A1 01 75 08 95 04 81 03 C0` and the measured five-byte frame
+`03 8E 40 01 29` (41%): only a unique `FA60 / 000A:0000` collection with
+`input_report_length=5`, exactly `input_report_sizes={"0":5}` and
+`input_report_proof="descriptor"` enables this separate receive-only route,
+which accepts only exact five-byte `03 8E 40 01 <1..100>` frames; grade C,
+pending this project's real hardware verification（待实机验证）.
+
 For exactly `1D57:FA60 / 000A:0000`, topology first tries the existing
 `byte_report_sizes` caps proof. Only when that Input proof is missing may the
 existing strict raw Report Descriptor fallback call hidapi's optional

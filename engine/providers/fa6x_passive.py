@@ -1,7 +1,7 @@
 """Receive-only FA60/FA65 web and exact legacy FA65 IN10 battery prefixes.
 
 Shared IDs and model bytes do not prove a brand. Use neutral names, an exact
-per-PID collection/model allow-list and descriptor-proven Input 03 lengths.
+per-PID collection/model allow-list and descriptor-proven input lengths.
 No requests, initialization, charging interpretation or zero readings.
 Keep handles open between polls, drain queued inputs and retain silent history
 until the receiver disappears, following the passive Rapoo lifecycle.
@@ -64,6 +64,14 @@ def parse_legacy_battery(raw):
     return raw[4]
 
 
+def parse_unnumbered_8e_battery(raw):
+    """Exact SC650 frame on the descriptor-proven unnumbered FA60 route."""
+    if (len(raw) != 5 or raw[0] != INPUT_ID or raw[1] != 0x8E
+            or (raw[2], raw[3]) != (0x40, 0x01) or not 1 <= raw[4] <= 100):
+        return None
+    return raw[4]
+
+
 def legacy_release(info):
     release = info.get("release_number")
     return type(release) is int and 0 <= release <= 0xFFFF and release & 0xFF == 0x16
@@ -105,6 +113,18 @@ class Fa6xPassiveProvider(Provider):
                 return None
             info = candidates[0]
         maximum, sizes = info.get("input_report_length"), info.get("input_report_sizes")
+        if (info.get("fa6x_variant") != "legacy_in10"
+                and info.get("product_id") == 0xFA60
+                and (info.get("usage_page"), info.get("usage")) == (0x000A, 0)
+                and isinstance(sizes, dict) and "0" in sizes):
+            # #490 has no Report ID: the firmware fills the leading slot with
+            # 03. A mixed 0/3 map must not fall through to the numbered route.
+            if (type(maximum) is not int or maximum != 5 or sizes != {"0": 5}
+                    or type(sizes["0"]) is not int
+                    or info.get("input_report_proof") != "descriptor"):
+                self._diag.append("unnumbered FA60 frame proof incomplete; not opened")
+                return None
+            return dict(info, fa6x_variant="unnumbered_8e")
         if (type(maximum) is not int or not 5 <= maximum <= 4096
                 or not isinstance(sizes, dict) or not sizes
                 or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
@@ -140,6 +160,8 @@ class Fa6xPassiveProvider(Provider):
 
     def _receive(self, dev, info, newly_opened):
         """Brief first listen; thereafter drain only, keeping the latest value."""
+        unnumbered = info.get("fa6x_variant") == "unnumbered_8e"
+        expected_length = 5 if unnumbered else info["input_report_sizes"]["3"]
         deadline = time.monotonic() + READ_WINDOW_MS / 1000
         newest = None
         for index in range(MAX_DRAIN):
@@ -152,10 +174,13 @@ class Fa6xPassiveProvider(Provider):
             raw = dev.read(info["input_report_length"], remaining_ms if waiting else DRAIN_TIMEOUT_MS)
             if not raw:
                 break
-            if len(raw) != info["input_report_sizes"]["3"]:
+            if len(raw) != expected_length:
                 continue
-            parsed = (parse_legacy_battery(raw) if info.get("fa6x_variant") == "legacy_in10"
-                      else parse_battery(raw, info["product_id"]))
+            if unnumbered:
+                parsed = parse_unnumbered_8e_battery(raw)
+            else:
+                parsed = (parse_legacy_battery(raw) if info.get("fa6x_variant") == "legacy_in10"
+                          else parse_battery(raw, info["product_id"]))
             if parsed is not None:
                 newest = parsed
         if newest is None:

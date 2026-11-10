@@ -99,6 +99,113 @@ def fixture(frames=(), inventory=None):
 
 
 class Fa6xPassiveTests(unittest.TestCase):
+    def test_sc650_unnumbered_descriptor_proof_accepts_exact_five_byte_frame(self):
+        info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
+                          input_report_proof="descriptor")
+        for level in (1, 41, 100):
+            with self.subTest(level=level), \
+                    fixture([report(level, model=0x8E, state=1, length=5)], [info]) as (bus, provider):
+                status, = provider.poll()
+                self.assertEqual((status.level, status.name, status.verification_level),
+                                 (level, F.PIDS[0xFA60], "C"))
+                self.assertEqual((status.charging, status.charging_known, status.cached),
+                                 (False, False, False))
+                self.assertEqual(bus.opened, [info["path"]])
+                self.assertTrue(bus.reads)
+                self.assertTrue(all(size == 5 for _, size, _ in bus.reads))
+                self.assertEqual(provider.diagnostics(), [])
+
+    def test_sc650_unnumbered_rejects_other_models_prefixes_percentages_and_lengths(self):
+        info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
+                          input_report_proof="descriptor")
+        invalid = [report(41, model=model, state=1, length=5)
+                   for model in (0, 0x07, 0x76, 0x77, 0x78, 0x79, 0xE8, 0xFF)]
+        invalid += [report(41, model=0x8E, event=event, state=1, length=5)
+                    for event in (0, 0x41, 0xFF)]
+        invalid += [report(41, model=0x8E, state=state, length=5) for state in (0, 2, 3, 0xFF)]
+        invalid += [report(level, model=0x8E, state=1, length=5) for level in (0, 101, 255)]
+        invalid += [report(41, model=0x8E, state=1, report_id=n, length=5) for n in (0, 4)]
+        invalid += [report(41, model=0x8E, state=1, length=n) for n in (4, 6)]
+        for raw in invalid:
+            with self.subTest(raw=raw), fixture([raw], [info]) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(bus.opened, [info["path"]])
+                self.assertEqual(provider.diagnostics(), ["no battery notification; no new measurement"])
+
+    def test_sc650_unnumbered_incomplete_proof_never_opens(self):
+        changes = [{"input_report_proof": proof} for proof in (None, "caps", "caps+descriptor", "")]
+        changes += [{"input_report_length": n} for n in (None, True, "5", 4, 6, 5.0)]
+        changes += [{"input_report_sizes": sizes} for sizes in (
+            {"0": 4}, {"0": 6}, {"0": 5.0}, {"0": "5"}, {"0": True},
+            {"0": 5, "3": 5}, {"0": 5, "9": 5})]
+        for change in changes:
+            info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
+                              input_report_proof="descriptor")
+            info.update(change)
+            with self.subTest(change=change), \
+                    fixture([report(41, model=0x8E, state=1, length=5)], [info]) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.reads), ([], []))
+                self.assertEqual(provider.diagnostics(),
+                                 ["unnumbered FA60 frame proof incomplete; not opened"])
+
+    def test_sc650_unnumbered_requires_unique_fa60_collection_path_and_parent(self):
+        info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
+                          input_report_proof="descriptor")
+        changes = [{"vendor_id": 0x1D58}, {"product_id": 0xFA65},
+                   {"usage_page": 0xFF00, "usage": 1}, {"usage_page": 0x000B}, {"usage": 1},
+                   {"path": None}, {"path": b""},
+                   {"physical_id": ""}, {"physical_id": "collection:unresolved"}]
+        inventories = [[dict(info, **change)] for change in changes]
+        inventories += [[info, dict(info, path=b"duplicate")],
+                        [info, descriptor(0xFA65, path=b"other-candidate")]]
+        for inventory in inventories:
+            with self.subTest(inventory=inventory), fixture([], inventory) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.reads), ([], []))
+
+    def test_sc650_unnumbered_proof_never_enables_fa65_web_or_legacy(self):
+        web = descriptor(0xFA65, input_report_length=5, input_report_sizes={"0": 5},
+                         input_report_proof="descriptor")
+        legacy = legacy_inventory()
+        legacy[0].update(input_report_length=5, input_report_sizes={"0": 5},
+                         input_report_proof="descriptor")
+        for inventory in ([web], legacy):
+            with self.subTest(inventory=inventory), \
+                    fixture([report(41, model=0x8E, state=1, length=5)], inventory) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.reads), ([], []))
+                self.assertEqual(provider.diagnostics(), ["input report 03 length unproven; not opened"])
+
+    def test_sc650_unnumbered_late_input_history_and_proof_loss_follow_passive_lifecycle(self):
+        info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
+                          input_report_proof="descriptor")
+        with fixture([], [info]) as (bus, provider):
+            self.assertEqual(provider.poll(), [])
+            bus.queues[info["path"]] = [report(n, model=0x8E, state=1, length=5) for n in (42, 41)]
+            before = len(bus.reads)
+            first, = provider.poll()
+            self.assertEqual(first.level, 41)
+            self.assertEqual(bus.opened, [info["path"]])
+            self.assertTrue(all(timeout == 1 for _, _, timeout in bus.reads[before:]))
+            bus.queues[info["path"]] = [report(91, model=0x07, state=1, length=5)]
+            stale, = provider.poll()
+            self.assertEqual((stale.level, stale.cached, stale.online), (41, True, False))
+            self.assertEqual((stale.measured_at_utc, stale.queried_at_utc),
+                             (first.measured_at_utc, first.queried_at_utc))
+            bus.inventory = [dict(info, input_report_proof="caps")]
+            self.assertTrue(provider.poll()[0].cached)
+            self.assertEqual(bus.closed, bus.opened)
+            self.assertEqual(provider.diagnostics(),
+                             ["unnumbered FA60 frame proof incomplete; not opened"])
+            bus.inventory = [info]
+            bus.queues[info["path"]] = [report(40, model=0x8E, state=1, length=5)]
+            self.assertEqual(provider.poll()[0].level, 40)
+            self.assertEqual(len(bus.opened), 2)
+            bus.inventory = []
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(bus.closed, bus.opened)
+
     def test_sc650_reported_prefixes_follow_passive_lifecycle(self):
         info = descriptor(input_report_length=5, input_report_sizes={"3": 5})
         with fixture([[3, 0x8E, 0x40, 1, 0x5B]], [info]) as (bus, provider):
