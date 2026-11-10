@@ -1,0 +1,46 @@
+name: Close stale needs-info issues
+
+# Closes open issues labelled triage:needs-info when the last comment is ours
+# (maintainer or bot) and nobody else has replied for 14 days. No model calls.
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: close-stale-needs-info
+  cancel-in-progress: false
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - name: Close issues waiting on the reporter for 14 days
+        shell: bash
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d '14 days ago' +%s)
+          body=$'这条反馈已经 14 天没有新的补充信息，先自动关闭。\n\n如果问题还在，请升级到最新版后在程序里重新反馈，或直接在这里回复，我们会重新打开。感谢反馈！'
+          gh issue list --repo "$GH_REPO" --state open --label triage:needs-info --limit 500 --json number -q '.[].number' |
+          while read -r n; do
+            last=$(gh api --paginate --slurp "repos/$GH_REPO/issues/$n/comments?per_page=100" \
+              | jq -r 'add // [] | last // empty
+                  | select((.body // "") | contains("myfinder-supplement:v1") | not)
+                  | "\(.user.login) \(.created_at)"')
+            # In-app supplements are posted under the owner account: they are the
+            # reporter's words, so an issue whose last comment is one stays open.
+            [ -n "$last" ] || continue
+            who=${last% *}; when=${last#* }
+            case "$who" in "$OWNER"|github-actions\[bot\]) ;; *) continue ;; esac
+            [ "$(date -u -d "$when" +%s)" -lt "$cutoff" ] || continue
+            gh issue close "$n" --repo "$GH_REPO" --reason "not planned" --comment "$body"
+            echo "closed #$n"
+          done
