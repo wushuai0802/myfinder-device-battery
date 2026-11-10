@@ -208,6 +208,33 @@ PIDS: Dict[int, Dict[int, str]] = {
 NANO_PIDS = {0x373B: {0x1216: "ATK / VXE NANO receiver"}}
 
 
+# Public projection of existing private-reader results, never free-form logs.
+_NANO_READER_REASONS = {
+    "NANO requires one proven input report: nothing sent": "NANO input report unproven",
+    "NANO input report ID invalid: nothing sent": "NANO input report ID invalid",
+    "missing or ambiguous eligible collection: nothing sent": "NANO collection missing or ambiguous",
+    "report IDs/lengths unknown or incompatible: nothing sent": "NANO report IDs/lengths unproven",
+    "physical parent unresolved; uniqueness unknown: nothing sent": "NANO physical parent unproven",
+    "enumeration failed: nothing sent": "NANO enumeration failed",
+    "short/failed battery query write; no retry": "NANO query write short/failed",
+    "rejected input report length": "NANO input report length rejected",
+    "rejected battery reply": "NANO battery reply rejected",
+    "no valid reply within deadline/read limit; connection unknown": "NANO no valid battery reply",
+    "battery I/O failed; connection unknown": "NANO battery I/O failed",
+    "HID handle close failed": "NANO handle close failed",
+}
+
+
+def _nano_reader_reason(line):
+    if not isinstance(line, str):
+        return None
+    # Only report-proof messages have a known suffix; discard it entirely.
+    proof = "report IDs/lengths unknown or incompatible: nothing sent"
+    if line.startswith(proof + ";"):
+        return _NANO_READER_REASONS[proof]
+    return _NANO_READER_REASONS.get(line)
+
+
 def make_nano_request():
     # Output report 08 + 63-byte BITMOUSE payload; receiver target 01.
     # Checksum 7D = sum(72 02 00 01 07 01 + padding) modulo 256.
@@ -694,7 +721,12 @@ class PulsarProvider(Provider):
             if vid == 0x373B and any(d.get("product_id") == 0x1216 for d in infos):
                 nano = AtkNanoProvider()
                 out.extend(nano.poll())
-                self._diag.extend(nano.diagnostics())
+                nano_diag = nano.diagnostics()
+                self._diag.extend(nano_diag)
+                for line in nano_diag:
+                    reason = _nano_reader_reason(line)
+                    if reason is not None:
+                        self._note_reader(reason)
             candidates = list(pids)
             if vid == 0x373B:
                 candidates += sorted({d["product_id"] for d in infos if d["product_id"] not in pids})

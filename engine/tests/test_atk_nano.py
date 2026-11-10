@@ -11,6 +11,7 @@ import _hidstub  # noqa: F401
 import battery_hid as H
 from providers import pulsar as P
 from test_new_brands import FakeHid
+import test_pulsar as L
 
 REQUEST = [0x08, 0x7D, 0x72, 0x02, 0x00, 0x01, 0x07, 0x01] + [0] * 56
 
@@ -44,6 +45,146 @@ def fixture(frames=(), inventory=None, **kwargs):
 
 
 class AtkNanoTests(unittest.TestCase):
+    def test_public_proof_failures_do_not_add_io(self):
+        cases = [([entry(input_report_sizes=None)], "NANO input report unproven"),
+                 ([entry(input_report_sizes={"256": 64})], "NANO input report ID invalid"),
+                 ([entry(path=b"")], "NANO collection missing or ambiguous"),
+                 ([entry(), entry(path=b"duplicate")], "NANO input report unproven"),
+                 ([entry(usage_page=0xFFB1)], "NANO input report unproven"),
+                 ([entry(output_report_sizes={"8": 63})], "NANO report IDs/lengths unproven"),
+                 ([entry(physical_id="collection:unresolved")], "NANO physical parent unproven")]
+        for infos, reason in cases:
+            with self.subTest(reason=reason, infos=infos), fixture([reply()], infos) as bus:
+                provider = P.PulsarProvider()
+                self.assertEqual(provider.poll(), [])
+            self.assertEqual((bus.opened, bus.writes, bus.reads, bus.closed), ([], [], [], []))
+            self.assertEqual(provider.reader_diagnostics(), [reason])
+
+    def test_public_query_failures_keep_one_request_and_existing_reads(self):
+        cases = [({}, [], ["NANO no valid battery reply"], 1, 1),
+                 ({}, [reply(length=8)], ["NANO input report length rejected",
+                                         "NANO no valid battery reply"], 1, 2),
+                 ({}, [reply(command=0)], ["NANO battery reply rejected",
+                                          "NANO no valid battery reply"], 1, 2),
+                 ({"write_result": 63}, [], ["NANO query write short/failed"], 1, 0),
+                 ({"error_at": "open"}, [], ["NANO battery I/O failed"], 0, 0),
+                 ({"error_at": "write"}, [], ["NANO battery I/O failed"], 1, 0),
+                 ({"error_at": "read"}, [], ["NANO battery I/O failed"], 1, 1)]
+        for options, frames, reasons, writes, reads in cases:
+            with self.subTest(options=options, reasons=reasons), fixture(frames, **options) as bus:
+                provider = P.PulsarProvider()
+                self.assertEqual(provider.poll(), [])
+            self.assertEqual(bus.writes, [(entry()["path"], REQUEST)] * writes)
+            self.assertEqual(len(bus.reads), reads)
+            self.assertEqual(bus.opened, bus.closed)
+            self.assertEqual(provider.reader_diagnostics(), reasons)
+
+    def test_public_enumeration_and_close_failures_use_existing_operations(self):
+        with fixture() as bus:
+            enumerate_infos = H.hidlist.enumerate
+            nano_enumerations = []
+
+            def enumerate_once_then_fail(vid=0):
+                if vid == 0x373B:
+                    nano_enumerations.append(vid)
+                    if len(nano_enumerations) == 2:
+                        raise OSError("PRIVATE enumeration exception")
+                return enumerate_infos(vid)
+
+            with patch.object(H.hidlist, "enumerate", side_effect=enumerate_once_then_fail):
+                provider = P.PulsarProvider()
+                self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(nano_enumerations), 2)
+            self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+            self.assertEqual(provider.reader_diagnostics(), ["NANO enumeration failed"])
+
+        with fixture([reply()]) as bus:
+            make_device = bus.device
+
+            def close_failing_device():
+                dev = make_device()
+                close = dev.close
+
+                def fail_close():
+                    close()
+                    raise OSError("PRIVATE close exception")
+
+                dev.close = fail_close
+                return dev
+
+            with patch.object(bus, "device", side_effect=close_failing_device):
+                provider = P.PulsarProvider()
+                status, = provider.poll()
+            self.assertEqual(status.level, 73)
+            self.assertEqual(bus.writes, [(entry()["path"], REQUEST)])
+            self.assertEqual(len(bus.reads), 1)
+            self.assertEqual(bus.opened, bus.closed)
+            self.assertEqual(provider.reader_diagnostics(), ["NANO handle close failed"])
+
+    def test_public_diagnostics_clear_on_success_including_zero(self):
+        provider = P.PulsarProvider()
+        for level in (73, 0):
+            with fixture():
+                self.assertEqual(provider.poll(), [])
+            self.assertEqual(provider.reader_diagnostics(), ["NANO no valid battery reply"])
+            with fixture([reply(level)]) as bus:
+                status, = provider.poll()
+            self.assertEqual(status.level, level)
+            self.assertEqual(provider.reader_diagnostics(), [])
+            self.assertEqual(bus.writes, [(entry()["path"], REQUEST)])
+            self.assertIsNone(status.dpi)
+            self.assertIsNone(status.dpi_target)
+
+    def test_public_projection_whitelists_fixed_text_and_reads_diagnostics_once(self):
+        private = "PRIVATE path serial product exception packet 08 7D 72"
+        proof = "report IDs/lengths unknown or incompatible: nothing sent"
+        lines = [private, None, 73, "battery I/O failed; connection unknown " + private,
+                 "NANO requires one proven input report: nothing sent " + private,
+                 proof + "; " + private, "missing or ambiguous eligible collection: nothing sent",
+                 "battery I/O failed; connection unknown"]
+        with fixture([reply()]) as bus, patch.object(P, "AtkNanoProvider") as factory:
+            nano = factory.return_value
+            nano.poll.return_value = []
+            nano.diagnostics.return_value = lines
+            provider = P.PulsarProvider()
+            self.assertEqual(provider.poll(), [])
+        factory.assert_called_once_with()
+        nano.poll.assert_called_once_with()
+        nano.diagnostics.assert_called_once_with()
+        self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+        self.assertEqual(provider.reader_diagnostics(), ["NANO report IDs/lengths unproven",
+                         "NANO collection missing or ambiguous", "NANO battery I/O failed"])
+        self.assertIn(private, provider.diagnostics())  # Private logs stay separate.
+        self.assertNotIn(private, repr(provider.reader_diagnostics()))
+
+    def test_mixed_inventory_keeps_legacy_diagnostics_and_exact_io_trace(self):
+        # The NANO branch must not alter another model's diagnostics, probes,
+        # requests, reads or DPI, even when both readers share a parent poll.
+        legacy = L.diagnostic_info()
+        legacy_script = L.length_calls(legacy, 17, 17) + L.battery_calls(
+            legacy, [L.reply(61)], True)
+        for nano_frames, nano_reasons in (([], ["NANO no valid battery reply"]),
+                                          ([reply(0)], [])):
+            nano = entry()
+            nano_script = [(("device",), None), (("open", nano["path"]), None),
+                           (("write", tuple(REQUEST)), 64),
+                           (("read", 64, 1000), nano_frames[0] if nano_frames else []),
+                           (("close",), None)]
+            for mixed in (False, True):
+                infos = [nano, legacy] if mixed else [legacy]
+                script = legacy_script + (nano_script if mixed else [])
+                with self.subTest(mixed=mixed, nano_reasons=nano_reasons), \
+                        L.diagnostic_hid(infos, script), \
+                        patch.object(H, "time", SimpleNamespace(monotonic=lambda: 0)), \
+                        patch.object(P, "_capture_dpi", return_value=(None, None)) as dpi:
+                    provider = P.PulsarProvider()
+                    statuses = provider.poll()
+                self.assertEqual([s.level for s in statuses],
+                                 ([61, 0] if nano_frames else [61]) if mixed else [61])
+                self.assertEqual(provider.reader_diagnostics(),
+                                 ["valid battery reply"] + (nano_reasons if mixed else []))
+                dpi.assert_called_once_with(legacy, provider._dpi_cache)
+
     def test_exact_request_and_descriptor_selected_input_id(self):
         self.assertEqual(P.make_nano_request(), REQUEST)
         self.assertEqual(REQUEST[1], sum(REQUEST[2:]) & 255)
