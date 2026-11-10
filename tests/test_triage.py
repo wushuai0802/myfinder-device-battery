@@ -67,7 +67,7 @@ class TriageTests(unittest.TestCase):
         # a pack candidate; the shared A7/K99 IDs must not claim support.
         self.assertEqual(result["label"], "triage:pack-candidate")
         self.assertEqual(result["remove_labels"], ["triage:supported"])
-        self.assertIsNone(result["reply"])
+        self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
         self.assertIn("需核对准确型号和接口", result["reason"])
         restricted_only = "\n".join(line for line in body.splitlines() if not line.startswith("3837:1012"))
         result = triage.decide(issue(restricted_only), known_ids.build_index())
@@ -128,7 +128,7 @@ class TriageTests(unittest.TestCase):
                 self.assertEqual(result["label"], "triage:" + label)
                 self.assertIn("需核对准确型号和接口", result["reason"])
                 if label != "insufficient-evidence":
-                    self.assertIsNone(result["reply"])
+                    self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
 
     def test_model_gate_reply_preserves_credentials_and_bot_deduplication(self):
         body = (ROOT / "tests/fixtures/issue353-body.txt").read_text(encoding="utf-8")
@@ -158,7 +158,7 @@ class TriageTests(unittest.TestCase):
             with self.subTest(body=body):
                 result = triage.decide(issue(body), known)
                 self.assertEqual(result["label"], "triage:insufficient-evidence")
-                self.assertIsNone(result["reply"])
+                self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
         for payload in (issue(in_app(report(unknown=row)), labels=("triage:locked", "triage:supported")),
                         dict(issue(in_app(report(unknown=row))), pull_request={})):
             result = triage.decide(payload, known)
@@ -217,7 +217,7 @@ class TriageTests(unittest.TestCase):
                               ('ABCD:1234 "unknown" FF00:0001', "new-vendor")):
             result = triage.decide(issue(in_app(report(unknown=row))), KNOWN, known_next=next_index)
             self.assertEqual(result["label"], "triage:" + expected)
-            self.assertIsNone(result["reply"])
+            self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
         loose = triage.decide(issue(in_app(description='291D:385D "V9" FF00:0001')),
                               KNOWN, known_next=next_index)
         self.assertEqual(loose["label"], "triage:insufficient-evidence")
@@ -225,8 +225,9 @@ class TriageTests(unittest.TestCase):
     def classify(self, body, label, **kwargs):
         result = triage.decide(issue(body, **kwargs), KNOWN)
         self.assertEqual(result["label"], "triage:" + label)
-        if label not in ("needs-info", "supported"):
-            self.assertIsNone(result["reply"])
+        if label in ("pack-candidate", "new-vendor", "insufficient-evidence", "bug"):
+            reply = triage.BUG_ACK if label == "bug" else triage.UNSUPPORTED
+            self.assertEqual(result["reply"], triage.MARKER + "\n" + reply)
         return result
 
     def test_both_sources_only_match_unadapted_reports(self):
@@ -294,7 +295,7 @@ class TriageTests(unittest.TestCase):
                         result = triage.decide(issue(in_app(report(card="mouse：Mouse 80%", unknown="\n".join(rows)))),
                                                known, known_next=None if released else KNOWN)
                         self.assertEqual(result["label"], "triage:" + label)
-                        self.assertIsNone(result["reply"])
+                        self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
 
     def test_no_card_still_replies_to_support_hits(self):
         for known, next_known, label, reply in (
@@ -376,6 +377,60 @@ class TriageTests(unittest.TestCase):
         self.assertNotIn("重新提交反馈", keyed)
         self.assertNotIn("写上本条编号", keyed)
         self.assertTrue(keyed.startswith(triage.MARKER + "\n自动回复：报告里的 ATK A9 Air+"))
+
+    def test_unsupported_reply_uses_credentials_for_supplement_guidance(self):
+        footer = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
+        expected = ("自动回复：这款设备目前还读不到电量。请先确认已升级到最新正式版；"
+                    "如果电脑上有官方软件能显示它的电量，请在程序里打开‘我的反馈’，"
+                    "选中这条后点‘补充资料’，写上软件名称、版本和下载地址，"
+                    "有了这个我们才能研究。维护者会定期查看。")
+        for diagnostics, label in (
+                (report(unknown='373B:EEEE "candidate" FF02:0002'), "pack-candidate"),
+                (report(unknown='ABCD:1234 "new" FF00:0001'), "new-vendor"),
+                (report(unknown='046D:EEEE "standard" 0001:0006'), "insufficient-evidence"),
+                (report(unknown='373B:EEEE "unknown"'), "insufficient-evidence"),
+                (report(card="mouse：Mouse 80%"), "insufficient-evidence")):
+            body = in_app(diagnostics)
+            for suffix, reply in (("", triage.UNSUPPORTED), ("\n\n" + footer, expected),
+                                  ("\n\n" + footer + " suffix", triage.UNSUPPORTED)):
+                with self.subTest(diagnostics=diagnostics, suffix=suffix):
+                    result = triage.decide(issue(body + suffix), KNOWN)
+                    self.assertEqual(result["label"], "triage:" + label)
+                    self.assertEqual(result["reply"], triage.MARKER + "\n" + reply)
+            result = triage.decide(issue(body, comments=[comment(footer)]), KNOWN)
+            self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
+
+    def test_bug_ack_is_fixed_for_both_branches_with_or_without_credentials(self):
+        footer = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
+        expected = ("自动回复：收到你的反馈，维护者会定期查看并在这里回复。"
+                    "如果方便，请写清楚操作步骤和看到的现象，有截图更好。")
+        for body in (in_app(category="界面或操作"), in_app(category="其他"),
+                     in_app(report(card="mouse：Mouse 80%"), category="电量或 DPI 不对")):
+            for suffix in ("", "\n\n" + footer):
+                with self.subTest(body=body, suffix=suffix):
+                    result = triage.decide(issue(body + suffix), KNOWN)
+                    self.assertEqual(result["label"], "triage:bug")
+                    self.assertEqual(result["reply"], triage.MARKER + "\n" + expected)
+
+    def test_new_replies_respect_marker_lock_and_pr(self):
+        for body, label in (
+                (in_app(report(unknown='373B:EEEE "candidate" FF02:0002')), "pack-candidate"),
+                (in_app(report(unknown='ABCD:1234 "new" FF00:0001')), "new-vendor"),
+                (in_app(report(unknown='046D:EEEE "standard" 0001:0006')), "insufficient-evidence"),
+                (in_app(category="界面或操作"), "bug"),
+                (in_app(report(card="mouse：Mouse 80%"), category="电量或 DPI 不对"), "bug")):
+            with self.subTest(label=label, body=body):
+                for comments in ([comment(triage.MARKER, True)],
+                                 [[comment("old")], [comment(triage.MARKER, True)]]):
+                    result = triage.decide(issue(body), KNOWN, comments)
+                    self.assertEqual(result["label"], "triage:" + label)
+                    self.assertIsNone(result["reply"])
+                for payload in (issue(body, labels=("triage:locked", "triage:old")),
+                                dict(issue(body), pull_request={})):
+                    result = triage.decide(payload, KNOWN)
+                    self.assertIsNone(result["label"])
+                    self.assertIsNone(result["reply"])
+                    self.assertEqual(result["remove_labels"], [])
 
     def test_reply_credential_requires_a_complete_marker_in_the_body_tail(self):
         marker = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
@@ -460,8 +515,13 @@ class TriageTests(unittest.TestCase):
         self.assertIsNotNone(self.classify(in_app(description=triage.MARKER), "needs-info")["reply"])
 
     def test_untrusted_markers_do_not_suppress_replies(self):
-        for diagnostics, label in (("", "needs-info"), (report(unknown='046D:0AB5 "G733"'), "supported")):
-            body = in_app(diagnostics, description=triage.MARKER)
+        for diagnostics, label in (("", "needs-info"), (report(unknown='046D:0AB5 "G733"'), "supported"),
+                                   (report(unknown='373B:EEEE "candidate" FF02:0002'), "pack-candidate"),
+                                   (report(unknown='ABCD:1234 "new" FF00:0001'), "new-vendor"),
+                                   (report(unknown='046D:EEEE "standard" 0001:0006'), "insufficient-evidence"),
+                                   ("", "bug")):
+            body = in_app(diagnostics, category="界面或操作" if label == "bug" else "设备不识别",
+                          description=triage.MARKER)
             for author in ({"login": "tester", "type": "User"},
                            {"login": "another[bot]", "type": "Bot"}, {}, None):
                 forged = {"body": triage.MARKER, "user": author}
@@ -523,7 +583,7 @@ class TriageTests(unittest.TestCase):
                 result = triage.decide(issue(body, labels=("triage:supported", "in-app-feedback")), known)
                 # A working card makes a support hit ambiguous; classify the other device.
                 self.assertEqual(result["label"], "triage:new-vendor")
-                self.assertIsNone(result["reply"])
+                self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
                 self.assertIn(unknown_id, result["reason"])
                 self.assertEqual(result["remove_labels"], ["triage:supported"])
                 classification, ignored = result["reason"].split(" 已忽略", 1)
@@ -537,7 +597,7 @@ class TriageTests(unittest.TestCase):
         body = (ROOT / "tests/fixtures/issue65-body.txt").read_text(encoding="utf-8")
         result = triage.decide(issue(body, labels=("triage:supported",)), known_ids.build_index())
         self.assertEqual(result["label"], "triage:new-vendor")
-        self.assertIsNone(result["reply"])
+        self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
         self.assertEqual(result["remove_labels"], ["triage:supported"])
         classification, ignored = result["reason"].split(" 已忽略", 1)
         self.assertIn("342D:E407", classification)
@@ -737,7 +797,7 @@ runpy.run_path(target, run_name="__main__")
                     if label == "supported":
                         self.assertIn("Logitech G733", result["reply"])
                     else:
-                        self.assertIsNone(result["reply"])
+                        self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
 
     def test_incomplete_source_is_unparsed_only_without_indexed_ids(self):
         with workspace_temp() as folder:
