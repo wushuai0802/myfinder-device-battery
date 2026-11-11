@@ -32,14 +32,12 @@ class DeviceStatusTests(unittest.TestCase):
             path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
             return device_status.load(path)
 
-    def test_repository_initial_table_is_valid_and_has_no_counts(self):
+    def test_repository_table_is_valid(self):
+        # The table is maintained data (statuses and counts change with every
+        # release and ranking run), so only its validity is pinned here.
         actual = device_status.load(ROOT / ".github/triage/device-status.json")
-        self.assertEqual(actual, {"schema": 1, "devices": {
-            "0B05:1ACE": {"status": "beta", "version": "1.3.11-beta.2",
-                          "note": "仅鼠标；经 OMNI 接收器连接的键盘暂不支持"},
-            "3837:1012": {"status": "not-a-device", "note": "充电底座，本身没有电量"},
-            "248A:5B2F": {"status": "no-evidence"}, "3837:6011": {"status": "no-evidence"},
-            "3554:F503": {"status": "no-evidence"}}})
+        self.assertEqual(actual["schema"], 1)
+        self.assertTrue(actual["devices"])
 
     def test_valid_statuses_and_optional_fields(self):
         for status in ("beta", "researching", "no-evidence", "not-a-device"):

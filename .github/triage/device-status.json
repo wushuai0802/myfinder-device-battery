@@ -1,10 +1,31 @@
 {
   "schema": 1,
   "devices": {
-    "0B05:1ACE": {"status": "beta", "version": "1.3.11-beta.2", "note": "仅鼠标；经 OMNI 接收器连接的键盘暂不支持"},
-    "3837:1012": {"status": "not-a-device", "note": "充电底座，本身没有电量"},
-    "248A:5B2F": {"status": "no-evidence"},
-    "3837:6011": {"status": "no-evidence"},
-    "3554:F503": {"status": "no-evidence"}
+    "0B05:1ACE": {
+      "status": "beta",
+      "version": "1.3.11-beta.2",
+      "note": "仅鼠标；经 OMNI 接收器连接的键盘暂不支持",
+      "reports": 0
+    },
+    "248A:5B2F": {
+      "status": "no-evidence",
+      "reports": 6,
+      "rank": 11
+    },
+    "3554:F503": {
+      "status": "no-evidence",
+      "reports": 7,
+      "rank": 8
+    },
+    "3837:1012": {
+      "status": "not-a-device",
+      "note": "充电底座，本身没有电量",
+      "reports": 0
+    },
+    "3837:6011": {
+      "status": "no-evidence",
+      "reports": 8,
+      "rank": 5
+    }
   }
 }
