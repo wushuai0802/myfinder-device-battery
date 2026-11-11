@@ -1324,8 +1324,8 @@ was copied into the tracked tree or executed, and no network fetch was needed.
 
 The match keeps **`3837:1018` or `3837:1014`, one proven `FF01:0001` collection**
 as the preferred route. Both output/input report `0x4D` lengths and collection
-maxima must be proven as **64 bytes including the ID** (63-byte body). Only
-`1018` may instead use one `FF0B:00C4`, under the additional gates below.
+maxima must be proven as **64 bytes including the ID** (63-byte body) for the
+normal route. Only `1018` may use one `FF0B:00C4` under the additional gates below.
 Discovery tries HidP's per-ID byte-array caps first; if either report map is
 `None`, it uses the bounded raw-descriptor parser below. On the alternate,
 raw fallback is attempted only when both caps maxima are 64; a known 41-byte
@@ -1340,6 +1340,16 @@ proof=caps+descriptor failed; descriptor=collection maximum mismatch; not
 opened; nothing sent`; successful proofs state `proof=caps/descriptor` by
 direction. Legacy MCHOSE diagnostic payloads, product strings and exception
 text are not exported through this path.
+
+**A7 V3 Ultra+ `3837:1018` on Windows:** the tested USB receiver reports
+`MCHOSE A7 V3 Ultra+` on interface 2. HidP gives `FF01:0001` 64-byte
+input and output buffers, but hidapi's reconstructed descriptor repeats the
+63-byte Input 4D item, yielding a parsed length of 127. When this mismatch
+occurs with Output 4D still declared at 64 bytes, discovery calls
+`HidP_InitializeReportForID` on local 64-byte buffers to confirm 4D in both
+directions. After both checks pass, the reader sends the existing 0900
+query on the unique FF01 collection. The patched Windows engine returned 84%
+with charging false on this receiver.
 
 **A7 V3 Ultra+ `3837:1014`: C / 用户实机验证，#276.** The supplied
 `.ai/evidence/issue-274.md` records five collections (`1:2`, `1:6`, `12:1`,

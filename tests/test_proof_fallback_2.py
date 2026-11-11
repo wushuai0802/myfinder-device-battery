@@ -21,6 +21,16 @@ from standardhid import Caps
 
 
 V3_DESCRIPTOR = bytes.fromhex("06 01 ff 09 01 a1 01 85 4d 75 08 95 3f 81 02 91 02 c0")
+# hidapi's reconstructed FF01 descriptor from the 3837:1018 Ultra+ receiver.
+ULTRA_1018_DESCRIPTOR = bytes.fromhex(
+    "06 01 ff 09 01 a1 01 85 11 19 00 29 ff 15 00 26 ff 00 75 08 95 14 81 00 "
+    "09 21 15 00 26 ff 00 75 08 95 14 81 00 85 4d 19 00 29 ff 15 00 26 ff 00 "
+    "75 08 95 3f 81 00 09 24 15 00 26 ff 00 75 08 95 3f 81 00 85 13 09 27 "
+    "15 00 26 ff 00 75 08 95 14 81 00 85 4d 19 00 29 ff 15 00 26 ff 00 75 08 "
+    "95 3f 91 00 85 13 19 00 29 13 15 00 26 ff 00 75 08 95 14 91 02 09 27 "
+    "15 00 26 ff 00 75 08 95 14 91 00 85 11 09 22 15 00 26 ff 00 75 08 95 14 "
+    "b2 02 01 85 4d 09 25 15 00 26 ff 00 75 08 95 3f b2 02 01 85 13 09 28 "
+    "15 00 26 ff 00 75 08 95 14 b2 02 01 c0")
 S9_DESCRIPTOR = bytes.fromhex("06 00 ff 09 01 a1 01 85 03 75 08 95 3f b1 02 c0")
 
 
@@ -66,8 +76,8 @@ class ProofFallback2Tests(unittest.TestCase):
         raw = S9_DESCRIPTOR if s9 else V3_DESCRIPTOR
         self.dev.get_report_descriptor.return_value = raw[:1] + page.to_bytes(2, "little") + raw[3:]
 
-    def scan(self):
-        info, = self.case.scan([T.PATH_A])
+    def scan(self, path=T.PATH_A):
+        info, = self.case.scan([path])
         self.case.hid.HidD_GetFeature.assert_not_called()
         self.case.hid.HidD_SetFeature.assert_not_called()
         self.case.kernel.ReadFile.assert_not_called()
@@ -104,6 +114,49 @@ class ProofFallback2Tests(unittest.TestCase):
                     decoded = json.loads(json.dumps(info, default=wire_encode), object_hook=wire_decode)
                     diagnostic = self.assert_reader([decoded], accepted=True)
                     self.assertIn("proof=descriptor" if failed else "proof=caps", diagnostic)
+
+    def test_ultra_1018_recovers_reconstructed_input_after_windows_confirms_both_directions(self):
+        path = r"\\?\hid#vid_3837&pid_1018&mi_02&col02#ultra-test"
+        self.configure(pid=0x1018)
+        self.case.identities[path] = (0x3837, 0x1018)
+        self.case.products[path] = "MCHOSE A7 V3 Ultra+"
+        self.dev.get_report_descriptor.return_value = ULTRA_1018_DESCRIPTOR
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = 0xFF01, 1
+            value.input = value.output = value.feature = 64
+            value.ib, value.ob, value.ov, value.fv = 5, 2, 1, 3
+            return 0x00110000
+
+        self.case.hid.HidP_GetCaps.side_effect = caps
+        initialize = self.case.hid.HidP_InitializeReportForID
+        for denied_direction in (0, 1, None):
+            with self.subTest(denied_direction=denied_direction):
+                initialize.reset_mock()
+                initialize.side_effect = lambda direction, *_: (
+                    0xC0110010 if direction == denied_direction else 0x00110000)
+                info = self.scan(path)
+                accepted = denied_direction is None
+                self.assertEqual(info["declared_report_sizes"]["input"]["77"], 127)
+                self.assertEqual(info["declared_report_sizes"]["output"]["77"], 64)
+                self.assertEqual(info.get("v3_windows_report_confirmed", False), accepted)
+                self.assertEqual(path in self.case.cache, accepted)
+                self.assertEqual([(args[0], args[1], len(args[3]), args[4])
+                                  for args, _ in initialize.call_args_list],
+                                 [(0, 0x4D, 64, 64)] if denied_direction == 0
+                                 else [(0, 0x4D, 64, 64), (1, 0x4D, 64, 64)])
+                decoded = json.loads(json.dumps(info, default=wire_encode), object_hook=wire_decode)
+                diagnostic = self.assert_reader([decoded], accepted=accepted)
+                self.assertIn("Windows input/output report 4D/64 confirmed" if accepted
+                              else "length unproven", diagnostic)
+        # A same-PID product with the same reconstruction still uses the normal gates.
+        self.case.cache.clear()
+        self.case.products[path] = "MCHOSE A7 V3 Pro+"
+        initialize.reset_mock()
+        info = self.scan(path)
+        initialize.assert_not_called()
+        self.assert_reader([info])
 
     def test_s9_both_pages_fallback_requires_one_proven_feature_collection(self):
         for page in (0xFF00, 0xFF06):
