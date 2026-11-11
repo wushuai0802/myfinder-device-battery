@@ -52,7 +52,8 @@ than by model list, which is what this provider does as well. The diagnostics in
 read on the *short* 0x11 report, so both report ids are tried before a poll gives up.
 Exception: A7 V3's 3837:1018 and 3837:1014 receivers share the collection but use
 output report 0x4D and a different command set (OpenMouse's V3 codec). Its separate
-read-only path below prefers FF01:0001 with proven 64-byte input/output report 4D.
+read-only path below prefers FF01:0001 with confirmed 64-byte Windows buffers
+for input/output report 4D, including the Ultra+ descriptor recovery below.
 Only 1018 may use a uniquely proven FF0B:00C4 on the same USB parent when FF01 is
 absent or definitively excludes 4D/64. It never falls back to a legacy exchange.
 See the V3 source/license notes in upstream-protocols.md.
@@ -272,6 +273,34 @@ def device_key(vid: int, pid: int) -> str:
 def make_v3_request() -> bytes:
     """Only readDeviceInfo: version/flags/length/cmd LE/biz/sequence/XOR."""
     return bytes([V3_REPORT_ID, 1, 1, 0, 0, 9, 0, 0, 8]).ljust(V3_REPORT_LEN, b"\x00")
+
+
+def v3_ultra_windows_report_candidate(info):
+    """Match the Ultra+ layout whose reconstructed descriptor repeats Input 4D."""
+    if ((info.get("vendor_id"), info.get("product_id")) != (V3_VID, V3_PID)
+            or (info.get("usage_page"), info.get("usage")) != V3_USAGE
+            or info.get("interface_number") != 2
+            or (info.get("product_string") or "").strip() != V3_PIDS[0x1014]
+            or (info.get("input_report_length"), info.get("output_report_length"))
+            != (V3_REPORT_LEN, V3_REPORT_LEN)
+            or info.get("report_descriptor_error") != "collection maximum mismatch"):
+        return False
+    # Windows hidapi reconstructs two 63-byte Input items for the same 4D
+    # array. Their sum is 127 bytes with the report ID, while HidP reports 64.
+    report_id = str(V3_REPORT_ID)
+    declared = info.get("declared_report_sizes")
+    if not isinstance(declared, dict):
+        return False
+    input_declaration = declared.get("input")
+    output_declaration = declared.get("output")
+    output_sizes = info.get("output_report_sizes")
+    return (info.get("input_report_sizes") is None
+            and isinstance(input_declaration, dict)
+            and input_declaration.get(report_id) == 2 * V3_REPORT_LEN - 1
+            and isinstance(output_declaration, dict)
+            and output_declaration.get(report_id) == V3_REPORT_LEN
+            and (output_sizes is None or isinstance(output_sizes, dict)
+                 and output_sizes.get(report_id) == V3_REPORT_LEN))
 
 
 def parse_v3(resp) -> Optional[Tuple[int, bool]]:
@@ -500,6 +529,10 @@ class MchoseProvider(Provider):
         if not info.get("path"):
             self._note_v3("V3 collection path unresolved" + collection + "; not opened; nothing sent")
             return None
+        if (not alternate and info.get("v3_windows_report_confirmed") is True
+                and v3_ultra_windows_report_candidate(info)):
+            self._note_v3("V3 Windows input/output report 4D/64 confirmed" + collection)
+            return info
         for direction in ("input", "output"):
             if not self._v3_report_proven(info, direction, alternate=alternate):
                 self._note_v3("V3 " + direction + " report 4D/64 length unproven"

@@ -185,6 +185,18 @@ def _descriptor_fallback(info, caps, directions):
     info["report_descriptor_error"] = reason
 
 
+def _windows_report_id_supported(hid, data, report_id, length):
+    """Check both directions in memory using the collection's preparsed data."""
+    try:
+        initialize = hid.HidP_InitializeReportForID
+    except AttributeError:
+        return False
+    initialize.argtypes = [c.c_int, c.c_ubyte, c.c_void_p, c.c_void_p, c.c_uint32]
+    initialize.restype = c.c_int32
+    return all(initialize(direction, report_id, data, c.create_string_buffer(length),
+                          length) == 0x00110000 for direction in (0, 1))
+
+
 def discover(paths, excluded=(), *, full=False):
     """Serialized descriptor discovery with native paths excluded BEFORE open.
 
@@ -359,6 +371,15 @@ def discover(paths, excluded=(), *, full=False):
                         _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+                if (not caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage)
+                        == (0x3837, 0x1018, 0xFF01, 0x0001)
+                        and info.get("report_descriptor_error") == "collection maximum mismatch"):
+                    from providers.mchose import (V3_REPORT_ID, V3_REPORT_LEN,
+                                                  v3_ultra_windows_report_candidate)
+                    if (v3_ultra_windows_report_candidate(info)
+                            and _windows_report_id_supported(hid, data, V3_REPORT_ID, V3_REPORT_LEN)):
+                        info["v3_windows_report_confirmed"] = True
+                        caps_complete = True
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
                     0x3554, 0xFA09, 0xFF04, 0x0002):
                 from battery_hid import battery_caps, byte_report_sizes
