@@ -383,7 +383,7 @@ class TriageTests(unittest.TestCase):
         expected = ("自动回复：这款设备目前还读不到电量。请先确认已升级到最新正式版；"
                     "如果电脑上有官方软件能显示它的电量，请在程序里打开‘我的反馈’，"
                     "选中这条后点‘补充资料’，写上软件名称、版本和下载地址，"
-                    "有了这个我们才能研究。维护者会定期查看。")
+                    "有了这个我们才能研究。我们每天查看一次反馈，有修复就会发布测试版。")
         for diagnostics, label in (
                 (report(unknown='373B:EEEE "candidate" FF02:0002'), "pack-candidate"),
                 (report(unknown='ABCD:1234 "new" FF00:0001'), "new-vendor"),
@@ -960,7 +960,199 @@ def pack_document(entries=None, disabled=None):
             "entries": entries or [], "disabled": disabled or []}
 
 
+class DeviceStatusTriageTests(unittest.TestCase):
+    def reply_for(self, devices, unknown='abcd:1234 "untrusted @name $(command)" FF00:0001', **kwargs):
+        return triage.decide(issue(in_app(report(unknown=unknown))), KNOWN,
+                             device_status=devices, **kwargs)["reply"]
+
+    def test_four_fixed_status_sentences(self):
+        for entry, expected in (
+                ({"status": "beta", "version": "1.2.3-beta.4", "note": "仅鼠标"},
+                 "ABCD:1234：测试版 1.2.3-beta.4 已加入读取，待实机验证（仅鼠标）。"
+                 "可在程序设置里打开「提醒测试版更新」后升级试用，并对照官方软件的电量。"),
+                ({"status": "researching"}, "ABCD:1234：已有协议线索，正在研究，有进展会在这里更新。"),
+                ({"status": "no-evidence"}, "ABCD:1234：目前还缺协议资料，暂时无法读取。"),
+                ({"status": "not-a-device", "note": "充电底座，本身没有电量"},
+                 "ABCD:1234：充电底座，本身没有电量，不需要适配。")):
+            with self.subTest(entry=entry):
+                actual = self.reply_for({"ABCD:1234": entry})
+                prefix = "自动回复：" if entry["status"] == "not-a-device" else triage.UNSUPPORTED + "\n\n"
+                self.assertEqual(actual, triage.MARKER + "\n" + prefix + expected)
+                for text in ("untrusted", "@name", "$(command)", "abcd:1234", "下个版本", "很快"):
+                    self.assertNotIn(text, actual)
+
+    def test_optional_notes_have_no_empty_parentheses(self):
+        beta = self.reply_for({"ABCD:1234": {"status": "beta", "version": "1.2.3-beta.4"}})
+        self.assertIn("待实机验证。可在程序设置", beta)
+        self.assertNotIn("（）", beta)
+        accessory = self.reply_for({"ABCD:1234": {"status": "not-a-device"}})
+        self.assertEqual(accessory, triage.MARKER + "\n自动回复：ABCD:1234：这是没有独立电量的配件，不需要适配。")
+
+    def test_reports_and_rank_thresholds_for_both_pending_statuses(self):
+        for status in ("researching", "no-evidence"):
+            for fields, suffix in (
+                    ({}, ""), ({"reports": 2, "rank": 1}, ""),
+                    ({"reports": 3}, "已有 3 条同款反馈。"),
+                    ({"reports": 4, "rank": 21}, "已有 4 条同款反馈。"),
+                    ({"reports": 3, "rank": 20}, "已有 3 条同款反馈，在待适配清单里排第 20 位。")):
+                with self.subTest(status=status, fields=fields):
+                    actual = self.reply_for({"ABCD:1234": dict(fields, status=status)})
+                    base = "有进展会在这里更新。" if status == "researching" else "暂时无法读取。"
+                    self.assertTrue(actual.endswith(base + suffix))
+        for entry in ({"status": "beta", "version": "1.2.3-beta.4"}, {"status": "not-a-device"}):
+            self.assertNotIn("同款反馈", self.reply_for({"ABCD:1234": dict(entry, reports=10, rank=1)}))
+
+    def test_status_ids_keep_report_order_deduplicate_and_stop_at_three(self):
+        devices = {key: {"status": "researching"} for key in ("ABCD:1234", "1111:1111", "2222:2222", "3333:3333")}
+        unknown = '\n'.join(key + ' "Receiver" FF00:0001' for key in
+                            ("2222:2222", "abcd:1234", "2222:2222", "1111:1111", "3333:3333"))
+        actual = self.reply_for(devices, unknown)
+        lines = actual.split("\n\n")[1].splitlines()
+        self.assertEqual([line.split("：", 1)[0] for line in lines], ["2222:2222", "ABCD:1234", "1111:1111"])
+
+    def test_only_unadapted_primary_ids_count_not_cards_names_collections_or_mentions(self):
+        devices = {"ABCD:1234": {"status": "researching"}}
+        for body in (in_app(description="ABCD:1234 is a description"),
+                     in_app(report(card="ABCD:1234 | mouse | provider | 80% | 当前读数：是")),
+                     in_app(report(unknown='9999:0001 "ABCD:1234" FF00:0001')),
+                     in_app(report(unknown='9999:0001 "Receiver" ABCD:1234')),
+                     in_app("已隐藏的重复连接\nABCD:1234\n读取器健康\nABCD:1234")):
+            with self.subTest(body=body):
+                self.assertEqual(triage.decide(issue(body), KNOWN, device_status=devices),
+                                 triage.decide(issue(body), KNOWN))
+
+    def test_human_supplements_count_and_bot_reports_do_not(self):
+        devices = {"ABCD:1234": {"status": "researching"}}
+        diagnostic = report(unknown='abcd:1234 "Receiver" FF00:0001')
+        for bot in (False, True):
+            with self.subTest(bot=bot):
+                actual = triage.decide(issue(in_app()), KNOWN, [[comment(diagnostic, bot)]], device_status=devices)
+                self.assertEqual("ABCD:1234：" in actual["reply"], not bot)
+
+    def test_status_appends_to_only_the_three_allowed_templates(self):
+        status = {"ABCD:1234": {"status": "researching"}}
+        device = {"vendorId": 0xABCD, "productId": 0x1234, "name": "Repository Model"}
+        payload = issue(in_app(report(unknown='ABCD:1234 "user input" FF00:0001')))
+        cases = [(KNOWN, None, triage.UNSUPPORTED),
+                 ({"vendors": {"test": [0xABCD]}, "devices": [dict(device, requiresModelMatch=True)]},
+                  None, triage.MODEL_MATCH_REQUIRED),
+                 (KNOWN, {"vendors": {"test": [0xABCD]}, "devices": [device]},
+                  triage.IN_NEXT_RELEASE.format(models="Repository Model"))]
+        for known, next_known, base in cases:
+            with self.subTest(base=base):
+                actual = triage.decide(payload, known, known_next=next_known, device_status=status)
+                self.assertEqual(actual["reply"], triage.MARKER + "\n" + base
+                                 + "\n\nABCD:1234：已有协议线索，正在研究，有进展会在这里更新。")
+        known = {"vendors": {"test": [0xABCD]}, "devices": [device]}
+        for data in (payload, issue(in_app()), issue(in_app(category="界面或操作")),
+                     issue(in_app(report(card="mouse：Mouse 80%"), category="电量或 DPI 不对"))):
+            self.assertEqual(triage.decide(data, known, device_status=status), triage.decide(data, known))
+
+    def test_all_accessories_replace_unsupported_without_requesting_official_software(self):
+        devices = {"ABCD:1234": {"status": "not-a-device"}, "1111:1111": {"status": "not-a-device", "note": "充电底座"}}
+        actual = self.reply_for(devices, 'ABCD:1234 "dock" FF00:0001\n1111:1111 "dock" FF00:0001')
+        self.assertTrue(actual.startswith(triage.MARKER + "\n自动回复：ABCD:1234："))
+        self.assertIn("1111:1111：充电底座，不需要适配。", actual)
+        self.assertNotIn("官方软件", actual)
+        self.assertNotIn(triage.UNSUPPORTED, actual)
+
+    def test_unknown_device_or_mixed_status_prevents_accessory_only_replacement(self):
+        devices = {"ABCD:1234": {"status": "not-a-device"}, "1111:1111": {"status": "researching"}}
+        for extra in ('9999:0001 "Unknown" FF00:0001', '1111:1111 "Unknown" FF00:0001'):
+            actual = self.reply_for(devices, 'ABCD:1234 "Dock" FF00:0001\n' + extra)
+            self.assertIn(triage.UNSUPPORTED, actual)
+        # Inspect all matching IDs, not just the first three displayed sentences.
+        many = {key: {"status": "not-a-device"} for key in ("1111:1111", "2222:2222", "3333:3333")}
+        many["4444:4444"] = {"status": "no-evidence"}
+        actual = self.reply_for(many, "\n".join(key + ' "Receiver" FF00:0001' for key in many))
+        self.assertIn(triage.UNSUPPORTED, actual)
+        self.assertNotIn("4444:4444：", actual)
+
+    def test_loose_unclassified_device_prevents_accessory_only_replacement(self):
+        body = in_app(report(unknown='ABCD:1234 "Dock" FF00:0001'), description="9999:0001 another device")
+        actual = triage.decide(issue(body), KNOWN, device_status={"ABCD:1234": {"status": "not-a-device"}})
+        self.assertIn(triage.UNSUPPORTED, actual["reply"])
+
+    def test_credentials_are_applied_before_status_and_marker_still_suppresses(self):
+        footer = "<!-- myfinder-reply:v1 sha256=" + "ab" * 32 + " -->"
+        body = in_app(report(unknown='ABCD:1234 "Receiver" FF00:0001')) + "\n\n" + footer
+        devices = {"ABCD:1234": {"status": "beta", "version": "1.2.3-beta.4"}}
+        actual = triage.decide(issue(body), KNOWN, device_status=devices)["reply"]
+        original = triage.decide(issue(body), KNOWN)["reply"]
+        self.assertTrue(actual.startswith(original + "\n\n"))
+        self.assertIn("补充资料", actual)
+        self.assertIn("ABCD:1234：测试版", actual)
+        self.assertIsNone(triage.decide(issue(body, comments=[comment(triage.MARKER, True)]),
+                                        KNOWN, device_status=devices)["reply"])
+        for entry in ({"status": "not-a-device"}, {"status": "researching"}):
+            devices["ABCD:1234"] = entry
+            keyed = triage.decide(issue(body), KNOWN, device_status=devices)["reply"]
+            plain = triage.decide(issue(body.rsplit("\n\n", 1)[0]), KNOWN, device_status=devices)["reply"]
+            self.assertEqual(keyed.split("ABCD:1234：", 1)[1], plain.split("ABCD:1234：", 1)[1])
+
+    def test_invalid_entries_and_unsafe_notes_are_ignored_individually(self):
+        invalid = [None, [], {}, {"status": []}, {"status": "unsupported"}, {"status": "beta"},
+                   {"status": "beta", "version": "1.2.3"}, {"status": "researching", "reports": True},
+                   {"status": "researching", "reports": -1}, {"status": "researching", "rank": 0},
+                   {"status": "researching", "rank": 1.5}, {"status": "researching", "extra": "bad"}]
+        invalid += [{"status": "researching", "note": note} for note in
+                    (None, "@user", "a\nb", "a\rb", "`bad`", "<bad", "bad>", "HTTP", "字" * 61, "a\u2028b")]
+        for entry in invalid:
+            with self.subTest(entry=entry):
+                actual = self.reply_for({"ABCD:1234": entry, "1111:1111": {"status": "researching"}},
+                                        'ABCD:1234 "Unknown" FF00:0001\n1111:1111 "Unknown" FF00:0001')
+                self.assertNotIn("ABCD:1234：", actual)
+                self.assertIn("1111:1111：已有协议线索", actual)
+        for devices in (None, [], "invalid", {"abcd:1234": {"status": "researching"}}):
+            self.assertEqual(self.reply_for(devices), triage.MARKER + "\n" + triage.UNSUPPORTED)
+
+    def test_missing_corrupt_or_invalid_status_table_falls_back(self):
+        with workspace_temp() as folder:
+            path = Path(folder) / "status.json"
+            self.assertEqual(triage.load_device_status(path), {})
+            for content in (b"bad json", b"\xff", b"null", b"[]", b"{}", b'{"schema":true,"devices":{}}',
+                            b'{"schema":2,"devices":{}}', b'{"schema":1,"devices":[]}'):
+                path.write_bytes(content)
+                self.assertEqual(self.reply_for(triage.load_device_status(path)), triage.MARKER + "\n" + triage.UNSUPPORTED)
+            path.write_text(json.dumps({"schema": 1, "devices": {
+                "ABCD:1234": {"status": "beta"}, "1111:1111": {"status": "researching"}}}), encoding="utf-8")
+            self.assertEqual(triage.load_device_status(path), {"1111:1111": {"status": "researching"}})
+
+    def test_no_status_parameter_preserves_old_results_except_requested_cadence(self):
+        self.assertTrue(triage.UNSUPPORTED.endswith("我们每天查看一次反馈，有修复就会发布测试版。"))
+        for body in (in_app(), in_app(report(unknown='ABCD:1234 "Unknown" FF00:0001')),
+                     in_app(report(unknown='373B:1278 "ATK" FF02:0002')), in_app(category="其他")):
+            self.assertEqual(triage.decide(issue(body), KNOWN), triage.decide(issue(body), KNOWN, device_status=None))
+            self.assertEqual(triage.decide(issue(body), KNOWN), triage.decide(issue(body), KNOWN, device_status={}))
+
+    def test_standalone_cli_uses_optional_table_and_survives_bad_files(self):
+        with workspace_temp() as folder:
+            work = Path(folder)
+            shutil.copyfile(ROOT / ".github/scripts/triage.py", work / "triage.py")
+            payload = issue(in_app(report(unknown='ABCD:1234 "Unknown" FF00:0001')))
+            for name, value in (("issue.json", payload), ("known.json", KNOWN)):
+                (work / name).write_text(json.dumps(value), encoding="utf-8")
+            command = [sys.executable, "-I", "-B", str(work / "triage.py"), "--issue", str(work / "issue.json"),
+                       "--known-ids", str(work / "known.json"), "--device-status", str(work / "status.json")]
+            for content in (None, "{bad", json.dumps({"schema": 1, "devices": {"ABCD:1234": {"status": "no-evidence"}}})):
+                if content is not None:
+                    (work / "status.json").write_text(content, encoding="utf-8")
+                run = subprocess.run(command, check=True, capture_output=True, timeout=10)
+                actual = json.loads(run.stdout)["reply"]
+                self.assertEqual("ABCD:1234：目前还缺协议资料" in actual, content is not None and content != "{bad")
+
+
 class WorkflowTests(unittest.TestCase):
+    def test_status_table_is_optional_in_both_triage_invocations(self):
+        text = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
+        indexing, writing = text.split("\n  triage:\n", 1)
+        self.assertIn('if test -f .github/triage/device-status.json; then', indexing)
+        self.assertIn('cp .github/triage/device-status.json "$RUNNER_TEMP/triage/device-status.json"', indexing)
+        self.assertEqual(writing.count('if test -f "$RUNNER_TEMP/triage/device-status.json"; then'), 2)
+        self.assertEqual(writing.count('status_args+=(--device-status "$RUNNER_TEMP/triage/device-status.json")'), 2)
+        self.assertEqual(writing.count('"${status_args[@]}" > "$RUNNER_TEMP/decision.json"'), 2)
+        self.assertNotIn("uses: actions/checkout", writing)
+
     def test_indexes_have_read_only_checkout_and_both_revisions(self):
         text = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
         indexing, writing = text.split("\n  triage:\n", 1)
