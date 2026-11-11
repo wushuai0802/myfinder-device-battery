@@ -37,6 +37,10 @@ HOT_THRESHOLD = 3
 # Laptop/motherboard internals (Intel Bluetooth, Lenovo, ASUS keyboard/audio).
 BUILTIN_VENDORS = {"8087", "17EF", "048D", "1462"}
 BUILTIN_NAME = re.compile(r"USB Audio|N-KEY|Idea\d|Bluetooth|Realtek|Webcam|Camera", re.I)
+# Accessories that enumerate with a vendor collection but have no battery of
+# their own (MCHOSE MagDock is a charging dock; the mouse reports through its
+# own receiver, see engine/research/batch2-protocols.md section 4).
+NO_BATTERY_IDS = {"3837:1012"}
 
 
 def gh(path, paginate=False):
@@ -88,7 +92,7 @@ def parse_body(body):
     if "未取得电量的设备" in body:
         for line in body.split("未取得电量的设备")[-1].splitlines():
             m = ID_LINE.match(line)
-            if m and not NOISE.search(m.group(3)):
+            if m and not NOISE.search(m.group(3)) and f"{m.group(1)}:{m.group(2)}" not in NO_BATTERY_IDS:
                 usages = sorted(set(re.findall(r"FF[0-9A-F]{2}:[0-9A-F]{4}", m.group(4))))
                 unknown.append({"id": f"{m.group(1)}:{m.group(2)}", "name": m.group(3), "vendor": usages})
     return {"version": version.group(1) if version else None,
