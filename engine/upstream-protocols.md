@@ -1341,7 +1341,7 @@ opened; nothing sent`; successful proofs state `proof=caps/descriptor` by
 direction. Legacy MCHOSE diagnostic payloads, product strings and exception
 text are not exported through this path.
 
-**A7 V3 Ultra+ `3837:1018` on Windows:** the tested USB receiver reports
+**A7 V3 Ultra+ `3837:1018` on Windows: C / 用户实机验证，#535 (PR #536).** The tested USB receiver reports
 `MCHOSE A7 V3 Ultra+` on interface 2. HidP gives `FF01:0001` 64-byte
 input and output buffers, but hidapi's reconstructed descriptor repeats the
 63-byte Input 4D item, yielding a parsed length of 127. When this mismatch
