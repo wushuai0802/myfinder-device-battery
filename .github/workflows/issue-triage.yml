@@ -59,6 +59,9 @@ jobs:
             python -I -B engine/known_ids.py --json --engine-root "$RUNNER_TEMP/released/engine" > "$RUNNER_TEMP/triage/known-ids.json"
           fi
           cp .github/scripts/triage.py "$RUNNER_TEMP/triage/triage.py"
+          if test -f .github/triage/device-status.json; then
+            cp .github/triage/device-status.json "$RUNNER_TEMP/triage/device-status.json"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: triage-inputs
@@ -92,7 +95,11 @@ jobs:
           set -euo pipefail
           gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER" > "$RUNNER_TEMP/issue.json"
           gh api --paginate --slurp "repos/$GH_REPO/issues/$ISSUE_NUMBER/comments?per_page=100" > "$RUNNER_TEMP/comments.json"
-          python -I -B "$RUNNER_TEMP/triage/triage.py" --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/triage/known-ids.json" --known-ids-next "$RUNNER_TEMP/triage/known-ids-next.json" > "$RUNNER_TEMP/decision.json"
+          status_args=()
+          if test -f "$RUNNER_TEMP/triage/device-status.json"; then
+            status_args+=(--device-status "$RUNNER_TEMP/triage/device-status.json")
+          fi
+          python -I -B "$RUNNER_TEMP/triage/triage.py" --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/triage/known-ids.json" --known-ids-next "$RUNNER_TEMP/triage/known-ids-next.json" "${status_args[@]}" > "$RUNNER_TEMP/decision.json"
       - name: Replace triage labels and post the template once
         shell: bash
         run: |
@@ -101,7 +108,11 @@ jobs:
           # comments posted since the first snapshot (including our own marker).
           gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER" > "$RUNNER_TEMP/issue.json"
           gh api --paginate --slurp "repos/$GH_REPO/issues/$ISSUE_NUMBER/comments?per_page=100" > "$RUNNER_TEMP/comments.json"
-          python -I -B "$RUNNER_TEMP/triage/triage.py" --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/triage/known-ids.json" --known-ids-next "$RUNNER_TEMP/triage/known-ids-next.json" > "$RUNNER_TEMP/decision.json"
+          status_args=()
+          if test -f "$RUNNER_TEMP/triage/device-status.json"; then
+            status_args+=(--device-status "$RUNNER_TEMP/triage/device-status.json")
+          fi
+          python -I -B "$RUNNER_TEMP/triage/triage.py" --issue "$RUNNER_TEMP/issue.json" --comments "$RUNNER_TEMP/comments.json" --known-ids "$RUNNER_TEMP/triage/known-ids.json" --known-ids-next "$RUNNER_TEMP/triage/known-ids-next.json" "${status_args[@]}" > "$RUNNER_TEMP/decision.json"
           label=$(jq -r '.label // empty' "$RUNNER_TEMP/decision.json")
           case "$label" in
             '') exit 0 ;;

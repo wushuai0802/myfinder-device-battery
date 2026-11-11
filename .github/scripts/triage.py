@@ -26,7 +26,7 @@ IN_NEXT_RELEASE = ("自动回复：报告里的 {models} 在开发代码已有�
 MODEL_MATCH_REQUIRED = ("自动回复：报告中的设备 ID 仅部分型号可读取电量，需核对准确型号和接口，"
                         "暂不能仅凭共享 ID 确认支持。请在这里补充一次新的反馈报告；没有 GitHub 账号的话，"
                         "可以在程序里重新提交反馈，并在描述里写上本条编号。维护者会尽快查看。")
-UNSUPPORTED = "自动回复：这款设备目前还读不到电量。请先确认已升级到最新正式版；如果电脑上有官方软件能显示它的电量，请在这里回复软件名称、版本和下载地址，有了这个我们才能研究。维护者会定期查看。"
+UNSUPPORTED = "自动回复：这款设备目前还读不到电量。请先确认已升级到最新正式版；如果电脑上有官方软件能显示它的电量，请在这里回复软件名称、版本和下载地址，有了这个我们才能研究。我们每天查看一次反馈，有修复就会发布测试版。"
 BUG_ACK = "自动回复：收到你的反馈，维护者会定期查看并在这里回复。如果方便，请写清楚操作步骤和看到的现象，有截图更好。"
 PAIR = re.compile(r"(?<![\w:])([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})(?![\w:])")
 TYPE = re.compile(r"^[ \t]*(?:\*\*)?类型(?:\*\*)?[ \t]*[：:][ \t]*([^\r\n]+?)[ \t\r]*$", re.MULTILINE)
@@ -38,6 +38,76 @@ LEGACY_CARD = re.compile(r"^(?:mouse|keyboard|headset|鼠标|键盘|耳机)[ \t]
                          re.IGNORECASE)
 NOISE_NAME = re.compile(r"HIDI2C|Touchpad|Multitouch|Precision|Motherboard", re.IGNORECASE)
 REPLY_CREDENTIAL = re.compile(r"<!-- myfinder-reply:v1 sha256=[0-9a-f]{64} -->")
+STATUS_ID = re.compile(r"[0-9A-F]{4}:[0-9A-F]{4}")
+STATUS_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+")
+UNSAFE_STATUS_NOTE = re.compile(r"[@`<>\r\n\v\f\x1c-\x1e\x85\u2028\u2029]|http", re.IGNORECASE)
+
+
+def valid_status_devices(devices):
+    # This script is shipped alone to the issue-writing job. Keep its small,
+    # fail-open validator local; never import code from the checkout here.
+    valid = {}
+    if not isinstance(devices, dict):
+        return valid
+    for device_id, entry in devices.items():
+        if not isinstance(device_id, str) or not STATUS_ID.fullmatch(device_id) or not isinstance(entry, dict):
+            continue
+        if set(entry) - {"status", "version", "note", "reports", "rank"}:
+            continue
+        if not isinstance(entry.get("status"), str) or entry["status"] not in {
+                "beta", "researching", "no-evidence", "not-a-device"}:
+            continue
+        if (entry["status"] == "beta" or "version" in entry) and (
+                not isinstance(entry.get("version"), str) or not STATUS_VERSION.fullmatch(entry["version"])):
+            continue
+        if "note" in entry and (not isinstance(entry["note"], str) or len(entry["note"]) > 60
+                                or UNSAFE_STATUS_NOTE.search(entry["note"])):
+            continue
+        if any(field in entry and (type(entry[field]) is not int or entry[field] < minimum)
+               for field, minimum in (("reports", 0), ("rank", 1))):
+            continue
+        valid[device_id] = entry
+    return valid
+
+
+def load_device_status(path):
+    try:
+        value = read_json(path)
+    except (OSError, ValueError):
+        return {}
+    if (not isinstance(value, dict) or type(value.get("schema")) is not int
+            or value["schema"] != 1 or set(value) - {"schema", "devices"}):
+        return {}
+    return valid_status_devices(value.get("devices"))
+
+
+def status_matches(rows, devices):
+    devices = valid_status_devices(devices)
+    matched = {}
+    for row in rows:
+        if row[3] == "unadapted":
+            device_id = f"{row[0]:04X}:{row[1]:04X}"
+            if device_id in devices:
+                matched.setdefault(device_id, devices[device_id])
+    return matched
+
+
+def status_sentence(device_id, entry):
+    status, note = entry["status"], entry.get("note", "")
+    if status == "beta":
+        extra = f"（{note}）" if note else ""
+        return (f"{device_id}：测试版 {entry['version']} 已加入读取，待实机验证{extra}。"
+                "可在程序设置里打开「提醒测试版更新」后升级试用，并对照官方软件的电量。")
+    if status == "not-a-device":
+        return f"{device_id}：{note or '这是没有独立电量的配件'}，不需要适配。"
+    text = ("已有协议线索，正在研究，有进展会在这里更新。" if status == "researching"
+            else "目前还缺协议资料，暂时无法读取。")
+    if entry.get("reports", 0) >= 3:
+        text += f"已有 {entry['reports']} 条同款反馈"
+        if entry.get("rank", 21) <= 20:
+            text += f"，在待适配清单里排第 {entry['rank']} 位"
+        text += "。"
+    return f"{device_id}：{text}"
 
 
 def has_reply_credential(body):
@@ -120,7 +190,7 @@ def report_devices(text):
     return rows
 
 
-def decide(issue, known, comments=None, known_next=None):
+def decide(issue, known, comments=None, known_next=None, device_status=None):
     labels = labels_of(issue)
     result = {"label": None, "reply": None, "reason": "未命中设备或问题类型规则。", "remove_labels": []}
     if "triage:locked" in labels or "pull_request" in issue:
@@ -225,6 +295,9 @@ def decide(issue, known, comments=None, known_next=None):
         reason += " 已忽略触摸板、虚拟设备名称或仅含 0001:0002 集合的行：" + ids + "。"
     result.update(label="triage:" + label, reason=reason)
     result["remove_labels"] = [old for old in labels if old.startswith("triage:") and old != result["label"]]
+    unsupported_reply = reply == UNSUPPORTED
+    matched = status_matches(reported, device_status) if (
+        unsupported_reply or reply == MODEL_MATCH_REQUIRED or (reply and label == "in-next-release")) else {}
     if reply and not any((comment.get("user") or {}).get("login") == "github-actions[bot]"
                          and MARKER in (comment.get("body") or "") for comment in comments):
         if has_reply_credential(body):
@@ -234,6 +307,13 @@ def decide(issue, known, comments=None, known_next=None):
             if reply == UNSUPPORTED:
                 reply = reply.replace("请在这里回复软件名称、版本和下载地址",
                                       "请在程序里打开‘我的反馈’，选中这条后点‘补充资料’，写上软件名称、版本和下载地址")
+        if matched:
+            sentences = "\n".join(status_sentence(device_id, entry)
+                                  for device_id, entry in list(matched.items())[:3])
+            accessories_only = (all(entry["status"] == "not-a-device" for entry in matched.values())
+                                and all(f"{row[0]:04X}:{row[1]:04X}" in matched for row in rows))
+            reply = ("自动回复：" + sentences if unsupported_reply and accessories_only
+                     else reply + "\n\n" + sentences)
         result["reply"] = MARKER + "\n" + reply
     return result
 
@@ -248,10 +328,12 @@ def main():
     parser.add_argument("--comments")
     parser.add_argument("--known-ids", required=True)
     parser.add_argument("--known-ids-next", help="main index; --known-ids is the latest release")
+    parser.add_argument("--device-status", help="optional, fail-open device status table")
     args = parser.parse_args()
     result = decide(read_json(args.issue), read_json(args.known_ids),
                     read_json(args.comments) if args.comments else None,
-                    read_json(args.known_ids_next) if args.known_ids_next else None)
+                    read_json(args.known_ids_next) if args.known_ids_next else None,
+                    load_device_status(args.device_status) if args.device_status else None)
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 
 
