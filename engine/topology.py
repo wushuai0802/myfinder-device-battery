@@ -302,6 +302,19 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(feature_report_length=caps.feature,
                             feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True))
                 caps_complete = (caps.feature == 33 and info["feature_report_sizes"] == {"15": 33})
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x0B05, 0x1ACE, 0xFF01, 0x0001) and info["interface_number"] == 2
+                    and len(path.split("#")) >= 3
+                    and re.search(r"&mi_02&col03(?:&|$)", path.split("#")[1], re.I)):
+                # OMNI mouse candidate: access-0 metadata only, existing strict
+                # byte-array proof for each ID. No raw-descriptor handle fallback.
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                for direction in ("input", "output"):
+                    info[direction + "_report_proof"] = (
+                        "caps" if info[direction + "_report_sizes"] is not None else "failed")
+                caps_complete = all(info[key] is not None and info[key].get("3") == 64
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
                     0x3654, 0x5055, 0xFF05, 0x0001):
                 # #459's fixed-Usage Data,Array, CE input / CD output. This

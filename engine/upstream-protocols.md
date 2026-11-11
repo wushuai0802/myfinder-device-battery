@@ -3844,6 +3844,48 @@ parents stay separate; pack disable rules block manager and child queries. No
 downloadable private profile is added. Complete literal frames, synthetic-test
 distinctions and acceptance limits: `docs/lingbao-m1pro.md`.
 
+### ROG OMNI mouse candidate (0B05:1ACE)
+
+Independent grade-C candidate, pending hardware validation. Protocol facts:
+`seerge/g-helper@0bda6b55317f67c0ad68f3b5366a0e12a9096c53` (GPL-3.0),
+`Mouse/AsusMouse.cs` and the OMNI mouse model definitions, recorded in
+[`docs/rog-omni-ghelper.md`](../docs/rog-omni-ghelper.md), section 2.2.
+No upstream implementation is copied. The existing `asus.py` is unchanged.
+
+Before a query handle opens, require exact VID:PID `0B05:1ACE`, interface 2
+and path `MI_02&Col03`, exact collection `FF01:0001`, a proven USB parent,
+and exactly one target route within that parent (count before report proof).
+Access-0 discovery uses the existing complete byte-array caps mechanism to
+prove Input and Output ID `03`, each 64 bytes including ID. A maximum alone,
+an incomplete map or ambiguity cannot authorize I/O. Other proven report IDs
+do not substitute for `03/64`; no looser proof or raw-descriptor handle
+fallback is added. FF00, FF02, FFC0, 0059 and other interfaces/collections are
+not fallback routes. Unproven/incompatible target reports stay uncached.
+
+Each poll per physical receiver sends only `03 12 07` plus 61 zeros (64 bytes),
+once, then at most four `read(64, 300)` calls; timeout stops the poll with no
+resend or drain. Skip other reports; only a 64-byte `03 12 07` echo yields
+byte `[5]` in `1..100` and charging `[10] > 0`. Target-ID `FF AA`, `[1..3]`
+all zero, battery zero (including charging), or battery above 100 yields no
+new reading, never 0%. All diagnostics are fixed and sanitized. Existing
+child/round budgets, failure backoff and historical timestamps are retained.
+Independent USB parents remain separate cards even with the same name/level.
+
+Task scope deliberately differs from the analysis document's proposed
+three-channel discovery: no `01 A0` pairing-table query, `03 7D` Booster query,
+or any other command. There is no downstream-model identification; the name
+is always `ROG OMNI 接收器（鼠标）`, kind mouse. Only mouse; keyboards through
+OMNI are not covered. The analysis's one-read suggestion is replaced by this
+task's four-read cap without retrying the request.
+
+Underlying Input/Output versus wrapped Feature transport, actual per-path
+descriptors, cold-start independent queries without full initialization,
+sleep/off/unpaired raw replies, RF/sample freshness and official-software
+coexistence remain unconfirmed. Host acceptance times are not a device sample
+clock. Keyboard routing, model-dependent battery offsets and pairing-table
+semantics remain outside this candidate. Offline synthetic fixtures do not
+constitute hardware acceptance. Full evidence limits are in the linked analysis.
+
 ### ZhuAudio ZG4 (3654:5055)
 
 Independent grade-C, read-only candidate based on official Z HUB static

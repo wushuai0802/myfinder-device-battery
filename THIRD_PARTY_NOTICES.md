@@ -53,6 +53,15 @@ The vendor JavaScript is read as inert text, not executed, copied into the
 provider or distributed with it. No vendor license review or hardware
 acceptance is asserted. Exact evidence and limitations: `docs/zhuaudio-zg4.md`.
 
+The ROG OMNI mouse-only battery candidate is an independent project implementation
+from protocol facts recorded in `docs/rog-omni-ghelper.md`, referencing
+[seerge/g-helper](https://github.com/seerge/g-helper/tree/0bda6b55317f67c0ad68f3b5366a0e12a9096c53),
+commit `0bda6b55317f67c0ad68f3b5366a0e12a9096c53` (GPL-3.0).
+No G-Helper implementation is copied or bundled with this candidate. Only the
+mouse battery exchange is used; pairing-table, Booster and keyboard commands
+are excluded. Grade C, pending hardware validation; the reference does not
+establish the underlying transport or cold-start independent-query behavior.
+
 The Windows distribution bundles the official CPython embeddable runtime and
 the `hidapi` Python wheel, with their original license files. Versions, original
 download URLs and SHA256 hashes are pinned in `engine/dependencies.lock.json`.
