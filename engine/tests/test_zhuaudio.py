@@ -1,4 +1,4 @@
-"""All replies are independent SYNTHETIC fixtures, never ZG4 hardware captures."""
+"""Replies are independent SYNTHETIC fixtures, except the verbatim #459 capture test."""
 from contextlib import contextmanager
 from pathlib import Path
 import sys
@@ -51,7 +51,8 @@ def connected(state=1, *, prefixed=False):
     # Independently computed response CRCs; not the provider's crc16 function.
     crc = {0: b"\x01\x60", 1: b"\xC0\xA0", 2: b"\x80\xA1"}[state]
     payload = b"\xAA\xCC\x00\x02" + crc + bytes([2, state])
-    return report((bytes([len(payload)]) if prefixed else b"") + payload)
+    # Hardware prefix (#459): 7 + length byte, one more than these 8 bytes.
+    return report((bytes([len(payload) + 1]) if prefixed else b"") + payload)
 
 
 def frame(level=70, charging=False, seq=1, cmd=7, value=None):
@@ -208,9 +209,38 @@ class ZhuAudioProtocolTests(unittest.TestCase):
         for prefixed in (False, True):
             packet = bytearray(connected(prefixed=prefixed))
             packet[5 if prefixed else 4] = 1
+            if prefixed:
+                packet[1] = 8  # 7 + the declared length of 1
             self.assertIs(Z.connection_reply(packet[1:]), True)
             packet[6 if prefixed else 5] ^= 1
             self.assertIsNone(Z.connection_reply(packet[1:]))
+
+    def test_issue_459_hardware_status_and_battery_frames(self):
+        # Verbatim listen-only frames from #459 (Z HUB showed 50%, not charging).
+        def real(text):
+            data = bytes.fromhex(text)
+            return data + bytes(64 - len(data))
+        online = real("CE 09 AA CC 00 02 C0 A0 02 01")
+        self.assertIs(Z.connection_reply(Z.input_payload(online)), True)
+        # Other opcodes seen in the same capture never count as a state.
+        for text in ("CE 09 AA CC 00 02 C1 30 03 01", "CE 0B AA CC 00 04 C1 36 04 00 00 09",
+                     "CE 0E AA CC 00 07 14 1C 05 F5 94 70 95 95 20",
+                     "CE 0C AA CC 00 05 41 32 06 88 36 05 10", "CE 09 AA CC 00 02 06 50 09 00",
+                     "CE 0E AA CC 00 07 96 67 0A 03 01 FF FF FF FF",
+                     "CE 09 AA CC 00 02 06 12 08 38"):
+            self.assertIsNone(Z.connection_reply(Z.input_payload(real(text))), text)
+        # The hardware prefix stays exact, and the CRC still has to match.
+        for index, value in ((1, 0x08), (1, 0x0A), (6, 0xC1), (9, 0x00), (10, 0x01)):
+            bad = bytearray(online)
+            bad[index] = value
+            self.assertIsNone(Z.connection_reply(bad[1:]), (index, value))
+        ack = Z._Assembler().feed(Z.input_payload(real("CE EA 80 00 05 00 FF 09 01 FC AA")), 0.0)
+        self.assertEqual(ack, bytes.fromhex("FF 09 01 FC AA"))
+        self.assertIsNone(Z.battery_reply(ack, 9))
+        level = Z._Assembler().feed(
+            Z.input_payload(real("CE EA 80 00 08 00 FF 09 04 07 32 00 00 AA")), 0.0)
+        self.assertEqual(Z.battery_reply(level, 9), (50, False, ""))
+        self.assertIsNone(Z.battery_reply(level, 10))
 
     def test_user_raw_descriptor_proves_ce_cd_without_shared_parser_changes(self):
         parsed, error = H.report_descriptor_proof(DESCRIPTOR)

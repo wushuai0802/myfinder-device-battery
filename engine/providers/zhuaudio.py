@@ -79,6 +79,10 @@ def connection_reply(payload):
     success field. Only the CRC-covered opcode/payload establish the state.
     Support the source's two CRC lengths only when padding/optional length
     prefix agree exactly. No inferred checksum or header interpretation.
+    #459's listen-only capture (Z HUB showing 50%) proves the hardware form:
+    prefix = 7 + length while the CRC covers exactly the `length` opcode +
+    payload bytes (`09 AA CC 00 02 C0 A0 02 01`). A prefix, when present,
+    must therefore be 7 + length for either CRC length.
     """
     data = _bytes(payload)
     if data is None or len(data) != 63:
@@ -94,7 +98,7 @@ def connection_reply(payload):
     checksum = int.from_bytes(data[4:6], "little")
     candidates = []
     for end in (6 + length, 7 + length):
-        if (8 <= end <= len(data) and (prefix is None or prefix == end)
+        if (8 <= end <= len(data) and (prefix is None or prefix == 7 + length)
                 and not any(data[end:]) and crc16(data[6:end]) == checksum):
             candidates.append(data[7] == 1)
     return candidates[0] if len(candidates) == 1 else None

@@ -3916,6 +3916,15 @@ three, low-seven-bit level 1..100 and bit7 charging. Unknown trailing value
 bytes are not interpreted. ACKs are received only; there is no added host ACK,
 arbitrary command passthrough, Feature, setting, reset, pairing or OTA path.
 
+**Hardware replies (#459, 2026-11-10, listen-only while Z HUB showed 50%, not charging;
+`.ai/evidence/zhub-desktop/issue-459-20261110/zg4_frames.log`).** The opcode-02 online state arrives as
+`CE 09 AA CC 00 02 C0 A0 02 01` plus zeros: the leading byte is 7 + length while the CRC covers exactly
+the `length` opcode + payload bytes. Before 1.3.11-beta.3 the parser required prefix = 6 + length, rejected
+this frame and never sent FE (`ZG4 no valid reply within limits`, #393/#457/#459/#538). A prefix, when
+present, must now be 7 + length. The battery reply `CE EA 80 00 08 00 FF seq 04 07 32 00 00 AA` matches the
+existing single-fragment EA + cmd `07` parsing (50%). The capture is receive-only: both request frames are
+still backed only by the official web source, and no end-to-end read by this app is confirmed yet.
+
 Both phases share a two-second/32-read deadline and a 1024-byte assembly bound.
 Short writes/errors end the current query without an immediate retry. The
 per-call pending guard is always released in finally; status-only failures have
