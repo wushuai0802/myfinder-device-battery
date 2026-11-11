@@ -7,6 +7,11 @@
       "note": "仅鼠标；经 OMNI 接收器连接的键盘暂不支持",
       "reports": 0
     },
+    "187C:0551": {
+      "status": "not-a-device",
+      "note": "电脑机身的灯效控制器，本身没有电量",
+      "reports": 0
+    },
     "248A:5B2F": {
       "status": "no-evidence",
       "reports": 6,

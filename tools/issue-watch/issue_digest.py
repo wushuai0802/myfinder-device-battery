@@ -40,7 +40,7 @@ BUILTIN_NAME = re.compile(r"USB Audio|N-KEY|Idea\d|Bluetooth|Realtek|Webcam|Came
 # Accessories that enumerate with a vendor collection but have no battery of
 # their own (MCHOSE MagDock is a charging dock; the mouse reports through its
 # own receiver, see engine/research/batch2-protocols.md section 4).
-NO_BATTERY_IDS = {"3837:1012"}
+NO_BATTERY_IDS = {"3837:1012", "187C:0551"}  # MagDock charging dock; Alienware AW-ELC light controller
 
 
 def gh(path, paginate=False):
