@@ -398,3 +398,20 @@ QMK 的 ID 依据为 `pretty/index-lp9XA374.js.txt:10918`，原文例 `` vendorI
 - `engine/battery_hid.py:338–358`、`engine/topology.py`、`engine/upstream-protocols.md`：仅参考描述符证明和报告体例，未借用其中其他品牌命令。
 
 本轮核对方式限PowerShell文本读取/分段筛选、`rg`检索、摘要计算及Git差异检查；预先按项目tag查询记忆只作边界背景，不作为协议事实来源。没有运行Python/Node/厂商脚本、联网、接触HID、修改代码或提交Git。
+
+## 7. 补充：维护者 INFI75 的 FF68:0061 运行时描述符（2026-11-12，协调者只读取回，未发送任何报告）
+
+有线 `05AC:024F / INFI75-1.1 / MI_02 / FF68:0061` 的报告描述符（35 字节）：
+
+```text
+06 68 ff 09 61 a1 01 09 62 15 00 26 ff 00 75 08 95 40 81 02
+09 63 15 00 26 ff 00 75 08 96 00 10 91 02 c0
+```
+
+- 无报告 ID；Input 为 64 数据字节；**Output 为 4096 数据字节**（`96 00 10`），没有 Feature。
+- 这与 `docs/infi75-driver.md` 里官方桌面驱动的“另一个大包通道”（`OutputReportByteLength == 0x1001`，`04 72` 之后下发 4096 字节内容块）一致：在 INFI75 上，FF68 的 Output 是屏幕/大块内容的下发通道。
+- HUB 的华奋达路径取 `outputReports[0].items[0].reportCount` 作包长，在这里会得到 4096，而不是 32 或 64；本文 2.2B 的两种条件化示例都不适用。
+- 结论：**不向 INFI75 的 FF68:0061 发送 `AA 10`**。型号表里没有 INFI75，输出通道的用途又与内容下发重合，证据不支持把它当作华奋达设备信息通道；发送次数保持 0。
+- 同一接收器 `2.4G Wireless Keyboard / FFB5:0001` 的描述符：报告 ID `B5`，Input、Output 各 7 数据字节，无 Feature；HUB 中没有对应路径（见 2.5）。
+
+本节不改变前文对 TH108 / TH87 等已登记华奋达型号以及容园型号的分析结论。
