@@ -33,7 +33,7 @@ from providers.profiles import profiles, registered_ids
 # Only the name (first tuple item) is needed; parser function references are inert.
 TABLES = {
     "atk_headset": ("PIDS",),
-    "astro": ("PIDS",), "asus": ("KNOWN",), "audeze": ("KNOWN",),
+    "astro": ("PIDS",), "asus": ("KNOWN",), "asus_omni": ("PIDS",), "audeze": ("KNOWN",),
     "corsair": ("PIDS", "BRAGI_PIDS"), "gwolves": ("WIRED", "MODELS"),
     "hyperx": ("PIDS",), "hyperx_cloud3": ("PIDS",),
     "hyperx_cloud3s": ("PIDS",), "jbl": ("PIDS",),
@@ -267,7 +267,7 @@ def build_index(root=None, *, engine_root=None):
         scope = readers.get(entry["provider"], {}).get("matchScope", "")
         if (entry["name"].casefold().endswith("(model identification required)")
                 or "产品全名" in scope or "产品名" in scope
-                or entry["provider"] == "fa6x_passive"):
+                or entry["provider"] in ("fa6x_passive", "asus_omni")):
             entry["requiresModelMatch"] = True
         indexed.append(entry)
     return {"vendors": {key: sorted(value) for key, value in sorted(vendors.items())},

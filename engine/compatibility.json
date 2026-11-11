@@ -82,6 +82,7 @@
     {"provider":"steelseries","name":"SteelSeries 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/steelseries.py"},
     {"provider":"barracuda","name":"Razer Barracuda Pro","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/barracuda.py"},
     {"provider":"asus","name":"ASUS ROG / TUF 已列明鼠标","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/asus.py"},
+    {"provider":"asus_omni","name":"ROG OMNI 接收器（鼠标）","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/asus_omni.py","matchScope":"只读候选，待实机验证；仅鼠标；经 OMNI 连接的键盘暂不支持；型号名不区分；仅0B05:1ACE、MI_02&Col03 / FF01:0001，同USB parent唯一目标路径，既有逐ID字节数组证明Input与Output报告03各64字节；最大长度不能代替逐ID证明，不回退其他集合；每轮仅写一次03 12 07加61个零，300ms一次读取、最多4包，不重发；仅64字节03 12 07回显，byte5为1至100、byte10大于0为充电；FF AA、空回复、0及越界无新读数；不查配对表、不发Booster或其他命令，独立parent保留独立卡片；底层传输、冷启动独立查询、休眠/未配对真实回复及设备采样新鲜度未确认","reference":"docs/rog-omni-ghelper.md"},
     {"provider":"gwolves","name":"G-Wolves 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/gwolves.py"},
     {"provider":"lofree","name":"Lofree Hyzen 2.4G","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/lofree.py"},
     {"provider":"astro","name":"Astro A50 Gen 5","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/astro.py"},

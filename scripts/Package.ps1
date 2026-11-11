@@ -45,7 +45,7 @@ if(Test-Path -LiteralPath (Join-Path $root 'docs\images')){
     New-Item -ItemType Directory -Path (Join-Path $stage 'docs')|Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'docs\images') -Destination (Join-Path $stage 'docs') -Recurse
 }
-foreach($document in @('compatibility.md','verification.md','cherry-mx2-pro.md','lingbao-m1pro.md','zhuaudio-zg4.md')) {
+foreach($document in @('compatibility.md','verification.md','cherry-mx2-pro.md','lingbao-m1pro.md','zhuaudio-zg4.md','rog-omni-ghelper.md')) {
     if(Test-Path -LiteralPath (Join-Path $root ('docs\'+$document))){
         New-Item -ItemType Directory -Path (Join-Path $stage 'docs') -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $root ('docs\'+$document)) -Destination (Join-Path $stage ('docs\'+$document))

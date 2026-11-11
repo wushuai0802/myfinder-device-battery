@@ -1776,5 +1776,221 @@ class Fa09DescriptorFallbackTests(unittest.TestCase):
                 self.backend.device.assert_not_called()
 
 
+class AsusOmniDescriptorTests(unittest.TestCase):
+    """Synthetic OMNI caps prove each direction before query-handle access."""
+    path = r"\\?\hid#vid_0b05&pid_1ace&mi_02&col03#synthetic-omni"
+
+    def setUp(self):
+        self.case = DescriptorCacheTests()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        raw = patch.object(topology, "_read_report_descriptor")
+        self.raw = raw.start()
+        self.addCleanup(raw.stop)
+
+    def configure(self, *, identity=(0x0B05, 0x1ACE), collection=(0xFF01, 1), path=None,
+                  inp=None, out=None, buttons=False, maxima=None, counts=None):
+        self.case.cache.clear()
+        self.target = path or self.path
+        self.case.identities[self.target] = identity
+        self.case.products[self.target] = "Synthetic OMNI receiver"
+        reports = {0: {3: 64} if inp is None else inp, 1: {3: 64} if out is None else out}
+        maxima = maxima or {}
+        counts = counts or {}
+
+        def caps(data, pointer):
+            if self.case.handles[data.value] in self.case.fail_caps:
+                return 0
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = collection
+            value.input = maxima.get(0, max(reports[0].values(), default=0))
+            value.output = maxima.get(1, max(reports[1].values(), default=0))
+            if buttons:
+                value.ib, value.ob = counts.get(0, len(reports[0])), counts.get(1, len(reports[1]))
+            else:
+                value.iv, value.ov = counts.get(0, len(reports[0])), counts.get(1, len(reports[1]))
+            return 0x00110000
+
+        def fields(report_type, fields, length, data):
+            self.assertIn(report_type, (0, 1))
+            for field, (report_id, size) in zip(fields, reports[report_type].items()):
+                field.report = report_id
+                if buttons:
+                    field.is_range, field.usage_min, field.usage_max = 1, 0, 255
+                else:
+                    field.bits, field.count = 8, size - 1
+            return 0x00110000
+
+        self.case.hid.HidP_GetCaps.side_effect = caps
+        self.case.hid.HidP_GetButtonCaps.side_effect = fields
+        self.case.hid.HidP_GetValueCaps.side_effect = fields
+        self.case.hid.HidP_GetButtonCaps.reset_mock()
+        self.case.hid.HidP_GetValueCaps.reset_mock()
+
+    def scan(self):
+        result, = self.case.scan([self.target])
+        self.assertTrue(all(call.args[1] == 0 for call in self.case.kernel.CreateFileW.call_args_list))
+        self.case.hid.HidD_GetFeature.assert_not_called()
+        self.case.hid.HidD_SetFeature.assert_not_called()
+        self.case.kernel.ReadFile.assert_not_called()
+        self.case.kernel.WriteFile.assert_not_called()
+        self.raw.assert_not_called()
+        self.assertEqual(self.case.kernel.CloseHandle.call_count, self.case.kernel.CreateFileW.call_count)
+        return result
+
+    def assert_refused(self, info):
+        import test_asus_omni as F
+        with F.fixture([F.reply()], [info]) as bus:
+            self.assertEqual(F.P().poll(), [])
+            self.assertEqual(bus.calls, [])
+
+    def test_exact_both_direction_byte_arrays_prove_id03_and_cache_without_io(self):
+        for buttons in (False, True):
+            with self.subTest(buttons=buttons):
+                self.configure(buttons=buttons)
+                before = self.case.kernel.CreateFileW.call_count
+                first = self.scan()
+                for direction in ("input", "output"):
+                    self.assertEqual(first[direction + "_report_sizes"], {"3": 64})
+                    self.assertEqual(first[direction + "_report_proof"], "caps")
+                self.assertEqual(self.scan(), first)
+                self.assertIn(self.target, self.case.cache)
+                self.assertEqual(self.case.kernel.CreateFileW.call_count, before + 1)
+                import test_asus_omni as F
+                with F.fixture([F.reply()], [first]) as bus:
+                    self.assertEqual(len(F.P().poll()), 1)
+                    self.assertEqual(bus.writes, [(first["path"], F.REQUEST)])
+
+    def test_each_direction_api_failure_partial_or_extra_count_cannot_use_maximum(self):
+        for buttons in (False, True):
+            for direction in (0, 1):
+                for failure in ("status", "short", "extra"):
+                    with self.subTest(buttons=buttons, direction=direction, failure=failure):
+                        self.configure(buttons=buttons)
+                        getter = getattr(self.case.hid, "HidP_GetButtonCaps" if buttons else "HidP_GetValueCaps")
+                        original = getter.side_effect
+
+                        def fail(report_type, fields, length, data):
+                            status = original(report_type, fields, length, data)
+                            if report_type != direction:
+                                return status
+                            if failure == "status":
+                                return 0
+                            ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 0 if failure == "short" else 2
+                            return status
+
+                        getter.side_effect = fail
+                        info = self.scan()
+                        key = ("input" if direction == 0 else "output") + "_report_sizes"
+                        self.assertIsNone(info[key])
+                        self.assertNotIn(self.target, self.case.cache)
+                        self.assert_refused(info)
+                        getter.side_effect = original
+                        self.assertEqual(self.scan()[key], {"3": 64})
+                        self.assertIn(self.target, self.case.cache)
+
+    def test_wrong_ids_lengths_missing_directions_and_unproven_fields_never_query(self):
+        cases = [dict(inp={4: 64}), dict(out={4: 64}), dict(inp={3: 63}), dict(out={3: 65}),
+                 dict(inp={}), dict(out={}), dict(maxima={0: 65}), dict(maxima={1: 63}),
+                 dict(counts={0: 0}), dict(counts={1: 33})]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                self.configure(**changes)
+                info = self.scan()
+                self.assertNotIn(self.target, self.case.cache)
+                self.assert_refused(info)
+        for field, value in (("bits", 7), ("count", 0), ("alias", 1)):
+            with self.subTest(field=field):
+                self.configure()
+                original = self.case.hid.HidP_GetValueCaps.side_effect
+
+                def bad(report_type, fields, length, data):
+                    status = original(report_type, fields, length, data)
+                    setattr(fields[0], field, value)
+                    return status
+
+                self.case.hid.HidP_GetValueCaps.side_effect = bad
+                info = self.scan()
+                self.assertIsNone(info["input_report_sizes"])
+                self.assertIsNone(info["output_report_sizes"])
+                self.assert_refused(info)
+
+    def test_other_ids_are_individually_proven_not_maximum_substitutes_for03(self):
+        self.configure(inp={3: 64, 4: 96}, out={3: 64, 5: 96})
+        info = self.scan()
+        self.assertEqual(info["input_report_sizes"], {"3": 64, "4": 96})
+        self.assertEqual(info["output_report_sizes"], {"3": 64, "5": 96})
+        import test_asus_omni as F
+        with F.fixture([F.reply()], [info]) as bus:
+            self.assertEqual(len(F.P().poll()), 1)
+            self.assertEqual(bus.reads, [(info["path"], 64, 300)])
+
+    def test_no_fixed_usage_loophole_mixed_fields_or_duplicate_id_inference(self):
+        for defect in ("fixed", "mixed", "duplicate"):
+            with self.subTest(defect=defect):
+                self.configure(buttons=defect != "duplicate", counts={0: 2, 1: 2} if defect == "duplicate" else None)
+                if defect == "duplicate":
+                    original = self.case.hid.HidP_GetValueCaps.side_effect
+
+                    def fields(report_type, fields, length, data):
+                        status = original(report_type, fields, length, data)
+                        fields[1].report, fields[1].bits, fields[1].count = 3, 8, 1
+                        return status
+
+                    self.case.hid.HidP_GetValueCaps.side_effect = fields
+                elif defect == "fixed":
+                    def fields(report_type, fields, length, data):
+                        fields[0].report, fields[0].is_range = 3, 0
+                        fields[0].usage_min = fields[0].usage_max = 1
+                        fields[0].report_count = 63
+                        return 0x00110000
+
+                    self.case.hid.HidP_GetButtonCaps.side_effect = fields
+                else:
+                    original = self.case.hid.HidP_GetCaps.side_effect
+
+                    def caps(data, pointer):
+                        status = original(data, pointer)
+                        value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                        value.iv = value.ov = 1
+                        return status
+
+                    self.case.hid.HidP_GetCaps.side_effect = caps
+                info = self.scan()
+                self.assertIsNone(info["input_report_sizes"])
+                self.assertIsNone(info["output_report_sizes"])
+                self.assertNotIn(self.target, self.case.cache)
+                self.assert_refused(info)
+
+    def test_proof_does_not_expand_vid_pid_usage_interface_or_collection(self):
+        cases = [dict(identity=(0x0B06, 0x1ACE)), dict(identity=(0x0B05, 0x1ACF)),
+                 dict(collection=(0xFF01, 2))]
+        cases += [dict(collection=(page, 1)) for page in (0xFF00, 0xFF02, 0xFFC0, 0x0059)]
+        cases += [dict(path=self.path.replace("mi_02&col03", route)) for route in (
+            "mi_01&col03", "mi_02&col01", "mi_02&col02", "mi_02&col030", "mi_02&col03suffix")]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                self.configure(**changes)
+                info = self.scan()
+                self.assertNotIn("input_report_sizes", info)
+                self.assertNotIn("output_report_sizes", info)
+                self.case.hid.HidP_GetValueCaps.assert_not_called()
+                self.case.hid.HidP_GetButtonCaps.assert_not_called()
+                self.assert_refused(info)
+
+    def test_access_zero_discovery_failure_stays_uncached_and_can_recover(self):
+        for name in ("fail_preparsed", "fail_caps"):
+            with self.subTest(name=name):
+                self.configure()
+                failure = getattr(self.case, name)
+                failure.add(self.target)
+                info = self.scan()
+                self.assertNotIn("input_report_sizes", info)
+                self.assertNotIn(self.target, self.case.cache)
+                self.assert_refused(info)
+                failure.clear()
+                self.assertEqual(self.scan()["input_report_sizes"], {"3": 64})
+
+
 if __name__ == "__main__":
     unittest.main()

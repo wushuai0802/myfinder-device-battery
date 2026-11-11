@@ -49,6 +49,7 @@ PROVIDERS = (
     ("fa6x_passive", "Fa6xPassiveProvider"),
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
     ("barracuda", "BarracudaProvider"), ("asus", "AsusProvider"),
+    ("asus_omni", "AsusOmniProvider"),
     ("gwolves", "GWolvesProvider"), ("lofree", "LofreeProvider"),
     ("astro", "AstroProvider"), ("corsair", "CorsairProvider"),
     ("lamzu", "LamzuProvider"), ("am_infinity", "AmInfinityProvider"),
@@ -81,6 +82,7 @@ PROVIDER_VIDS = {
     "fa6x_passive": (0x1D57,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
+    "asus_omni": (0x0B05,),
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
     "am_infinity": (0x3151,), "steelseries_elite": (0x1038,),
     "logitech_centurion": (0x046D,), "hyperx_cloud3s": (0x03F0,), "nzxt": (0x1E71,),
@@ -96,7 +98,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -140,6 +142,24 @@ LINGBAO_DIAGNOSTICS = {
     "charging placeholder; no new reading": "charging placeholder; no new reading",
     "invalid battery reply; no new reading": "invalid battery reply; no new reading",
 }
+ASUS_OMNI_DIAGNOSTICS = {
+    "OMNI identity mismatch; not opened": "OMNI identity mismatch",
+    "OMNI collection mismatch; not opened": "OMNI collection mismatch",
+    "OMNI USB parent unproven; not opened": "OMNI USB parent unproven",
+    "OMNI collection ambiguous; not opened": "OMNI collection ambiguous",
+    "OMNI report 03/64 unproven; not opened": "OMNI report 03/64 unproven",
+    "OMNI open failed": "OMNI open failed",
+    "OMNI battery query write failed; no retry": "OMNI battery query write failed; no retry",
+    "OMNI input read failed": "OMNI input read failed",
+    "OMNI no echo within read limit": "OMNI no echo within read limit",
+    "OMNI device error FF AA": "OMNI device error FF AA",
+    "OMNI empty reply or asleep; no new reading": "OMNI empty reply or asleep; no new reading",
+    "OMNI zero battery; no new reading": "OMNI zero battery; no new reading",
+    "OMNI battery out of range": "OMNI battery out of range",
+    "OMNI HID backend unavailable": "OMNI HID backend unavailable",
+    "OMNI enumeration failed": "OMNI enumeration failed",
+    "OMNI HID handle close failed": "OMNI HID handle close failed",
+}
 ZHUAUDIO_DIAGNOSTICS = frozenset({
     "ZG4 collection missing or ambiguous", "ZG4 parent/path unproven",
     "ZG4 interface/product unverified", "ZG4 CE/CD byte reports unproven",
@@ -168,6 +188,8 @@ def reader_diagnostics(provider):
         lines = [line for line in lines if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
     if provider.name == "lingbao":
         lines = [line for line in lines if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
+    if provider.name == "asus_omni":
+        lines = [line for line in lines if isinstance(line, str) and line in ASUS_OMNI_DIAGNOSTICS]
     if provider.name == "mchose_headset":
         # Expose only fixed firmware reasons, never this legacy reader's
         # raw I/O exceptions or packet log.
@@ -240,7 +262,7 @@ def suppress_bluetooth_xinput(devices):
 def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
-        if (a.get("provider") in ("cherry", "lingbao", "zhuaudio")
+        if (a.get("provider") in ("cherry", "lingbao", "zhuaudio", "asus_omni")
                 or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
@@ -640,7 +662,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     if name == "atk_headset":
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
-    if name == "moondrop":
+    if name in ("moondrop", "asus_omni"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
@@ -782,7 +804,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -854,6 +876,10 @@ class BatteryEngine:
                     if reason in diagnostics:
                         self.health[reader_key]["diagnosticSummary"] = summary
                         break
+            if name == "asus_omni":
+                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in ASUS_OMNI_DIAGNOSTICS]
+                if diagnostics and not measured:
+                    self.health[reader_key]["diagnosticSummary"] = ASUS_OMNI_DIAGNOSTICS[diagnostics[0]]
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
             if name == "mchose" and not measured:
                 # V3-only protocol-owned failures outrank the identity/proof notes.
