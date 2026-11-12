@@ -98,12 +98,14 @@ namespace AtkBatteryTray {
             if(!InsideRoundedCard(bounds,Radius(bounds,card),card))throw new InvalidOperationException("Interaction content enters a card corner: "+id);
             return new InteractionRegion {Content=content,Bounds=bounds,Card=card,Limit=limit,Padding=padding,Radius=Radius(bounds,card),Id=id};
         }
-        internal static InteractionRegion Paint(Graphics g,RectangleF card,RectangleF limit,int id,PanelFeedback feedback,bool dark,bool selected,Action draw){
+        internal static InteractionRegion Paint(Graphics g,RectangleF card,RectangleF limit,int id,PanelFeedback feedback,bool dark,bool selected,Action draw,bool pointerFill=true,float pressOffset=0,float focusWidth=1,RectangleF? focusRect=null){
             if(!g.IsVisible(limit))return null;
             var previous=measured;bool wasMeasuring=measuring;var state=g.Save();RectangleF content;
             try{measuring=true;measured=RectangleF.Empty;g.SetClip(RectangleF.Empty);draw();content=measured;}
             finally{g.Restore(state);measured=previous;measuring=wasMeasuring;}
             if(content.IsEmpty){draw();return null;}
+            var original=content;
+            if(feedback!=null&&feedback.PressedAction==id)content.Offset(0,pressOffset);
             var region=Create(content,card,limit,id);
             region.Enabled=feedback!=null&&id>=0;
             if(Observer!=null)Observer(region);
@@ -115,8 +117,8 @@ namespace AtkBatteryTray {
                 // focus remains visible without extending the feedback bounds.
                 var r=region.Bounds;using(var path=VisualDesign.RoundRect(r.X+1,r.Y+1,r.Width-2,r.Height-2,Math.Max(0,region.Radius-1)))using(var pen=new Pen(palette.Card,2))g.DrawPath(pen,path);
             }
-            CompactRenderer.Highlight(g,region.Bounds,id,new PanelFeedback {HoverAction=selected&&!VisualDesign.HighContrast?-1:value.HoverAction,PressedAction=selected&&!VisualDesign.HighContrast?-1:value.PressedAction,KeyboardFocus=value.KeyboardFocus},dark,region.Radius);
-            state=g.Save();try{g.TranslateTransform(region.Content.X-content.X,region.Content.Y-content.Y);draw();}finally{g.Restore(state);}
+            CompactRenderer.Highlight(g,region.Bounds,id,new PanelFeedback {HoverAction=!pointerFill||selected&&!VisualDesign.HighContrast?-1:value.HoverAction,PressedAction=!pointerFill||selected&&!VisualDesign.HighContrast?-1:value.PressedAction,KeyboardFocus=value.KeyboardFocus},dark,region.Radius,focusWidth,focusRect);
+            state=g.Save();try{g.TranslateTransform(region.Content.X-original.X,region.Content.Y-original.Y);draw();}finally{g.Restore(state);}
             return region;
         }
     }

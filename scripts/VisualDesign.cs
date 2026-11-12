@@ -9,17 +9,21 @@ namespace AtkBatteryTray {
         internal static bool LargeFont {get{return DeviceSettings.Current.FontSize=="large";}}
         internal static float DialogScale {get{return LargeFont?1.15f:1f;}}
         public static int PanelWidth {get{return LargeFont?300:260;}}
-        public static int CardHeightNormal {get{return LargeFont?112:96;}}
-        public static int CardHeightExpanded {get{return LargeFont?144:126;}}
+        public static int CardHeightNormal {get{return BarGeometry.CardHeight(4);}}
+        public static int CardHeightExpanded {get{return BarGeometry.CardHeight(8);}}
         public static int HeadsetCardHeight {get{return CardHeightNormal;}}
         public static int FooterHeight {get{return LargeFont?36:30;}}
-        internal static int HeaderHeight {get{return LargeFont?62:56;}}
+        internal static int HeaderHeight {get{return BarGeometry.HeaderHeight;}}
         internal static int SecondCardStep {get{return HeadsetCardHeight+CardGap;}}
         internal static bool? HighContrastOverride=null;
         public static bool HighContrast {get{return HighContrastOverride??System.Windows.Forms.SystemInformation.HighContrast;}}
         public const int CardGap=8;
-        public static int GenericCardHeight {get{return LargeFont?68:60;}}
+        public static int GenericCardHeight {get{return HeaderHeight+16;}}
         internal static int SelectionHeight {get{return LargeFont?34:30;}}
+        internal static int MainControlTop {get{return BarGeometry.ControlTop;}}
+        internal static int MicrophoneWidth {get{return LargeFont?38:34;}}
+        internal static float BatteryPercentSize {get{return LargeFont?11:10;}}
+        internal const float MainCardRadius=10,IconTileRadius=9,BatteryBarRadius=2,MicrophoneRadius=9;
         internal const int VolumeTrackHeight=6;
         internal const float SelectionRadius=7,VolumeTrackRadius=3;
         internal static float DeviceNameFontSize {get{return LargeFont?14f:12f;}}
@@ -29,7 +33,7 @@ namespace AtkBatteryTray {
         internal static float DialogTitleFontSize {get{return LargeFont?18f:15f;}}
         internal static float SmallFontSize {get{return LargeFont?13f:11f;}}
         internal const float ToggleWidth=30,ToggleHeight=18,ToggleKnobSize=14,ToggleInset=2;
-        public static int SystemVolumeHeight {get{return LargeFont?56:48;}}
+        public static int SystemVolumeHeight {get{return LargeFont?40:36;}}
         public static int SystemVolumeHeightFor(bool collapsed){return collapsed?(LargeFont?36:32):SystemVolumeHeight;}
         public static int CurrentSystemVolumeHeight {get{return SystemVolumeHeightFor(DeviceSettings.Current.VolumeCollapsed);}}
         internal static float SnapFontSize(float size){return (float)Math.Max(1,Math.Round(size,MidpointRounding.AwayFromZero));}
@@ -38,15 +42,40 @@ namespace AtkBatteryTray {
             float right=(float)Math.Round(rect.Right,MidpointRounding.AwayFromZero),bottom=(float)Math.Round(rect.Bottom,MidpointRounding.AwayFromZero);
             return new RectangleF(x,y,Math.Max(1,right-x),Math.Max(1,bottom-y));
         }
-        internal static RectangleF VolumeSliderRect(RectangleF card){return new RectangleF(card.X,card.Y,card.Width-36,card.Height);}
-        internal static RectangleF VolumeToggleRect(RectangleF card,bool collapsed){return new RectangleF(card.Right-32,collapsed?card.Y+(float)Math.Round((card.Height-24)/2):card.Y+2,28,24);}
-        internal static RectangleF VolumeChevronRect(RectangleF card,bool collapsed){return new RectangleF(card.Right-25,collapsed?card.Y+(float)Math.Round((card.Height-14)/2):card.Y+6,14,14);}
+        internal static RectangleF VolumeSliderRect(RectangleF card){return new RectangleF(card.X+8,card.Y+8,card.Width-44,card.Height-16);}
+        internal static RectangleF VolumeToggleRect(RectangleF card,bool collapsed){return new RectangleF(card.Right-32,card.Y+(float)Math.Round((card.Height-24)/2),28,24);}
+        internal static RectangleF VolumeChevronRect(RectangleF card,bool collapsed){return CenteredRect(VolumeToggleRect(card,collapsed),14,14);}
+        internal static RectangleF MainVolumeTrack(RectangleF slider){return new RectangleF(slider.X+31,slider.Y+slider.Height/2-2,slider.Width-73,4);}
+        internal static RectangleF VolumeSpeakerRect(RectangleF slider){return new RectangleF(slider.X+4,slider.Y+(slider.Height-14)/2,14,14);}
+        internal static RectangleF VolumeValueRect(RectangleF slider){return new RectangleF(slider.Right-37,slider.Y,34,slider.Height);}
+        internal static RectangleF VolumeKnobRect(RectangleF track,int percent,bool active=false){float size=active?14:12;return new RectangleF(track.X+track.Width*Math.Max(0,Math.Min(100,percent))/100f-size/2,track.Y+track.Height/2-size/2,size,size);}
+        internal static RectangleF CenteredRect(RectangleF rect,float width,float height){return new RectangleF((float)Math.Floor(rect.X+(rect.Width-width)/2),(float)Math.Floor(rect.Y+(rect.Height-height)/2),width,height);}
+        // The last two pixels of each slot contain the layered downward shadow.
+        // Nothing extends outside the panel or into an animation's clipped slot.
+        internal static RectangleF PanelCardRect(float top,float height){return PanelCardSurface(new RectangleF(0,top,PanelWidth,height));}
+        internal static RectangleF PanelCardSurface(RectangleF slot){return new RectangleF(slot.X+.5f,slot.Y+.5f,slot.Width-1,slot.Height-3);}
+        internal static RectangleF PanelShadowRect(RectangleF card,int layer){var rect=card;rect.Y+=layer;return rect;}
+        // Layout entry points stay stable for rendering, hits and WirelessLayout.
+        // Only the bar composition lives in BarGeometry; control internals are shared.
+        internal static RectangleF HeaderNameHitRect(float top){return BarGeometry.NameHit(top);}
+        internal static RectangleF HeaderMeterHitRect(float top){return BarGeometry.MeterHit(top);}
+        internal static RectangleF AudioHeaderHitRect(float top){return BarGeometry.AudioHit(top);}
+        internal static RectangleF IconTileRect(float top){return BarGeometry.IconTile(top);}
+        internal static RectangleF HeaderIconRect(float top){return CenteredRect(IconTileRect(top),16,19);}
+        internal static RectangleF HeaderTextRect(float top,bool subtitle,bool audioOnly=false,bool reveal=false){return BarGeometry.HeaderText(top,subtitle,audioOnly,reveal);}
+        internal static RectangleF AudioHeaderChevronRect(float top){return new RectangleF(PanelWidth-21,top+(LargeFont?16:13),7,10);}
+        internal static RectangleF BatteryBarRect(float top){return BarGeometry.BatteryBar(top);}
+        internal static RectangleF BatteryFillRect(float top,BatteryView view){var rect=BatteryBarRect(top);rect.Width*=Math.Max(0,Math.Min(100,view==null?0:view.Percent.GetValueOrDefault()))/100f;return rect;}
         public const float BatteryRingSize=28,BatteryRingWidth=3.2f;
-        public static float BatteryDigitSize {get{return LargeFont?23f:20f;}}
-        internal static float BatteryApproximateDigitSize {get{return LargeFont?20f:18f;}}
+        public static float BatteryDigitSize {get{return LargeFont?22f:19f;}}
+        internal static float BatteryApproximateDigitSize {get{return BatteryDigitSize;}}
         internal static RectangleF BatteryRingRect(float top){return new RectangleF(LargeFont?198:168,top+(LargeFont?17:14),BatteryRingSize,BatteryRingSize);}
-        internal static RectangleF BatteryDigitsRect(float top){return new RectangleF(LargeFont?229:198,top+(LargeFont?14:12),LargeFont?49:43,LargeFont?34:32);}
-        internal static RectangleF BatteryPercentRect(float top){return new RectangleF(LargeFont?278:241,top+(LargeFont?20:18),LargeFont?13:10,LargeFont?22:20);}
+        internal static RectangleF BatteryDigitsRect(float top){return BarGeometry.BatteryDigits(top);}
+        internal static RectangleF BatteryPercentRect(float top){return BarGeometry.BatteryPercent(top);}
+        internal static RectangleF AlignBatteryDigits(RectangleF rect,RectangleF digitInk,RectangleF percentInk){rect.X+=percentInk.Left-1-digitInk.Right;return rect;}
+        internal static RectangleF BatteryPlaceholderRect(float top){var rect=BatteryDigitsRect(top);rect.Width=PanelWidth-12-rect.X;return rect;}
+        internal static RectangleF BatteryChargingRect(float top,RectangleF digitInk){return new RectangleF(digitInk.Left-14,top+(LargeFont?22:17),10,13);}
+        internal static RectangleF BatteryPendingRect(float top){var meter=HeaderMeterHitRect(top);return new RectangleF(meter.X,top+(LargeFont?42:36),meter.Width,14);}
         public static Size PanelSize {get{return PanelSizeFor(false);}}
         public static float PanelRadius {get{return 12;}}
         public static int MouseCardHeight(DpiConfig dpi){return dpi!=null&&dpi.Stages!=null&&dpi.Stages.Count>4?CardHeightExpanded:CardHeightNormal;}
@@ -60,26 +89,60 @@ namespace AtkBatteryTray {
         public static Size PanelSizeFor(HeadsetReading headset){return PanelSizeFor(headset,null);}
         public static Size PanelSizeFor(HeadsetReading headset,DpiConfig dpi){return PanelSizeFor(ShouldShowHeadset(headset),dpi);}
         public static Size PanelSizeFor(bool headset,DpiConfig dpi=null){return new Size(PanelWidth,(int)FooterRectFor(headset,dpi).Bottom);}
-        public static RectangleF MouseNameRect {get{return new RectangleF(10,6,LargeFont?180:150,LargeFont?50:44);}}
-        public static RectangleF MouseMeterRect {get{return new RectangleF(LargeFont?198:168,6,LargeFont?94:84,LargeFont?50:44);}}
-        public static RectangleF HeadsetNameRectFor(DpiConfig dpi){return new RectangleF(10,MouseCardHeight(dpi)+14,LargeFont?180:150,LargeFont?50:44);}
-        public static RectangleF HeadsetMeterRectFor(DpiConfig dpi){return new RectangleF(LargeFont?198:168,MouseCardHeight(dpi)+14,LargeFont?94:84,LargeFont?50:44);}
+        public static RectangleF MouseNameRect {get{return HeaderNameHitRect(0);}}
+        public static RectangleF MouseMeterRect {get{return HeaderMeterHitRect(0);}}
+        public static RectangleF HeadsetNameRectFor(DpiConfig dpi){return HeaderNameHitRect(MouseCardHeight(dpi)+CardGap);}
+        public static RectangleF HeadsetMeterRectFor(DpiConfig dpi){return HeaderMeterHitRect(MouseCardHeight(dpi)+CardGap);}
         public static RectangleF SystemVolumeRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,MouseCardHeight(dpi)+(headset?SecondCardStep:0)+CardGap,PanelWidth,CurrentSystemVolumeHeight);}
         public static RectangleF FooterRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,SystemVolumeRectFor(headset,dpi).Bottom,PanelWidth,FooterHeight);}
-        public static RectangleF RefreshRectFor(bool headset,DpiConfig dpi){var footer=FooterRectFor(headset,dpi);return new RectangleF(8,footer.Y+1,PanelWidth-52,FooterHeight-2);}
-        public static RectangleF MoreRectFor(bool headset,DpiConfig dpi){var footer=FooterRectFor(headset,dpi);return new RectangleF(PanelWidth-34,footer.Y+1,28,FooterHeight-2);}
+        internal static RectangleF FooterRefreshRect(float top){return new RectangleF(8,top+(FooterHeight-28)/2,28,28);}
+        internal static RectangleF FooterMoreRect(float top){return new RectangleF(PanelWidth-34,top+(FooterHeight-28)/2,28,28);}
+        internal static RectangleF FooterTextRect(float top,float maximumWidth){return new RectangleF(39,top+3,Math.Max(1,maximumWidth-33),FooterHeight-6);}
+        internal static RectangleF FooterPageRect(float top,bool next){return new RectangleF(PanelWidth-(next?68:102),top+(FooterHeight-28)/2,28,28);}
+        public static RectangleF RefreshRectFor(bool headset,DpiConfig dpi){return FooterRefreshRect(FooterRectFor(headset,dpi).Y);}
+        public static RectangleF MoreRectFor(bool headset,DpiConfig dpi){return FooterMoreRect(FooterRectFor(headset,dpi).Y);}
         public static RectangleF RefreshRect {get{return RefreshRectFor(false,null);}}
         public static RectangleF SettingsRect {get{return MoreRectFor(false,null);}}
         public static RectangleF SpeakerOutputRect {get{return SpeakerOutputRectFor(null);}}
         public static RectangleF HeadsetOutputRect {get{return HeadsetOutputRectFor(null);}}
         public static RectangleF MicrophoneMuteRect {get{return MicrophoneMuteRectFor(null);}}
-        public static RectangleF SpeakerOutputRectFor(DpiConfig dpi){return new RectangleF(11,MouseCardHeight(dpi)+(LargeFont?71:63),LargeFont?100:86,SelectionHeight);}
-        public static RectangleF HeadsetOutputRectFor(DpiConfig dpi){return new RectangleF(LargeFont?113:99,MouseCardHeight(dpi)+(LargeFont?71:63),LargeFont?100:86,SelectionHeight);}
-        public static RectangleF MicrophoneMuteRectFor(DpiConfig dpi){return new RectangleF(LargeFont?219:191,MouseCardHeight(dpi)+(LargeFont?71:63),LargeFont?70:58,SelectionHeight);}
+        internal static RectangleF AudioSelectionTrack(float top){return BarGeometry.AudioTrack(top);}
+        internal static RectangleF AudioOutputRect(float top,int index){return SelectionSegmentRect(AudioSelectionTrack(top),index,2);}
+        internal static RectangleF MicrophoneRect(float top){return BarGeometry.Microphone(top);}
+        public static RectangleF SpeakerOutputRectFor(DpiConfig dpi){return AudioOutputRect(MouseCardHeight(dpi)+CardGap,0);}
+        public static RectangleF HeadsetOutputRectFor(DpiConfig dpi){return AudioOutputRect(MouseCardHeight(dpi)+CardGap,1);}
+        public static RectangleF MicrophoneMuteRectFor(DpiConfig dpi){return MicrophoneRect(MouseCardHeight(dpi)+CardGap);}
+        internal static RectangleF StageTrackRect(float top,int count){return BarGeometry.DpiTrack(top,count);}
+        internal static int SelectionTrackHeight(int count){return SelectionHeight+(count>4?SelectionHeight-2:0);}
+        internal static RectangleF SelectionSegmentRect(RectangleF track,int index,int count){
+            int columns=Math.Max(1,Math.Min(4,count));float width=(track.Width-4-(columns-1)*2f)/columns;
+            return new RectangleF(track.X+2+index%columns*(width+2),track.Y+2+index/columns*(SelectionHeight-2),width,SelectionHeight-4);
+        }
+        internal static RectangleF SelectionTextRect(RectangleF rect){rect.Height-=4;return rect;}
+        internal static RectangleF SelectionPipRect(RectangleF rect){return new RectangleF((float)Math.Floor(rect.X+(rect.Width-12)/2),rect.Bottom-3,12,2);}
+        internal static RectangleF SelectionPendingDotRect(RectangleF rect,int index){var pip=SelectionPipRect(rect);return new RectangleF(pip.X+index*5,pip.Y,2,2);}
+        internal static RectangleF SelectionFocusRect(RectangleF rect){rect.Inflate(3,3);return rect;}
+        internal static RectangleF SelectionIconRect(RectangleF rect,string label){float width=(label??"").Length*SmallFontSize+18;return new RectangleF((float)Math.Floor(rect.X+(rect.Width-width)/2),(float)Math.Floor(rect.Y+(rect.Height-15)/2),13,13);}
+        internal static RectangleF SelectionIconLabelRect(RectangleF rect,string label){var icon=SelectionIconRect(rect,label);return new RectangleF(icon.X+17,rect.Y,rect.Right-icon.X-18,rect.Height-4);}
+        internal static RectangleF SelectionDetailRect(RectangleF rect,bool second){var text=SelectionTextRect(rect);return new RectangleF(text.X,text.Y+(second?text.Height/2:0),text.Width,text.Height/2);}
         public static RectangleF StageRect(int index,int count) {
-            count=Math.Max(1,Math.Min(8,count));int columns=Math.Min(4,count),column=index%columns,row=index/columns;
-            float inner=PanelWidth-24,width=(inner-(columns-1)*2f)/columns;
-            return new RectangleF(12+column*(width+2),(LargeFont?63:55)+row*SelectionHeight,width,count>4?SelectionHeight-2:SelectionHeight);
+            count=Math.Max(1,Math.Min(8,count));return SelectionSegmentRect(StageTrackRect(0,count),index,count);
+        }
+        internal static class BarGeometry {
+            internal static int HeaderHeight {get{return LargeFont?56:50;}}
+            internal static int ControlTop {get{return HeaderHeight+14;}}
+            internal static int CardHeight(int count){return ControlTop+SelectionTrackHeight(count)+12;}
+            internal static RectangleF NameHit(float top){return new RectangleF(10,top+6,(LargeFont?200:168)-14,HeaderHeight-6);}
+            internal static RectangleF MeterHit(float top){float left=LargeFont?200:168;return new RectangleF(left,top+6,PanelWidth-left-12,HeaderHeight-6);}
+            internal static RectangleF AudioHit(float top){return new RectangleF(10,top+6,PanelWidth-20,HeaderHeight-6);}
+            internal static RectangleF IconTile(float top){return new RectangleF(12,top+(LargeFont?13:10),30,30);}
+            internal static RectangleF HeaderText(float top,bool subtitle,bool audioOnly,bool reveal){float right=audioOnly?PanelWidth-12:NameHit(top).Right;if(audioOnly&&!subtitle&&reveal)right-=12;return new RectangleF(52,top+(subtitle?(LargeFont?30:27):(LargeFont?9:7)),right-52,LargeFont?22:20);}
+            internal static RectangleF BatteryBar(float top){return new RectangleF(12,top+HeaderHeight,PanelWidth-24,4);}
+            internal static RectangleF BatteryDigits(float top){float width=LargeFont?62:54;return new RectangleF(PanelWidth-22-width,top+(LargeFont?10:8),width,LargeFont?36:32);}
+            internal static RectangleF BatteryPercent(float top){return new RectangleF(PanelWidth-26,top+(LargeFont?22:17),14,20);}
+            internal static RectangleF AudioTrack(float top){return new RectangleF(10,top+ControlTop,PanelWidth-MicrophoneWidth-26,SelectionHeight);}
+            internal static RectangleF Microphone(float top){return new RectangleF(PanelWidth-MicrophoneWidth-10,top+ControlTop,MicrophoneWidth,SelectionHeight);}
+            internal static RectangleF DpiTrack(float top,int count){return new RectangleF(10,top+ControlTop,PanelWidth-20,SelectionTrackHeight(count));}
         }
         public static Bitmap Tray(int? percent,bool charge,bool dark,bool stale){return TrayGlyph.Render(percent,charge,dark,stale,32);}
         public static Bitmap Tray(int? percent,bool charge,bool dark,bool stale,int size){return TrayGlyph.Render(percent,charge,dark,stale,size);}

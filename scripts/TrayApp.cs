@@ -422,17 +422,17 @@ namespace AtkBatteryTray {
             Region mask;
             int panelWidth=VisualDesign.PanelWidth,footerHeight=VisualDesign.FooterHeight;
             if(navigation.Page==PopupPage.Main&&owner.UseWirelessLayout) {
-                mask=new Region();mask.MakeEmpty();var layout=MainWireless();foreach(var card in layout.Cards)using(var shape=Style.Round(new RectangleF(0,card.Top,panelWidth,card.Height),VisualDesign.PanelRadius))mask.Union(shape);
-                if(layout.HasVolume)using(var shape=Style.Round(layout.VolumeRect,12))mask.Union(shape);
+                mask=new Region();mask.MakeEmpty();var layout=MainWireless();foreach(var card in layout.Cards)using(var shape=Style.Round(new RectangleF(0,card.Top,panelWidth,card.Height),VisualDesign.MainCardRadius))mask.Union(shape);
+                if(layout.HasVolume)using(var shape=Style.Round(layout.VolumeRect,VisualDesign.MainCardRadius))mask.Union(shape);
                 mask.Union(new RectangleF(0,layout.Footer,panelWidth,footerHeight));
             }else{
             int mouse=VisualDesign.MouseCardHeight(owner.Dpi),headsetTop=mouse+8;
-            using(var shape=Style.Round(new RectangleF(0,0,targetSize.Width,navigation.Page==PopupPage.Main?mouse:targetSize.Height),VisualDesign.PanelRadius))mask=new Region(shape);
+            using(var shape=Style.Round(new RectangleF(0,0,targetSize.Width,navigation.Page==PopupPage.Main?mouse:targetSize.Height),navigation.Page==PopupPage.Main?VisualDesign.MainCardRadius:VisualDesign.PanelRadius))mask=new Region(shape);
             if(navigation.Page==PopupPage.Main) {
                 float height=Math.Max(1,VisualDesign.HeadsetCardHeight*headsetProgress);
-                if(headsetProgress>0f)using(var shape=Style.Round(new RectangleF(0,headsetTop,targetSize.Width,height),Math.Min(VisualDesign.PanelRadius,height/2)))mask.Union(shape);
+                if(headsetProgress>0f)using(var shape=Style.Round(new RectangleF(0,headsetTop,targetSize.Width,height),Math.Min(VisualDesign.MainCardRadius,height/2)))mask.Union(shape);
                 float volumeTop=mouse+VisualDesign.SecondCardStep*headsetProgress+VisualDesign.CardGap;
-                using(var shape=Style.Round(new RectangleF(0,volumeTop,targetSize.Width,VisualDesign.CurrentSystemVolumeHeight),12))mask.Union(shape);
+                using(var shape=Style.Round(new RectangleF(0,volumeTop,targetSize.Width,VisualDesign.CurrentSystemVolumeHeight),VisualDesign.MainCardRadius))mask.Union(shape);
                 mask.Union(new RectangleF(0,volumeTop+VisualDesign.CurrentSystemVolumeHeight,targetSize.Width,footerHeight));
             }
             }

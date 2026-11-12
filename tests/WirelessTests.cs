@@ -31,13 +31,14 @@ static class WirelessTests {
                 foreach(string kind in new[]{"gamepad","unknown","info"}) {
                     var device=Device("pad",kind,65);device.Name="Flydigi APEX5";owner.WirelessDevices=new[]{device};
                     var layout=WirelessLayout.Build(owner,0,1000);
-                    using(var card=Scene(owner,layout,new PanelFeedback(),dark))using(var expected=new Bitmap(14,19,PixelFormat.Format32bppPArgb)) {
+                    var icon=Rectangle.Round(VisualDesign.HeaderIconRect(0));
+                    using(var card=Scene(owner,layout,new PanelFeedback(),dark))using(var expected=new Bitmap(icon.Width,icon.Height,PixelFormat.Format32bppPArgb)) {
                         using(var g=Graphics.FromImage(expected)) {
-                            g.Clear(card.GetPixel(22,15));g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                            CompactRenderer.DrawSymbol(g,kind=="gamepad"?"gamepad":"info",new RectangleF(0,0,14,19),ThemePalette.Current(dark).Foreground);
+                            g.Clear(ThemePalette.Current(dark).Track);g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                            CompactRenderer.DrawSymbol(g,kind=="gamepad"?"gamepad":"info",new RectangleF(0,0,icon.Width,icon.Height),ThemePalette.Current(dark).Foreground);
                         }
-                        using(var actual=card.Clone(new Rectangle(15,17,14,19),PixelFormat.Format32bppPArgb))
-                            Check(!Changed(actual,expected,new RectangleF(0,0,14,19)),kind+" card uses its symbol and theme foreground in "+style+" / "+dark+" / "+contrast);
+                        using(var actual=card.Clone(icon,PixelFormat.Format32bppPArgb))
+                            Check(!Changed(actual,expected,new RectangleF(0,0,icon.Width,icon.Height)),kind+" card uses its symbol and theme foreground in "+style+" / "+dark+" / "+contrast);
                         if(kind=="gamepad")card.Save(Path.Combine(output,"gamepad-"+style+"-"+(dark?"dark":"light")+(contrast?"-contrast":"")+".png"));
                     }
                     var rows=PopupPages.Build(owner,new PopupNavigation {Page=PopupPage.Device,SelectedDeviceKey=device.Id,SelectedDeviceName=device.Name},false);
@@ -118,7 +119,7 @@ static class WirelessTests {
             owner.NativeMousePresent=false;owner.GenericReady=true;GamepadPresentation(owner,output);UnconfirmedReadings(owner,output,json);
             owner.NativeMousePresent=false;owner.GenericReady=true;owner.WirelessDevices=new[]{Device("1","mouse",75),Device("2","keyboard",42,true),Device("3","headset",19)};
             var navigation=new PopupNavigation();var layout=WirelessLayout.Build(owner,0,500);
-            Check(layout.Cards.Count==3&&layout.Size==new Size(260,282),"three generic cards retain their compact geometry above one shared volume row");
+            Check(layout.Cards.Count==3&&layout.Size==new Size(260,288),"three generic cards retain their compact geometry above one shared volume row");
             Check(layout.All.TrueForAll(delegate(WirelessCard c){return c.Name!="ATK A9 Air+";}),"another PC does not get a phantom ATK card");
             Check(layout.Cards[1].Kind=="keyboard"&&layout.Cards[1].Battery.Approximate,"keyboard and coarse-level capabilities reach the UI");
             var controls=PopupPages.Build(owner,navigation,false,layout);bool disjoint=true;for(int a=0;a<controls.Count;a++)for(int b=a+1;b<controls.Count;b++)disjoint&=!controls[a].Rect.IntersectsWith(controls[b].Rect);Check(disjoint,"dynamic card hit areas do not overlap");
@@ -126,7 +127,7 @@ static class WirelessTests {
                 VisualDesign.HighContrastOverride=contrast;
                 var size=UiState.ScaleSize(layout.Size,scale);using(var bitmap=new Bitmap(size.Width,size.Height,PixelFormat.Format32bppPArgb))using(var graphics=Graphics.FromImage(bitmap)) {
                     graphics.Clear(Color.Transparent);graphics.ScaleTransform(scale,scale);CompactRenderer.PaintWireless(graphics,owner,layout,dark,new PanelFeedback());
-                    Check(bitmap.GetPixel((int)(130*scale),(int)(64*scale)).A==0,"wireless cards retain their transparent gap at "+scale);
+                    float gapY=layout.Cards[0].Top+layout.Cards[0].Height+VisualDesign.CardGap/2f;Check(bitmap.GetPixel((int)(130*scale),(int)(gapY*scale)).A==0,"wireless cards retain their transparent gap at "+scale);
                     bitmap.Save(Path.Combine(output,"three-cards-"+(contrast?"contrast-":"")+(dark?"dark-":"light-")+scale.ToString(System.Globalization.CultureInfo.InvariantCulture)+".png"));
                 }
             }

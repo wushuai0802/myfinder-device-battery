@@ -258,27 +258,27 @@ static class ThemeTests {
         }
     }
     static void Geometry(){
-        Check(VisualDesign.PanelWidth==260&&VisualDesign.BatteryRingSize==28&&VisualDesign.BatteryDigitSize==20&&VisualDesign.PanelRadius==12,"requested geometry constants");
+        Check(VisualDesign.PanelWidth==260&&VisualDesign.BatteryBarRect(0).Height==4&&VisualDesign.BatteryDigitSize==19&&VisualDesign.MainCardRadius==10&&VisualDesign.PanelRadius==12,"main geometry changes without changing dialog radius");
         using(var f=new Fixture()){
-            var rows=PopupPages.Build(f.Owner,new PopupNavigation(),true);var expected=new Dictionary<int,RectangleF>{{0,new RectangleF(8,257,208,28)},{1,new RectangleF(226,257,28,28)},{2,new RectangleF(10,6,150,44)},{4,new RectangleF(168,6,84,44)},{200,new RectangleF(10,110,240,44)},{100,new RectangleF(11,157,86,34)},{101,new RectangleF(99,157,86,34)},{102,new RectangleF(191,157,58,34)},{240,new RectangleF(0,208,224,48)},{241,new RectangleF(228,210,28,24)}};
-            for(int i=0;i<4;i++)expected[10+i]=new RectangleF(12+i*59.5f,53,57.5f,34);
-            foreach(var pair in expected){var row=rows.Find(delegate(PopupControl c){return c.Id==pair.Key;});Check(row!=null&&row.Rect.Contains(pair.Value),"classic hit region preserved: "+pair.Key);}
+            var rows=PopupPages.Build(f.Owner,new PopupNavigation(),true);var expected=new Dictionary<int,RectangleF>{{0,new RectangleF(8,265,28,28)},{1,new RectangleF(226,265,28,28)},{2,new RectangleF(10,6,154,44)},{4,new RectangleF(168,6,80,44)},{200,new RectangleF(10,120,240,44)},{100,new RectangleF(12,180,97,26)},{101,new RectangleF(111,180,97,26)},{102,new RectangleF(216,178,34,30)},{240,new RectangleF(8,236,216,20)},{241,new RectangleF(228,234,28,24)}};
+            for(int i=0;i<4;i++)expected[10+i]=new RectangleF(12+i*59.5f,66,57.5f,26);
+            foreach(var pair in expected){var row=rows.Find(delegate(PopupControl c){return c.Id==pair.Key;});Check(row!=null&&row.Rect==pair.Value,"classic hit region matches the redesigned geometry exactly: "+pair.Key);}
             f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];f.Owner.WirelessDevices=new[]{Device("theme-one","很长很长的设备名称",75)};
             var layout=WirelessLayout.Build(f.Owner,0,1000);rows=PopupPages.Build(f.Owner,new PopupNavigation(),false,layout);
-            Check(rows.Find(delegate(PopupControl c){return c.Id==1000;}).Rect==new RectangleF(10,6,150,44)&&rows.Find(delegate(PopupControl c){return c.Id==2000;}).Rect==new RectangleF(168,6,84,44),"wireless name and meter hits unchanged");
+            Check(rows.Find(delegate(PopupControl c){return c.Id==1000;}).Rect==new RectangleF(10,6,154,44)&&rows.Find(delegate(PopupControl c){return c.Id==2000;}).Rect==new RectangleF(168,6,80,44),"wireless name and meter use the same redesigned header hits");
         }
         using(var image=new Bitmap(520,100))using(var g=Graphics.FromImage(image))foreach(string style in Styles)foreach(float scale in new[]{1f,1.25f,1.5f,2f}){
             g.ResetTransform();g.ScaleTransform(scale,scale);
             foreach(string text in new[]{"0","100","≈100","--"}){
-                float preferred=text.StartsWith("≈")?18:20;float size=CompactRenderer.BatteryTextSize(g,text,preferred,43);
+                float preferred=VisualDesign.BatteryDigitSize;float size=CompactRenderer.BatteryTextSize(g,text,preferred,VisualDesign.BatteryDigitsRect(0).Width);
                 using(var font=new Font("Segoe UI",size,FontStyle.Bold,GraphicsUnit.Pixel))using(var format=new StringFormat {FormatFlags=StringFormatFlags.NoWrap}){
-                    Check(g.MeasureString(text,font,Int32.MaxValue,format).Width<=43,"full battery label fits "+style+" "+text+" "+scale);
+                    Check(size==preferred&&g.MeasureString(text,font,Int32.MaxValue,format).Width<=VisualDesign.BatteryDigitsRect(0).Width,"full sized battery label fits "+style+" "+text+" "+scale);
                     int fitted,lines;g.MeasureString(text,font,VisualDesign.BatteryDigitsRect(0).Size,format,out fitted,out lines);Check(fitted==text.Length&&lines==1,"all battery glyphs fit in one line");
                 }
             }
-            var ring=VisualDesign.BatteryRingRect(0);var digits=VisualDesign.BatteryDigitsRect(0);var percent=VisualDesign.BatteryPercentRect(0);
-            Check(ring.Right+VisualDesign.BatteryRingWidth/2<digits.Left&&digits.Right<=percent.Left&&percent.Right<260,"ring, digits and percent never overlap");
-            Check(ring.Y+ring.Height/2==digits.Y+digits.Height/2&&ring.Y+ring.Height/2==percent.Y+percent.Height/2,"ring, digits and percent are vertically centered");
+            var bar=VisualDesign.BatteryBarRect(0);var digits=VisualDesign.BatteryDigitsRect(0);var percent=VisualDesign.BatteryPercentRect(0);
+            Check(bar.X==12&&bar.Right==248&&bar.Height==4&&percent.Right==248,"battery track and percentage respect the right inset");
+            Check(digits.Bottom<bar.Top&&percent.Bottom<bar.Top,"digits and percent remain above the battery bar");
             using(var font=new Font("Segoe UI",11,FontStyle.Regular,GraphicsUnit.Pixel))using(var format=new StringFormat {FormatFlags=StringFormatFlags.NoWrap}){int fitted,lines;g.MeasureString("%",font,percent.Size,format,out fitted,out lines);Check(fitted==1&&lines==1,"percent glyph fits at 11px");}
         }
     }
@@ -296,13 +296,13 @@ static class ThemeTests {
     static void LowBattery(){
         VisualDesign.HighContrastOverride=false;
         foreach(string style in Styles)foreach(bool dark in new[]{true,false})foreach(int threshold in new[]{10,15,20})foreach(int kind in new[]{0,1,2}){
-            bool wireless=kind==1,headset=kind==2;int y=headset?104:0;
+            bool wireless=kind==1,headset=kind==2;int y=headset?VisualDesign.MouseCardHeight(Dpi())+VisualDesign.CardGap:0;
             using(var low=Card(threshold-1,true,dark,wireless,style,threshold,headset))using(var equal=Card(threshold,true,dark,wireless,style,threshold,headset))using(var history=Card(threshold-1,false,dark,wireless,style,threshold,headset)){
                 Check(low.GetPixel(20,y+48)!=equal.GetPixel(20,y+48),"fresh low battery tints "+style+" "+kind+" "+dark+" "+threshold);Check(history.GetPixel(20,y+48)==equal.GetPixel(20,y+48),"threshold equality and history do not tint");
                 // Thin 11px percent strokes are antialiased; test their red hue,
                 // independently of exact-color checks on the semantic palette.
-                bool digit=false,percent=false;for(int x=199;x<253;x++)for(int row=y+13;row<y+43;row++){var pixel=low.GetPixel(x,row);if(pixel.R>100&&pixel.R-pixel.G>40&&pixel.R-pixel.B>40){if(x<242)digit=true;else percent=true;}}
-                Check(digit&&percent,"both low digits and percent use red: "+style+" dark="+dark+" kind="+kind+" threshold="+threshold+" digits="+digit+" percent="+percent);
+                bool digit=false,percent=false;for(int x=199;x<248;x++)for(int row=y+13;row<y+37;row++){var pixel=low.GetPixel(x,row);if(pixel.R>100&&pixel.R-pixel.G>40&&pixel.R-pixel.B>40){if(x<235)digit=true;else percent=true;}}
+                Check(digit&&!percent,"low digits use red while percent stays muted: "+style+" dark="+dark+" kind="+kind+" threshold="+threshold+" digits="+digit+" percent="+percent);
             }
             VisualDesign.HighContrastOverride=true;using(var low=Card(threshold-1,true,dark,wireless,style,threshold,headset))using(var equal=Card(threshold,true,dark,wireless,style,threshold,headset))Check(low.GetPixel(20,y+48)==equal.GetPixel(20,y+48),"high contrast does not tint");VisualDesign.HighContrastOverride=false;
         }
@@ -335,16 +335,17 @@ static class ThemeTests {
         foreach(string style in Styles)foreach(bool dark in new[]{true,false})using(var f=new Fixture(style)){
             var p=ThemePalette.Current(dark);
             using(var card=RenderPanel(new Size(260,96),1,delegate(Graphics g){CompactRenderer.DrawSurface(g,new RectangleF(.5f,.5f,259,95),dark);}))Check(card.GetPixel(80,20).ToArgb()==p.Card.ToArgb()&&card.GetPixel(80,70).ToArgb()==p.Card.ToArgb(),"flat exact card fill");
-            using(var main=RenderPanel(VisualDesign.PanelSizeFor(true,f.Owner.Dpi),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,f.Owner.Audio);}))Check(main.GetPixel(100,58).ToArgb()==p.Selected.ToArgb()&&main.GetPixel(100,82).ToArgb()==p.Selected.ToArgb(),"flat selected segment fill");
+            using(var main=RenderPanel(VisualDesign.PanelSizeFor(true,f.Owner.Dpi),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,f.Owner.Audio);}))Check(main.GetPixel(78,71).ToArgb()==p.SegmentFill.ToArgb()&&main.GetPixel(100,90).ToArgb()==p.Accent.ToArgb(),"neutral floating selected segment and 12px accent pip");
             using(var image=new Bitmap(1,1))using(var g=Graphics.FromImage(image)){
-                var shortPill=CompactRenderer.SyncPillRect(g,"刚刚确认",0,208);var longPill=CompactRenderer.SyncPillRect(g,"这是很长很长很长很长很长的同步状态说明",0,208);
-                Check(shortPill.Width<208&&longPill.Width==208&&shortPill.Height==24&&p.SyncFill.A==225,"sync background fits text and preserves opacity and maximum width");
+                var status=VisualDesign.FooterTextRect(0,208);
+                Check(status==new RectangleF(39,3,175,24)&&status.Right<VisualDesign.FooterMoreRect(0).Left,"plain status text is bounded between its icon buttons");
             }
             var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=223},false);
             foreach(var row in rows)if(row.Id!=6)Check(!String.IsNullOrEmpty(row.PaletteKey),"each style choice carries its two-color swatch");
             using(var normal=RenderPanel(new Size(260,96),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,null);}))
             using(var hover=RenderPanel(new Size(260,96),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,null,1,-1,false,1,-1,new PanelFeedback {HoverAction=2});})){
-                bool arrowChanged=false;for(int x=151;x<158;x++)for(int y=14;y<24;y++){Check(normal.GetPixel(x,y).ToArgb()==p.Card.ToArgb(),"idle title arrow is hidden");arrowChanged|=normal.GetPixel(x,y)!=hover.GetPixel(x,y);}Check(arrowChanged,"hover reveals title arrow");
+                bool changed=false;for(int x=12;x<164;x++)for(int y=10;y<40;y++)changed|=normal.GetPixel(x,y)!=hover.GetPixel(x,y);Check(changed,"name row hover remains visible without a persistent arrow");
+                var symbols=new List<string>();CompactRenderer.SymbolObserver=delegate(string name,RectangleF rect){symbols.Add(name);};try{using(var frame=RenderPanel(new Size(260,VisualDesign.CardHeightNormal),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,null,1,-1,false,1,-1,new PanelFeedback {HoverAction=2});})){}Check(!symbols.Contains("chevron"),"device title does not paint an arrow even on hover");}finally{CompactRenderer.SymbolObserver=null;}
             }
         }
     }
@@ -365,16 +366,16 @@ static class ThemeTests {
         const int scale=4;
         foreach(string style in Styles)foreach(bool dark in new[]{true,false})foreach(bool secondary in new[]{false,true})using(var f=new Fixture(style)){
             var nav=new PopupNavigation {Page=PopupPage.Audio,VisibleChoices=100};var rows=PopupPages.Build(f.Owner,nav,false);var row=rows.Find(delegate(PopupControl c){return c.Id==240;});
-            var rect=secondary?row.Rect:VisualDesign.VolumeSliderRect(new RectangleF(0,0,260,48));var track=PopupPages.VolumeTrack(rect);var center=new PointF(track.X+track.Width*.55f,track.Y+track.Height/2);
+            var rect=secondary?row.Rect:VisualDesign.VolumeSliderRect(new RectangleF(0,0,260,VisualDesign.SystemVolumeHeight));var track=PopupPages.VolumeTrack(rect);var center=new PointF(track.X+track.Width*.55f,track.Y+track.Height/2);
             var palette=ThemePalette.Current(dark);Color expected=dark?palette.Foreground:Color.White;
             Check(palette.Knob.ToArgb()==expected.ToArgb(),"slider is white in light mode and retains the existing light knob in dark mode: "+style+" "+dark);
             Check(Contrast(dark?expected:palette.Accent,palette.Track)>=3,"slider fill or light-mode accent outline contrasts with the unfilled track");
             var bounds=new List<Rectangle>();
             for(int state=0;state<3;state++){
                 var feedback=new PanelFeedback {HoverAction=state==1?240:-1,PressedAction=state==2?240:-1};
-                using(var image=RenderPanel(secondary?PopupPages.SizeFor(rows):new Size(260,48),scale,delegate(Graphics g){
+                using(var image=RenderPanel(secondary?PopupPages.SizeFor(rows):new Size(260,VisualDesign.SystemVolumeHeight),scale,delegate(Graphics g){
                     g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                    if(secondary)PopupPages.Paint(g,f.Owner,nav,rows,dark,feedback.HoverAction,feedback.PressedAction,-1);else CompactRenderer.SystemVolume(g,new RectangleF(0,0,260,48),f.Owner.Audio,dark,feedback);
+                    if(secondary)PopupPages.Paint(g,f.Owner,nav,rows,dark,feedback.HoverAction,feedback.PressedAction,-1);else CompactRenderer.SystemVolume(g,new RectangleF(0,0,260,VisualDesign.SystemVolumeHeight),f.Owner.Audio,dark,feedback);
                 })){
                     Check(Pixel(image,center.X,center.Y,scale).ToArgb()==expected.ToArgb(),"both slider renderers use the correct knob fill");
                     Check(Pixels(image,new RectangleF(center.X-1,center.Y-(state==0?6:7)-.5f,2,1),scale,delegate(Color c){return c.ToArgb()==palette.Accent.ToArgb();})>0,"slider retains its accent outline above the track");
@@ -382,7 +383,7 @@ static class ThemeTests {
                 }
             }
             foreach(var bound in bounds)Check(Math.Abs(bound.Width-bound.Height)<=1,"volume knob stays circular");
-            Check(Math.Abs(bounds[0].Width/(float)scale-11)<=.5f&&Math.Abs(bounds[1].Width/(float)scale-13)<=.5f&&bounds[1].Size==bounds[2].Size,"12px idle knob grows to 14px on hover and drag, inside its 1px outline");
+            Check(Math.Abs(bounds[0].Width/(float)scale-11)<=.5f&&Math.Abs(bounds[1].Width/(float)scale-13)<=.5f&&bounds[1].Size==bounds[2].Size,"both sliders grow from 12px to 14px on hover/drag inside the 1px outline");
         }
     }
     static void RepaintCache(){

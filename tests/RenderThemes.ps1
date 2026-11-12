@@ -1,8 +1,9 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly,[switch]$UpdateBadgesOnly)
+param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly,[switch]$UpdateBadgesOnly,[switch]$MainPanelsOnly)
 $ErrorActionPreference='Stop'
 if($InteractionsOnly -and $DialogsOnly){throw 'InteractionsOnly and DialogsOnly cannot be combined.'}
 if($UpdateBadgesOnly -and ($InteractionsOnly -or $DialogsOnly)){throw 'UpdateBadgesOnly cannot be combined with other modes.'}
+if($MainPanelsOnly -and ($InteractionsOnly -or $DialogsOnly -or $UpdateBadgesOnly)){throw 'MainPanelsOnly cannot be combined with other modes.'}
 $root=Split-Path -Parent $PSScriptRoot
 $previewOutput=[IO.Path]::GetFullPath($OutputDirectory)
 $temporaryRoot=[IO.Path]::GetFullPath($env:TEMP).TrimEnd('\','/')
@@ -34,6 +35,12 @@ if($UpdateBadgesOnly){
     return
 }
 if(-not $DialogsOnly){
+$panelExecutable=Join-Path $compileDirectory 'RenderMainPanels.exe'
+& $compiler /nologo /target:exe /platform:x64 /optimize+ /main:PanelDesignTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$panelExecutable" $sources (Join-Path $PSScriptRoot 'PanelDesignTests.cs')
+if($LASTEXITCODE -ne 0){throw 'Main panel preview compilation failed.'}
+& $panelExecutable --render $previewOutput
+if($LASTEXITCODE -ne 0){throw 'Main panel preview rendering failed.'}
+if($MainPanelsOnly){return}
 $interactionExecutable=Join-Path $compileDirectory 'RenderInteractions.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:HoverTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$interactionExecutable" $sources (Join-Path $PSScriptRoot 'HoverTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Interaction preview compilation failed.'}
