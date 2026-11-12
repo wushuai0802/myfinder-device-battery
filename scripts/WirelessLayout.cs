@@ -9,9 +9,11 @@ namespace AtkBatteryTray {
         internal BatteryView Battery;
         internal WirelessDevice Device;
         internal bool NativeMouse,NativeHeadset,AudioOnly,Hidden;
-        internal int Height {get{return NativeMouse?VisualDesign.MouseCardHeight(Dpi):NativeHeadset||AudioOnly?VisualDesign.HeadsetCardHeight:WirelessLayout.DpiStageCount(Device)>0?WirelessLayout.DpiStageCount(Device)>4?VisualDesign.CardHeightExpanded:VisualDesign.CardHeightNormal:VisualDesign.GenericCardHeight;}}
+        internal int Height {get{return VisualDesign.GridLayout?GridLayout.TileHeight:NativeMouse?VisualDesign.MouseCardHeight(Dpi):NativeHeadset||AudioOnly?VisualDesign.HeadsetCardHeight:WirelessLayout.DpiStageCount(Device)>0?WirelessLayout.DpiStageCount(Device)>4?VisualDesign.CardHeightExpanded:VisualDesign.CardHeightNormal:VisualDesign.GenericCardHeight;}}
         internal DpiConfig Dpi;
         internal float Top;
+        internal RectangleF Tile;
+        internal RectangleF DpiTrack;
     }
     internal sealed class WirelessLayout {
         internal readonly List<WirelessCard> Cards=new List<WirelessCard>();
@@ -21,6 +23,7 @@ namespace AtkBatteryTray {
         internal bool HasVolume=true;
         internal bool VolumeCollapsed;
         internal bool AllHidden;
+        internal GridLayout Grid;
         internal float VolumeTop;
         internal RectangleF VolumeRect {get{return new RectangleF(0,VolumeTop,VisualDesign.PanelWidth,VisualDesign.SystemVolumeHeightFor(VolumeCollapsed));}}
         internal bool Paged {get{return Start>0||End<All.Count;}}
@@ -49,6 +52,7 @@ namespace AtkBatteryTray {
             foreach(var card in discovered)add(card);
             layout.AllHidden=layout.All.Count==0&&discovered.Count>0;
             if(layout.All.Count==0)layout.All.Add(new WirelessCard {Id="empty",Name="无线设备",Kind="device",Battery=new BatteryView {Name="无线设备"},Subtitle=owner.GenericScanning?"正在识别设备…":layout.AllHidden?EmptyReason(owner,true):"点这里查看原因"});
+            if(VisualDesign.GridLayout){GridLayout.Arrange(layout,offset,maximumHeight);return layout;}
             layout.Start=Math.Max(0,Math.Min(offset,layout.All.Count-1));
             float y=0;int end=layout.Start;
             foreach(var card in layout.All.GetRange(layout.Start,layout.All.Count-layout.Start)) {
@@ -85,7 +89,7 @@ namespace AtkBatteryTray {
             if(device.Dpi.Current.HasValue)return label+" · "+(DpiFresh(device)?"":"上次 ")+device.Dpi.Current.Value;
             return label+" · 未读取";
         }
-        internal static RectangleF DpiRect(WirelessCard card,int stage) {var rect=VisualDesign.StageRect(stage,DpiStageCount(card.Device));rect.Y+=card.Top;return rect;}
+        internal static RectangleF DpiRect(WirelessCard card,int stage) {if(VisualDesign.GridLayout&&!card.DpiTrack.IsEmpty)return VisualDesign.SelectionSegmentRect(card.DpiTrack,stage,GridLayout.DpiCount(card));var rect=VisualDesign.StageRect(stage,DpiStageCount(card.Device));rect.Y+=card.Top;return rect;}
         internal static int DpiActionId(int cardIndex,int stage){return 3000+cardIndex*8+stage;}
     }
 }

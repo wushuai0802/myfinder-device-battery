@@ -54,6 +54,85 @@ static class PanelDesignTests {
         }
     }
     static DpiConfig Dpi(int count=4){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("panel-design-fixture"),ActiveStage=1,TimestampUtc=DateTime.UtcNow};for(int i=0;i<count;i++)dpi.Stages.Add(new DpiStage {XDpi=400*(i+1),YDpi=400*(i+1)});return dpi;}
+    static void GridBasics(){
+        Check(PanelLayouts.Effective("grid")=="grid","grid must have its own geometry, not the phase-2 ring fallback");
+        foreach(string font in new[]{"normal","large"}){Mode(font,"ocean",false,"grid");using(var fixture=new Fixture()){
+            var owner=fixture.Owner;owner.GenericReady=true;var layout=WirelessLayout.Build(owner,0,10000);var rows=PopupPages.Build(owner,new PopupNavigation(),true,layout);
+            int width=font=="large"?146:126,height=font=="large"?104:92;
+            Check(rows.Find(delegate(PopupControl row){return row.Id==2;}).Rect==new RectangleF(0,0,width,height),"native mouse occupies the first grid tile");
+            Check(rows.Find(delegate(PopupControl row){return row.Id==3;}).Rect==new RectangleF(width+8,0,width,height),"headset occupies the second column");
+            Check(!rows.Exists(delegate(PopupControl row){return row.Id==4||row.Id==5;}),"grid tile is one direct detail action");
+            var dpi=rows.Find(delegate(PopupControl row){return row.Id==10;});Check(dpi.Rect.Top>=height+8,"DPI belongs to the fixed quick controls below the grid");
+        }}
+    }
+    static WirelessDevice GridDevice(int index,int stages=0){var values=new int[stages];for(int i=0;i<stages;i++)values[i]=400*(i+1);return new WirelessDevice {Id="grid-"+index,Name="设备 "+index,Kind=stages>0?"mouse":"keyboard",Percent=85,Fresh=true,Online=true,ConnectionState="connected",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),Dpi=stages>0?new WirelessDpi {Supported=true,CanSet=true,Current=800,Stages=values,TargetToken=new string((char)('a'+index%6),64),CheckedAtUtc=DateTime.UtcNow.ToString("o")}:null};}
+    static void GridCountsAndPaging(){
+        foreach(string font in new[]{"normal","large"})foreach(int count in new[]{1,2,3,4,5}){Mode(font,"ocean",false,"grid");using(var fixture=new Fixture()){
+            var owner=fixture.Owner;owner.NativeMousePresent=false;owner.Headset=null;owner.GenericReady=true;var devices=new List<WirelessDevice>();for(int i=0;i<count;i++)devices.Add(GridDevice(i));owner.WirelessDevices=devices.ToArray();
+            var full=WirelessLayout.Build(owner,0,10000);int rows=(count+1)/2,expected=rows*(GridLayout.TileHeight+8)+VisualDesign.SystemVolumeHeight+2+VisualDesign.FooterHeight;
+            Check(full.Size.Height==expected&&full.Cards.Count==count,"1..5 tiles use row height plus the volume-only controls and footer");Console.WriteLine("grid "+font+" / "+count+" devices / volume only: "+expected);
+            for(int i=0;i<count;i++){var tile=full.Cards[i].Tile;Check(tile.Height==GridLayout.TileHeight&&tile.Width==(i==count-1&&count%2==1?VisualDesign.PanelWidth:GridLayout.TileWidth),"only the global odd last tile spans both columns");Check(tile.Top==i/2*(GridLayout.TileHeight+8),"grid rows have an eight-pixel gutter");}
+            int maximum=GridLayout.TileHeight+8+(int)full.Grid.Controls.Height+VisualDesign.FooterHeight;
+            for(int offset=0;offset<count+3;offset++){
+                var page=WirelessLayout.Build(owner,offset,maximum);Check(page.Size.Height<=maximum&&page.Start%2==0&&page.Cards.Count<=2,"bounded grid pages scroll whole rows");
+                Check(page.Grid.Controls.Top==GridLayout.TileHeight+8&&page.VolumeRect==WirelessLayout.Build(owner,0,maximum).VolumeRect,"scrolling keeps quick controls and volume at identical coordinates");
+                var hit=PopupPages.Build(owner,new PopupNavigation(),false,page);var regions=new List<InteractionRegion>();InteractionLayout.Observer=regions.Add;
+                try{using(var image=new Bitmap(page.Size.Width,page.Size.Height))using(var g=Graphics.FromImage(image))CompactRenderer.PaintWireless(g,owner,page,false,new PanelFeedback());}finally{InteractionLayout.Observer=null;}
+                foreach(var control in hit)if(control.Id>=0&&!control.Information){var region=regions.Find(delegate(InteractionRegion r){return r.Id==control.Id;});Check(region!=null&&region.Limit==control.Rect,"paged tile, control and footer hits equal their drawing limits");Check(control.Rect.Bottom<=page.Size.Height,"all page hit rectangles fit the computed height");}
+            }
+        }}
+    }
+    static void GridGroupsAndHidden(){
+        foreach(string font in new[]{"normal","large"}){Mode(font,"ocean",false,"grid");using(var fixture=new Fixture()){
+            var owner=fixture.Owner;owner.GenericReady=true;owner.Dpi=Dpi(8);owner.WirelessDevices=new[]{GridDevice(0,5),GridDevice(1,8),GridDevice(2)};
+            var pref=DeviceSettings.Current;pref.DeviceOrder=new List<string>{"grid-1","native:headset","grid-0","native:mouse","grid-2"};DeviceSettings.UseTransientConfiguration(pref);
+            var layout=WirelessLayout.Build(owner,0,10000);Check(layout.Grid.Groups.Count==4&&layout.Grid.Groups[0].Card.NativeMouse&&layout.Grid.Groups[1].Card.Id=="grid-1"&&layout.Grid.Groups[2].Card.Id=="grid-0"&&layout.Grid.Groups[3].Audio,"fixed controls put native DPI first, other mice in device order, then audio");
+            foreach(var group in layout.Grid.Groups){Check(group.Title.Bottom<=group.Track.Top,"non-focusable group heading precedes its controls");if(group.Count>4){Check(GridLayout.Segment(group,4).Top-GridLayout.Segment(group,0).Bottom==2,"more than four DPI values wrap with a two-pixel gutter");Check(group.Track.Contains(GridLayout.Segment(group,group.Count-1)),"last stage stays within its group track");}}
+            var before=layout.Grid.Controls;var bounded=WirelessLayout.Build(owner,2,GridLayout.TileHeight+8+(int)before.Height+VisualDesign.FooterHeight);var first=WirelessLayout.Build(owner,0,bounded.Size.Height);Check(bounded.Grid.Controls==first.Grid.Controls,"all DPI groups stay fixed even when their tiles are off-page");
+            var controls=PopupPages.Build(owner,new PopupNavigation(),true,bounded);Check(controls.Exists(delegate(PopupControl c){return c.DpiValue>0&&c.DeviceKey=="grid-0";})&&controls.Exists(delegate(PopupControl c){return c.Id==10;}),"off-page mice keep every DPI control");Check(!controls.Exists(delegate(PopupControl c){return c.Information&&c.Id>=0;}),"headings cannot be focused");
+            var regions=new List<InteractionRegion>();InteractionLayout.Observer=regions.Add;try{using(var image=new Bitmap(bounded.Size.Width,bounded.Size.Height))using(var g=Graphics.FromImage(image))CompactRenderer.PaintWireless(g,owner,bounded,false,new PanelFeedback());}finally{InteractionLayout.Observer=null;}foreach(var control in controls)if(control.DpiValue>0||control.Id>=10&&control.Id<18){var region=regions.Find(delegate(InteractionRegion r){return r.Id==control.Id;});Check(region!=null&&region.Limit==control.Rect,"all off-page multi-mouse DPI groups retain identical paint and hit rectangles");}
+            pref=DeviceSettings.Current;pref.HiddenDeviceIds=new List<string>{"native:mouse","grid-1","native:headset"};DeviceSettings.UseTransientConfiguration(pref);layout=WirelessLayout.Build(owner,0,10000);Check(layout.All.Count==2&&layout.Grid.Groups.Count==1&&layout.Grid.Groups[0].Card.Id=="grid-0","hidden tiles and their DPI/audio groups disappear together");
+            controls=PopupPages.Build(owner,new PopupNavigation(),false,layout);Check(!controls.Exists(delegate(PopupControl c){return c.DeviceKey=="native:mouse"||c.DeviceKey=="grid-1"||c.Id>=100&&c.Id<=102;}),"hidden devices leave no input targets");
+            owner.WirelessDevices=new[]{GridDevice(2)};layout=WirelessLayout.Build(owner,0,10000);Check(layout.Grid.Groups.Count==0&&layout.VolumeTop==layout.Grid.Controls.Top,"no DPI and no audio puts volume at the top without headings");
+        }}
+    }
+    static void GridTypographyAndStates(){
+        foreach(string font in new[]{"normal","large"})foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){Mode(font,"ocean",false,"grid");using(var fixture=new Fixture())using(var host=new Control()){
+            var owner=fixture.Owner;owner.NativeMousePresent=false;owner.Headset=null;owner.GenericReady=true;var handle=host.Handle;
+            foreach(bool wide in new[]{false,true})foreach(int? percent in new int?[]{0,1,2,3,50,100,null})foreach(int state in new[]{0,1,2,3}){
+                var device=GridDevice(0);device.Name="非常长的设备名称用于验证单行省略";device.Percent=percent;device.Approximate=percent==100;device.Fresh=state!=1;device.Online=state!=1;device.ConnectionState=state==2?"sleeping":state==1?"disconnected":"connected";device.MeasurementState=state==2?"sleeping":"current";device.ConfirmedAtUtc=(state==1?DateTime.UtcNow.AddHours(-2):DateTime.UtcNow).ToString("o");device.Charging=state==3;device.ChargingCheckedAtUtc=DateTime.UtcNow.ToString("o");owner.WirelessDevices=wide?new[]{device}:new[]{device,GridDevice(1)};
+                var layout=WirelessLayout.Build(owner,0,10000);var tile=layout.Cards[0].Tile;var view=layout.Cards[0].Battery;bool sleeping=state==2;string status=GridLayout.Status(view,sleeping);Check(status==(sleeping?"休眠":state==1&&percent.HasValue?"上次":state==3?"充电":percent.HasValue&&percent<20?"电量低":null),"labels reflect only explicit charging/sleep and fresh/low state");
+                var labels=new List<DrawnLabel>();var chevrons=new List<RectangleF>();CompactRenderer.LabelObserver=labels.Add;CompactRenderer.SymbolObserver=delegate(string icon,RectangleF rect){if(icon=="chevron")chevrons.Add(rect);};
+                try{using(var image=Render(owner,true,false,new PanelFeedback {HoverAction=1000},scale)){if(sleeping&&percent<20&&scale==1){var palette=ThemePalette.Current(false);Check(image.GetPixel((int)tile.Left+5,(int)(tile.Top+tile.Height/2)).ToArgb()==ThemePalette.Blend(palette.Card,palette.SegmentHover,palette.SegmentHover.A).ToArgb(),"sleeping retains only the requested hover fill, never an old low-reading tint");}} }finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;}
+                string text=sleeping?"休眠":percent.HasValue?(percent==100?"≈":"")+percent.Value:"--";var number=labels.Find(delegate(DrawnLabel label){return label.Text==text;});Check(number!=null&&number.FontSize==(sleeping||!percent.HasValue?13:font=="large"?30:26),"grid keeps 26/30px digits and the existing 13px placeholders");
+                var title=labels.Find(delegate(DrawnLabel label){return label.Text==device.Name;});Check(title!=null&&tile.Contains(title.LogicalRect),"device names stay in their tile");
+                using(var image=new Bitmap(1,1))using(var g=Graphics.FromImage(image)){g.ScaleTransform(scale,scale);var ink=InteractionLayout.LabelBounds(g,text,number.LogicalRect,number.FontSize,true,number.Alignment,StringTrimming.None);Check(ink.Left>=tile.Left+GridLayout.Inset-1&&ink.Right<=tile.Right-GridLayout.Inset+1,"approximate full readings fit both widths at every monitor scale");if(wide)Check(title.LogicalRect.Right<=ink.Left-4,"wide tile name truncates before its number");
+                    if(!sleeping&&percent.HasValue){var percentLabel=labels.Find(delegate(DrawnLabel label){return label.Text=="%";});var percentInk=InteractionLayout.LabelBounds(g,"%",percentLabel.LogicalRect,percentLabel.FontSize,true,StringAlignment.Near,StringTrimming.None);Check(percentInk.Right<=tile.Right-GridLayout.Inset+1&&Math.Abs(ink.Bottom-percentInk.Bottom)<=2,"grid percent stays inside and shares the number baseline");}
+                }
+                Check(chevrons.Count==1&&chevrons[0]==GridLayout.Chevron(tile,status),"only the hovered tile reveals its shared 7x10 detail arrow");
+                var rows=PopupPages.Build(owner,new PopupNavigation(),false,layout);var control=rows.Find(delegate(PopupControl c){return c.DeviceKey==device.Id&&c.Id==1000;});var tree=new PopupAccessibility(host,delegate{return rows;},delegate{return -1;},null,delegate{return scale;},null,null);string name=tree.GetChild(rows.IndexOf(control)).Name;Check(name.Contains("键盘")&&name.Contains(device.Name)&&name.Contains("打开详情")&&(sleeping?name.Contains("休眠")&&!name.Contains("85%"):name.Contains(percent.HasValue?percent+"%":"--")),"accessible tile includes type, device, reading/state and direct detail action");
+            }
+        }}
+    }
+    static void GridFeedbackAndControls(){
+        foreach(string font in new[]{"normal","large"})foreach(bool contrast in new[]{false,true})foreach(bool dark in new[]{false,true}){Mode(font,"ocean",false,"grid");VisualDesign.HighContrastOverride=contrast;using(var fixture=new Fixture()){
+            var owner=fixture.Owner;var labels=new List<DrawnLabel>();var pressedLabels=new List<DrawnLabel>();var arrows=new List<RectangleF>();var rings=new List<RectangleF>();CompactRenderer.LabelObserver=labels.Add;CompactRenderer.SymbolObserver=delegate(string symbol,RectangleF rect){if(symbol=="chevron")arrows.Add(rect);};CompactRenderer.InteractionOutlineObserver=rings.Add;
+            try{
+                using(var normal=Render(owner,false,dark,new PanelFeedback())){
+                    Check(arrows.Count==0&&rings.Count==0,"unfocused tiles have no arrow or selected accent outline");CompactRenderer.LabelObserver=pressedLabels.Add;
+                    using(var hover=Render(owner,false,dark,new PanelFeedback {HoverAction=2}))using(var press=Render(owner,false,dark,new PanelFeedback {PressedAction=2}))using(var focus=Render(owner,false,dark,new PanelFeedback {KeyboardFocus=2}))Check(Different(normal,hover)&&Different(normal,press)&&Different(normal,focus),"tiles show distinct hover, press and keyboard focus feedback");
+                }
+            }finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;CompactRenderer.InteractionOutlineObserver=null;}
+            // The second rendering is hover; the following press moves the same
+            // content by one logical pixel before rasterization.
+            var baseLabel=labels.Find(delegate(DrawnLabel label){return label.Text==DeviceSettings.Current.MouseAlias;});var moved=pressedLabels.FindAll(delegate(DrawnLabel label){return label.Text==DeviceSettings.Current.MouseAlias;});Check(moved.Count==3&&moved[1].DeviceRect.Y-baseLabel.DeviceRect.Y==1,"pressed tile contents move by exactly one logical pixel");
+            owner.Audio.MicrophoneMuted=true;var layout=WirelessLayout.Build(owner,0,10000);var group=layout.Grid.Groups.Find(delegate(GridControlGroup item){return item.Audio;});var area=Rectangle.Round(GridLayout.Microphone(group));
+            using(var muted=Render(owner,true,dark,new PanelFeedback()))using(var pending=Render(owner,true,dark,new PanelFeedback {MicrophonePending=true,ShowPendingHints=true}))if(!contrast)Check(RedPixels(muted,area)>0&&RedPixels(pending,area)==0,"grid microphone keeps existing confirmed and pending ink");
+            var controls=PopupPages.Build(owner,new PopupNavigation(),true,layout);Check(controls.Find(delegate(PopupControl c){return c.Id==10;}).Text.StartsWith(DeviceSettings.Current.MouseAlias+" DPI")&&controls.Find(delegate(PopupControl c){return c.Id==102;}).Text.StartsWith("音源，"),"control accessible names include the device/group prefix");
+            var feedback=new PanelFeedback {ShowPendingHints=true,PendingStage=1,PendingOutput="headset",MicrophonePending=true};labels.Clear();CompactRenderer.LabelObserver=labels.Add;try{using(var image=Render(owner,true,dark,feedback)){} }finally{CompactRenderer.LabelObserver=null;}Check(labels.Exists(delegate(DrawnLabel label){return label.Text=="800…";})&&labels.Exists(delegate(DrawnLabel label){return label.Text=="耳机…";}),"grid reuses existing native DPI and audio pending hints");
+            owner.Dpi=null;owner.Headset=null;owner.Audio=null;using(var image=Render(owner,false,dark,new PanelFeedback()))Check(image.Size==VisualDesign.PanelSizeFor(false,null),"no DPI and no audio still renders a bounded volume card");
+        }}VisualDesign.HighContrastOverride=false;
+    }
     static AudioReading Audio(){return new AudioReading {TimestampUtc=DateTime.UtcNow,OperationSucceeded=true,ActiveOutput="speaker",ConsoleOutputId="speaker",SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="扬声器",HeadsetAvailable=true,HeadsetId="headset",HeadsetName="耳机",MicrophoneAvailable=true,MicrophoneId="mic",MicrophoneName="麦克风",MicrophoneMuted=false,VolumeEndpointId="speaker",OutputVolumePercent=55,Devices=new AudioDeviceChoice[0]};}
     static HeadsetReading Headset(){return new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=46,ConnectionTimestampUtc=DateTime.UtcNow,BatteryTimestampUtc=DateTime.UtcNow};}
     sealed class Fixture:IDisposable {
@@ -331,7 +410,12 @@ static class PanelDesignTests {
         }
     }
     [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{
-        if(args.Length>=2&&args[0]=="--render"){VisualDesign.HighContrastOverride=false;foreach(string layout in args.Length>2?new[]{args[2]}:new[]{"ring","bar"})RenderPreviews(args[1],layout);return 0;}
+        if(args.Length>=2&&args[0]=="--render"){VisualDesign.HighContrastOverride=false;foreach(string layout in args.Length>2?new[]{args[2]}:new[]{"ring","bar","grid"})RenderPreviews(args[1],layout);return 0;}
+        Run("grid dispatch, two-column tiles and fixed quick controls",GridBasics);
+        Run("grid 1..5 devices, whole-row paging and fixed controls",GridCountsAndPaging);Run("grid all-device control groups and hidden devices",GridGroupsAndHidden);
+        Run("grid shared drawing and hit geometry",delegate{HitGeometry("grid");});Run("grid complete theme and render path matrix",delegate{RenderMatrix("grid");});Run("grid typography, status and accessibility at five DPI scales",GridTypographyAndStates);
+        Run("grid feedback, control names and pending semantics",GridFeedbackAndControls);
+        if(args.Length==1&&args[0]=="--grid")return failures==0?0:1;
         Run("layout defaults, migration, persistence and normalization",LayoutSettings);Run("ring geometry, full-row details and calculated heights",RingGeometry);
         Run("ring draw and hit geometry",delegate{HitGeometry("ring");});Run("ring color, font, headset, contrast and render path matrix",delegate{RenderMatrix("ring");});Run("ring tiny, full, cached, sleeping and charging boundaries",RingBoundaries);Run("ring state accessibility and typography at five DPI scales",RingNamesAndTypography);
         Run("ring paging reserves volume and the external footer",delegate{FooterPaging("ring");});

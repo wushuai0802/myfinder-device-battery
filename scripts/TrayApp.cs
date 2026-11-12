@@ -193,7 +193,11 @@ namespace AtkBatteryTray {
             MouseLeave+=delegate {lastHoverTip=null;hoverAction=-1;hoverStage=-1;hoverRefresh=false;hoverSettings=false;hoverAudio=-1;controlTip.SetToolTip(this,null);Cursor=Cursors.Default;Invalidate();};
             MouseWheel+=delegate(object sender,MouseEventArgs e) {
                 if(navigation.Page!=PopupPage.Main){navigation.Offset=Math.Max(0,navigation.Offset+(e.Delta<0?1:-1));UpdateLayoutSize();Invalidate();}
-                else if(navigation.Page==PopupPage.Main&&owner.UseWirelessLayout){navigation.DeviceScroll=Math.Max(0,navigation.DeviceScroll+(e.Delta<0?1:-1));UpdateLayoutSize();Invalidate();}
+                else if(MainUsesDeviceLayout){
+                    if(VisualDesign.GridLayout&&PanelPoint(e.Location).Y>=MainWireless().Grid.Controls.Top)return;
+                    CancelPointerInteraction();navigation.DeviceScroll=Math.Max(0,navigation.DeviceScroll+(e.Delta<0?1:-1)*(VisualDesign.GridLayout?2:1));
+                    if(VisualDesign.GridLayout)navigation.DeviceScroll=MainWireless().Start;UpdateLayoutSize();ReconcileKeyboardFocus(ControlsForPage());Invalidate();
+                }
             };
         }
         void CancelPointerInteraction(bool releaseCapture=true) {
@@ -215,13 +219,14 @@ namespace AtkBatteryTray {
         }
         Rectangle PanelWorkArea {get{return updatedAnchor.HasValue?updatedAnchor.Value.WorkArea:TrayPanelPlacement.WorkingArea(Screen.FromPoint(anchor));}}
         WirelessLayout MainWireless(){return WirelessLayout.Build(owner,navigation.DeviceScroll,(int)(PanelWorkArea.Height/dpiScale)-24);}
+        bool MainUsesDeviceLayout {get{return owner.UseWirelessLayout||VisualDesign.GridLayout;}}
         List<PopupControl> ControlsForPage(){
             float workHeight=PanelWorkArea.Height/dpiScale;
             navigation.MaximumHeight=(int)workHeight-24;
             int rowStep=VisualDesign.LargeFont?40:36;
             navigation.VisibleChoices=Math.Max(2,Math.Min(7,(int)((workHeight-88)/rowStep)-2));
-            var controls=PopupPages.Build(owner,navigation,headsetProgress>.98f,owner.UseWirelessLayout?MainWireless():null);
-            if(navigation.Page==PopupPage.Main&&!owner.UseWirelessLayout){
+            var controls=PopupPages.Build(owner,navigation,headsetProgress>.98f,MainUsesDeviceLayout?MainWireless():null);
+            if(navigation.Page==PopupPage.Main&&!MainUsesDeviceLayout){
                 float top=VisualDesign.MouseCardHeight(owner.Dpi)+VisualDesign.SecondCardStep*headsetProgress+VisualDesign.CardGap;
                 bool secondCard=headsetProgress>.98f||VisualDesign.AudioCardFor(owner.Headset,owner.Audio)!=null;
                 float delta=top-VisualDesign.SystemVolumeRectFor(secondCard,owner.Dpi).Top;
@@ -242,7 +247,7 @@ namespace AtkBatteryTray {
             int id=control.Id;
             if(control.DeviceKey=="empty"){if(!owner.GenericScanning)Go(WirelessLayout.Build(owner,0,100000).AllHidden?PopupPage.Devices:PopupPage.DeviceMissing);return;}
             if(id==241){CancelPointerInteraction();owner.SetVolumeCollapsed(!DeviceSettings.Current.VolumeCollapsed);return;}
-            if(id==902||id==903){var layout=MainWireless();navigation.DeviceScroll=id==902?Math.Max(0,layout.Start-layout.Cards.Count):layout.End;UpdateLayoutSize();Invalidate();return;}
+            if(id==902||id==903){var layout=MainWireless();navigation.DeviceScroll=id==902?Math.Max(0,layout.Start-(layout.Grid==null?layout.Cards.Count:layout.Grid.VisibleRows*2)):layout.End;UpdateLayoutSize();Invalidate();return;}
             if(id>=1000&&id<3000) {
                 if(id>=2000){owner.RefreshWireless(control.DeviceKey);return;}
                 if(navigation.Page==PopupPage.Devices){navigation.SelectedDeviceKey=control.DeviceKey;navigation.SelectedDeviceName=control.Text;Go(PopupPage.ManageDevice);return;}
@@ -363,9 +368,21 @@ namespace AtkBatteryTray {
         }
         PointF PanelPoint(Point point) {return UiState.LogicalPoint(point,dpiScale);}
         protected override bool ProcessCmdKey(ref Message message,Keys keys) {
-            if(keys==Keys.Escape||keys==Keys.Tab||keys==(Keys.Tab|Keys.Shift)||keys==Keys.Left||keys==Keys.Right||keys==Keys.Enter||keys==Keys.Space){keyboardFocusVisible=true;HidePointerTip();}
+            if(keys==Keys.Escape||keys==Keys.Tab||keys==(Keys.Tab|Keys.Shift)||keys==Keys.Left||keys==Keys.Right||keys==Keys.Up||keys==Keys.Down||keys==Keys.Enter||keys==Keys.Space){keyboardFocusVisible=true;HidePointerTip();}
             if(keys==Keys.Escape){if(navigation.Page==PopupPage.Main)CloseAnimated();else Back();return true;}
             var controls=ControlsForPage();ReconcileKeyboardFocus(controls);var targets=new List<PopupControl>();foreach(var control in controls)if(control.Id>=0&&control.Enabled&&!control.Information)targets.Add(control);
+            if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout){
+                var layout=MainWireless();var tiles=targets.FindAll(delegate(PopupControl c){return c.Rect.Bottom<=layout.Grid.Controls.Top;});var current=tiles.Find(delegate(PopupControl c){return c.StableKey==keyboardFocusKey;});
+                if((current!=null||keyboardFocusKey==null)&&(keys==Keys.Left||keys==Keys.Right||keys==Keys.Up||keys==Keys.Down)){
+                    int dy=keys==Keys.Up?-1:keys==Keys.Down?1:0;var next=GridLayout.Spatial(tiles,current,keys==Keys.Left?-1:keys==Keys.Right?1:0,dy);
+                    if(next==current&&current!=null&&dy!=0&&(dy<0?layout.Start>0:layout.End<layout.All.Count)){
+                        int index=layout.All.FindIndex(delegate(WirelessCard card){return card.Id==current.DeviceKey;});string id=layout.All[Math.Max(0,Math.Min(layout.All.Count-1,index+dy*2))].Id;
+                        navigation.DeviceScroll=Math.Max(0,layout.Start+dy*2);CancelPointerInteraction();UpdateLayoutSize();next=ControlsForPage().Find(delegate(PopupControl c){return c.DeviceKey==id&&(c.Id==2||c.Id==3||c.Id==200||c.Id>=1000&&c.Id<2000);});
+                    }
+                    FocusControl(next);return true;
+                }
+                if(current!=null&&keys==Keys.Tab){FocusControl(targets.Find(delegate(PopupControl c){return c.Rect.Top>=layout.Grid.Controls.Top;}));return true;}
+            }
             if(keyboardFocus==240&&(keys==Keys.Left||keys==Keys.Right)&&owner.Audio!=null&&owner.Audio.OutputVolumePercent.HasValue){var slider=controls.Find(delegate(PopupControl row){return row.Id==240&&row.Enabled&&row.Slider;});if(slider!=null)SetSliderValue(slider,(owner.DesiredVolume??owner.Audio.OutputVolumePercent.Value)+(keys==Keys.Left?-2:2));return true;}
             if(keys==Keys.Tab||keys==(Keys.Tab|Keys.Shift)||keys==Keys.Right||keys==Keys.Left) {
                 if(targets.Count==0)return true;int direction=keys==(Keys.Tab|Keys.Shift)||keys==Keys.Left?-1:1,index=targets.FindIndex(delegate(PopupControl c){return c.StableKey==keyboardFocusKey;});
@@ -399,7 +416,7 @@ namespace AtkBatteryTray {
             bool volumeChanged=volumeCollapsed!=DeviceSettings.Current.VolumeCollapsed;volumeCollapsed=DeviceSettings.Current.VolumeCollapsed;
             if(draggingVolume&&(!VolumeTargetAvailable(volumeEndpoint)||navigation.Page==PopupPage.Main&&volumeCollapsed))CancelPointerInteraction();
             if(volumeChanged){pageAnimation.Stop();pageProgress=1;}
-            if(!volumeChanged&&(owner.UseWirelessLayout||layoutChanged)&&navigation.Page==PopupPage.Main&&!pageAnimation.Enabled&&!PopupPages.Reduced&&(owner.UseWirelessLayout?MainWireless().Size.Height:VisualDesign.PanelSizeFor(VisualDesign.HasAudioCard(owner.Headset,owner.Audio),owner.Dpi).Height)!=targetSize.Height){pageStartHeight=targetSize.Height;pageProgress=0;pageClock.Restart();pageAnimation.Start();}
+            if(!volumeChanged&&(MainUsesDeviceLayout||layoutChanged)&&navigation.Page==PopupPage.Main&&!pageAnimation.Enabled&&!PopupPages.Reduced&&(MainUsesDeviceLayout?MainWireless().Size.Height:VisualDesign.PanelSizeFor(VisualDesign.HasAudioCard(owner.Headset,owner.Audio),owner.Dpi).Height)!=targetSize.Height){pageStartHeight=targetSize.Height;pageProgress=0;pageClock.Restart();pageAnimation.Start();}
             bool visible=VisualDesign.HasAudioCard(owner.Headset,owner.Audio);
             displayAudio=owner.Audio;if(visible||headsetProgress==0f)displayHeadset=owner.Headset;
             float next=visible?1f:0f;
@@ -415,7 +432,7 @@ namespace AtkBatteryTray {
         void UpdateLayoutSize() {
             Size mouse=VisualDesign.PanelSizeFor(false,owner.Dpi),both=VisualDesign.PanelSizeFor(true,owner.Dpi);
             targetSize=new Size(mouse.Width,mouse.Height+(int)Math.Round((both.Height-mouse.Height)*headsetProgress));
-            if(navigation.Page==PopupPage.Main&&owner.UseWirelessLayout)targetSize=MainWireless().Size;
+            if(navigation.Page==PopupPage.Main&&MainUsesDeviceLayout)targetSize=MainWireless().Size;
             if(navigation.Page!=PopupPage.Main)targetSize=PopupPages.SizeFor(ControlsForPage());
             if(pageProgress<1f)targetSize.Height=(int)Math.Round(pageStartHeight+(targetSize.Height-pageStartHeight)*pageProgress);
             Size physical=UiState.ScaleSize(targetSize,dpiScale);
@@ -429,7 +446,10 @@ namespace AtkBatteryTray {
         void UpdateFallbackRegion() {
             Region mask;
             int panelWidth=VisualDesign.PanelWidth,footerHeight=VisualDesign.FooterHeight;
-            if(navigation.Page==PopupPage.Main&&VisualDesign.RingLayout) {
+            if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout){
+                mask=new Region();mask.MakeEmpty();var layout=MainWireless();foreach(var card in layout.Cards)using(var shape=Style.Round(card.Tile,VisualDesign.MainCardRadius))mask.Union(shape);
+                using(var shape=Style.Round(layout.Grid.Controls,VisualDesign.MainCardRadius))mask.Union(shape);mask.Union(new RectangleF(0,layout.Footer,panelWidth,footerHeight));
+            }else if(navigation.Page==PopupPage.Main&&VisualDesign.RingLayout) {
                 float bottom=owner.UseWirelessLayout?MainWireless().VolumeRect.Bottom:VisualDesign.MouseCardHeight(owner.Dpi)+VisualDesign.SecondCardStep*headsetProgress+VisualDesign.DeviceGap+VisualDesign.CurrentSystemVolumeHeight;
                 using(var shape=Style.Round(new RectangleF(0,0,panelWidth,bottom),14))mask=new Region(shape);
                 mask.Union(new RectangleF(0,bottom+VisualDesign.MainFooterGap,panelWidth,footerHeight));
@@ -592,7 +612,7 @@ namespace AtkBatteryTray {
         void PaintContent(Graphics g) {
             var saved=g.Save();
             if(navigation.Page!=PopupPage.Main){g.TranslateTransform(8*(1-pageProgress),0);PopupPages.Paint(g,owner,navigation,ControlsForPage(),Style.Dark,hoverAction,pressedAction,keyboardFocusVisible?keyboardFocus:-1);}
-            else if(owner.UseWirelessLayout)CompactRenderer.PaintWireless(g,owner,MainWireless(),Style.Dark,Feedback());
+            else if(MainUsesDeviceLayout)CompactRenderer.PaintWireless(g,owner,MainWireless(),Style.Dark,Feedback());
             else VisualDesign.PaintDevicesPanel(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,Style.Dark,displayHeadset,displayAudio,animationProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,Feedback(),hoverSettings);
             g.Restore(saved);
         }

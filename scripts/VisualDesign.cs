@@ -9,13 +9,12 @@ namespace AtkBatteryTray {
         internal static readonly string[] Names={"环形","电量条","网格"};
         internal static string Normalize(string layout){return Array.IndexOf(Keys,layout)<0?"ring":layout;}
         internal static string Name(string layout){return Names[Array.IndexOf(Keys,Normalize(layout))];}
-        // Phase 2 only: grid deliberately uses ring geometry/rendering. Phase 3
-        // replaces this dispatch point with the grid's fixed quick controls.
-        internal static string Effective(string layout){return Normalize(layout)=="bar"?"bar":"ring";}
+        internal static string Effective(string layout){return Normalize(layout);}
     }
     // Shared logical geometry: rendering and hit testing must use the same layout.
     public static class VisualDesign {
         internal static bool RingLayout {get{return PanelLayouts.Effective(DeviceSettings.Current.PanelLayout)=="ring";}}
+        internal static bool GridLayout {get{return PanelLayouts.Effective(DeviceSettings.Current.PanelLayout)=="grid";}}
         internal static bool LargeFont {get{return DeviceSettings.Current.FontSize=="large";}}
         internal static float DialogScale {get{return LargeFont?1.15f:1f;}}
         public static int PanelWidth {get{return LargeFont?300:260;}}
@@ -105,13 +104,13 @@ namespace AtkBatteryTray {
         internal static bool HasAudioCard(HeadsetReading headset,AudioReading audio){return ShouldShowHeadset(headset)||AudioCardFor(headset,audio)!=null;}
         public static Size PanelSizeFor(HeadsetReading headset){return PanelSizeFor(headset,null);}
         public static Size PanelSizeFor(HeadsetReading headset,DpiConfig dpi){return PanelSizeFor(ShouldShowHeadset(headset),dpi);}
-        public static Size PanelSizeFor(bool headset,DpiConfig dpi=null){return new Size(PanelWidth,(int)FooterRectFor(headset,dpi).Bottom);}
+        public static Size PanelSizeFor(bool headset,DpiConfig dpi=null){return GridLayout?AtkBatteryTray.GridLayout.Native(headset,dpi).Size:new Size(PanelWidth,(int)FooterRectFor(headset,dpi).Bottom);}
         public static RectangleF MouseNameRect {get{return HeaderNameHitRect(0);}}
         public static RectangleF MouseMeterRect {get{return HeaderMeterHitRect(0);}}
         public static RectangleF HeadsetNameRectFor(DpiConfig dpi){return HeaderNameHitRect(MouseCardHeight(dpi)+DeviceGap);}
         public static RectangleF HeadsetMeterRectFor(DpiConfig dpi){return HeaderMeterHitRect(MouseCardHeight(dpi)+DeviceGap);}
-        public static RectangleF SystemVolumeRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,MouseCardHeight(dpi)+(headset?SecondCardStep:0)+DeviceGap,PanelWidth,CurrentSystemVolumeHeight);}
-        public static RectangleF FooterRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,SystemVolumeRectFor(headset,dpi).Bottom+MainFooterGap,PanelWidth,FooterHeight);}
+        public static RectangleF SystemVolumeRectFor(bool headset,DpiConfig dpi){return GridLayout?AtkBatteryTray.GridLayout.Native(headset,dpi).VolumeRect:new RectangleF(0,MouseCardHeight(dpi)+(headset?SecondCardStep:0)+DeviceGap,PanelWidth,CurrentSystemVolumeHeight);}
+        public static RectangleF FooterRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,GridLayout?AtkBatteryTray.GridLayout.Native(headset,dpi).Footer:SystemVolumeRectFor(headset,dpi).Bottom+MainFooterGap,PanelWidth,FooterHeight);}
         internal static RectangleF FooterRefreshRect(float top){return new RectangleF(8,top+(FooterHeight-28)/2,28,28);}
         internal static RectangleF FooterMoreRect(float top){return new RectangleF(PanelWidth-34,top+(FooterHeight-28)/2,28,28);}
         internal static RectangleF FooterTextRect(float top,float maximumWidth){return new RectangleF(39,top+3,Math.Max(1,maximumWidth-33),FooterHeight-6);}

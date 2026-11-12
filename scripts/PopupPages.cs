@@ -77,7 +77,7 @@ namespace AtkBatteryTray {
         internal static List<PopupControl> Build(TrayContext owner,PopupNavigation nav,bool headset,WirelessLayout wireless=null) {
             var rows=new List<PopupControl>();int preferenceSplit=0;var pref=DeviceSettings.Current;var audio=nav.AudioDeviceKey!=null&&!owner.AudioControlsAvailable?null:owner.Audio;
             var audioPref=DeviceSettings.ForAudioDevice(nav.AudioDeviceKey);
-            if(nav.Page==PopupPage.Main&&owner.UseWirelessLayout)return WithIdentity(BuildWireless(owner,wireless??WirelessLayout.Build(owner,nav.DeviceScroll,520),nav),nav,owner);
+            if(nav.Page==PopupPage.Main&&(owner.UseWirelessLayout||VisualDesign.GridLayout))return WithIdentity(BuildWireless(owner,wireless??WirelessLayout.Build(owner,nav.DeviceScroll,520),nav),nav,owner);
             if(nav.Page==PopupPage.Main) {
                 var audioCard=VisualDesign.AudioCardFor(owner.Headset,audio);bool secondCard=headset||audioCard!=null;
                 rows.Add(new PopupControl {Id=2,Rect=VisualDesign.MouseNameRect,Text=pref.MouseAlias});
@@ -332,7 +332,7 @@ namespace AtkBatteryTray {
             string context=nav.Page==PopupPage.Mouse?"native:mouse":nav.Page==PopupPage.Headset?"native:headset":nav.Page==PopupPage.Device||nav.Page==PopupPage.ManageDevice?nav.SelectedDeviceKey:nav.Page==PopupPage.Audio||nav.Page==PopupPage.Bindings||nav.Page==PopupPage.PickBinding?nav.AudioDeviceKey:null;
             var feedback=owner.GetFeedback();
             foreach(var row in rows) {
-                if(nav.Page==PopupPage.Main&&VisualDesign.RingLayout){
+                if(nav.Page==PopupPage.Main&&(VisualDesign.RingLayout||VisualDesign.GridLayout)){
                     BatteryView battery=null;string subtitle=null;bool sleeping=false;
                     if(row.Id==2){battery=UiState.Mouse(owner.Current,owner.LastGood,DateTime.UtcNow);subtitle=CompactRenderer.MouseSubtitle(battery,owner.Dpi,owner.DpiError);}
                     else if(row.Id==3){battery=UiState.Headset(owner.Headset,DateTime.UtcNow);subtitle=CompactRenderer.HeadsetSubtitle(battery);}
@@ -342,6 +342,10 @@ namespace AtkBatteryTray {
                     }
                     if(battery!=null)row.AccessibleName=sleeping?row.Text+"，休眠，打开详情":battery.TooltipFor(row.Text)+"，"+CompactRenderer.RingStatus(battery,subtitle)+"，打开详情";
                     else if(row.Id==200)row.AccessibleName=row.Text+"，"+row.Value;
+                    if(VisualDesign.GridLayout&&(row.Id==2||row.Id==3||row.Id==200||row.Id>=1000&&row.Id<2000&&row.DeviceKey!="empty")){
+                        var device=Array.Find(owner.WirelessDevices,delegate(WirelessDevice item){return item.Id==row.DeviceKey;});string kind=row.Id==2?"mouse":row.Id==3||row.Id==200?"headset":device==null?"device":device.Kind;
+                        row.AccessibleName=GridLayout.KindName(kind)+" "+row.Text+"，"+(sleeping?"休眠":battery==null?row.Value??"电量未读取":"电量 "+battery.TooltipFor("").Trim()+"，"+CompactRenderer.RingStatus(battery,subtitle))+"，打开详情";
+                    }
                 }
                 if(String.IsNullOrEmpty(row.DeviceKey)) {
                     if(row.Id==2||row.Id==4||row.Id>=10&&row.Id<18)row.DeviceKey="native:mouse";
@@ -395,6 +399,7 @@ namespace AtkBatteryTray {
             foreach(var row in rows)if(row.Id>=100&&row.Id<=102){row.DeviceKey="native:audio";if(row.Id==101){row.Enabled&=card.HasTarget;row.Detail=card.HasTarget?card.Subtitle:"请到音频设置中绑定耳机端点";}}
         }
         static List<PopupControl> BuildWireless(TrayContext owner,WirelessLayout layout,PopupNavigation nav) {
+            if(layout.Grid!=null)return BuildGrid(owner,layout,nav);
             var rows=new List<PopupControl>();
             rows.Add(new PopupControl {Id=0,Text="立即同步全部设备",Rect=VisualDesign.FooterRefreshRect(layout.Footer)});
             rows.Add(new PopupControl {Id=1,Text="更多选项",Rect=VisualDesign.FooterMoreRect(layout.Footer)});
@@ -429,6 +434,27 @@ namespace AtkBatteryTray {
             }
             if(layout.Paged){rows.Add(new PopupControl {Id=902,Text="上一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,false),Enabled=layout.Start>0});rows.Add(new PopupControl {Id=903,Text="下一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,true),Enabled=layout.End<layout.All.Count});}
             if(layout.HasVolume)AddMainVolume(rows,owner,nav,layout.VolumeRect,layout.VolumeCollapsed);
+            return rows;
+        }
+        static List<PopupControl> BuildGrid(TrayContext owner,WirelessLayout layout,PopupNavigation nav) {
+            var rows=new List<PopupControl>();
+            foreach(var card in layout.Cards)rows.Add(new PopupControl {Id=GridLayout.DetailAction(layout,card),Text=card.Id=="empty"?layout.AllHidden?"设备管理":"设备没显示？":card.AudioOnly?"音源与麦克风":card.Name,Value=card.AudioOnly?card.Subtitle:null,Detail=card.Subtitle,DeviceKey=card.Id,Rect=card.Tile,ActionKey=card.Id=="empty"?layout.AllHidden?"devices":"device-missing":null,Enabled=card.Id!="empty"||!owner.GenericScanning});
+            foreach(var group in layout.Grid.Groups){
+                var card=group.Card;rows.Add(new PopupControl {Id=-1,Text=group.Audio?"音源":card.Name+" · DPI",Rect=group.Title,Information=true,Section=true});
+                if(group.Audio){
+                    foreach(int id in new[]{100,101,102}){var audio=owner.Audio;bool enabled=audio!=null&&(id==100?audio.SpeakerAvailable:id==101?audio.HeadsetAvailable:audio.MicrophoneAvailable&&audio.MicrophoneMuted.HasValue);
+                        rows.Add(new PopupControl {Id=id,Text="音源，"+(id==100?"输出到扬声器":id==101?"输出到耳机":"Windows麦克风静音"),Rect=id==102?GridLayout.Microphone(group):GridLayout.Segment(group,id-100),Enabled=enabled,DeviceKey=card.Id});
+                    }
+                    if(card.AudioOnly)QualifyAudioCard(rows,UiState.AudioCard(owner.Audio,DeviceSettings.Current,owner.Headset,owner.WirelessDevices));
+                }else for(int i=0;i<group.Count;i++){
+                    var hit=GridLayout.Segment(group,i);
+                    if(card.NativeMouse)rows.Add(new PopupControl {Id=10+i,Rect=hit,Text=card.Name+" DPI "+card.Dpi.Stages[i].XDpi+(card.Dpi.Stages[i].XDpi==card.Dpi.Stages[i].YDpi?"":"，Y "+card.Dpi.Stages[i].YDpi),DeviceKey=card.Id});
+                    else {var dpi=card.Device.Dpi;int value=dpi.Stages[i];rows.Add(new PopupControl {Id=WirelessLayout.DpiActionId(layout.All.IndexOf(card),i),DpiValue=value,TargetToken=dpi.TargetToken,DeviceKey=card.Id,Rect=WirelessLayout.DpiRect(card,i),Text=card.Name+"，设置"+WirelessLayout.DpiLabel(card.Device)+"为 "+value,Value=value+" DPI",Detail=dpi.StageSource=="quick"?"软件快捷值，不代表设备板载预设":"设备板载DPI档位",Enabled=owner.CanSetWirelessDpi(card.Id,dpi.TargetToken)});}
+                }
+            }
+            AddMainVolume(rows,owner,nav,layout.VolumeRect,layout.VolumeCollapsed);
+            rows.Add(new PopupControl {Id=0,Text="立即同步全部设备",Rect=VisualDesign.FooterRefreshRect(layout.Footer)});rows.Add(new PopupControl {Id=1,Text="更多选项",Rect=VisualDesign.FooterMoreRect(layout.Footer)});
+            if(layout.Paged){rows.Add(new PopupControl {Id=902,Text="上一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,false),Enabled=layout.Start>0});rows.Add(new PopupControl {Id=903,Text="下一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,true),Enabled=layout.End<layout.All.Count});}
             return rows;
         }
         internal static Size SizeFor(List<PopupControl> controls){float bottom=PageHeaderHeight;foreach(var c in controls)bottom=Math.Max(bottom,c.Rect.Bottom);return new Size(VisualDesign.PanelWidth,(int)bottom+PageFooterHeight);}
