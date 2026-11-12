@@ -58,6 +58,7 @@ PROVIDERS = (
     ("hyperx_cloud3s", "HyperXCloud3SProvider"), ("nzxt", "NzxtProvider"),
     ("bluetooth", "BluetoothProvider"),
     ("xinput", "XInputProvider"),
+    ("sony_inzone", "SonyInzoneProvider"),
 )
 PROVIDER_VIDS = {
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
@@ -96,7 +97,7 @@ MAX_READER_TASKS = 96
 BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
-SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
+SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput", "sony_inzone"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
 READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
@@ -1244,6 +1245,8 @@ class BatteryEngine:
                 pending.append(("topology", "topology", "", command, 6))
             if "xinput" in self.providers and physical_id is None and (not device_id or target_name == "xinput"):
                 pending.append(("query", "xinput", "", {"action": "query", "provider": "xinput"}, 5))
+            if "sony_inzone" in self.providers and physical_id is None and (not device_id or target_name == "sony_inzone"):
+                pending.append(("query", "sony_inzone", "", {"action": "query", "provider": "sony_inzone"}, 9))
             if self._bluetooth_slot is None and physical_id is None and (not device_id or target_name == "bluetooth"):
                 pending.append(("query", "bluetooth", "", {"action": "query", "provider": "bluetooth"}, 14))
         while pending or active or wait_bluetooth and self._bluetooth_slot is not None:
@@ -1253,6 +1256,8 @@ class BatteryEngine:
                 action, name, physical, command, budget = item
                 reader_key = task_key(item)
                 minimum = 30 if name == "standard_hid" else 0
+                if name == "sony_inzone":
+                    minimum = 60
                 if name == "bluetooth":
                     minimum = (BLUETOOTH_EMPTY_POLL_SECONDS if self._bluetooth_empty_polls >= BLUETOOTH_EMPTY_POLL_THRESHOLD
                                else BLUETOOTH_POLL_SECONDS)

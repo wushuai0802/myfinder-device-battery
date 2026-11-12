@@ -32,6 +32,7 @@ from providers.profiles import profiles, registered_ids
 # Explicit table meanings prevent protocol opcodes/model numbers becoming PIDs.
 # Only the name (first tuple item) is needed; parser function references are inert.
 TABLES = {
+    "sony_inzone": ("PIDS",),
     "atk_headset": ("PIDS",),
     "astro": ("PIDS",), "asus": ("KNOWN",), "asus_omni": ("PIDS",), "audeze": ("KNOWN",),
     "corsair": ("PIDS", "BRAGI_PIDS"), "gwolves": ("WIRED", "MODELS"),

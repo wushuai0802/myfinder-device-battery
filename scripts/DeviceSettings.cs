@@ -70,8 +70,11 @@ namespace AtkBattery {
         [DataMember(Order=27)] public bool CheckFeedbackReplies = true;
         [DataMember(Order=28)] public bool IncludeBetaUpdates = true;
         [DataMember(Order=29)] public string FontSize = "normal";
+        [DataMember(Order=30)] public bool DesktopWidgetEnabled;
+        [DataMember(Order=31, EmitDefaultValue=false)] public TrayIconPosition DesktopWidgetPosition;
+        [DataMember(Order=32)] public int DesktopWidgetOpacity = 88;
         [OnDeserializing] void Defaults(StreamingContext context) {
-            Theme="auto";ThemeStyle="ocean";FontSize="normal";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;
+            Theme="auto";ThemeStyle="ocean";FontSize="normal";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;DesktopWidgetOpacity=88;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
@@ -89,6 +92,9 @@ namespace AtkBattery {
             if(AudioDeviceBindings!=null)foreach(var pair in AudioDeviceBindings)copy.AudioDeviceBindings[pair.Key]=pair.Value==null?null:pair.Value.Clone();
             copy.TrayIconStyle=TrayIconStyle;copy.TrayGroupHintShown=TrayGroupHintShown;
             copy.LastTrayIconPosition=LastTrayIconPosition==null?null:LastTrayIconPosition.Clone();
+            copy.DesktopWidgetEnabled=DesktopWidgetEnabled;
+            copy.DesktopWidgetPosition=DesktopWidgetPosition==null?null:DesktopWidgetPosition.Clone();
+            copy.DesktopWidgetOpacity=DesktopWidgetOpacity;
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
         }
@@ -193,6 +199,7 @@ namespace AtkBattery {
             TrayConfiguration.Normalize(settings);
             if(settings.WarningThreshold!=10&&settings.WarningThreshold!=15&&settings.WarningThreshold!=20)throw new InvalidDataException("Invalid notification threshold");
             if(settings.BackgroundSeconds!=60&&settings.BackgroundSeconds!=120&&settings.BackgroundSeconds!=300)throw new InvalidDataException("Invalid background interval");
+            if(settings.DesktopWidgetOpacity<40||settings.DesktopWidgetOpacity>100)settings.DesktopWidgetOpacity=88;
             settings.MouseAlias=CleanAlias(settings.MouseAlias,"ATK A9 Air+");
             settings.HeadsetAlias=CleanAlias(settings.HeadsetAlias,"HyperX Cloud Alpha");
             if(settings.DeviceAliases==null)settings.DeviceAliases=new Dictionary<string,string>();

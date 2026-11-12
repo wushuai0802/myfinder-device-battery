@@ -773,6 +773,18 @@ namespace AtkBatteryTray {
         string audioScopeDeviceId;
         DateTime actionRequestedAt;
         Details details;int busy;volatile bool disposed;
+        DesktopWidget desktopWidget;
+        internal void SetDesktopWidget(bool enabled) {
+            try {var pref=DeviceSettings.Current;pref.DesktopWidgetEnabled=enabled;saveConfiguration(pref);}
+            catch(Exception){SafeDiagnostic.Transition("desktop_widget","save_failed");return;}
+            if(!enabled){if(desktopWidget!=null){desktopWidget.Dispose();desktopWidget=null;}return;}
+            if(desktopWidget!=null&&!desktopWidget.IsDisposed){desktopWidget.Show();return;}
+            desktopWidget=new DesktopWidget(this,delegate{SetDesktopWidget(false);},delegate(Point point){
+                try{var pref=DeviceSettings.Current;pref.DesktopWidgetPosition=TrayIconPosition.Capture(point,Screen.FromPoint(point).Bounds);saveConfiguration(pref);}
+                catch(Exception){SafeDiagnostic.Transition("desktop_widget_position","save_failed");}
+            },delegate(int opacity){var pref=DeviceSettings.Current;pref.DesktopWidgetOpacity=opacity;saveConfiguration(pref);});
+            desktopWidget.Show();
+        }
         bool switching,panelOpen,pendingRead,pendingBattery;
         int pendingStage=-1;
         NativeDpiRequest pendingNativeDpi;
@@ -855,6 +867,9 @@ namespace AtkBatteryTray {
             var update=new ToolStripMenuItem("\u5237\u65b0");update.Click+=delegate {RefreshBattery();};menu.Items.Add(update);
             menu.Items.Add(audioSettingsMenu);menu.Opening+=delegate {BuildAudioSettingsMenu();};
             var settingsItem=new ToolStripMenuItem("设置…");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
+            var widgetItem=new ToolStripMenuItem("桌面常驻悬浮窗");
+            widgetItem.Click+=delegate{SetDesktopWidget(desktopWidget==null||desktopWidget.IsDisposed);};
+            menu.Opening+=delegate{widgetItem.Checked=desktopWidget!=null&&!desktopWidget.IsDisposed;};menu.Items.Add(widgetItem);
             var checkUpdates=new ToolStripMenuItem("检查更新…");checkUpdates.Click+=delegate{if(UpdateAvailable)OpenUpdate();else CheckUpdates();};menu.Items.Add(checkUpdates);
             menu.Opening+=delegate{checkUpdates.Text=UpdateAvailable?"查看新版本 "+updates.Version+"…":"检查更新…";};
             var myFeedback=new ToolStripMenuItem("我的反馈");myFeedback.Click+=delegate{OpenMyFeedback();};menu.Items.Add(myFeedback);
@@ -866,6 +881,7 @@ namespace AtkBatteryTray {
             if(diagnostics&&DeviceSettings.Current.RememberReadings)ReadingCache.Load(Path.Combine(DeviceSettings.DataDirectory,"readings-cache.json"),out LastGood,out lastKnownHeadset);
             if(diagnostics&&DeviceSettings.Current.RememberReadings)foreach(var device in ReadingCache.LoadWireless(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json")))wirelessCache[device.Id]=device;
             UpdateIcon();
+            if(diagnostics&&DeviceSettings.Current.DesktopWidgetEnabled)SetDesktopWidget(true);
             refresh.Interval=DeviceSettings.Current.BackgroundSeconds*1000;refresh.Tick+=delegate {if(!panelOpen){RequestRead(true,false);RequestHeadsetRead(false);RequestAudioRead(false);RequestWirelessRead(false);}};refresh.Start();
             expiryTimer.Tick+=delegate{expiryTimer.Stop();UpdateIcon();};
             operationTimer.Interval=500;operationTimer.Tick+=delegate{if(audioBusy!=0&&(DateTime.UtcNow-audioOperationStarted).TotalSeconds>4){audioActionFailure="音频响应较慢，结果尚未确认";audioFailureAt=DateTime.UtcNow;if(details!=null&&!details.IsDisposed)details.Invalidate();}};
@@ -886,7 +902,7 @@ namespace AtkBatteryTray {
             notify.MouseDown+=delegate(object sender,MouseEventArgs e){HandleTrayMouseDown(e.Button);};
             notify.MouseUp+=delegate(object sender,MouseEventArgs e){HandleTrayMouseUp(e.Button);};
         }
-        void ShowDetails(bool fromLauncher=false) {
+        internal void ShowDetails(bool fromLauncher=false) {
             if(details!=null&&!details.IsDisposed){details.Reveal();return;}
             details=new Details(this);details.OpenAnimated(fromLauncher);
         }
@@ -1518,6 +1534,7 @@ namespace AtkBatteryTray {
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
             if(genericWorker!=null)genericWorker.Dispose();
             if(persistStatus)AudioBrokerClient.Shutdown();fileWriter.Dispose();
+            if(desktopWidget!=null){desktopWidget.Dispose();desktopWidget=null;}
             if(details!=null)details.Close();var menu=tray.ContextMenuStrip;trayIcons.Dispose();if(menu!=null)menu.Dispose();dispatch.Dispose();base.ExitThreadCore();
         }
     }

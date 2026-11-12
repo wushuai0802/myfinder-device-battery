@@ -110,6 +110,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | NZXT Lift Elite Wireless | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Windows 系统蓝牙电量属性 | mouse, keyboard, headset, gamepad, device | C | 协议已接入，待本项目实机验证；Windows提供电量属性的已连接设备，含蓝牙手柄；Xbox系统百分比优先于XInput四档估算 |
 | Xbox 及兼容 XInput 手柄 | gamepad | C | 协议已接入，待本项目实机验证；Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄 |
+| Sony INZONE H9（原版接收器） | headset | C | 协议已接入，待本项目实机验证；仅 Windows 串口 USB 054C:0E53 MI_06；与 INZONE Hub 可能争用端口；H9 II 和蓝牙不在此范围 |
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 | MCHOSE K99 V3 2.4G (3837:3033) | keyboard | D | 已发现但未取得电量，不列为兼容 |
