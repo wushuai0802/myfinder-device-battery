@@ -33,7 +33,7 @@ static class UiFeedbackTests {
         internal int Reads,VolumeWrites,LastVolume=-1,OutputWrites;
         internal readonly ManualResetEvent VolumeGate=new ManualResetEvent(true);
         internal Fixture(AudioBindings settings=null,Func<AudioReading> readAudio=null,Func<string,AudioReading> switchAudio=null){
-            DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {RememberReadings=false,ReducedMotion=true,TraySource="auto",VolumeCollapsed=false});
+            DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {PanelLayout="bar",RememberReadings=false,ReducedMotion=true,TraySource="auto",VolumeCollapsed=false});
             Owner=new TrayContext(false,delegate(bool battery){Interlocked.Increment(ref Reads);return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=Now}};},delegate(int stage){throw new Exception("No DPI writes");},null,delegate{return readAudio==null?Audio():readAudio();},false,
                 delegate(string target){Interlocked.Increment(ref OutputWrites);if(switchAudio!=null)return switchAudio(target);var value=Audio();value.ActiveOutput=target;return value;},delegate(bool mute){throw new Exception("No microphone writes");},
                 delegate(string endpoint,int value){VolumeGate.WaitOne();LastVolume=value;Interlocked.Increment(ref VolumeWrites);var audio=Audio();audio.OutputVolumePercent=value;return audio;},delegate{return false;},null,null,delegate{return Now;},null,
@@ -160,7 +160,7 @@ static class UiFeedbackTests {
             var expanded=VisualDesign.VolumeToggleRect(new RectangleF(0,50,260,36),false);Check(expanded==new RectangleF(228,56,28,24),"expanded hit geometry is centered in the single-line volume card");
             Check(VisualDesign.VolumeChevronRect(new RectangleF(0,50,260,36),false)==new RectangleF(235,61,14,14),"expanded triangle is centered in its exact hit rectangle");
         }
-        using(var f=new Fixture(new AudioBindings {RememberReadings=false,VolumeCollapsed=true})){
+        using(var f=new Fixture(new AudioBindings {PanelLayout="bar",RememberReadings=false,VolumeCollapsed=true})){
             Set(f.Popup,"headsetProgress",.5f);Call(f.Popup,"UpdateLayoutSize");var toggle=f.Controls().Find(delegate(PopupControl c){return c.Id==241;});
             var card=new RectangleF(0,VisualDesign.MouseCardHeight(f.Owner.Dpi)+VisualDesign.SecondCardStep*.5f+VisualDesign.CardGap,260,32);
             Check(toggle.Rect==VisualDesign.VolumeToggleRect(card,true),"classic Id 241 follows the intermediate second-card animation offset");

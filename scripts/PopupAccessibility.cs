@@ -49,7 +49,7 @@ namespace AtkBatteryTray {
             internal Item(PopupAccessibility tree,string key){this.tree=tree;this.key=key;}
             PopupControl Row {get{return tree.Resolve(key);}}
             public override AccessibleObject Parent {get{return tree;}}
-            public override string Name {get{var row=Row;return row==null?"设备已断开":row.Text;}}
+            public override string Name {get{var row=Row;return row==null?"设备已断开":row.AccessibleName??row.Text;}}
             public override string Description {get{var row=Row;return row==null?"此操作已不可用":row.Detail;}}
             public override AccessibleRole Role {get{var row=Row;return row==null||row.Information?AccessibleRole.StaticText:row.Slider?AccessibleRole.Slider:row.Toggle?AccessibleRole.CheckButton:AccessibleRole.PushButton;}}
             public override string DefaultAction {get{var row=Row;return row==null||row.Information||!row.Enabled?null:row.Slider?"调整音量":row.Toggle?"切换":"执行";}}

@@ -49,7 +49,7 @@ static class HoverTests {
     sealed class Fixture:IDisposable {
         internal TrayContext Owner;
         internal Fixture(){
-            DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false,LowBatteryNotifications=false,VolumeCollapsed=false});
+            DeviceSettings.UseTransientConfiguration(new AudioBindings {PanelLayout="bar",ReducedMotion=true,RememberReadings=false,LowBatteryNotifications=false,VolumeCollapsed=false});
             Owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=DateTime.UtcNow},Dpi=Dpi()};},delegate(int stage){throw new Exception("No writes");},delegate{return new HeadsetReading();},Audio,false,delegate(string id){throw new Exception("No writes");},delegate(bool muted){throw new Exception("No writes");},delegate(string id,int v){throw new Exception("No writes");},delegate{return false;});
             DateTime until=DateTime.UtcNow.AddSeconds(5);while((Owner.IsRefreshing||Owner.IsAudioBusy||Owner.IsHeadsetRefreshing||Owner.Audio==null)&&DateTime.UtcNow<until){Application.DoEvents();Thread.Sleep(2);}
             Check(!Owner.IsRefreshing&&!Owner.IsAudioBusy&&Owner.Audio!=null,"injected readers settle");

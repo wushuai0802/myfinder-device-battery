@@ -19,7 +19,40 @@ static class PanelDesignTests {
     static object Geometry(string name,params object[] args){var method=typeof(VisualDesign).GetMethod(name,Static);Check(method!=null,"shared geometry exists: "+name);return method.Invoke(null,args);}
     static RectangleF Rect(string name,params object[] args){return (RectangleF)Geometry(name,args);}
     static Color Role(ThemePalette palette,string name){var property=typeof(ThemePalette).GetProperty(name,BindingFlags.Instance|BindingFlags.NonPublic);Check(property!=null,"palette role exists: "+name);return (Color)property.GetValue(palette,null);}
-    static void Mode(string font,string style="ocean",bool collapsed=false){DeviceSettings.UseTransientConfiguration(new AudioBindings {FontSize=font,ThemeStyle=style,VolumeCollapsed=collapsed,ReducedMotion=true,RememberReadings=false,LowBatteryNotifications=false});}
+    static void Mode(string font,string style="ocean",bool collapsed=false,string layout="bar"){
+        var settings=new AudioBindings {FontSize=font,ThemeStyle=style,VolumeCollapsed=collapsed,ReducedMotion=true,RememberReadings=false,LowBatteryNotifications=false};
+        var field=typeof(AudioBindings).GetField("PanelLayout");if(field!=null)field.SetValue(settings,layout);else Check(layout=="bar","PanelLayout must exist for the new default ring layout");
+        DeviceSettings.UseTransientConfiguration(settings);
+    }
+    static string Layout(AudioBindings settings){var field=typeof(AudioBindings).GetField("PanelLayout");Check(field!=null,"PanelLayout is persisted");return (string)field.GetValue(settings);}
+    static void LayoutSettings(){
+        Check(Layout(new AudioBindings())=="ring","new settings default to ring");
+        var field=typeof(AudioBindings).GetField("PanelLayout");var member=(System.Runtime.Serialization.DataMemberAttribute)Attribute.GetCustomAttribute(field,typeof(System.Runtime.Serialization.DataMemberAttribute));Check(member!=null&&member.Order==30,"layout uses the unused data member 30");
+        string directory=Path.Combine(Path.GetTempPath(),"myfinder-ring-settings-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);string path=Path.Combine(directory,"settings.json");
+        Check(Layout(DeviceSettings.LoadBindings(path))=="ring","missing file defaults to ring");
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"Theme\":\"dark\",\"MouseAlias\":\"保留名称\"}");var legacy=DeviceSettings.LoadBindings(path);Check(Layout(legacy)=="ring"&&legacy.Theme=="dark"&&legacy.MouseAlias=="保留名称","legacy file migrates only the layout default");
+        foreach(string value in new[]{"ring","bar","grid","invalid","",null}){
+            field.SetValue(legacy,value);DeviceSettings.SaveBindings(path,legacy);var loaded=DeviceSettings.LoadBindings(path);string expected=value=="bar"||value=="grid"?value:"ring";
+            Check(Layout(loaded)==expected&&Layout(loaded.Clone())==expected,"layout round trip, clone and normalization: "+value);DeviceSettings.UseTransientConfiguration(loaded);Check(Layout(DeviceSettings.Current)==expected,"transient settings normalize layout too");
+        }
+        foreach(string value in new[]{"{}","[]","42","true","null"}){File.WriteAllText(path,"{\"SchemaVersion\":1,\"PanelLayout\":"+value+",\"MouseAlias\":\"保留名称\"}");var loaded=DeviceSettings.LoadBindings(path);Check(Layout(loaded)=="ring"&&loaded.MouseAlias=="保留名称","non-string layout falls back without discarding other fields: "+value);}
+    }
+    static void RingGeometry(){
+        foreach(string font in new[]{"normal","large"})foreach(int count in new[]{4,5,8})foreach(bool headset in new[]{false,true})foreach(bool collapsed in new[]{false,true}){
+            Mode(font,"ocean",collapsed,"ring");bool large=font=="large";int header=large?62:54,bottom=large?12:10;int height=header+VisualDesign.SelectionTrackHeight(count)+bottom;
+            Check(VisualDesign.HeaderHeight==header&&VisualDesign.MouseCardHeight(Dpi(count))==height,"ring row and controls have specified heights");
+            var ring=VisualDesign.BatteryRingRect(0);Check(ring.Width==(large?44:38)&&ring.Height==ring.Width&&ring.X==(large?12:11)&&ring.Y==(header-ring.Height)/2,"ring wraps its centered device icon on the left");
+            Check(VisualDesign.HeaderTextRect(0,false).X==(large?66:58),"ring name starts after the gauge");
+            Check(VisualDesign.StageTrackRect(0,count).Top==header&&VisualDesign.StageTrackRect(0,count).Left==(large?12:10),"ring controls follow the device row without a bar gap");
+            int expected=height+1+(headset?(header+VisualDesign.SelectionHeight+bottom+1):0)+VisualDesign.SystemVolumeHeightFor(collapsed)+8+VisualDesign.FooterHeight;
+            Check(VisualDesign.PanelSizeFor(headset,Dpi(count)).Height==expected,"ring calculated height includes separators and the external footer");
+            using(var fixture=new Fixture()){
+                fixture.Owner.Dpi=Dpi(count);if(!headset)fixture.Owner.Headset=null;var layout=WirelessLayout.Build(fixture.Owner,0,10000);Check(layout.Size==VisualDesign.PanelSizeFor(headset,fixture.Owner.Dpi),"native and wireless ring heights agree");
+                var rows=PopupPages.Build(fixture.Owner,new PopupNavigation(),headset);Check(rows.Find(delegate(PopupControl row){return row.Id==2;}).Rect==new RectangleF(0,0,VisualDesign.PanelWidth,header),"entire ring row opens details");Check(!rows.Exists(delegate(PopupControl row){return row.Id==4||row.Id==5;}),"ring numbers belong to the detail row; refresh remains in the footer");
+                if(count==4&&!collapsed)Console.WriteLine("ring "+font+" / headset="+headset+": "+expected);
+            }
+        }
+    }
     static DpiConfig Dpi(int count=4){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("panel-design-fixture"),ActiveStage=1,TimestampUtc=DateTime.UtcNow};for(int i=0;i<count;i++)dpi.Stages.Add(new DpiStage {XDpi=400*(i+1),YDpi=400*(i+1)});return dpi;}
     static AudioReading Audio(){return new AudioReading {TimestampUtc=DateTime.UtcNow,OperationSucceeded=true,ActiveOutput="speaker",ConsoleOutputId="speaker",SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="扬声器",HeadsetAvailable=true,HeadsetId="headset",HeadsetName="耳机",MicrophoneAvailable=true,MicrophoneId="mic",MicrophoneName="麦克风",MicrophoneMuted=false,VolumeEndpointId="speaker",OutputVolumePercent=55,Devices=new AudioDeviceChoice[0]};}
     static HeadsetReading Headset(){return new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=46,ConnectionTimestampUtc=DateTime.UtcNow,BatteryTimestampUtc=DateTime.UtcNow};}
@@ -73,9 +106,10 @@ static class PanelDesignTests {
             }
         }
     }
-    static void HitGeometry(){
+    static void HitGeometry(){HitGeometry("bar");}
+    static void HitGeometry(string panelLayout){
         foreach(string font in new[]{"normal","large"})foreach(bool wireless in new[]{false,true})foreach(int count in new[]{4,5,8})foreach(bool collapsed in new[]{false,true})foreach(int audioCard in new[]{0,1,2}){
-            Mode(font,"ocean",collapsed);using(var fixture=new Fixture()){
+            Mode(font,"ocean",collapsed,panelLayout);using(var fixture=new Fixture()){
                 var owner=fixture.Owner;owner.Dpi=Dpi(count);owner.GenericReady=wireless;
                 if(audioCard!=1)owner.Headset=null;
                 if(audioCard==2)owner.Audio.Devices=new[]{new AudioDeviceChoice {Id="headset",Name="耳机",Flow=0,FormFactor=3}};
@@ -83,7 +117,7 @@ static class PanelDesignTests {
                 var layout=WirelessLayout.Build(owner,0,10000);var rows=PopupPages.Build(owner,new PopupNavigation(),VisualDesign.ShouldShowHeadset(owner.Headset),wireless?layout:null);var regions=new List<InteractionRegion>();InteractionLayout.Observer=regions.Add;
                 try{using(var image=Render(owner,wireless,false,new PanelFeedback())){}}finally{InteractionLayout.Observer=null;}
                 foreach(var row in rows){if(!(row.Id>=2&&row.Id<=5||row.Id>=10&&row.Id<18||row.Id>=100&&row.Id<=102||row.Id==200||row.Id==240||row.Id==241||row.Id==0||row.Id==1||row.DpiValue>0||row.Id>=1000&&row.Id<3000))continue;
-                    var region=regions.Find(delegate(InteractionRegion item){return item.Id==row.Id;});Check(region!=null,"drawn control exists for hit action "+row.Id);var drawn=region.Limit;if(row.Id==3||row.Id==5||row.Id==200||row.Id>=100&&row.Id<=102)drawn.Y+=wireless?layout.Cards.Find(delegate(WirelessCard card){return card.NativeHeadset||card.AudioOnly;}).Top:VisualDesign.MouseCardHeight(owner.Dpi)+VisualDesign.CardGap;
+                    var region=regions.Find(delegate(InteractionRegion item){return item.Id==row.Id;});Check(region!=null,"drawn control exists for hit action "+row.Id);var drawn=region.Limit;if(panelLayout=="bar"&&(row.Id==3||row.Id==5||row.Id==200||row.Id>=100&&row.Id<=102))drawn.Y+=wireless?layout.Cards.Find(delegate(WirelessCard card){return card.NativeHeadset||card.AudioOnly;}).Top:VisualDesign.MouseCardHeight(owner.Dpi)+VisualDesign.CardGap;
                     Check(drawn==row.Rect,"draw and hit rectangles are identical for "+row.Id+" / "+font+" / "+wireless+": "+drawn+" != "+row.Rect);
                     if(row.Enabled)Check(PopupPages.Hit(rows,new PointF(row.Rect.Left+row.Rect.Width/2,row.Rect.Top+row.Rect.Height/2))==row,"center hit resolves the drawn action");
                 }
@@ -92,10 +126,11 @@ static class PanelDesignTests {
             }
         }
     }
-    static void RenderMatrix(){
+    static void RenderMatrix(){RenderMatrix("bar");}
+    static void RenderMatrix(string panelLayout){
         foreach(string font in new[]{"normal","large"})foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true})foreach(bool headset in new[]{false,true})foreach(bool contrast in new[]{false,true}){
             VisualDesign.HighContrastOverride=contrast;
-            Mode(font,style);using(var fixture=new Fixture()){
+            Mode(font,style,false,panelLayout);using(var fixture=new Fixture()){
                 var owner=fixture.Owner;if(!headset)owner.Headset=null;
                 foreach(bool wireless in new[]{false,true}){owner.GenericReady=wireless;using(var image=Render(owner,wireless,dark,new PanelFeedback())){
                     var expected=VisualDesign.PanelSizeFor(headset,owner.Dpi);Check(image.Size==expected,"all theme/font/headset matrices use the shared panel height");
@@ -109,6 +144,42 @@ static class PanelDesignTests {
             }
         }
         VisualDesign.HighContrastOverride=false;
+    }
+    static Bitmap Gauge(BatteryView view,bool dark,bool sleeping=false){var bitmap=new Bitmap(VisualDesign.PanelWidth,VisualDesign.HeaderHeight);using(var g=Graphics.FromImage(bitmap)){g.Clear(ThemePalette.Current(dark).Card);g.SmoothingMode=SmoothingMode.AntiAlias;CompactRenderer.RingGauge(g,view,"mouse",0,dark,sleeping);}return bitmap;}
+    static void RingBoundaries(){
+        foreach(string font in new[]{"normal","large"})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true}){
+            Mode(font,"ocean",false,"ring");VisualDesign.HighContrastOverride=contrast;var bounds=Rectangle.Round(VisualDesign.BatteryRingRect(0));
+            using(var zero=Gauge(new BatteryView {Percent=0,Fresh=true},dark))using(var one=Gauge(new BatteryView {Percent=1,Fresh=true},dark))using(var two=Gauge(new BatteryView {Percent=2,Fresh=true},dark))using(var three=Gauge(new BatteryView {Percent=3,Fresh=true},dark))using(var full=Gauge(new BatteryView {Percent=100,Fresh=true},dark)){
+                Color ink=contrast?SystemColors.Highlight:ThemePalette.LevelColor(1,dark);Check(Different(zero,one)&&!Different(one,two)&&!Different(two,three),"one to three percent has a visible, stable single dot");Check(ColorPixels(one,bounds,ink)>0,"tiny ring progress uses level or system highlight ink");
+                Check(ColorPixels(full,bounds,contrast?SystemColors.Highlight:ThemePalette.LevelColor(100,dark))>ColorPixels(one,bounds,ink)*10,"100 percent is a complete ring");
+            }
+            using(var empty=Gauge(new BatteryView(),dark))using(var sleeping=Gauge(new BatteryView {Percent=85,Fresh=true,Charging=true},dark,true))Check(!Different(empty,sleeping),"sleeping paints only the base ring and muted icon, never the old value or charging badge");
+            if(!contrast)using(var stale=Gauge(new BatteryView {Percent=50,Fresh=false},dark))Check(ColorPixels(stale,bounds,ThemePalette.Current(dark).Muted)>0,"cached progress uses secondary ink");
+            var bolts=new List<RectangleF>();CompactRenderer.SymbolObserver=delegate(string icon,RectangleF rect){if(icon=="bolt")bolts.Add(rect);};try{using(var charged=Gauge(new BatteryView {Percent=50,Fresh=true,Charging=true},dark)){} }finally{CompactRenderer.SymbolObserver=null;}
+            Check(bolts.Count==1&&VisualDesign.RingChargeBadgeRect(0).Size==new SizeF(12,12)&&VisualDesign.RingChargeBadgeRect(0).Contains(bolts[0]),"explicit charging has a twelve-pixel tangent badge");
+        }
+        VisualDesign.HighContrastOverride=false;
+    }
+    static void RingNamesAndTypography(){
+        foreach(string font in new[]{"normal","large"})foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
+            Mode(font,"ocean",false,"ring");using(var fixture=new Fixture())using(var host=new Control()){
+                var owner=fixture.Owner;owner.GenericReady=true;owner.NativeMousePresent=false;owner.Headset=null;var handle=host.Handle;
+                foreach(int? percent in new int?[]{0,1,2,3,50,100,null})foreach(bool fresh in new[]{false,true})foreach(bool sleeping in new[]{false,true}){
+                    var device=new WirelessDevice {Id="ring-boundary",Name="非常长的设备名称用于验证省略而不是覆盖读数",Kind="mouse",Percent=percent,Fresh=fresh,Online=fresh,Approximate=percent==100,ConnectionState=sleeping?"sleeping":fresh?"connected":"unconfirmed",MeasurementState=sleeping?"sleeping":"current",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),Charging=fresh&&percent==100,ChargingCheckedAtUtc=DateTime.UtcNow.ToString("o")};owner.WirelessDevices=new[]{device};
+                    var labels=new List<DrawnLabel>();var icons=new List<RectangleF>();CompactRenderer.LabelObserver=labels.Add;CompactRenderer.SymbolObserver=delegate(string icon,RectangleF rect){if(icon=="chevron")icons.Add(rect);};
+                    try{using(var image=Render(owner,true,false,new PanelFeedback {HoverAction=1000},scale)){} }finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;}
+                    var rows=PopupPages.Build(owner,new PopupNavigation(),false);var row=rows.Find(delegate(PopupControl item){return item.Id==1000;});var tree=new PopupAccessibility(host,delegate{return rows;},delegate{return -1;},null,delegate{return 1f;},null,null);string name=tree.GetChild(rows.IndexOf(row)).Name;
+                    string expectedState=sleeping?"休眠":!percent.HasValue?"--":fresh&&percent==100?"充电中":!fresh?"待确认":fresh&&percent<20?"电量低":"%";
+                    Check(name.Contains(device.Name)&&name.Contains("打开详情")&&name.Contains(expectedState),"ring spoken name includes battery state: "+name);
+                    string text=sleeping?"休眠":percent.HasValue?(percent==100?"≈":"")+percent.Value:"--";var number=labels.Find(delegate(DrawnLabel label){return label.Text==text;});Check(number!=null,"ring number or placeholder is visible");
+                    using(var bitmap=new Bitmap(1,1))using(var g=Graphics.FromImage(bitmap)){
+                        g.ScaleTransform(scale,scale);var ink=InteractionLayout.LabelBounds(g,text,number.LogicalRect,number.FontSize,true,StringAlignment.Far,StringTrimming.None);Check(ink.Right<=VisualDesign.PanelWidth-12+.01f,"ring text stays inside the right padding");
+                        var title=labels.Find(delegate(DrawnLabel label){return label.Text==device.Name;});Check(title!=null&&title.LogicalRect.Right<=icons[0].Left,"name truncates before the revealed chevron and number");
+                    }
+                    Check(icons.Count==1&&icons[0].Size==new SizeF(7,10),"detail chevron appears on hover only");
+                }
+            }
+        }
     }
     static void ContrastAndShadows(){
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
@@ -163,13 +234,15 @@ static class PanelDesignTests {
         // a fully covered exact-color pixel. The faint red surface stays below 40.
         int result=0;for(int y=area.Top;y<area.Bottom;y++)for(int x=area.Left;x<area.Right;x++){var pixel=image.GetPixel(x,y);if(pixel.R-pixel.G>40&&pixel.R-pixel.B>40)result++;}return result;
     }
-    static void FooterPaging(){
-        foreach(string font in new[]{"normal","large"}){Mode(font);using(var fixture=new Fixture()){
+    static void FooterPaging(){FooterPaging("bar");}
+    static void FooterPaging(string panelLayout){
+        foreach(string font in new[]{"normal","large"}){Mode(font,"ocean",false,panelLayout);using(var fixture=new Fixture()){
             var owner=fixture.Owner;owner.NativeMousePresent=false;owner.Headset=null;owner.GenericReady=true;owner.WirelessDevices=new[]{new WirelessDevice {Id="one",Name="第一台",Kind="keyboard"},new WirelessDevice {Id="two",Name="第二台",Kind="mouse"},new WirelessDevice {Id="three",Name="第三台",Kind="gamepad"}};
             foreach(int offset in new[]{0,1}){
-                var layout=WirelessLayout.Build(owner,offset,VisualDesign.GenericCardHeight+VisualDesign.CardGap+VisualDesign.SystemVolumeHeight+VisualDesign.FooterHeight);var rows=PopupPages.Build(owner,new PopupNavigation(),false,layout);var regions=new List<InteractionRegion>();InteractionLayout.Observer=regions.Add;
+                int maximum=VisualDesign.GenericCardHeight+VisualDesign.DeviceGap+VisualDesign.SystemVolumeHeight+VisualDesign.MainFooterGap+VisualDesign.FooterHeight;var layout=WirelessLayout.Build(owner,offset,maximum);var rows=PopupPages.Build(owner,new PopupNavigation(),false,layout);var regions=new List<InteractionRegion>();InteractionLayout.Observer=regions.Add;
                 try{using(var image=new Bitmap(layout.Size.Width,layout.Size.Height))using(var g=Graphics.FromImage(image))CompactRenderer.PaintWireless(g,owner,layout,false,new PanelFeedback());}finally{InteractionLayout.Observer=null;}
                 Check(layout.Paged&&layout.Cards.Count==1,"bounded device pages reserve the volume and footer");
+                Check(layout.Size.Height<=maximum,"paged device panel stays within its available height");
                 foreach(int id in new[]{0,1,902,903}){var row=rows.Find(delegate(PopupControl item){return item.Id==id;});var region=regions.Find(delegate(InteractionRegion item){return item.Id==id;});Check(row!=null&&region!=null&&row.Rect==region.Limit&&row.Rect.Size==new SizeF(28,28),"pagination, refresh and more use their actual 28x28 drawing rectangles");}
             }
         }}
@@ -224,14 +297,18 @@ static class PanelDesignTests {
             }
         }}
     }
-    static void RenderPreviews(string directory){
+    static void RenderPreviews(string directory,string panelLayout="bar"){
         Directory.CreateDirectory(directory);const int scale=2;
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
             var frames=new List<Bitmap>();
             try{
                 foreach(string font in new[]{"normal","large"}){
-                    Mode(font,style);using(var fixture=new Fixture()){
+                    Mode(font,style,false,panelLayout);using(var fixture=new Fixture()){
                         var owner=fixture.Owner;frames.Add(Render(owner,false,dark,new PanelFeedback(),scale));
+                        if(style=="ocean"){
+                            string stem=Path.Combine(directory,"main-panel-"+panelLayout+"-ocean-"+(dark?"dark":"light")+"-"+font);
+                            frames[frames.Count-1].Save(stem+"-headset.png",ImageFormat.Png);var ear=owner.Headset;owner.Headset=null;using(var noHeadset=Render(owner,false,dark,new PanelFeedback(),scale))noHeadset.Save(stem+"-no-headset.png",ImageFormat.Png);owner.Headset=ear;
+                        }
                         owner.GenericReady=true;owner.Audio.MicrophoneMuted=true;
                         owner.WirelessDevices=new[]{
                             new WirelessDevice {Id="charging-keyboard",Name="VGN V98 Pro V3",Kind="keyboard",Transport="2.4G",Percent=72,Fresh=true,Online=true,ConnectionState="connected",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),Charging=true,ChargingCheckedAtUtc=DateTime.UtcNow.ToString("o")},
@@ -246,15 +323,19 @@ static class PanelDesignTests {
                 int width=0,height=0;foreach(var frame in frames){width+=frame.Width+32;height=Math.Max(height,frame.Height);}
                 using(var sheet=new Bitmap(width+32,height+112,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(sheet)){
                     g.Clear(dark?Color.FromArgb(27,34,48):Color.FromArgb(237,241,247));
-                    CompactRenderer.DrawLabel(g,ThemePalette.Name(style)+" / "+(dark?"深色":"浅色")+"  ·  标准原生 / 标准多设备 / 较大原生 / 较大多设备",new RectangleF(32,8,width-32,56),24,true,dark?Color.White:Color.FromArgb(27,36,48),StringAlignment.Near);
+                    CompactRenderer.DrawLabel(g,PanelLayouts.Name(panelLayout)+" / "+ThemePalette.Name(style)+" / "+(dark?"深色":"浅色")+"  ·  标准原生 / 标准多设备 / 较大原生 / 较大多设备",new RectangleF(32,8,width-32,56),24,true,dark?Color.White:Color.FromArgb(27,36,48),StringAlignment.Near);
                     int x=32;foreach(var frame in frames){g.DrawImageUnscaled(frame,x,80);x+=frame.Width+32;}
-                    string path=Path.Combine(directory,"main-panel-a-"+style+(dark?"-dark":"-light")+".png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);
+                    string path=Path.Combine(directory,"main-panel-"+panelLayout+"-"+style+(dark?"-dark":"-light")+".png");sheet.Save(path,ImageFormat.Png);Console.WriteLine(path);
                 }
             }finally{foreach(var frame in frames)frame.Dispose();}
         }
     }
     [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{
-        if(args.Length==2&&args[0]=="--render"){VisualDesign.HighContrastOverride=false;RenderPreviews(args[1]);return 0;}
+        if(args.Length>=2&&args[0]=="--render"){VisualDesign.HighContrastOverride=false;foreach(string layout in args.Length>2?new[]{args[2]}:new[]{"ring","bar"})RenderPreviews(args[1],layout);return 0;}
+        Run("layout defaults, migration, persistence and normalization",LayoutSettings);Run("ring geometry, full-row details and calculated heights",RingGeometry);
+        Run("ring draw and hit geometry",delegate{HitGeometry("ring");});Run("ring color, font, headset, contrast and render path matrix",delegate{RenderMatrix("ring");});Run("ring tiny, full, cached, sleeping and charging boundaries",RingBoundaries);Run("ring state accessibility and typography at five DPI scales",RingNamesAndTypography);
+        Run("ring paging reserves volume and the external footer",delegate{FooterPaging("ring");});
+        if(args.Length==1&&args[0]=="--ring")return failures==0?0:1;
         VisualDesign.HighContrastOverride=false;Mode("normal");Run("battery bar proportions and bounds",BarGeometry);Run("battery digits and percent baselines at five DPI scales",BatteryTypography);Run("shared draw and hit geometry",HitGeometry);Run("four themes x light/dark x fonts x headset x high contrast x render paths",RenderMatrix);Run("card shadows and high contrast",ContrastAndShadows);Run("icon-only microphone accessible state",MicrophoneNames);Run("microphone pending and unavailable ink",MicrophonePresentation);Run("floating segmented controls",FloatingSegments);Run("pending hints, press offset and segment focus",PendingSegments);Run("plain footer and single-row volume",PlainFooterAndVolume);Run("bounded device page footer geometry",FooterPaging);
         Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices and audio only");return failures==0?0:1;
     }finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;InteractionLayout.Observer=null;VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}}

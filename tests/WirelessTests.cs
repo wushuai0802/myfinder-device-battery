@@ -103,7 +103,7 @@ static class WirelessTests {
         }
         var current=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=current.GetValue(null);TrayContext owner=null;
         try {
-            NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();current.SetValue(null,new AudioBindings {VolumeCollapsed=false});
+            NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();current.SetValue(null,new AudioBindings {PanelLayout="bar",VolumeCollapsed=false});
             string output=Path.Combine(Path.GetFullPath(args[0]),"wireless-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(output);
             Check(GenericBatteryWorker.Parse("{broken").Error!=null,"invalid worker output cannot replace verified data");
             string json="{\"schema\":1,\"devices\":[{\"id\":\"device-000000000000000000000001\",\"name\":\"Keyboard\\nInjected\",\"kind\":\"keyboard\",\"percent\":42,\"online\":true,\"fresh\":true,\"confirmedAtUtc\":\""+DateTime.UtcNow.ToString("o")+"\"}]}";

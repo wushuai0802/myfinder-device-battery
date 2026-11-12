@@ -104,7 +104,7 @@ static class UiMenusTests {
     }
     static void PreferenceOrder(){
         using(var f=new Fixture()){
-            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preferences include theme style, font size and the requested noninteractive groups");
+            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preferences include theme style, layout, font size and the requested noninteractive groups");
             f.Page(PopupPage.Preferences);var toggle=f.Find("自动检查反馈回复");Check(toggle.Id==226&&toggle.Checked,"feedback checking defaults on in the settings page");f.Activate(toggle);
             Check(!DeviceSettings.Current.CheckFeedbackReplies&&f.Saves==1,"feedback checking toggle uses the existing configuration writer");
             var beta=f.Find("提醒测试版更新");Check(beta.Id==227&&beta.Checked,"beta update reminders default on in the settings page");f.Activate(beta);
@@ -165,6 +165,27 @@ static class UiMenusTests {
                 }finally{CompactRenderer.LabelObserver=null;}
             }
             var reset=DeviceSettings.Current;reset.FontSize="normal";DeviceSettings.UseTransientConfiguration(reset);
+        }
+    }
+    static void PanelLayoutPreferences(){
+        foreach(string font in new[]{"normal","large"})foreach(bool wireless in new[]{false,true})foreach(bool headset in new[]{false,true})using(var f=new Fixture()){
+            var pref=DeviceSettings.Current;pref.FontSize=font;pref.VolumeCollapsed=false;DeviceSettings.UseTransientConfiguration(pref);
+            f.Owner.NativeMousePresent=true;f.Owner.GenericReady=wireless;f.Owner.Current=new BatteryReading {Percent=85,TimestampUtc=DateTime.UtcNow};f.Owner.Dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("ring-choice"),ActiveStage=0,TimestampUtc=DateTime.UtcNow};foreach(int value in new[]{400,800,1600,3200})f.Owner.Dpi.Stages.Add(new DpiStage {XDpi=value,YDpi=value});
+            f.Owner.Headset=headset?new HeadsetReading {Connected=true,ConnectionVerified=true,Percent=50,BatteryTimestampUtc=DateTime.UtcNow}:null;f.Owner.Audio=new AudioReading {Devices=new AudioDeviceChoice[0]};f.Popup.SyncDevices();
+            f.Page(PopupPage.Preferences);var row=f.Find("布局");Check(row.Id==229&&row.Value=="环形","new and legacy defaults are shown as ring in preferences");f.Activate(row);Check(PopupPages.Title(f.Navigation)=="布局"&&Texts(f.Controls())=="环形|电量条|网格","layout chooser has exactly the three text choices");
+            int saves=f.Saves;
+            foreach(int index in new[]{1,0,2}){
+                f.Activate(f.ById(470+index));Check(f.Saves==++saves&&DeviceSettings.Current.PanelLayout==PanelLayouts.Keys[index],"choosing a layout saves exactly once through the existing configuration writer");
+                Check(f.ById(470+index).Selected&&Selected(f.Controls())==1,"layout selection is effective immediately and retains its check mark");
+                f.Page(PopupPage.Main);var expected=wireless?WirelessLayout.Build(f.Owner,0,10000).Size:VisualDesign.PanelSizeFor(headset,f.Owner.Dpi);float scale=(float)Field(f.Popup,"dpiScale");Check(f.Popup.ClientSize==UiState.ScaleSize(expected,scale),"switching layout updates the actual popup height: "+font+" / "+wireless+" / "+headset+" / "+PanelLayouts.Keys[index]);
+                Call(f.Popup,"UpdateFallbackRegion");Check(f.Popup.Region.IsVisible(VisualDesign.PanelWidth/2f*scale,(VisualDesign.MouseCardHeight(f.Owner.Dpi)+.5f)*scale)==VisualDesign.RingLayout,"fallback window uses a continuous ring panel and preserves the bar's gaps");
+                var controls=f.Controls();var name=controls.Find(delegate(PopupControl item){return item.Id==2;});f.Activate(name);Check(f.Navigation.Page==PopupPage.Mouse,"device row still opens the existing detail page");
+                f.Page(PopupPage.ChoosePreference);f.Navigation.PreferenceAction=229;
+            }
+            var grid=WirelessLayout.Build(f.Owner,0,10000).Size;pref=DeviceSettings.Current;pref.PanelLayout="ring";DeviceSettings.UseTransientConfiguration(pref);Check(WirelessLayout.Build(f.Owner,0,10000).Size==grid,"phase 2 grid dispatch deliberately uses ring geometry");
+            f.Page(PopupPage.Main);f.Popup.SyncDevices();pref=DeviceSettings.Current;pref.ReducedMotion=false;pref.PanelLayout="bar";DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
+            if(!PopupPages.Reduced){Check(((System.Windows.Forms.Timer)Field(f.Popup,"pageAnimation")).Enabled,"layout height change uses the existing animation timer");Pump(delegate{return !((System.Windows.Forms.Timer)Field(f.Popup,"pageAnimation")).Enabled;});}
+            var settled=wireless?WirelessLayout.Build(f.Owner,0,10000).Size:VisualDesign.PanelSizeFor(headset,f.Owner.Dpi);Check(f.Popup.ClientSize==UiState.ScaleSize(settled,(float)Field(f.Popup,"dpiScale")),"animated layout change settles at the calculated height");
         }
     }
     static void HelpActions(){
@@ -405,6 +426,7 @@ static class UiMenusTests {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=cached.GetValue(null);
         try{
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
+            Run("layout preferences, immediate save and popup heights",PanelLayoutPreferences);
             Run("more-options rows",MoreRows);Run("preference order",PreferenceOrder);Run("font size preferences, large layout and 96 DPI integer coordinates",FontSizePreferencesAndLayout);Run("help actions and routes",HelpActions);Run("empty-card entry",EmptyCard);Run("hidden empty-card recovery",HiddenEmptyCard);Run("empty reasons and wrapped bounds",EmptyReasonsAndBounds);Run("hidden detail access",HiddenDetails);Run("tray rules and fixed devices",TrayRulesAndPins);Run("hidden fixed devices",HiddenFixedDevices);Run("native pin consistency",NativePins);Run("tray pagination and identity",TrayPaginationAndIdentity);Run("new and legacy volume defaults",LegacyVolumeDefaults);Run("help accessibility and bounds",HelpAccessibilityAndBounds);
             Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices, no real clipboard/browser/settings writes");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;cached.SetValue(null,previous);}

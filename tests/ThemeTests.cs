@@ -81,7 +81,7 @@ static class ThemeTests {
     sealed class Fixture:IDisposable {
         internal readonly TrayContext Owner;internal readonly Details Popup;internal readonly PopupNavigation Nav;internal int Saves;
         internal Fixture(string style="ocean"){
-            var pref=new AudioBindings {ReducedMotion=true,RememberReadings=false,VolumeCollapsed=false};if(typeof(AudioBindings).GetField("ThemeStyle")!=null)Style(pref,style);DeviceSettings.UseTransientConfiguration(pref);
+            var pref=new AudioBindings {PanelLayout="bar",ReducedMotion=true,RememberReadings=false,VolumeCollapsed=false};if(typeof(AudioBindings).GetField("ThemeStyle")!=null)Style(pref,style);DeviceSettings.UseTransientConfiguration(pref);
             Owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=new BatteryReading {Percent=76,TimestampUtc=DateTime.UtcNow},Dpi=Dpi()};},delegate(int stage){throw new Exception("No device writes");},null,Audio,false,null,null,null,delegate{return false;},null,null,null,null,
                 delegate(AudioBindings settings){Saves++;DeviceSettings.SaveBindings(Path.Combine(output,"theme-choice.json"),settings);DeviceSettings.UseTransientConfiguration(settings);});
             DateTime until=DateTime.UtcNow.AddSeconds(5);while((Owner.IsRefreshing||Owner.IsAudioBusy||Owner.Audio==null)&&DateTime.UtcNow<until){Application.DoEvents();Thread.Sleep(2);}Check(!Owner.IsRefreshing&&!Owner.IsAudioBusy&&Owner.Audio!=null,"fake readers settle");
@@ -109,7 +109,7 @@ static class ThemeTests {
         using(var f=new Fixture()){
             var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=100},false);
             string actual=String.Join("|",rows.FindAll(delegate(PopupControl row){return row.Id!=6;}).ConvertAll(delegate(PopupControl row){return row.Text;}).ToArray());
-            Check(actual=="显示|外观|配色|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preference sections and order");
+            Check(actual=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preference sections and order");
             foreach(string name in new[]{"显示","提醒","数据","更新"}){
                 var row=rows.Find(delegate(PopupControl c){return c.Text==name;});Check(row.Information&&row.Id<0&&row.Rect.Height>=23&&row.Rect.Height<=25,"section is 24px information");Check(PopupPages.Hit(rows,new PointF(row.Rect.X+10,row.Rect.Y+10))==null&&PopupPages.FindStable(rows,row.StableKey)==null,"section cannot be hit or focused");
             }
@@ -119,7 +119,7 @@ static class ThemeTests {
                     rows=PopupPages.Build(f.Owner,nav,false);var size=PopupPages.SizeFor(rows);float bottom=0;foreach(var row in rows){Check(row.Rect.Bottom<=size.Height&&row.Rect.Top>=bottom,"paged rows fit without overlap");bottom=row.Rect.Bottom;if(row.Id!=6&&row.Id!=7&&row.Id!=8)seen.Add(row.Text);}
                     var next=rows.Find(delegate(PopupControl c){return c.Id==8;});if(next==null)break;nav.Offset+=count;
                 }
-                Check(seen.Count==18,"every grouped preference remains reachable at "+count);
+                Check(seen.Count==19,"every grouped preference remains reachable at "+count);
             }
         }
     }
@@ -133,11 +133,11 @@ static class ThemeTests {
         int count=0;for(int y=(int)(area.Top*scale);y<(int)(area.Bottom*scale);y++)for(int x=(int)(area.Left*scale);x<(int)(area.Right*scale);x++)if(match(image.GetPixel(x,y)))count++;return count;
     }
     static void PreferencePages(){
-        const string first="显示|外观|配色|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值",second="数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复";
+        const string first="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值",second="数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复";
         using(var f=new Fixture()){
             var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=7};var rows=PopupPages.Build(f.Owner,nav,false);
-            Check(PageTexts(rows)==first,"first preferences page keeps all seven display/reminder settings together");
-            Check(rows.FindAll(delegate(PopupControl row){return row.Id>=200;}).Count==7&&!rows.Exists(delegate(PopupControl row){return row.Detail==HistoryNotice;}),"first page has seven settings and no history notice");
+            Check(PageTexts(rows)==first,"first preferences page keeps all eight display/reminder settings together");
+            Check(rows.FindAll(delegate(PopupControl row){return row.Id>=200;}).Count==8&&!rows.Exists(delegate(PopupControl row){return row.Detail==HistoryNotice;}),"first page has eight settings and no history notice");
             using(var image=RenderPanel(PopupPages.SizeFor(rows),2,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,false,-1,-1,-1);})){
                 var footer=new RectangleF(13,image.Height/2-25,234,20);Check(Pixels(image,footer,2,delegate(Color c){return c.ToArgb()!=ThemePalette.Current(false).Card.ToArgb();})==0,"first page footer does not repeat the data notice");
             }
@@ -157,7 +157,7 @@ static class ThemeTests {
                     foreach(float scale in new[]{1f,1.25f,1.5f,2f})Check(UiState.ScaleSize(size,scale).Height<=Math.Ceiling(limit*scale),"preferences also fit after DPI scaling");
                     var next=rows.Find(delegate(PopupControl row){return row.Id==8;});if(next==null)break;nav.Offset=PageOffset(rows,8,nav.Offset+nav.VisibleChoices);Check(pages<20,"bounded preferences finish");
                 }
-                Check(seen.Count==14,"all fourteen settings remain reachable with height "+limit);Check(limit>=groupHeight?pages==2:pages>2,"group paging is used only when both full pages fit");
+                Check(seen.Count==15,"all fifteen settings remain reachable with height "+limit);Check(limit>=groupHeight?pages==2:pages>2,"group paging is used only when both full pages fit");
                 while(nav.Offset>0){rows=PopupPages.Build(f.Owner,nav,false);int before=nav.Offset;nav.Offset=PageOffset(rows,7,Math.Max(0,before-nav.VisibleChoices));Check(nav.Offset<before,"bounded previous page always moves backwards");}
             }
             f.Nav.Page=PopupPage.Preferences;rows=f.Rows();if(PageTexts(rows)==first){f.Activate(rows.Find(delegate(PopupControl row){return row.Id==8;}));Check(PageTexts(f.Rows())==second,"real popup action follows the group page boundary");f.Activate(f.Rows().Find(delegate(PopupControl row){return row.Id==7;}));Check(PageTexts(f.Rows())==first,"real popup previous action restores first groups");}
@@ -283,7 +283,7 @@ static class ThemeTests {
         }
     }
     static Bitmap Card(int percent,bool fresh,bool dark,bool wireless,string style="ocean",int threshold=20,bool headset=false){
-        var pref=new AudioBindings {VolumeCollapsed=false,RememberReadings=false,WarningThreshold=threshold};Style(pref,style);DeviceSettings.UseTransientConfiguration(pref);
+        var pref=new AudioBindings {PanelLayout="bar",VolumeCollapsed=false,RememberReadings=false,WarningThreshold=threshold};Style(pref,style);DeviceSettings.UseTransientConfiguration(pref);
         var image=new Bitmap(260,400);using(var g=Graphics.FromImage(image)){
             g.Clear(Color.Transparent);
             if(wireless)using(var f=new Fixture(style)){DeviceSettings.UseTransientConfiguration(pref);f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];f.Owner.WirelessDevices=new[]{Device("theme-low","电量测试",percent,fresh)};CompactRenderer.PaintWireless(g,f.Owner,WirelessLayout.Build(f.Owner,0,1000),dark,new PanelFeedback());}

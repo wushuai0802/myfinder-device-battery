@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly,[switch]$UpdateBadgesOnly,[switch]$MainPanelsOnly)
+param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly,[switch]$UpdateBadgesOnly,[switch]$MainPanelsOnly,[ValidateSet('all','ring','bar','grid')][string]$PanelLayout='all')
 $ErrorActionPreference='Stop'
 if($InteractionsOnly -and $DialogsOnly){throw 'InteractionsOnly and DialogsOnly cannot be combined.'}
 if($UpdateBadgesOnly -and ($InteractionsOnly -or $DialogsOnly)){throw 'UpdateBadgesOnly cannot be combined with other modes.'}
@@ -38,7 +38,7 @@ if(-not $DialogsOnly){
 $panelExecutable=Join-Path $compileDirectory 'RenderMainPanels.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:PanelDesignTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$panelExecutable" $sources (Join-Path $PSScriptRoot 'PanelDesignTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Main panel preview compilation failed.'}
-& $panelExecutable --render $previewOutput
+if($PanelLayout -eq 'all'){& $panelExecutable --render $previewOutput}else{& $panelExecutable --render $previewOutput $PanelLayout}
 if($LASTEXITCODE -ne 0){throw 'Main panel preview rendering failed.'}
 if($MainPanelsOnly){return}
 $interactionExecutable=Join-Path $compileDirectory 'RenderInteractions.exe'

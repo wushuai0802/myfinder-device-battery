@@ -27,7 +27,7 @@ static class WirelessDpiUiTests {
         return new WirelessDevice {Id="device-"+suffix.PadLeft(24,'0'),Name="Fixture GPW "+suffix,Kind="mouse",Percent=78,Provider="logitech",Transport="2.4G",Online=true,Fresh=true,ConnectionState="connected",SourceQuality="verified",MeasurementState="measured",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),Dpi=new WirelessDpi {Supported=true,CanSet=true,Current=800,Stages=stages??new[]{400,800,1600,3200},StageSource=source,CheckedAtUtc=DateTime.UtcNow.ToString("o"),TargetToken=new string(suffix[0],64)}};
     }
     static TrayContext Owner() {
-        DeviceSettings.UseTransientConfiguration(new AudioBindings {RememberReadings=false,Theme="light",ReducedMotion=true,LowBatteryNotifications=false});
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {PanelLayout="bar",RememberReadings=false,Theme="light",ReducedMotion=true,LowBatteryNotifications=false});
         var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=battery?new BatteryReading {Percent=80,TimestampUtc=DateTime.UtcNow}:null,Dpi=NativeDpi()};},
             delegate(int stage){throw new Exception("Unexpected native DPI write");},delegate{return new HeadsetReading {Connected=false,ConnectionVerified=true};},delegate{return new AudioReading {OperationSucceeded=true,Devices=new AudioDeviceChoice[0]};},false,
             delegate(string id){throw new Exception("Unexpected audio write");},delegate(bool mute){throw new Exception("Unexpected microphone write");},delegate(string id,int value){throw new Exception("Unexpected volume write");},delegate{return false;});

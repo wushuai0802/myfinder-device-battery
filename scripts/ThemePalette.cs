@@ -59,5 +59,6 @@ namespace AtkBatteryTray {
         internal Color SegmentBorder {get{return VisualDesign.HighContrast?Border:PanelBorder;}}
         internal Color SegmentHover {get{return VisualDesign.HighContrast?Selected:Color.FromArgb(dark?15:10,dark?Color.White:Color.Black);}}
         internal Color Charging {get{return VisualDesign.HighContrast?Foreground:LevelColor(100,dark);}}
+        internal Color Tertiary {get{return VisualDesign.HighContrast?SystemColors.GrayText:Blend(Card,Muted,190);}}
     }
 }

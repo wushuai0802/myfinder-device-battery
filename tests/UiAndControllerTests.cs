@@ -45,7 +45,7 @@ static class UiAndControllerTests {
         try {
             NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
             string output=Path.Combine(Path.GetFullPath(args[0]),"ui-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(output);
-            cached.SetValue(null,new AudioBindings {VolumeCollapsed=false});
+            cached.SetValue(null,new AudioBindings {PanelLayout="bar",VolumeCollapsed=false});
             var now=DateTime.UtcNow;
             var mouse=new BatteryReading {Percent=85,TimestampUtc=now};
             var headset=new HeadsetReading {Connected=true,ConnectionVerified=true,ReceiverPresent=true,Percent=46,Charging=false,ConnectionTimestampUtc=now,BatteryTimestampUtc=now,ChargingTimestampUtc=now};
