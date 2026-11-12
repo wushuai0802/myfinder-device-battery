@@ -1,0 +1,1 @@
+[assembly:System.Reflection.AssemblyInformationalVersion("1.3.11-beta.5")]

@@ -1,0 +1,18 @@
+2026-11-12T13:48:06.3658081Z success 1.3.6 
+2026-11-12T13:48:06.7900262Z success 1.3.6 
+2026-11-12T13:48:07.1917708Z success 1.3.6 
+2026-11-12T13:48:07.6310887Z success 1.3.6 
+2026-11-12T13:48:08.1107740Z success 1.3.6 
+2026-11-12T13:48:08.5613501Z success 1.3.6 
+2026-11-12T13:48:08.9991393Z success 1.3.6 
+2026-11-12T13:48:09.4696255Z success 1.3.6 
+2026-11-12T13:48:09.9078191Z failed 1.3.6 fixture mid-install failure
+2026-11-12T13:48:10.3473796Z failed 1.3.6 fixture late shortcut failure
+2026-11-12T13:48:10.7838866Z failed 1.3.6 fixture late shortcut failure
+2026-11-12T13:48:11.0887536Z failed 1.3.6 Timed out waiting for the application to exit normally; no installation was attempted.
+2026-11-12T13:48:12.4013989Z failed 1.3.6 Package file is missing or changed: engine/server.py
+2026-11-12T13:48:12.7453786Z failed 1.3.6 fixture hash validation failure
+2026-11-12T13:48:12.9919539Z failed 1.3.6 fixture manifest validation failure
+2026-11-12T13:48:13.2333842Z failed 1.3.6 fixture receipt validation failure
+2026-11-12T13:48:13.4819719Z failed 1.3.6 fixture manifest validation failure
+2026-11-12T13:48:13.4885700Z failed 1.3.6 fixture manifest validation failure Recovery restart failed: fixture launch failure

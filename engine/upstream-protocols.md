@@ -3981,6 +3981,53 @@ charging/sleep/cold-start/reconnect or official-software coexistence were
 validated. Sources, exact byte/line anchors, descriptor attachment hash and
 remaining hardware acceptance are recorded in `docs/zhuaudio-zg4.md`.
 
+### ROG Delta II headset candidate (0B05:1AFA)
+
+Independent grade-C candidate, pending this project's hardware validation.
+Protocol facts only: [dvalfrid/rigstats](https://github.com/dvalfrid/rigstats)
+(MIT), `sensor-sidecar/Control/Lighting/AsusHeadsetDevice.cs` and
+`Control/Lighting/Battery.cs`, whose Delta II read on its 2.4 GHz dongle is
+verified on hardware, plus the report layout recorded in
+[mbekkelund/rog-delta-ii issue #1](https://github.com/mbekkelund/rog-delta-ii/issues/1)
+(MIT). No upstream implementation is copied, imported or executed, and the
+existing `asus.py` mouse reader is unchanged.
+
+ASUS GearLink "pattern 2" frames use report ID `0xCC` on the vendor collection
+`FF00:0001`; after the ID a frame is `12 <key> 00 00 <data>`, where `0x12` is a
+get. Battery is key `07`, charging key `08`:
+
+| Purpose | Request (ID included) | Reply | Reading |
+| --- | --- | --- | --- |
+| Battery | `CC 12 07 00 00`, zeros to the proven length | `CC 12 07 ...` | byte 6, `1..100` |
+| Charging | `CC 12 08 00 00`, zeros to the proven length | `CC 12 08 ...` | byte 5 `== 1` |
+
+Byte indexes include the report ID, matching the reference. The dongle also
+pushes unrelated `CC 12 ..` reports (for example `12 09` and link state
+`12 00`); only a reply that repeats the key just asked for is accepted, and
+other frames are skipped within the read limit.
+
+Before a handle opens, require exact VID:PID `0B05:1AFA`, exact collection
+`FF00:0001`, and exactly one such collection inside a proven USB parent;
+ambiguity sends nothing. Input and Output report `CC` lengths come from the
+existing per-report byte-array caps proof, with the established raw-descriptor
+fallback only for a direction caps could not prove; a maximum alone cannot
+authorize I/O. `FF13:0001` and `000C:0001` are other collections and are never
+fallbacks. Only `0B05:1AFA` is enabled: the GearLink schema's `1D41`, `1E6B`,
+`1B82` and `1B84` are not inferred from a nearby PID or a product name.
+
+Each poll sends the two frames once, zero-filled to the proven output length,
+and both reads share a two-second deadline with a bounded read count; there is
+no resend and no drain. `FF AA`, an all-zero frame, a percentage above 100, a
+missing battery reply or silence keeps the previous history without a new
+measurement. Zero percent without a charging flag is standby, not an empty
+battery. A missing charging reply leaves charging unknown instead of claiming
+`false`. No lighting, sidetone, EQ, microphone, pairing, reset or firmware
+command exists in this reader. Cold start, sleep/off, low battery, charging
+transitions and official-software coexistence remain unconfirmed; host
+acceptance times are not a device sample clock, and synthetic fixtures are not
+hardware acceptance.
+
+
 ### Logitech (more HID++ 2.0 devices and G-series headsets)
 
 **Connection:** Lightspeed, Unifying or Bolt receiver

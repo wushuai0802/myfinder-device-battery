@@ -328,6 +328,20 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = all(info[key] is not None and info[key].get("3") == 64
                                     for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x0B05, 0x1AFA, 0xFF00, 0x0001):
+                # Delta II headset candidate: access-0 metadata only. Existing
+                # strict byte-array proof per report ID; the raw descriptor is
+                # read only through the established fallback for a missing
+                # direction. No device command is sent during discovery.
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                for direction in ("input", "output"):
+                    info[direction + "_report_proof"] = (
+                        "caps" if info[direction + "_report_sizes"] is not None else "failed")
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = all(info.get(key) is not None and info[key].get("204") is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
                     0x3654, 0x5055, 0xFF05, 0x0001):
                 # #459's fixed-Usage Data,Array, CE input / CD output. This
                 # exact opt-in never touches either FF02 or reads HID reports.

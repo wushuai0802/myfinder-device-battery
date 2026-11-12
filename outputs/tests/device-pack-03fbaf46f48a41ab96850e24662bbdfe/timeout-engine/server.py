@@ -1,0 +1,1 @@
+# Offline fake; never imports or probes hardware.

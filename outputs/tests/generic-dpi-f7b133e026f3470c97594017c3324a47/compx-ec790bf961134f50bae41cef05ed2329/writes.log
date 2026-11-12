@@ -1,0 +1,2 @@
+{"command":"set_dpi","requestId":2,"generation":1,"deviceId":"device-000000000000000000000001","dpi":800,"targetToken":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedDpi":400}
+{"command":"set_dpi","requestId":3,"generation":1,"deviceId":"device-000000000000000000000001","dpi":400,"targetToken":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedDpi":800}

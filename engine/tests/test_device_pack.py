@@ -60,7 +60,10 @@ def fake_razer(inventory, devices):
 
 class ValidationTests(unittest.TestCase):
     def test_disable_scope_matches_engine_brand_providers(self):
-        self.assertEqual(BRAND_PROVIDERS, {name for name, _ in server.PROVIDERS} - {"bluetooth", "xinput"})
+        # System readers (Bluetooth, XInput, the Sony serial reader) have no HID
+        # inventory to select, so only the remaining providers are pack targets.
+        self.assertEqual(BRAND_PROVIDERS,
+                         {name for name, _ in server.PROVIDERS} - server.SYSTEM_PROVIDERS)
 
     def assert_rejected(self, data):
         result = pack(data)

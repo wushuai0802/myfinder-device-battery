@@ -1,0 +1,2 @@
+builtin
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\encoding-packs-False\staging\device-pack-v1-1.json

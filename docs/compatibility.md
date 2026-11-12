@@ -98,6 +98,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | Razer Barracuda Pro | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | ASUS ROG / TUF 已列明鼠标 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | ROG OMNI 接收器（鼠标） | mouse | C | 协议已接入，待本项目实机验证；只读候选，待实机验证；仅鼠标；经 OMNI 连接的键盘暂不支持；型号名不区分；仅0B05:1ACE、MI_02&Col03 / FF01:0001，同USB parent唯一目标路径，既有逐ID字节数组证明Input与Output报告03各64字节；最大长度不能代替逐ID证明，不回退其他集合；每轮仅写一次03 12 07加61个零，300ms一次读取、最多4包，不重发；仅64字节03 12 07回显，byte5为1至100、byte10大于0为充电；FF AA、空回复、0及越界无新读数；不查配对表、不发Booster或其他命令，独立parent保留独立卡片；底层传输、冷启动独立查询、休眠/未配对真实回复及设备采样新鲜度未确认 |
+| ROG Delta II 耳机（2.4 GHz 接收器） | headset | C | 协议已接入，待本项目实机验证；只读候选；仅0B05:1AFA、厂商集合FF00:0001、报告CC；同USB parent唯一目标集合，运行时以既有逐报告字节数组证明Input与Output报告CC长度，缺失方向才走既有原始描述符回退，歧义或证明失败不打开、不发送；每轮只写CC 12 07与CC 12 08各一次（零填充到已证明输出长度），跳过其他报告，2秒总预算；仅CC 12 07回显byte6为1至100、CC 12 08回显byte5等于1为充电，0且未充电视为待机，FF AA、全零、越界和缺充电回显不产生新读数（缺充电回显时充电未知）；不回退FF13/000C集合或其他型号，不发灯光、侧音、EQ、麦克风、配对、复位或固件命令；冷启动、休眠/关机、低电量、充电及官方软件共存未确认 |
 | G-Wolves 已列明型号 | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Lofree Hyzen 2.4G | keyboard | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Astro A50 Gen 5 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
@@ -110,6 +111,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | NZXT Lift Elite Wireless | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Windows 系统蓝牙电量属性 | mouse, keyboard, headset, gamepad, device | C | 协议已接入，待本项目实机验证；Windows提供电量属性的已连接设备，含蓝牙手柄；Xbox系统百分比优先于XInput四档估算 |
 | Xbox 及兼容 XInput 手柄 | gamepad | C | 协议已接入，待本项目实机验证；Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄 |
+| Sony INZONE H9（原版接收器） | headset | C | 协议已接入，待本项目实机验证；仅 Windows 串口 USB 054C:0E53 MI_06；与 INZONE Hub 可能争用端口；H9 II 和蓝牙不在此范围 |
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 | MCHOSE K99 V3 2.4G (3837:3033) | keyboard | D | 已发现但未取得电量，不列为兼容 |

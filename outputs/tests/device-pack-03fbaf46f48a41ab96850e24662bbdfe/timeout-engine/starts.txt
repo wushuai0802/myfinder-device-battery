@@ -1,0 +1,3 @@
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\probe.json
+builtin
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\timed-trial\staging\device-pack-v1-1.json

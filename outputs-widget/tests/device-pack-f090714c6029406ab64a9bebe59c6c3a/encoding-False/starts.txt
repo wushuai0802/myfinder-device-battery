@@ -1,0 +1,2 @@
+builtin
+d:\显示外设电量\myfinder-device-battery-main\myfinder-device-battery-main\outputs-widget\tests\device-pack-f090714c6029406ab64a9bebe59c6c3a\encoding-packs-False\staging\device-pack-v1-1.json

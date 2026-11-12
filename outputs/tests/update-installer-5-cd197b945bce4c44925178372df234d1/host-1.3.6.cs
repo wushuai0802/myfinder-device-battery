@@ -1,0 +1,1 @@
+[assembly:System.Reflection.AssemblyInformationalVersion("1.3.6")] class Fixture {static void Main(string[] args){if(args.Length==0 || args.Length==1 && args[0]=="--show-updated") System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(typeof(Fixture).Assembly.Location),"started.txt"),"1.3.6|"+string.Join(" ",args));}}
