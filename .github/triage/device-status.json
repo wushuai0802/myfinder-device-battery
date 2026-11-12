@@ -12,6 +12,10 @@
       "note": "电脑机身的灯效控制器，本身没有电量",
       "reports": 0
     },
+    "1D57:FA65": {
+      "status": "researching",
+      "note": "已有读取器，部分接收器报告长度未通过校验，正在修"
+    },
     "248A:5B2F": {
       "status": "no-evidence",
       "reports": 6,
