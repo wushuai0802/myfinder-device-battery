@@ -62,6 +62,17 @@ mouse battery exchange is used; pairing-table, Booster and keyboard commands
 are excluded. Grade C, pending hardware validation; the reference does not
 establish the underlying transport or cold-start independent-query behavior.
 
+The ROG Delta II headset candidate is an independent project implementation from
+protocol facts recorded in `engine/upstream-protocols.md`, referencing
+[dvalfrid/rigstats](https://github.com/dvalfrid/rigstats) (MIT License, Delta II
+verified there on hardware) and
+[mbekkelund/rog-delta-ii issue #1](https://github.com/mbekkelund/rog-delta-ii/issues/1)
+(MIT License). No upstream implementation is copied, imported or bundled. Only the
+two GearLink get frames for battery and charging are used; lighting, sidetone, EQ,
+microphone, pairing, reset and firmware commands are excluded. Grade C, pending
+this project's hardware validation; the references do not establish cold-start,
+sleep/off, low-battery, charging-transition or official-software coexistence.
+
 The Windows distribution bundles the official CPython embeddable runtime and
 the `hidapi` Python wheel, with their original license files. Versions, original
 download URLs and SHA256 hashes are pinned in `engine/dependencies.lock.json`.

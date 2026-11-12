@@ -1,0 +1,5 @@
+{"command":"poll","requestId":1,"generation":1,"force":true,"parkEmptyReaders":true}
+{"command":"poll","requestId":2,"generation":1,"force":true,"parkEmptyReaders":true,"physicalId":"device-000000000000000000000001"}
+{"command":"poll","requestId":3,"generation":1,"force":true,"parkEmptyReaders":true,"physicalId":"device-000000000000000000000002"}
+{"command":"poll","requestId":4,"generation":1,"force":true,"parkEmptyReaders":true,"physicalId":"device-000000000000000000000001"}
+{"command":"poll","requestId":5,"generation":1,"force":false,"parkEmptyReaders":true}

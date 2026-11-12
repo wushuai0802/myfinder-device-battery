@@ -1,0 +1,13 @@
+builtin
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\staging\device-pack-v1-1.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-1.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\staging\device-pack-v1-2.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-2.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-2.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-2.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-2.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-1.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\staging\device-pack-v1-3.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\staging\device-pack-v1-4.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-4.json
+D:\GitHub克隆\myfinder-device-battery\outputs\tests\device-pack-03fbaf46f48a41ab96850e24662bbdfe\worker-packs\current\device-pack-v1-1.json

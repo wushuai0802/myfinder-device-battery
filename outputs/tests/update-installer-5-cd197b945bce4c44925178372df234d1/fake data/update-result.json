@@ -1,0 +1,8 @@
+{
+    "schema":  1,
+    "status":  "failed",
+    "version":  "1.3.6",
+    "reason":  "fixture manifest validation failure Recovery restart failed: fixture launch failure",
+    "timeUtc":  "2026-11-12T13:48:13.4829751Z",
+    "notified":  false
+}

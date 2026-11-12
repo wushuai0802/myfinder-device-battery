@@ -1,0 +1,59 @@
+{
+    "schema":  1,
+    "appId":  "myfinder-device-battery",
+    "version":  "1.3.4",
+    "configSchema":  1,
+    "engineSchema":  2,
+    "files":  [
+                  {
+                      "path":  "engine/runtime/python.exe",
+                      "length":  3584,
+                      "sha256":  "235baa07b5d0358f0003645a1e1dd10c9984248ef5d4883a1ed7f16e74154103"
+                  },
+                  {
+                      "path":  "engine/server.py",
+                      "length":  15,
+                      "sha256":  "492ff45699b430551ae1b9e3381a89484dbc34866ca25e8677cf1bd974d269f4"
+                  },
+                  {
+                      "path":  "LICENSE",
+                      "length":  7,
+                      "sha256":  "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+                  },
+                  {
+                      "path":  "outputs/AtkMouseBattery.exe",
+                      "length":  3584,
+                      "sha256":  "235baa07b5d0358f0003645a1e1dd10c9984248ef5d4883a1ed7f16e74154103"
+                  },
+                  {
+                      "path":  "release.json",
+                      "length":  176,
+                      "sha256":  "eb44200fe1a0fee9dfd15b9caf7537a7dece77adca1e7a620aecf02d5e2e51b2"
+                  },
+                  {
+                      "path":  "scripts/Install.Common.ps1",
+                      "length":  29157,
+                      "sha256":  "fd6ca4144b0118556a20c4c4ddac91314604a6256dd64039a82820912fad249b"
+                  },
+                  {
+                      "path":  "scripts/Install-Startup.ps1",
+                      "length":  3176,
+                      "sha256":  "137853807b11a698678973d36be6299b89483d8658d02d4dd1ccd321bcd1fb74"
+                  },
+                  {
+                      "path":  "scripts/Manifest.Common.ps1",
+                      "length":  8438,
+                      "sha256":  "5a94d93f44b03dd9fae1e4e2357fed60577a2dfbed26a316033f567d6fa70fa9"
+                  },
+                  {
+                      "path":  "scripts/Uninstall-Startup.ps1",
+                      "length":  9,
+                      "sha256":  "c6e8aef74a8b0647edb3951b47cf16c5fdfa8ea27beaa2408a24882d5da354f5"
+                  },
+                  {
+                      "path":  "THIRD_PARTY_NOTICES.md",
+                      "length":  7,
+                      "sha256":  "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+                  }
+              ]
+}

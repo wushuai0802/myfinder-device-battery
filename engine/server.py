@@ -50,6 +50,7 @@ PROVIDERS = (
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
     ("barracuda", "BarracudaProvider"), ("asus", "AsusProvider"),
     ("asus_omni", "AsusOmniProvider"),
+    ("asus_headset", "AsusHeadsetProvider"),
     ("gwolves", "GWolvesProvider"), ("lofree", "LofreeProvider"),
     ("astro", "AstroProvider"), ("corsair", "CorsairProvider"),
     ("lamzu", "LamzuProvider"), ("am_infinity", "AmInfinityProvider"),
@@ -84,6 +85,7 @@ PROVIDER_VIDS = {
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
     "asus_omni": (0x0B05,),
+    "asus_headset": (0x0B05,),
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
     "am_infinity": (0x3151,), "steelseries_elite": (0x1038,),
     "logitech_centurion": (0x046D,), "hyperx_cloud3s": (0x03F0,), "nzxt": (0x1E71,),
@@ -99,7 +101,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput", "sony_inzone"})
 NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni", "asus_headset", "sony_inzone"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -129,6 +131,13 @@ CHERRY_DIAGNOSTICS = {
     "rejected battery reply": "battery reply rejected",
     "no valid reply within deadline/read limit; connection unknown": "no valid battery reply",
     "HID handle close failed": "HID handle close failed",
+}
+SONY_DIAGNOSTICS = {
+    "receiver serial port not found": "INZONE receiver serial port not found",
+    "multiple receiver serial ports; not opened": "multiple INZONE receivers; not read",
+    "serial port open or write failed; no measurement": "INZONE receiver serial port did not answer",
+    "serial reader failed; no measurement": "INZONE serial reader failed",
+    "no valid battery frame; no measurement": "no valid battery frame",
 }
 LINGBAO_DIAGNOSTICS = {
     "HID handle close failed": "HID handle close failed",
@@ -160,6 +169,25 @@ ASUS_OMNI_DIAGNOSTICS = {
     "OMNI HID backend unavailable": "OMNI HID backend unavailable",
     "OMNI enumeration failed": "OMNI enumeration failed",
     "OMNI HID handle close failed": "OMNI HID handle close failed",
+}
+ASUS_HEADSET_DIAGNOSTICS = {
+    "DELTA II collection mismatch; not opened": "DELTA II collection mismatch",
+    "DELTA II collection ambiguous; not opened": "DELTA II collection ambiguous",
+    "DELTA II report CC length unproven; not opened": "DELTA II report CC length unproven",
+    "DELTA II USB parent unproven; not opened": "DELTA II USB parent unproven",
+    "DELTA II open failed": "DELTA II open failed",
+    "DELTA II query write failed; no retry": "DELTA II query write failed; no retry",
+    "DELTA II input read failed": "DELTA II input read failed",
+    "DELTA II no battery echo within read limit": "DELTA II no battery echo",
+    "DELTA II no charging echo within read limit": "DELTA II no charging echo",
+    "DELTA II device error FF AA": "DELTA II device error FF AA",
+    "DELTA II empty reply or asleep; no new reading": "DELTA II empty reply or asleep",
+    "DELTA II zero battery; no new reading": "DELTA II zero battery; no new reading",
+    "DELTA II battery out of range": "DELTA II battery out of range",
+    "DELTA II charging state unavailable": "DELTA II charging state unavailable",
+    "DELTA II HID backend unavailable": "DELTA II HID backend unavailable",
+    "DELTA II enumeration failed": "DELTA II enumeration failed",
+    "DELTA II HID handle close failed": "DELTA II HID handle close failed",
 }
 ZHUAUDIO_DIAGNOSTICS = frozenset({
     "ZG4 collection missing or ambiguous", "ZG4 parent/path unproven",
@@ -208,6 +236,8 @@ def reader_diagnostics(provider):
         lines = [line for line in lines if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
     if provider.name == "asus_omni":
         lines = [line for line in lines if isinstance(line, str) and line in ASUS_OMNI_DIAGNOSTICS]
+    if provider.name == "asus_headset":
+        lines = [line for line in lines if isinstance(line, str) and line in ASUS_HEADSET_DIAGNOSTICS]
     if provider.name == "mchose_headset":
         # Expose only fixed firmware reasons, never this legacy reader's
         # raw I/O exceptions or packet log.
@@ -280,7 +310,7 @@ def suppress_bluetooth_xinput(devices):
 def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
-        if (a.get("provider") in ("cherry", "lingbao", "zhuaudio", "asus_omni")
+        if (a.get("provider") in ("cherry", "lingbao", "zhuaudio", "asus_omni", "asus_headset")
                 or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
@@ -680,7 +710,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     if name == "atk_headset":
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
-    if name in ("moondrop", "asus_omni"):
+    if name in ("moondrop", "asus_omni", "asus_headset"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
@@ -822,7 +852,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni", "asus_headset", "sony_inzone") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -898,6 +928,21 @@ class BatteryEngine:
                 diagnostics = [line for line in diagnostics if isinstance(line, str) and line in ASUS_OMNI_DIAGNOSTICS]
                 if diagnostics and not measured:
                     self.health[reader_key]["diagnosticSummary"] = ASUS_OMNI_DIAGNOSTICS[diagnostics[0]]
+            if name == "asus_headset":
+                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in ASUS_HEADSET_DIAGNOSTICS]
+                if diagnostics and not measured:
+                    self.health[reader_key]["diagnosticSummary"] = ASUS_HEADSET_DIAGNOSTICS[diagnostics[0]]
+            if name == "sony_inzone":
+                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in SONY_DIAGNOSTICS]
+                # An absent receiver or a silent one (an off/asleep headset) is
+                # not a link fault; only port-level failures reach errorCode.
+                for reason in diagnostics:
+                    if reason in ("multiple receiver serial ports; not opened",
+                                  "serial port open or write failed; no measurement",
+                                  "serial reader failed; no measurement"):
+                        if not measured:
+                            self.health[reader_key]["diagnosticSummary"] = SONY_DIAGNOSTICS[reason]
+                        break
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
             if name == "mchose" and not measured:
                 # V3-only protocol-owned failures outrank the identity/proof notes.
