@@ -13,8 +13,9 @@
       "reports": 0
     },
     "1D57:FA65": {
-      "status": "researching",
-      "note": "已有读取器，部分接收器报告长度未通过校验，正在修"
+      "status": "beta",
+      "version": "1.3.11-beta.5",
+      "note": "候选修复，读不到请补交一次诊断"
     },
     "248A:5B2F": {
       "status": "no-evidence",
