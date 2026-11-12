@@ -14,6 +14,7 @@ import time
 
 import hid
 
+from battery_hid import report_proof_summary
 from . import hidlist
 from .base import DeviceStatus, Provider
 
@@ -130,7 +131,9 @@ class Fa6xPassiveProvider(Provider):
                 or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                 or max(sizes.values()) != maximum
                 or type(sizes.get("3")) is not int or not 5 <= sizes["3"] <= maximum):
-            self._diag.append("input report 03 length unproven; not opened")
+            self._diag.append("input report 03 length unproven"
+                              + report_proof_summary(info, "input", include_declared=True)
+                              + "; not opened")
             return None
         return info
 

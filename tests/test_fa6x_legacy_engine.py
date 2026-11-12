@@ -91,11 +91,12 @@ class Fa6xLegacyEngineTests(unittest.TestCase):
             self.assertEqual(bus.opened, [infos[0]["path"]])
             self.assertEqual(bus.closed, bus.opened)
         self.assertEqual([r["candidateCount"] for r in replies], [1, 1, 1, 1, 0])
-        self.assertEqual(replies[0]["diagnostics"], ["input report 03 length unproven; not opened"])
+        self.assertEqual(replies[0]["diagnostics"], [
+            "input report 03 length unproven; declared=out:unknown,in:unknown,feature:unknown; not opened"])
         engine = self.engine(infos, replies)
         rejected = self.poll(engine)
         self.assertEqual(rejected["devices"], [])
-        self.assertEqual(self.health(rejected)["errorCode"], "input report 03 length unproven")
+        self.assertEqual(self.health(rejected)["errorCode"], "in:03 unproven;declared=out:unknown,...")
         self.assert_not_failure(engine, rejected)
         for percent in (91, 49):
             fresh = self.poll(engine)
@@ -127,12 +128,12 @@ class Fa6xLegacyEngineTests(unittest.TestCase):
         self.assertEqual([r["sequence"] for r in replies], [1, 2, 3, 4])
         self.assertEqual([r["candidateCount"] for r in replies], [1, 1, 1, 0])
         self.assertEqual([r["diagnostics"] for r in replies], [
-            ["input report 03 length unproven; not opened"], [],
+            ["input report 03 length unproven; declared=out:unknown,in:unknown,feature:unknown; not opened"], [],
             ["no battery notification; no new measurement"], []])
         engine = self.engine(infos, replies)
         rejected = self.poll(engine)
         self.assertEqual(rejected["devices"], [])
-        self.assertEqual(self.health(rejected)["errorCode"], "input report 03 length unproven")
+        self.assertEqual(self.health(rejected)["errorCode"], "in:03 unproven;declared=out:unknown,...")
         self.assert_not_failure(engine, rejected)
 
         fresh = self.poll(engine)
@@ -168,7 +169,8 @@ class Fa6xLegacyEngineTests(unittest.TestCase):
                  ([base[1]], "legacy FA65 state input missing or ambiguous"),
                  ([base[0], dict(base[1], release_number=True)], "legacy FA65 release unproven"),
                  ([dict(base[0], path=b""), base[1]], "legacy FA65 collection path unproven"),
-                 ([dict(base[0], input_report_sizes={"3": 4}), base[1]], "input report 03 length unproven"),
+                 ([dict(base[0], input_report_sizes={"3": 4}), base[1]],
+                  "in:03 unproven;declared=out:unknown,in:03/4,..."),
                  (base, "no valid battery notification")]
         for infos, expected in cases:
             with self.subTest(reason=expected), fixture([], infos) as (bus, _):

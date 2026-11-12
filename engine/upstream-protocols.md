@@ -3519,13 +3519,15 @@ Input/Output/Feature maxima and any existing proof to agree. Truncation,
 duplicate top-level collections, report IDs shared across collections and
 caps contradictions remain rejected. Complete proof is cached normally;
 failed proof is retried without caching a complete entry. This adds no
-Feature/Output, initialization, pairing or firmware command, and no fallback
-for FA65, other identities or collections; native exclusions stay unchanged.
+Feature/Output, initialization, pairing or firmware command. The same strict
+fallback now also covers the existing FA65 routes described below, not other
+identities or collections; native exclusions stay unchanged.
 
 The user's failed `HidD_GetPhysicalDescriptor` reads a **Physical Descriptor**,
 not a **HID Report Descriptor**; it does not prove the latter is unavailable.
 If the real Report Descriptor is also unavailable or invalid, black-box
-collections remain refused with `input report 03 length unproven; not opened`.
+collections remain refused with `input report 03 length unproven`, a fixed
+proof/declared-size summary and `not opened`.
 There is no maximum-only assumption or opt-in bypass. Fake DLL/getter/listener
 fixtures verify the boundary, not actual descriptor availability, notification
 frequency, cold start, sleep/wake or official-driver coexistence on hardware.
@@ -3538,8 +3540,22 @@ be valid and distinct. The communication companion is topology metadata only:
 the provider never opens or reads it. Only the status collection is opened,
 after the same Input `03` byte-array and exact report-length proof. New
 topology proof is limited to this exact status identity and release, with no
-Output/Feature inspection or raw-descriptor fallback. Native ATK exclusions
-and descriptor cache semantics are unchanged.
+Output/Feature report I/O. Native ATK exclusions and descriptor cache semantics
+are unchanged.
+
+Issues #264 / #356 / #470 (latest feedback: 1.3.11-beta.4) show IN10
+`1D57:FA65` receivers stopped at `input report 03 length unproven`, before
+opening the listener. If HidP per-report Input proof is missing, topology now
+tries the existing strict raw Report Descriptor fallback for `FF00:0001` and
+for `000A:0000` only under the existing release-low-byte `16` gate. Proven
+HidP caps are never replaced. Missing Input `03`, fewer than five bytes,
+collection/maxima mismatches or unavailable descriptors still cannot open a
+listener. A valid descriptor lacking a usable Input `03` is not itself a
+descriptor parser error. Diagnostics now retain known proof/failure codes and
+numeric declared lengths in JSON; health uses the existing at-most-48-character
+compression and fixed-vocabulary whitelist. No arbitrary device text is echoed.
+We still have no real descriptor from these FA65 receivers: this is a grade-C
+candidate, awaiting new user diagnostics, not a confirmed IN10 fix.
 
 Legacy reports must begin `03 93 40 <state> <percent>`, match the proven length
 exactly and contain `1..100` percent. States `02` and `03` are discarded: the

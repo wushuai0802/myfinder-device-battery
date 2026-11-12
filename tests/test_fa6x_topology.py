@@ -83,9 +83,10 @@ class Fa6xTopologyTests(unittest.TestCase):
         f.hid.HidP_GetButtonCaps.assert_not_called()
         self.assert_descriptor_only()
 
-    def test_legacy_incomplete_byte_array_proof_retries_without_fallback_or_cache(self):
+    def test_legacy_incomplete_byte_array_proof_retries_when_raw_proof_is_unavailable(self):
         f = self.fixture
-        with patch.object(topology, "_read_report_descriptor", side_effect=AssertionError("no fallback")):
+        with patch.object(topology, "_read_report_descriptor",
+                          return_value=(None, "get_report_descriptor unavailable")):
             for defect in ("no_03", "short", "not_bytes", "alias", "partial", "failure"):
                 with self.subTest(defect=defect):
                     f.cache.clear()
@@ -200,13 +201,18 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def configure(self, identity=(0x1D57, 0xFA60), collection=(0x000A, 0),
-                  maxima=(5, 0, 0), raw=None, counts=(0, 0, 0)):
+                  maxima=(5, 0, 0), raw=None, counts=(0, 0, 0), release=1):
         f = self.case
         f.cache.clear()
         self.dev.reset_mock(side_effect=True)
         self.backend.device.reset_mock()
         f.identities[fixtures.PATH_A] = identity
         self.dev.get_report_descriptor.return_value = self.raw if raw is None else raw
+
+        def attributes(handle, pointer):
+            result = f.attributes(handle, pointer)
+            ctypes.cast(pointer, ctypes.POINTER(topology._Attributes)).contents.release = release
+            return result
 
         def caps(data, pointer):
             value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
@@ -215,6 +221,7 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
             value.iv, value.ov, value.fv = counts
             return 0x00110000
 
+        f.hid.HidD_GetAttributes.side_effect = attributes
         f.hid.HidP_GetCaps.side_effect = caps
 
     def scan(self):
@@ -228,8 +235,8 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
         self.assertTrue(all(call.args[1] == 0 for call in f.kernel.CreateFileW.call_args_list))
         return info
 
-    def assert_no_listener(self, info):
-        with fixture([[3, 0x8E, 0x40, 1, 49]], [info]) as (bus, provider):
+    def assert_no_listener(self, info, inventory=None):
+        with fixture([[3, 0x8E, 0x40, 1, 49]], [info] if inventory is None else inventory) as (bus, provider):
             self.assertEqual(provider.poll(), [])
             self.assertEqual((bus.opened, bus.reads), ([], []))
             return provider.diagnostics()
@@ -267,7 +274,9 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
                 info = self.scan()
                 self.assertNotIn(fixtures.PATH_A, self.case.cache)
                 self.assertEqual(self.assert_no_listener(info),
-                                 ["input report 03 length unproven; not opened"])
+                                 ["input report 03 length unproven"
+                                  + H.report_proof_summary(info, "input", include_declared=True)
+                                  + "; not opened"])
                 self.dev.get_report_descriptor.return_value = self.raw
                 recovered = self.scan()
                 self.assertEqual(recovered["input_report_sizes"], {"3": 5})
@@ -312,7 +321,9 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
                 self.assertNotIn(fixtures.PATH_A, self.case.cache)
                 self.assertNotIn("private-device-path", str(info))
                 self.assertEqual(self.assert_no_listener(info),
-                                 ["input report 03 length unproven; not opened"])
+                                 ["input report 03 length unproven"
+                                  + H.report_proof_summary(info, "input", include_declared=True)
+                                  + "; not opened"])
                 dev.close.assert_called_once_with()
                 if failure == "missing":
                     dev.open_path.assert_not_called()
@@ -322,8 +333,7 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
                 self.assertEqual(self.scan()["input_report_sizes"], {"3": 5})
 
     def test_sc650_raw_fallback_does_not_expand_identity_or_collection_scope(self):
-        cases = (((0x1D57, 0xFA65), (0xFF00, 1)),
-                 ((0x1D57, 0xFA65), (0x000A, 0)),
+        cases = (((0x1D57, 0xFA65), (0x000A, 0)),
                  ((0x1D58, 0xFA60), (0x000A, 0)),
                  ((0x1D57, 0xFA61), (0x000A, 0)),
                  ((0x1D57, 0xFA60), (0x000B, 0)),
@@ -334,18 +344,123 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
                 self.configure(identity=identity, collection=collection)
                 self.assert_no_listener(self.scan())
                 self.backend.device.assert_not_called()
-        # The legacy FA65 state route also stays caps-only.
-        self.configure(identity=(0x1D57, 0xFA65))
-        original = self.case.hid.HidD_GetAttributes.side_effect
 
-        def attributes(handle, pointer):
-            result = original(handle, pointer)
-            ctypes.cast(pointer, ctypes.POINTER(topology._Attributes)).contents.release = 0x0116
-            return result
+    @staticmethod
+    def fa65_inventory(info):
+        if (info["usage_page"], info["usage"]) == (0x000A, 0):
+            return [info, dict(info, usage_page=0xFF00, usage=1, path=b"metadata-only",
+                               input_report_sizes=None)]
+        return [info]
 
-        self.case.hid.HidD_GetAttributes.side_effect = attributes
-        self.assert_no_listener(self.scan())
-        self.backend.device.assert_not_called()
+    def fa65_routes(self):
+        web_raw = bytes.fromhex("06 00 ff 09 01 a1 01 85 03 75 08 95 04 81 02 c0")
+        return (((0xFF00, 1), 1, web_raw), ((0x000A, 0), 0x0116, self.raw))
+
+    def test_fa65_caps_failure_raw_input03_recovers_web_and_legacy_and_caches(self):
+        routes = list(self.fa65_routes())
+        routes += [((0x000A, 0), release, self.raw) for release in (0x0016, 0xFF16)]
+        for collection, release, raw in routes:
+            with self.subTest(collection=collection, release=release):
+                self.configure(identity=(0x1D57, 0xFA65), collection=collection,
+                               release=release, raw=raw, counts=(1, 0, 0))
+                self.case.hid.HidP_GetValueCaps.side_effect = lambda *args: 0
+                info = self.scan()
+                self.assertEqual(info["input_report_sizes"], {"3": 5})
+                self.assertEqual(info["input_report_proof"], "descriptor")
+                self.assertEqual(info["declared_report_sizes"],
+                                 {"input": {"3": 5}, "output": {}, "feature": {}})
+                self.assertNotIn("report_descriptor_error", info)
+                self.assertNotIn("output_report_sizes", info)
+                self.assertNotIn("feature_report_sizes", info)
+                self.assertIn(fixtures.PATH_A, self.case.cache)
+                before = self.case.kernel.CreateFileW.call_count
+                self.assertEqual(self.scan(), info)
+                self.assertEqual(self.case.kernel.CreateFileW.call_count, before)
+                self.dev.open_path.assert_called_once_with(info["path"])
+                self.dev.get_report_descriptor.assert_called_once_with()
+                self.dev.close.assert_called_once_with()
+                model = 0x93 if collection == (0x000A, 0) else 0x78
+                with fixture([[3, model, 0x40, 0, 67]], self.fa65_inventory(info)) as (bus, provider):
+                    status, = provider.poll()
+                    self.assertEqual((status.level, status.charging_known, status.verification_level),
+                                     (67, False, "C"))
+                    self.assertEqual(bus.opened, [info["path"]])
+                    self.assertEqual(provider.diagnostics(), [])
+
+    def test_fa65_raw_missing_or_short_input03_still_never_opens_or_caches(self):
+        for collection, release, raw in self.fa65_routes():
+            cases = ((raw.replace(b"\x85\x03", b"\x85\x04"), 5, {"4": 5}),
+                     (raw.replace(b"\x95\x04", b"\x95\x03"), 4, {"3": 4}))
+            for descriptor_raw, maximum, sizes in cases:
+                with self.subTest(collection=collection, sizes=sizes):
+                    self.configure(identity=(0x1D57, 0xFA65), collection=collection,
+                                   release=release, raw=descriptor_raw, maxima=(maximum, 0, 0))
+                    info = self.scan()
+                    self.assertEqual(info["input_report_sizes"], sizes)
+                    self.assertEqual(info["input_report_proof"], "descriptor")
+                    # A valid declaration is not a parser error or permission for Input 03.
+                    self.assertNotIn("report_descriptor_error", info)
+                    self.assertEqual(info["declared_report_sizes"]["input"], sizes)
+                    self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                    self.assert_no_listener(info, self.fa65_inventory(info))
+
+    def test_fa65_raw_maxima_mismatch_or_missing_collection_never_opens(self):
+        for collection, release, raw in self.fa65_routes():
+            other_raw = self.raw if collection == (0xFF00, 1) else self.fa65_routes()[0][2]
+            cases = [(raw, maxima, "collection maximum mismatch")
+                     for maxima in ((8, 0, 0), (5, 7, 0), (5, 0, 7))]
+            cases += [(other_raw, (5, 0, 0), "collection not found")]
+            for descriptor_raw, maxima, error in cases:
+                with self.subTest(collection=collection, maxima=maxima, error=error):
+                    self.configure(identity=(0x1D57, 0xFA65), collection=collection,
+                                   release=release, raw=descriptor_raw, maxima=maxima)
+                    info = self.scan()
+                    self.assertIsNone(info["input_report_sizes"])
+                    self.assertEqual(info["input_report_proof"], "failed")
+                    self.assertEqual(info["report_descriptor_error"], error)
+                    if error == "collection maximum mismatch":
+                        self.assertEqual(info["declared_report_sizes"]["input"], {"3": 5})
+                    self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                    self.assert_no_listener(info, self.fa65_inventory(info))
+
+    def test_fa65_proven_caps_are_never_overridden_by_raw_descriptor(self):
+        for collection, release, raw in self.fa65_routes():
+            for sizes in ({3: 5}, {4: 5}, {3: 4}):
+                with self.subTest(collection=collection, sizes=sizes):
+                    self.configure(identity=(0x1D57, 0xFA65), collection=collection,
+                                   release=release, raw=raw)
+                    self.dev.get_report_descriptor.side_effect = AssertionError("caps must win")
+                    self.case.batch3_descriptor((0x1D57, 0xFA65), collection, sizes, {4: 7})
+                    info = self.scan()
+                    self.assertEqual(info["input_report_sizes"], {str(k): v for k, v in sizes.items()})
+                    self.assertEqual(info["input_report_proof"], "caps")
+                    self.backend.device.assert_not_called()
+                    if sizes != {3: 5}:
+                        self.assert_no_listener(info, self.fa65_inventory(info))
+                        self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                    else:
+                        self.assertIsNotNone(F.Fa6xPassiveProvider()._pick(self.fa65_inventory(info)))
+
+    def test_fa65_legacy_raw_fallback_requires_release_low_byte_16(self):
+        for release in (0, 1, 0x15, 0x18, 0x1618, 0xFFFF):
+            with self.subTest(release=release):
+                self.configure(identity=(0x1D57, 0xFA65), release=release)
+                info = self.scan()
+                self.assertNotIn("input_report_sizes", info)
+                self.assert_no_listener(info, self.fa65_inventory(info))
+                self.backend.device.assert_not_called()
+
+    def test_fa65_raw_getter_failure_is_fixed_and_does_not_open_listener(self):
+        for collection, release, raw in self.fa65_routes():
+            with self.subTest(collection=collection):
+                self.configure(identity=(0x1D57, 0xFA65), collection=collection,
+                               release=release, raw=raw)
+                self.dev.get_report_descriptor.side_effect = OSError("PRIVATE-DEVICE-TEXT")
+                info = self.scan()
+                self.assertEqual(info["report_descriptor_error"], "descriptor read failed")
+                self.assertNotIn("PRIVATE", str(info))
+                self.assertNotIn(fixtures.PATH_A, self.case.cache)
+                self.assert_no_listener(info, self.fa65_inventory(info))
 
     def test_sc650_native_exclusion_still_precedes_all_handle_opens(self):
         self.configure()
