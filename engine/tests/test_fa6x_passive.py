@@ -175,7 +175,9 @@ class Fa6xPassiveTests(unittest.TestCase):
                     fixture([report(41, model=0x8E, state=1, length=5)], inventory) as (bus, provider):
                 self.assertEqual(provider.poll(), [])
                 self.assertEqual((bus.opened, bus.reads), ([], []))
-                self.assertEqual(provider.diagnostics(), ["input report 03 length unproven; not opened"])
+                self.assertEqual(provider.diagnostics(), [
+                    "input report 03 length unproven; proof=descriptor; "
+                    "declared=out:unknown,in:00/5,feature:unknown; not opened"])
 
     def test_sc650_unnumbered_late_input_history_and_proof_loss_follow_passive_lifecycle(self):
         info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
@@ -264,12 +266,63 @@ class Fa6xPassiveTests(unittest.TestCase):
                 self.assertTrue(all(size == maximum for _, size, _ in bus.reads))
 
     def test_sc650_no_per_id_proof_never_opens(self):
-        for sizes in (None, {}, {"9": 5}, {"3": 4}, {"3": 6}):
+        for sizes, declared in ((None, "unknown"), ({}, "none"),
+                                ({"9": 5}, "09/5"), ({"3": 4}, "03/4"), ({"3": 6}, "03/6")):
             info = descriptor(input_report_length=5, input_report_sizes=sizes)
             with self.subTest(sizes=sizes), fixture([[3, 0x8E, 0x40, 1, 49]], [info]) as (bus, provider):
                 self.assertEqual(provider.poll(), [])
                 self.assertEqual((bus.opened, bus.reads), ([], []))
-                self.assertEqual(provider.diagnostics(), ["input report 03 length unproven; not opened"])
+                self.assertEqual(provider.diagnostics(), [
+                    "input report 03 length unproven; declared=out:unknown,in:"
+                    + declared + ",feature:unknown; not opened"])
+
+    def test_fa65_web_and_legacy_unproven_diagnostics_include_proof_and_declared(self):
+        for legacy in (False, True):
+            infos = legacy_inventory() if legacy else [descriptor(0xFA65)]
+            infos[0].update(input_report_sizes=None, input_report_proof="failed",
+                            report_descriptor_error="collection maximum mismatch",
+                            declared_report_sizes={"input": {"3": 4}, "output": {}, "feature": {}})
+            with self.subTest(legacy=legacy), fixture([], infos) as (bus, provider):
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.reads), ([], []))
+                self.assertEqual(provider.diagnostics(), [
+                    "input report 03 length unproven; proof=caps+descriptor failed; "
+                    "descriptor=collection maximum mismatch; "
+                    "declared=out:none,in:03/4,feature:none; not opened"])
+
+    def test_fa65_proven_but_missing_or_short_report_keeps_declared_diagnostic(self):
+        for proof in ("caps", "descriptor"):
+            for sizes, declared in (({"4": 5}, "04/5"), ({"3": 4}, "03/4")):
+                info = descriptor(0xFA65, input_report_length=max(sizes.values()),
+                                  input_report_sizes=sizes, input_report_proof=proof,
+                                  declared_report_sizes={"input": sizes, "output": {}, "feature": {}})
+                with self.subTest(proof=proof, sizes=sizes), fixture([], [info]) as (bus, provider):
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual((bus.opened, bus.reads), ([], []))
+                    self.assertEqual(provider.diagnostics(), [
+                        "input report 03 length unproven; proof=" + proof
+                        + "; declared=out:none,in:" + declared + ",feature:none; not opened"])
+
+    def test_fa65_proof_diagnostics_never_echo_arbitrary_device_text(self):
+        private = "PRIVATE-PATH PRIVATE-PRODUCT PRIVATE-SERIAL PRIVATE-EXCEPTION"
+        for legacy in (False, True):
+            for proof in ("failed", private):
+                infos = legacy_inventory() if legacy else [descriptor(0xFA65)]
+                infos[0].update(path=private.encode(), product_string=private, serial_number=private,
+                                manufacturer_string=private, input_report_sizes=None,
+                                input_report_proof=proof, report_descriptor_error=private,
+                                declared_report_sizes={"output": {private: 64, "3": private},
+                                                       "input": {"4": 5, private: 5, "3": True},
+                                                       "feature": {private: private}})
+                with self.subTest(legacy=legacy, proof=proof), fixture([], infos) as (bus, provider):
+                    self.assertEqual(provider.poll(), [])
+                    self.assertEqual((bus.opened, bus.reads), ([], []))
+                    expected = "input report 03 length unproven"
+                    if proof == "failed":
+                        expected += "; proof=caps+descriptor failed; descriptor=unknown"
+                    expected += "; declared=out:unknown,in:04/5,in:unknown,feature:unknown; not opened"
+                    self.assertEqual(provider.diagnostics(), [expected])
+                    self.assertNotIn("PRIVATE", " ".join(provider.diagnostics()))
 
     def test_web_fa65_release_0118_with_extra_state_reads_only_web(self):
         web = descriptor(0xFA65, release_number=0x0118)

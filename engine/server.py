@@ -173,6 +173,23 @@ ZHUAUDIO_DIAGNOSTICS = frozenset({
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
 
 
+def fa6x_diagnostic_summary(line):
+    """Accept only fixed FA6x reasons and the bounded numeric proof grammar."""
+    if not isinstance(line, str) or len(line) > READER_DIAGNOSTIC_LIMIT:
+        return None
+    if line in FA6X_DIAGNOSTICS:
+        return FA6X_DIAGNOSTICS[line]
+    from battery_hid import DESCRIPTOR_FAILURES
+    reasons = "|".join(re.escape(reason) for reason in sorted(DESCRIPTOR_FAILURES | {"unknown"}))
+    proof = (r"(?:; proof=(?:caps|descriptor)|; proof=caps\+descriptor failed; descriptor=(?:"
+             + reasons + r"))?")
+    entry = r"(?:out|in|feature):(?:[0-9A-F]{2}/[0-9]{1,4}|\+[0-9]{1,3}|none|unknown)"
+    if re.fullmatch(r"input report 03 length unproven" + proof + r"; declared="
+                    + entry + r"(?:," + entry + r"){2,29}; not opened", line) is None:
+        return None
+    return reader_health_summary(line)
+
+
 def reader_diagnostics(provider):
     # These new readers emit only bounded, protocol-owned messages (no paths,
     # serials, product strings or raw exception text). Do not expose legacy logs.
@@ -185,7 +202,7 @@ def reader_diagnostics(provider):
         lines = [reason for line in lines if isinstance(line, str)
                  for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
     if provider.name == "fa6x_passive":
-        lines = [line for line in lines if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
+        lines = [line for line in lines if fa6x_diagnostic_summary(line) is not None]
     if provider.name == "lingbao":
         lines = [line for line in lines if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
     if provider.name == "asus_omni":
@@ -867,9 +884,9 @@ class BatteryEngine:
                             self.health[reader_key]["diagnosticSummary"] = summary
                             break
             if name == "fa6x_passive":
-                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in FA6X_DIAGNOSTICS]
+                diagnostics = [line for line in diagnostics if fa6x_diagnostic_summary(line) is not None]
                 if not measured and diagnostics:
-                    self.health[reader_key]["diagnosticSummary"] = FA6X_DIAGNOSTICS[diagnostics[0]]
+                    self.health[reader_key]["diagnosticSummary"] = fa6x_diagnostic_summary(diagnostics[0])
             if name == "lingbao":
                 diagnostics = [line for line in diagnostics if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
                 for reason, summary in LINGBAO_DIAGNOSTICS.items():
