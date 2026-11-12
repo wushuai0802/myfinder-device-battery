@@ -13,6 +13,10 @@ import re
 
 
 MARKER = "<!-- myfinder-triage:v1 -->"
+# In-app supplements are relayed under the owner account with this prefix; they
+# are user content. Any other maintainer comment must not start a triage pass.
+SUPPLEMENT_PREFIX = "<!-- myfinder-supplement:v1 "
+MAINTAINER_ASSOCIATIONS = frozenset(("OWNER", "MEMBER", "COLLABORATOR"))
 NEEDS_INFO = ("自动回复：这次反馈没有带上设备信息，我们没法判断是哪款设备。请在程序里打开‘反馈问题’，"
               "勾选‘附带诊断信息’后重新提交，并在描述里写上本条编号；也可以在这里粘贴完整的反馈报告。维护者会尽快查看。")
 SUPPLEMENT_GUIDANCE = "请在程序里打开‘我的反馈’，选中这条后点‘补充资料’，勾选‘附带诊断信息’提交即可，不需要重新提交，也不需要 GitHub 账号。"
@@ -190,13 +194,23 @@ def report_devices(text):
     return rows
 
 
-def decide(issue, known, comments=None, known_next=None, device_status=None):
+def decide(issue, known, comments=None, known_next=None, device_status=None, trigger_comment_id=None):
     labels = labels_of(issue)
     result = {"label": None, "reply": None, "reason": "未命中设备或问题类型规则。", "remove_labels": []}
     if "triage:locked" in labels or "pull_request" in issue:
         result["reason"] = "维护者已锁定初筛。" if "triage:locked" in labels else "跳过 Pull Request。"
         return result
     comments = comments_list(issue.get("comments") if comments is None else comments)
+    if trigger_comment_id is not None:
+        # A release notice or other maintainer comment is not new user evidence:
+        # leave labels alone and never answer it with a template. Unknown or
+        # missing trigger comments fall through to the normal rules.
+        for comment in comments:
+            if (comment.get("id") == trigger_comment_id
+                    and comment.get("author_association") in MAINTAINER_ASSOCIATIONS
+                    and not (comment.get("body") or "").lstrip().startswith(SUPPLEMENT_PREFIX)):
+                result["reason"] = "维护者评论不触发初筛。"
+                return result
     body = issue.get("body") or ""
     category_match = TYPE.search(body)
     category = category_match[1] if category_match else ""
@@ -329,11 +343,14 @@ def main():
     parser.add_argument("--known-ids", required=True)
     parser.add_argument("--known-ids-next", help="main index; --known-ids is the latest release")
     parser.add_argument("--device-status", help="optional, fail-open device status table")
+    parser.add_argument("--trigger-comment-id", type=int,
+                        help="id of the comment whose creation started this run, if any")
     args = parser.parse_args()
     result = decide(read_json(args.issue), read_json(args.known_ids),
                     read_json(args.comments) if args.comments else None,
                     read_json(args.known_ids_next) if args.known_ids_next else None,
-                    load_device_status(args.device_status) if args.device_status else None)
+                    load_device_status(args.device_status) if args.device_status else None,
+                    args.trigger_comment_id)
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 
 

@@ -1142,6 +1142,55 @@ class DeviceStatusTriageTests(unittest.TestCase):
                 self.assertEqual("ABCD:1234：目前还缺协议资料" in actual, content is not None and content != "{bad")
 
 
+class TriggerCommentTests(unittest.TestCase):
+    BODY = in_app(report(unknown='FFFF:0001 "X" FF02:0002'))
+
+    def run_with(self, trigger, **changes):
+        notice = dict(comment("测试版已发布"), id=77, author_association="OWNER")
+        notice.update(changes)
+        return triage.decide(issue(self.BODY, labels=("triage:supported",)), KNOWN, [notice],
+                             trigger_comment_id=trigger)
+
+    def test_maintainer_comment_is_a_no_op(self):
+        baseline = self.run_with(None)
+        self.assertIsNotNone(baseline["label"])
+        self.assertIsNotNone(baseline["reply"])
+        for association in ("OWNER", "MEMBER", "COLLABORATOR"):
+            with self.subTest(association=association):
+                result = self.run_with(77, author_association=association)
+                self.assertEqual((result["label"], result["reply"], result["remove_labels"]), (None, None, []))
+
+    def test_supplements_users_and_unknown_triggers_still_triage(self):
+        baseline = self.run_with(None)
+        supplement = triage.SUPPLEMENT_PREFIX + "request=1 -->\n来自程序内补充"
+        for trigger, changes in ((77, {"body": supplement}), (77, {"body": "\n " + supplement}),
+                                 (77, {"author_association": "NONE"}),
+                                 (77, {"author_association": "CONTRIBUTOR"}),
+                                 (78, {}), (77, {"id": "77"}), (77, {"author_association": None})):
+            with self.subTest(trigger=trigger, changes=changes):
+                self.assertEqual(self.run_with(trigger, **changes), baseline)
+        # The marker must lead the comment: quoting it later does not make a
+        # maintainer comment a supplement.
+        quoted = self.run_with(77, body="说明\n" + supplement)
+        self.assertIsNone(quoted["label"])
+
+    def test_cli_accepts_the_trigger_id(self):
+        with workspace_temp() as folder:
+            paths = {name: Path(folder) / (name + ".json") for name in ("issue", "comments", "known")}
+            paths["issue"].write_text(json.dumps(issue(self.BODY)), encoding="utf-8")
+            paths["comments"].write_text(json.dumps([[dict(comment("通知"), id=5, author_association="OWNER")]]),
+                                         encoding="utf-8")
+            paths["known"].write_text(json.dumps(KNOWN), encoding="utf-8")
+            command = [sys.executable, "-I", "-B", str(ROOT / ".github/scripts/triage.py"),
+                       "--issue", str(paths["issue"]), "--comments", str(paths["comments"]),
+                       "--known-ids", str(paths["known"])]
+            for extra, silent in (([], False), (["--trigger-comment-id", "5"], True),
+                                  (["--trigger-comment-id", "6"], False)):
+                with self.subTest(extra=extra):
+                    run = subprocess.run(command + extra, check=True, capture_output=True, timeout=10)
+                    self.assertEqual(json.loads(run.stdout)["label"] is None, silent)
+
+
 class WorkflowTests(unittest.TestCase):
     def test_status_table_is_optional_in_both_triage_invocations(self):
         text = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
@@ -1180,6 +1229,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", text)
         self.assertIn("!github.event.issue.pull_request", text)
         self.assertIn("github.event.comment.user.type != 'Bot'", text)
+        self.assertIn("TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}", text)
+        self.assertEqual(text.count('status_args+=(--trigger-comment-id "$TRIGGER_COMMENT_ID")'), 2)
         self.assertIn("--paginate --slurp", text)
         self.assertIn("--body-file", text)
         self.assertIn(".remove_labels[] | @uri", text)
