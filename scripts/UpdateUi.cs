@@ -108,14 +108,16 @@ namespace AtkBatteryTray {
         volatile bool disposed;int checking,installing;
         string status="尚未检查";
         internal string LastFailure {get;private set;}
-        internal string Status {get{
+        static bool CatalogWaitCode(string code){return code=="update_waiting_catalog"||code=="update_http_403"||code=="update_http_429";}
+        internal string Status {get{return StatusAt(DateTime.UtcNow);}}
+        internal string StatusAt(DateTime now){
             if(checking!=0)return "正在检查更新…";
             if(checker!=null){
-                DateTime now=DateTime.UtcNow;var wait=checker.Backoff(UpdateBackoffScope.Catalog,now);string code=checker.ErrorCode;
-                if(code=="update_waiting_catalog"||wait.Waiting(now)||code=="update_http_403"||code=="update_http_429")return CheckStatus(available,now);
+                var wait=checker.Backoff(UpdateBackoffScope.Catalog,now);string code=checker.ErrorCode;
+                if(CatalogWaitCode(code)||wait.Waiting(now))return CheckStatus(available,now);
             }
             return available!=null?(availableCached?"已缓存版本 ":"有新版本 ")+available.Version:!DeviceSettings.Current.AutoCheckUpdates?"自动检查已关闭":status;
-        }}
+        }
         internal bool Available {get{return available!=null;}}
         internal string Version {get{return available==null?null:available.Version;}}
         internal bool BadgeVisible {get{return Available&&checker!=null&&checker.BadgeVisible(DeviceSettings.Current.ShowUpdateBadge,DeviceSettings.Current.AutoCheckUpdates);}}
@@ -152,9 +154,11 @@ namespace AtkBatteryTray {
                     if(release!=null){
                         bool notify=checker.MarkNotified(release.Version);
                         Post(delegate{available=checker.CachedRelease;availableCached=false;if(available==null){if(!automatic)status="未发现新版本";changed();return;}status="有新版本 "+available.Version;changed();if(automatic){if(notify&&available!=null)balloon("MyFinder 设备电量更新",status,true);}else ShowAvailable(true);});
-                    }else Post(delegate{var cached=checker.CachedRelease;if(automatic&&available==cached)return;available=cached;availableCached=cached!=null;if(!automatic)status=CheckStatus(cached,DateTime.UtcNow);changed();});
+                    }else Post(delegate{var cached=checker.CachedRelease;if(automatic&&available==cached)return;available=cached;availableCached=cached!=null;
+                        // Countdown text is computed live by Status, never kept as a fallback after ErrorCode changes.
+                        if(!automatic)status=CatalogWaitCode(checker.ErrorCode)?"上次检查未完成，已可手动重试":CheckStatus(cached,DateTime.UtcNow);changed();});
                 }catch(Exception){SafeDiagnostic.Transition("updates","update_check_failed");if(!automatic)Post(delegate{status="检查未完成，详情已记入诊断";changed();});}
-                finally{lock(gate){if(checkCancel==cancellation)checkCancel=null;}cancellation.Dispose();Interlocked.Exchange(ref checking,0);}
+                finally{lock(gate){if(checkCancel==cancellation)checkCancel=null;}cancellation.Dispose();Interlocked.Exchange(ref checking,0);Post(changed);}
             });
         }
         internal void ConfigurationChanged(){lock(gate){if(!DeviceSettings.Current.AutoCheckUpdates&&automaticInFlight&&checkCancel!=null)checkCancel.Cancel();}var current=checker;bool betas=DeviceSettings.Current.IncludeBetaUpdates;
@@ -189,6 +193,11 @@ namespace AtkBatteryTray {
         static string Remaining(UpdateBackoffInfo wait,DateTime now){TimeSpan left=wait.UntilUtc-now;if(left.TotalSeconds<60)return "不到1分钟";if(left.TotalHours<1)return ((int)Math.Ceiling(left.TotalMinutes)).ToString(CultureInfo.InvariantCulture)+"分钟";return ((int)Math.Ceiling(left.TotalHours)).ToString(CultureInfo.InvariantCulture)+"小时";}
         string CheckStatus(UpdateRelease cached,DateTime now){
             var wait=checker.Backoff(UpdateBackoffScope.Catalog,now);string code=checker.ErrorCode;
+            if(!wait.Waiting(now)){
+                if(CatalogWaitCode(code))return (code=="update_http_403"&&wait.Source!="server"?"上次访问被拒绝，无法确认限流；":"")+"已可手动重试"+(cached==null?"":"；已缓存版本 "+cached.Version);
+                return code==null?"未发现新版本":"检查未完成，详情已记入诊断";
+            }
+            if(wait.Source=="legacy")return "沿用旧记录等待检查（来源未知），剩余 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);
             if(code=="update_waiting_catalog")return "本地等待检查，剩余 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);
             if(code=="update_http_403"&&wait.Source!="server")return "访问被拒绝，无法确认限流；本地等待 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);
             if((code=="update_http_403"||code=="update_http_429")&&wait.Source=="server")return "刚收到服务端限流，请在 "+Remaining(wait,now)+" 后重试"+(cached==null?"":"；已缓存版本 "+cached.Version);

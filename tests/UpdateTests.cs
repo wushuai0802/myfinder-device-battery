@@ -170,10 +170,42 @@ static class UpdateTests {
         path=Path.Combine(root,"backoff-asset.json");checker=new UpdateChecker(new Http(),path,"1.3.4",now.AddDays(-1));checker.Defer(new UpdateHttpFailure(429,"60"),now,UpdateBackoffScope.Asset);Check(checker.Backoff(UpdateBackoffScope.Asset,now).UntilUtc==now.AddMinutes(1)&&checker.Backoff(UpdateBackoffScope.Catalog,now).UntilUtc==DateTime.MinValue,"asset wait is recorded independently");checker.Complete(UpdateBackoffScope.Asset);Check(checker.Backoff(UpdateBackoffScope.Asset,now).UntilUtc==DateTime.MinValue,"successful asset completion clears only its wait");
         path=Path.Combine(root,"backoff-cached.json");legacy=new UpdateState {CatalogNotBeforeUtc=now.AddMinutes(10),CatalogBackoffSource="server",AvailableRelease=Release("1.3.6")};File.WriteAllText(path,UpdateJson.Text(legacy));http=new Http();checker=new UpdateChecker(http,path,"1.3.4",now.AddDays(-1));Check(checker.CachedRelease!=null&&checker.Check(false,true,now)==null&&http.Requests.Count==0&&checker.DownloadsAllowed(now),"catalog wait preserves a known signed cached release and permits its asset channel");
     }
+    static void UpdateUiExpiry(string root){
+        var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+        var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);int before=passed;
+        foreach(string source in new[]{"server403","server429","fallback403","fallback429","legacy"})foreach(bool cached in new[]{false,true}){
+            string name=source+" cached="+cached,path=Path.Combine(root,"ui-expiry-"+source+"-"+cached+".json");var http=new Http();
+            var state=new UpdateState {AvailableRelease=cached?Release("1.3.6"):null};
+            if(source=="legacy")state.NotBeforeUtc=now.AddMinutes(2);else http.Reply("limited",source.EndsWith("403",StringComparison.Ordinal)?403:429,null,-1,source.StartsWith("server",StringComparison.Ordinal)?"120":null);
+            File.WriteAllText(path,UpdateJson.Text(state));var checker=new UpdateChecker(http,path,"1.3.4",now.AddDays(-1));checker.Check(false,true,now);
+            var controller=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));
+            typeof(UpdateController).GetField("checker",flags).SetValue(controller,checker);typeof(UpdateController).GetField("available",flags).SetValue(controller,checker.CachedRelease);typeof(UpdateController).GetField("availableCached",flags).SetValue(controller,true);
+            var until=checker.Backoff(UpdateBackoffScope.Catalog,now).UntilUtc;
+            string active=controller.StatusAt(now);
+            Check(active.Contains(cached?"已缓存版本 1.3.6":"分钟")&&!active.Contains("可手动重试"),"active wait precedes cache: "+name);
+            Check(source=="legacy"?active.Contains("来源未知")&&!active.Contains("服务端"):source=="fallback403"?active.StartsWith("访问被拒绝，无法确认限流",StringComparison.Ordinal):active.StartsWith("刚收到服务端限流",StringComparison.Ordinal),"active wait reports its actual source: "+name);
+            foreach(var time in new[]{until.AddTicks(-1),until,until.AddMinutes(10)}){
+                string code=checker.ErrorCode,text=controller.StatusAt(time);
+                string computed=(string)typeof(UpdateController).GetMethod("CheckStatus",flags).Invoke(controller,new object[]{checker.CachedRelease,time});
+                Check(text==computed,"Status and result calculation share the supplied clock: "+name);
+                if(time<until)Check(text.Contains("不到1分钟")&&!text.Contains("可手动重试"),"one tick before deadline remains waiting: "+name);
+                else{
+                    Check(text.Contains("可手动重试")&&!text.Contains("刚收到")&&!text.Contains("不到1分钟")&&!text.Contains("剩余")&&!text.Contains("未发现新版本"),"UI expired server deadline permits manual retry at the exact boundary or later: "+name);
+                    Check(text.Contains("已缓存版本 1.3.6")==cached,"expired wait preserves truthful cache information: "+name);
+                }
+                Check(checker.ErrorCode==code&&checker.Backoff(UpdateBackoffScope.Catalog,time).UntilUtc==until,"rendering preserves error history and deadline: "+name);
+            }
+            typeof(UpdateController).GetField("checking",flags).SetValue(controller,1);Check(controller.StatusAt(now)=="正在检查更新…","checking precedes active wait and cache: "+name);typeof(UpdateController).GetField("checking",flags).SetValue(controller,0);
+            checker.Check(false,true,now.AddSeconds(1));Check(checker.ErrorCode=="update_waiting_catalog"&&controller.StatusAt(now.AddSeconds(1)).Contains("剩余")&&!controller.StatusAt(now.AddSeconds(1)).Contains("刚收到"),"repeated gated check is local waiting: "+name);
+            Check(controller.StatusAt(until).Contains("可手动重试")&&controller.StatusAt(until.AddMinutes(10)).Contains("可手动重试"),"local waiting code also expires: "+name);
+            Check(http.Requests.Count==(source=="legacy"?0:1),"status reads and local wait send no HTTP: "+name);
+        }
+        Console.WriteLine("PASS UpdateUiExpiry: "+(passed-before)+" checks (future/exact/past, cache, server/fallback/legacy)");
+    }
     static void UpdateUiStatusPolicy(string root){
         var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);var http=new Http();http.Reply("limited",403,null,-1,"120");var checker=new UpdateChecker(http,Path.Combine(root,"ui-server.json"),"1.3.4",now.AddDays(-1));checker.Check(false,true,now);var controller=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));typeof(UpdateController).GetField("checker",flags).SetValue(controller,checker);string text=(string)typeof(UpdateController).GetMethod("CheckStatus",flags).Invoke(controller,new object[]{null,now});Check(text.StartsWith("刚收到服务端限流",StringComparison.Ordinal),"UI names an explicit server limit");
         var limitedChecker=checker;http=new Http();http.Reply("denied",403);checker=new UpdateChecker(http,Path.Combine(root,"ui-unknown.json"),"1.3.4",now.AddDays(-1));checker.Check(false,true,now);var unknown=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));typeof(UpdateController).GetField("checker",flags).SetValue(unknown,checker);text=(string)typeof(UpdateController).GetMethod("CheckStatus",flags).Invoke(unknown,new object[]{null,now});Check(text.StartsWith("访问被拒绝，无法确认限流",StringComparison.Ordinal),"UI keeps an unclassified 403 distinct from a server limit");
-        typeof(UpdateController).GetField("checker",flags).SetValue(controller,limitedChecker);typeof(UpdateController).GetField("available",flags).SetValue(controller,Release("1.3.6"));typeof(UpdateController).GetField("availableCached",flags).SetValue(controller,true);Check(controller.Status.StartsWith("刚收到服务端限流",StringComparison.Ordinal),"UI keeps catalog limit visible when a cached release exists");
+        typeof(UpdateController).GetField("checker",flags).SetValue(controller,limitedChecker);typeof(UpdateController).GetField("available",flags).SetValue(controller,Release("1.3.6"));typeof(UpdateController).GetField("availableCached",flags).SetValue(controller,true);Check(controller.StatusAt(now).StartsWith("刚收到服务端限流",StringComparison.Ordinal),"UI keeps catalog limit visible when a cached release exists at the same clock");Check(controller.StatusAt(now.AddMinutes(2)).Contains("可手动重试"),"cached server limit expires at the same clock");
         var checking=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));typeof(UpdateController).GetField("available",flags).SetValue(checking,Release("1.3.6"));typeof(UpdateController).GetField("availableCached",flags).SetValue(checking,true);typeof(UpdateController).GetField("checking",flags).SetValue(checking,1);Check(checking.Status=="正在检查更新…","UI keeps checking visible when a cached release exists");
         var cached=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));typeof(UpdateController).GetField("available",flags).SetValue(cached,Release("1.3.6"));typeof(UpdateController).GetField("availableCached",flags).SetValue(cached,true);Check(cached.Status=="已缓存版本 1.3.6","UI labels a cached release instead of claiming a fresh check");
     }
@@ -186,6 +218,7 @@ static class UpdateTests {
     [STAThread] static int Main(string[] args){
         string root=Path.Combine(Path.GetFullPath(args[0]),"update-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try {
+            DeviceSettings.UseTransientConfiguration(new AudioBindings());
             HelperEnvironment(root);FailureNotification(root);
             NetworkTimeouts();
             UpdateVersion a,b;Check(UpdateVersion.TryParse("1.3.5-beta.1",out a)&&UpdateVersion.TryParse("1.3.5",out b)&&a.CompareTo(b)<0,"beta before stable");
@@ -213,7 +246,7 @@ static class UpdateTests {
             var renamed=Release("1.3.5");renamed.Assets[0].Name="MyFinder-device-battery-v1.3.5-windows-x64.zip";Reject(()=>UpdateCatalog.ValidateAssets(renamed,"1.3.5"),"asset filename is case exact");
             var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);
             UpdateBackoffPolicy(root);
-            UpdateUiStatusPolicy(root);
+            UpdateUiExpiry(root);UpdateUiStatusPolicy(root);
             var state=new UpdateState();Check(!UpdateSchedule.CanCheck(state,now,now.AddMinutes(-5),true,false),"disabled sends no request");
             Check(!UpdateSchedule.CanCheck(state,now,now.AddSeconds(-119),true,true),"two minute startup delay");
             Check(UpdateSchedule.CanCheck(state,now,now.AddMinutes(-2),true,true),"startup delay expires");
