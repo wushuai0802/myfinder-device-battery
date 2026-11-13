@@ -87,6 +87,30 @@ static class PanelDesignTests {
             for(int i=0;i<x.Length;i++)if(x[i]!=y[i])return false;
         }return true;}finally{left.UnlockBits(a);right.UnlockBits(b);}
     }
+    static string GridDifference(Bitmap left,Bitmap right,Rectangle area){
+        int count=0,firstX=-1,firstY=-1,minX=area.Right,minY=area.Bottom,maxX=-1,maxY=-1;int leftArgb=0,rightArgb=0;
+        for(int y=area.Top;y<area.Bottom;y++)for(int x=area.Left;x<area.Right;x++){
+            int a=left.GetPixel(x,y).ToArgb(),b=right.GetPixel(x,y).ToArgb();if(a==b)continue;
+            if(firstX<0){firstX=x;firstY=y;leftArgb=a;rightArgb=b;}count++;minX=Math.Min(minX,x);minY=Math.Min(minY,y);maxX=Math.Max(maxX,x);maxY=Math.Max(maxY,y);
+        }
+        return count==0?"none":"count="+count+" first=("+firstX+","+firstY+") left=0x"+leftArgb.ToString("X8")+" right=0x"+rightArgb.ToString("X8")+" bounds=("+minX+","+minY+")- ("+maxX+","+maxY+") area="+area;
+    }
+    static string GridFeedback(PanelFeedback feedback){return feedback==null?"<null>":feedback.Key;}
+    static string GridControl(PopupControl control){
+        if(control==null)return "<null>";
+        return "id="+control.Id+" deviceKey="+control.DeviceKey+" rect="+control.Rect+" visible="+control.VisibleRect+" viewport="+(control.Viewport.HasValue?control.Viewport.Value.ToString():"<none>");
+    }
+    static string GridFrameState(TrayContext owner,WirelessLayout layout,PanelFeedback feedback){
+        var grid=layout.Grid;
+        string tags="";for(int i=0;i<layout.Cards.Count;i++){var card=layout.Cards[i];bool sleeping=card.Device!=null&&(card.Device.ConnectionState=="sleeping"||card.Device.MeasurementState=="sleeping");string status=GridLayout.Status(card.Battery,sleeping)??"<none>";bool dpiFresh=card.Device!=null&&WirelessLayout.DpiStageCount(card.Device)>0&&WirelessLayout.DpiFresh(card.Device);tags+=(i==0?"":";")+"card"+i+"="+status+"/batteryFresh="+(card.Battery!=null&&card.Battery.Fresh)+"/dpiFresh="+dpiFresh;}
+        return "feedback="+GridFeedback(feedback)+" size="+layout.Size+" cards="+layout.Cards.Count+" all="+layout.All.Count+" controls="+grid.Controls+" viewport="+grid.Viewport+" scroll="+grid.ScrollOffset+"/"+grid.MaximumScroll+" groups="+grid.Groups.Count+" volume="+layout.VolumeRect+" footer="+layout.Footer+" tags="+tags+" owner(native="+owner.NativeMousePresent+",genericReady="+owner.GenericReady+",genericScanning="+owner.GenericScanning+",audio="+(owner.Audio!=null)+",headset="+(owner.Headset!=null)+",dpi="+(owner.Dpi!=null)+",refresh="+owner.IsRefreshing+",audioBusy="+owner.IsAudioBusy+",headsetBusy="+owner.IsHeadsetRefreshing+")";
+    }
+    static void GridDiagnostic(string label,string parameters,TrayContext owner,WirelessLayout leftLayout,WirelessLayout rightLayout,PanelFeedback leftFeedback,PanelFeedback rightFeedback,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area){
+        string path=Path.Combine(Path.GetTempPath(),"myfinder-ui-grid-ci-1113h-"+Guid.NewGuid().ToString("N")+".log");
+        string text="label="+label+Environment.NewLine+"parameters="+parameters+Environment.NewLine+"hidden="+GridControl(hidden)+Environment.NewLine+"left="+GridFrameState(owner,leftLayout,leftFeedback)+Environment.NewLine+"right="+GridFrameState(owner,rightLayout,rightFeedback)+Environment.NewLine+"diff="+GridDifference(left,right,area)+Environment.NewLine;
+        try{File.WriteAllText(path,text);Console.Error.WriteLine("GRID_DIAGNOSTIC "+path);}
+        catch(Exception error){Console.Error.WriteLine("GRID_DIAGNOSTIC_WRITE_FAILED "+error.Message+"; "+text);}
+    }
     static void GridOverflowViewportMatrix(){
         foreach(string font in new[]{"normal","large"})foreach(bool native in new[]{false,true})foreach(bool audio in new[]{false,true})foreach(bool collapsed in new[]{false,true}){
             Mode(font,"ocean",collapsed,"grid");using(var fixture=new Fixture()){
@@ -109,8 +133,12 @@ static class PanelDesignTests {
                         Check(rows.Exists(delegate(PopupControl row){return row.Id==240;})!=collapsed,"volume expansion is independent of group scrolling");
                         InteractionLayout.Observer=regions.Add;
                         try{using(var image=RenderGrid(owner,layout,dark,scale,new PanelFeedback())){
-                            Check(GridSameArea(baseline,image,new Rectangle(0,0,image.Width,(int)(first.Grid.Controls.Top*scale))),"scrolling cannot paint into the device tiles");
-                            int fixedTop=(int)Math.Ceiling(first.VolumeTop*scale);Check(GridSameArea(baseline,image,new Rectangle(0,fixedTop,image.Width,image.Height-fixedTop)),"scrolling cannot paint over system volume or the footer");
+                            var topArea=new Rectangle(0,0,image.Width,(int)(first.Grid.Controls.Top*scale));bool topSame=GridSameArea(baseline,image,topArea);
+                            if(!topSame)GridDiagnostic("scrolling cannot paint into the device tiles","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,owner,first,layout,new PanelFeedback(),new PanelFeedback(),null,baseline,image,topArea);
+                            Check(topSame,"scrolling cannot paint into the device tiles");
+                            int fixedTop=(int)Math.Ceiling(first.VolumeTop*scale);var fixedArea=new Rectangle(0,fixedTop,image.Width,image.Height-fixedTop);bool fixedSame=GridSameArea(baseline,image,fixedArea);
+                            if(!fixedSame)GridDiagnostic("scrolling cannot paint over system volume or the footer","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,owner,first,layout,new PanelFeedback(),new PanelFeedback(),null,baseline,image,fixedArea);
+                            Check(fixedSame,"scrolling cannot paint over system volume or the footer");
                         }}finally{InteractionLayout.Observer=null;}
                         foreach(var row in rows){
                             var visible=row.VisibleRect;if(!visible.IsEmpty)Check(visible.Left>=0&&visible.Right<=layout.Size.Width&&visible.Top>=0&&visible.Bottom<=layout.Size.Height,"all visible rectangles fit the actual 520px panel at every scale");
@@ -124,7 +152,11 @@ static class PanelDesignTests {
                         if(offset==31)Check(partial!=null,"the regression exercises a genuinely enabled partially visible stage");
                         if(partial!=null){var point=new PointF(partial.Rect.X+partial.Rect.Width/2,partial.Rect.Top<partial.VisibleRect.Top?partial.Rect.Top+.25f:partial.Rect.Bottom-.25f);Check(PopupPages.Hit(rows,point)!=partial,"the cropped part of a partially visible control cannot be hit");}
                         var hidden=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&!row.Information&&row.VisibleRect.IsEmpty;});
-                        if(hidden!=null)using(var ordinary=RenderGrid(owner,layout,dark,scale,new PanelFeedback()))using(var hovered=RenderGrid(owner,layout,dark,scale,new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id}))Check(GridSameArea(ordinary,hovered,new Rectangle(Point.Empty,ordinary.Size)),"offscreen hover, press and focus feedback leaves no ink in another region");
+                        if(hidden!=null){var ordinaryFeedback=new PanelFeedback();var hoveredFeedback=new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id};using(var ordinary=RenderGrid(owner,layout,dark,scale,ordinaryFeedback))using(var hovered=RenderGrid(owner,layout,dark,scale,hoveredFeedback)){
+                            var fullArea=new Rectangle(Point.Empty,ordinary.Size);bool same=GridSameArea(ordinary,hovered,fullArea);
+                            if(!same)GridDiagnostic("offscreen hover, press and focus feedback leaves no ink in another region","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,owner,layout,layout,ordinaryFeedback,hoveredFeedback,hidden,ordinary,hovered,fullArea);
+                            Check(same,"offscreen hover, press and focus feedback leaves no ink in another region");
+                        }}
                     }
                 }
                 var clamped=WirelessLayout.Build(owner,0,520,false,Int32.MaxValue);owner.WirelessDevices=new WirelessDevice[0];owner.Headset=null;owner.Audio=null;
