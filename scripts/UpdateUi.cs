@@ -16,7 +16,8 @@ namespace AtkBatteryTray {
         readonly ThemedSection versionCard;readonly Label title,current,next;readonly FlowLayoutPanel versions;
         bool downloading,handedOff,progressShown;
         internal event Action InstallRequested,SkipRequested,CancelRequested;
-        internal UpdateDialog(UpdateRelease release,bool stable){
+        internal UpdateDialog(UpdateRelease release,bool stable):this(release,stable,false){}
+        internal UpdateDialog(UpdateRelease release,bool stable,bool cached){
             Version=release.Version;
             Text="MyFinder 设备电量 · 软件更新";StartPosition=FormStartPosition.CenterScreen;ShowInTaskbar=true;
             ClientSize=new Size(380,340);
@@ -26,14 +27,14 @@ namespace AtkBatteryTray {
             var versionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             bool beta=release.Prerelease||UpdateVersion.Parse(release.Version).IsBeta;
-            title=Caption(beta?"发现新测试版":"发现新版本",true);title.Name="UpdateTitle";title.Margin=Padding.Empty;versionLayout.Controls.Add(title,0,0);
+            title=Caption(cached?(beta?"已缓存测试版":"已缓存版本"):(beta?"发现新测试版":"发现新版本"),true);title.Name="UpdateTitle";title.Margin=Padding.Empty;versionLayout.Controls.Add(title,0,0);
             versions=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,Margin=new Padding(0,4,0,0)};
             current=Caption("当前 "+AppRuntime.Version+" → ");current.Margin=Padding.Empty;
             next=Caption(release.Version);next.Name="NewVersion";next.ForeColor=Theme.Accent;next.Margin=Padding.Empty;
             versions.Controls.AddRange(new Control[]{current,next});versionLayout.Controls.Add(versions,0,1);versionCard.Controls.Add(versionLayout);layout.Controls.Add(versionCard,0,0);
             var notes=new ThemedReleaseNotes(Theme) {Name="ReleaseNotes",AccessibleName="发布说明",Text=Notes(release.Body),TabStop=true,Dock=DockStyle.Fill};
             var section=new ThemedTextBox(Theme,notes) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};layout.Controls.Add(section,0,1);
-            status=Caption(stable&&beta?"测试版含待实机验证的功能，不想试用可跳过此版本。":stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。",false,true);
+            status=Caption(cached?"这是已缓存的官方发布版本；下载时仍会重新校验签名和附件。":stable&&beta?"测试版含待实机验证的功能，不想试用可跳过此版本。":stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。",false,true);
             status.Name="UpdateStatus";status.AutoSize=false;status.AutoEllipsis=true;status.Dock=DockStyle.Fill;status.Margin=Padding.Empty;
             statusArea=new ThemedSection(Theme) {Name="UpdateStatusCard",Dock=DockStyle.Fill};
             progress=new ThemedProgress(Theme) {Name="UpdateProgress",Dock=DockStyle.Bottom,Visible=false};
@@ -85,7 +86,7 @@ namespace AtkBatteryTray {
             status.Text="已下载 "+(Math.Max(0,bytes)/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB"+(total>0?" / "+(total/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB（"+percent.ToString(CultureInfo.InvariantCulture)+"%）":"");
             progress.Indeterminate=total<=0;progress.Value=percent;
         }
-        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;status.ForeColor=text.StartsWith("已取消",StringComparison.Ordinal)?Theme.Muted:Theme.Error;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;progress.Indeterminate=false;progress.Value=0;ShowProgress(false);FocusAction(install);}
+        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;status.ForeColor=text.StartsWith("已取消",StringComparison.Ordinal)||text.StartsWith("下载仍在本地等待",StringComparison.Ordinal)?Theme.Muted:Theme.Error;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;progress.Indeterminate=false;progress.Value=0;ShowProgress(false);FocusAction(install);}
         internal void Handoff(){handedOff=true;FocusAction(null);cancel.Enabled=false;ShowProgress(true);progress.Indeterminate=false;progress.Value=100;status.ForeColor=Theme.Muted;status.Text="签名与文件校验通过，正在退出并安装…";}
         internal void Shutdown(){handedOff=true;downloading=false;Close();}
     }
@@ -102,12 +103,12 @@ namespace AtkBatteryTray {
         readonly UpdateProcess installer;readonly IUpdateTransport http;readonly string data;
         readonly DateTime started=DateTime.UtcNow;readonly object gate=new object();
         readonly System.Threading.Timer timer;
-        volatile UpdateChecker checker;bool? betaChoice;UpdateRelease available;UpdateDialog dialog;
+        volatile UpdateChecker checker;bool? betaChoice;UpdateRelease available;UpdateDialog dialog;bool availableCached;
         CancellationTokenSource checkCancel,downloadCancel;bool automaticInFlight,downloadCommitted;
         volatile bool disposed;int checking,installing;
         string status="尚未检查";
         internal string LastFailure {get;private set;}
-        internal string Status {get{return available!=null?"有新版本 "+available.Version:!DeviceSettings.Current.AutoCheckUpdates&&checking==0?"自动检查已关闭":status;}}
+        internal string Status {get{return available!=null?(availableCached?"已缓存版本 ":"有新版本 ")+available.Version:!DeviceSettings.Current.AutoCheckUpdates&&checking==0?"自动检查已关闭":status;}}
         internal bool Available {get{return available!=null;}}
         internal string Version {get{return available==null?null:available.Version;}}
         internal bool BadgeVisible {get{return Available&&checker!=null&&checker.BadgeVisible(DeviceSettings.Current.ShowUpdateBadge,DeviceSettings.Current.AutoCheckUpdates);}}
@@ -120,7 +121,7 @@ namespace AtkBatteryTray {
         void Initialize(){
             if(checker!=null)return;
             checker=new UpdateChecker(http,Path.Combine(data,"update-state.json"),AppRuntime.Version,started) {IncludeBeta=delegate{return DeviceSettings.Current.IncludeBetaUpdates;}};
-            var cached=checker.CachedRelease;if(cached!=null)Post(delegate{available=cached;changed();});
+            var cached=checker.CachedRelease;if(cached!=null)Post(delegate{available=cached;availableCached=true;changed();});
             try{UpdateDownload.CleanStale(Path.Combine(data,"updates"),DateTime.UtcNow);}catch(Exception){SafeDiagnostic.Transition("updates","update_cleanup_failed");}
             string path=Path.Combine(data,"update-result.json");
             try{
@@ -140,11 +141,11 @@ namespace AtkBatteryTray {
                     Initialize();if(disposed)return;
                     bool enabled=DeviceSettings.Current.AutoCheckUpdates&&!DeviceSettings.UsingDefaults;
                     var release=checker.Check(automatic,enabled,DateTime.UtcNow,cancellation.Token);
-                    if(checker.ErrorCode!=null)SafeDiagnostic.Transition("updates",checker.ErrorCode);
+                    if(checker.ErrorCode!=null&&checker.ErrorCode!="update_waiting_catalog")SafeDiagnostic.Transition("updates",checker.ErrorCode);
                     if(release!=null){
                         bool notify=checker.MarkNotified(release.Version);
-                        Post(delegate{available=checker.CachedRelease;if(available==null){if(!automatic)status="未发现新版本或检查已暂缓";changed();return;}status="有新版本 "+available.Version;changed();if(automatic){if(notify&&available!=null)balloon("MyFinder 设备电量更新",status,true);}else ShowAvailable(true);});
-                    }else Post(delegate{var cached=checker.CachedRelease;if(automatic&&available==cached)return;available=cached;if(!automatic)status=checker.ErrorCode==null?"未发现新版本或检查已暂缓":"检查未完成，详情已记入诊断";changed();});
+                        Post(delegate{available=checker.CachedRelease;availableCached=false;if(available==null){if(!automatic)status="未发现新版本";changed();return;}status="有新版本 "+available.Version;changed();if(automatic){if(notify&&available!=null)balloon("MyFinder 设备电量更新",status,true);}else ShowAvailable(true);});
+                    }else Post(delegate{var cached=checker.CachedRelease;if(automatic&&available==cached)return;available=cached;availableCached=cached!=null;if(!automatic)status=CheckStatus(cached,DateTime.UtcNow);changed();});
                 }catch(Exception){SafeDiagnostic.Transition("updates","update_check_failed");if(!automatic)Post(delegate{status="检查未完成，详情已记入诊断";changed();});}
                 finally{lock(gate){if(checkCancel==cancellation)checkCancel=null;}cancellation.Dispose();Interlocked.Exchange(ref checking,0);}
             });
@@ -165,7 +166,7 @@ namespace AtkBatteryTray {
                 Post(delegate{
                     if(dialog!=null&&!dialog.IsDisposed){DialogVisibility.RestoreAndActivate(dialog);Viewed(dialog,userInitiated);return;}
                     if(available==null||available.Version!=release.Version)return;
-                    var form=new UpdateDialog(release,installed);dialog=form;
+                    var form=new UpdateDialog(release,installed,availableCached);dialog=form;
                     form.SkipRequested+=delegate{
                         ThreadPool.QueueUserWorkItem(delegate{try{checker.Skip(release.Version);Post(delegate{if(available!=null&&available.Version==release.Version)available=null;status="已跳过 "+release.Version;changed();form.Close();});}catch(Exception){Post(delegate{form.Finished("无法保存跳过记录，请稍后再试。");});}});
                     };
@@ -178,12 +179,29 @@ namespace AtkBatteryTray {
                 });
             });
         }
+        static string Remaining(UpdateBackoffInfo wait,DateTime now){TimeSpan left=wait.UntilUtc-now;if(left.TotalSeconds<60)return "不到1分钟";if(left.TotalHours<1)return ((int)Math.Ceiling(left.TotalMinutes)).ToString(CultureInfo.InvariantCulture)+"分钟";return ((int)Math.Ceiling(left.TotalHours)).ToString(CultureInfo.InvariantCulture)+"小时";}
+        string CheckStatus(UpdateRelease cached,DateTime now){
+            var wait=checker.Backoff(UpdateBackoffScope.Catalog,now);string code=checker.ErrorCode;
+            if(code=="update_waiting_catalog")return "本地等待检查，剩余 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);
+            if(code=="update_http_403"&&wait.Source!="server")return "访问被拒绝，无法确认限流；本地等待 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);
+            if((code=="update_http_403"||code=="update_http_429")&&wait.Source=="server")return "刚收到服务端限流，请在 "+Remaining(wait,now)+" 后重试"+(cached==null?"":"；已缓存版本 "+cached.Version);
+            if(code=="update_http_429")return "刚收到服务端限流，已本地等待 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);
+            if(wait.Waiting(now))return "本地等待检查，剩余 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);
+            return code==null?"未发现新版本":"检查未完成，详情已记入诊断";
+        }
+        static string DownloadWait(UpdateBackoffInfo wait,DateTime now){return "下载仍在本地等待，剩余 "+Remaining(wait,now)+"；不会重复请求附件。";}
+        static string DownloadFailure(UpdateHttpFailure error,UpdateBackoffInfo wait,DateTime now){
+            if(error.Status==403&&wait.Source!="server")return "访问被拒绝，无法确认限流；下载已本地等待 "+Remaining(wait,now)+"。";
+            if((error.Status==403||error.Status==429)&&wait.Source=="server")return "刚收到服务端限流，下载请在 "+Remaining(wait,now)+" 后重试。";
+            if(error.Status==429)return "服务端限制下载，已本地等待 "+Remaining(wait,now)+"。";
+            return SafeDiagnostic.Clean(error.Message);
+        }
         void BeginInstall(UpdateRelease release,UpdateDialog form){
             if(Interlocked.CompareExchange(ref installing,1,0)!=0)return;
             var cancellation=new CancellationTokenSource();lock(gate){downloadCancel=cancellation;downloadCommitted=false;}form.Downloading();
             ThreadPool.QueueUserWorkItem(delegate{
                 try{
-                    if(!checker.DownloadsAllowed(DateTime.UtcNow))throw new InvalidOperationException("GitHub 暂时限制更新请求，请稍后再试。");
+                    cancellation.Token.ThrowIfCancellationRequested();DateTime checkTime=DateTime.UtcNow;var wait=checker.Backoff(UpdateBackoffScope.Asset,checkTime);if(wait.Waiting(checkTime)){Post(delegate{if(!form.IsDisposed)form.Finished(DownloadWait(wait,DateTime.UtcNow));});return;}
                     var download=new UpdateDownload(http,installer,AppRuntime.Version,installer.InstallDirectory,Path.Combine(data,"updates")) {AllowBeta=DeviceSettings.Current.IncludeBetaUpdates};
                     long lastProgress=0;
                     download.Install(release,cancellation.Token,delegate(long bytes,long total){long now=Stopwatch.GetTimestamp();if(now-lastProgress<Stopwatch.Frequency/5&&bytes!=total)return;lastProgress=now;Post(delegate{if(!form.IsDisposed)form.Progress(bytes,total);});},delegate{
@@ -191,12 +209,12 @@ namespace AtkBatteryTray {
                         // Finish cancellation on the UI thread before starting the auxiliary process.
                         dispatch.Invoke((MethodInvoker)delegate{lock(gate){cancellation.Token.ThrowIfCancellationRequested();if(disposed||form.IsDisposed)throw new OperationCanceledException();downloadCommitted=true;form.Handoff();}});
                     });
+                    checker.Complete(UpdateBackoffScope.Asset);
                     installer.RequestExit();
                 }catch(OperationCanceledException){Post(delegate{if(!form.IsDisposed)form.Finished("已取消更新。");});}
                 catch(Exception error){
                     if(cancellation.IsCancellationRequested){Post(delegate{if(!form.IsDisposed)form.Finished("已取消更新。");});return;}
-                    var rate=error as UpdateHttpFailure;if(rate!=null)try{checker.Defer(rate,DateTime.UtcNow);}catch(Exception){}
-                    string message=SafeDiagnostic.Clean(error.Message);SafeDiagnostic.Transition("updates","update_install_failed: "+message);
+                    var rate=error as UpdateHttpFailure;string message;if(rate!=null){try{checker.Defer(rate,DateTime.UtcNow,UpdateBackoffScope.Asset);}catch(Exception){}message=DownloadFailure(rate,checker.Backoff(UpdateBackoffScope.Asset,DateTime.UtcNow),DateTime.UtcNow);}else message=SafeDiagnostic.Clean(error.Message);SafeDiagnostic.Transition("updates","update_install_failed: "+message);
                     Post(delegate{if(!form.IsDisposed)form.Finished("更新未完成："+message);});
                 }finally{lock(gate){if(downloadCancel==cancellation)downloadCancel=null;}cancellation.Dispose();Interlocked.Exchange(ref installing,0);}
             });
