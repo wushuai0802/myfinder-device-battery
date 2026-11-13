@@ -27,7 +27,7 @@ static class WirelessDpiUiTests {
         return new WirelessDevice {Id="device-"+suffix.PadLeft(24,'0'),Name="Fixture GPW "+suffix,Kind="mouse",Percent=78,Provider="logitech",Transport="2.4G",Online=true,Fresh=true,ConnectionState="connected",SourceQuality="verified",MeasurementState="measured",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),Dpi=new WirelessDpi {Supported=true,CanSet=true,Current=800,Stages=stages??new[]{400,800,1600,3200},StageSource=source,CheckedAtUtc=DateTime.UtcNow.ToString("o"),TargetToken=new string(suffix[0],64)}};
     }
     static TrayContext Owner() {
-        DeviceSettings.UseTransientConfiguration(new AudioBindings {RememberReadings=false,Theme="light",ReducedMotion=true,LowBatteryNotifications=false});
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {PanelLayout="bar",RememberReadings=false,Theme="light",ReducedMotion=true,LowBatteryNotifications=false});
         var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=battery?new BatteryReading {Percent=80,TimestampUtc=DateTime.UtcNow}:null,Dpi=NativeDpi()};},
             delegate(int stage){throw new Exception("Unexpected native DPI write");},delegate{return new HeadsetReading {Connected=false,ConnectionVerified=true};},delegate{return new AudioReading {OperationSucceeded=true,Devices=new AudioDeviceChoice[0]};},false,
             delegate(string id){throw new Exception("Unexpected audio write");},delegate(bool mute){throw new Exception("Unexpected microphone write");},delegate(string id,int value){throw new Exception("Unexpected volume write");},delegate{return false;});
@@ -45,20 +45,21 @@ static class WirelessDpiUiTests {
     static void CapabilityAndGeometry(TrayContext owner) {
         var gpw=Device("a");var ordinary=Device("b");ordinary.Dpi=null;var keyboard=Device("c");keyboard.Kind="keyboard";owner.WirelessDevices=new[]{gpw,ordinary,keyboard};
         var layout=WirelessLayout.Build(owner,0,1000);var rows=Controls(owner);
-        Check(layout.All[0].Height==96&&layout.All[1].Height==60&&layout.All[2].Height==60,"only a supported mouse with its own stages expands the generic card");
+        Check(layout.All[0].Height==106&&layout.All[1].Height==66&&layout.All[2].Height==66,"only a supported mouse with its own stages expands the generic card");
         Check(rows.FindAll(delegate(PopupControl row){return row.DpiValue>0;}).Count==4&&Stage(rows,gpw.Id,800).Selected,"generic confirmed value is selected using the device model");
         Check(Stage(rows,gpw.Id,800).Enabled&&!Stage(rows,gpw.Id,1600).Selected&&Stage(rows,ordinary.Id,800)==null,"ordinary devices never inherit the native ATK DPI model or controls");
         Check(rows.TrueForAll(delegate(PopupControl row){return row.DpiValue<=0||row.Id>=3000&&row.TargetToken==gpw.Dpi.TargetToken;}),"generic DPI actions carry their own token and use a separate action range");
         bool disjoint=true;for(int i=0;i<rows.Count;i++)for(int j=i+1;j<rows.Count;j++)disjoint&=!rows[i].Rect.IntersectsWith(rows[j].Rect);Check(disjoint,"DPI stages, device header, refresh, volume and footer have disjoint hit areas");
         foreach(int count in new[]{1,4,5,8}) {
             var values=new[]{400,800,1200,1600,2400,3200,4800,6400};var stages=new int[count];Array.Copy(values,stages,count);gpw.Dpi.Stages=stages;gpw.Dpi.Current=stages[0];owner.WirelessDevices=new[]{gpw};layout=WirelessLayout.Build(owner,0,260);rows=Controls(owner,260);
-            Check(layout.All[0].Height==(count>4?126:96)&&rows.FindAll(delegate(PopupControl row){return row.DpiValue>0;}).Count==count,"one to eight device stages reserve the correct compact DPI rows");
+            Check(layout.All[0].Height==(count>4?134:106)&&rows.FindAll(delegate(PopupControl row){return row.DpiValue>0;}).Count==count,"one to eight device stages reserve the correct compact DPI rows");
+            if(count>4)Check(Stage(rows,gpw.Id,stages[4]).Rect.Top-Stage(rows,gpw.Id,stages[0]).Rect.Bottom==2,"wrapped generic DPI stages retain the specified two-pixel row gap");
             Check(layout.Size.Height<=260&&rows.TrueForAll(delegate(PopupControl row){return row.Rect.Left>=0&&row.Rect.Right<=260&&row.Rect.Bottom<=layout.Size.Height;}),"expanded DPI geometry fits the bounded 260-pixel popup");
         }
-        gpw.Dpi.Stages=new int[0];Check(WirelessLayout.Build(owner,0,1000).All[0].Height==60,"a supported read without a stage list does not create an empty DPI row");
-        gpw.Dpi.Stages=new[]{400,800,1600,3200};gpw.Dpi.Current=800;gpw.Dpi.Supported=false;Check(WirelessLayout.Build(owner,0,1000).All[0].Height==60&&Controls(owner).FindAll(delegate(PopupControl row){return row.DpiValue>0;}).Count==0,"unsupported DPI metadata leaves the original compact card unchanged");gpw.Dpi.Supported=true;
+        gpw.Dpi.Stages=new int[0];Check(WirelessLayout.Build(owner,0,1000).All[0].Height==66,"a supported read without a stage list does not create an empty DPI row");
+        gpw.Dpi.Stages=new[]{400,800,1600,3200};gpw.Dpi.Current=800;gpw.Dpi.Supported=false;Check(WirelessLayout.Build(owner,0,1000).All[0].Height==66&&Controls(owner).FindAll(delegate(PopupControl row){return row.DpiValue>0;}).Count==0,"unsupported DPI metadata leaves the original compact card unchanged");gpw.Dpi.Supported=true;
         owner.NativeMousePresent=true;owner.WirelessDevices=new[]{gpw};layout=WirelessLayout.Build(owner,0,1000);rows=Controls(owner);
-        Check(layout.All[0].NativeMouse&&layout.All[0].Height==126&&layout.All[1].Height==96,"native ATK and generic GPW card sizes use independent stage lists");
+        Check(layout.All[0].NativeMouse&&layout.All[0].Height==134&&layout.All[1].Height==106,"native ATK and generic GPW card sizes use independent stage lists");
         Check(rows.FindAll(delegate(PopupControl row){return row.Id>=10&&row.Id<18&&row.DeviceKey=="native:mouse";}).Count==8&&Stage(rows,gpw.Id,800).Selected,"adding generic DPI preserves all native ATK actions and confirmed state");owner.NativeMousePresent=false;
     }
     static void FreshnessAndSource(TrayContext owner) {
@@ -113,10 +114,12 @@ static class WirelessDpiUiTests {
                 queue.Enqueue(new WirelessDpiRequest(a.Id,a.Dpi.TargetToken,1600,800,a.Provider,a.Kind,epoch));var rows=Controls(owner);var current=Stage(rows,a.Id,800);var pending=Stage(rows,a.Id,1600);
                 Check(current.Selected&&pending.Busy&&!pending.Selected&&!pending.Enabled&&!current.Enabled&&a.Dpi.Current==800,"pending disables duplicate writes but preserves the actual confirmed value and separate target state");
                 Check(Stage(rows,b.Id,1600).Enabled&&!Stage(rows,b.Id,1600).Busy,"pending DPI feedback remains isolated to the requested device");
-                using(var after=Render(owner,layout,false,1.75f,new PanelFeedback())) {
+                var labels=new List<DrawnLabel>();CompactRenderer.LabelObserver=labels.Add;
+                try{using(var after=Render(owner,layout,false,1.75f,new PanelFeedback())) {
                     Check(Changed(before,after,pending.Rect,1.75f)&&!Changed(before,after,current.Rect,1.75f),"pending outline is distinct while the last confirmed selection keeps its visual highlight");
+                    Check(labels.Exists(delegate(DrawnLabel label){return label.Text=="1600…";})&&!labels.Exists(delegate(DrawnLabel label){return label.Text=="800…";}),"only the generic pending target receives the existing ellipsis hint");
                     after.Save(Path.Combine(output,"pending-onboard-1.75-light.png"));
-                }
+                }}finally{CompactRenderer.LabelObserver=null;}
                 using(var after=Render(owner,layout,true,1.75f,new PanelFeedback()))after.Save(Path.Combine(output,"pending-onboard-1.75-dark.png"));
                 Check(WirelessLayout.DpiSubtitle(a,owner.DesiredWirelessDpi(a.Id,a.Dpi.TargetToken),null).Contains("等待 1600"),"the subtitle names the pending target without replacing current DPI");
                 a.Dpi.TargetToken=new string('c',64);rows=Controls(owner);

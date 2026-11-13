@@ -41,7 +41,7 @@ static class PopupStateRegressionTests {
         internal int VolumeWrites,LastVolume=-1;
         internal string LastEndpoint;
         internal Fixture() {
-            DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false,Theme="light",VolumeCollapsed=false});
+            DeviceSettings.UseTransientConfiguration(new AudioBindings {PanelLayout="bar",ReducedMotion=true,RememberReadings=false,Theme="light",VolumeCollapsed=false});
             Owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=battery?new BatteryReading {Percent=85,TimestampUtc=DateTime.UtcNow}:null,Dpi=Dpi()};},
                 delegate(int stage){throw new Exception("Unexpected DPI write");},delegate{return new HeadsetReading {ConnectionVerified=true,Connected=false};},delegate{return Audio();},false,
                 delegate(string endpoint){throw new Exception("Unexpected output write");},delegate(bool muted){throw new Exception("Unexpected microphone write");},
@@ -195,7 +195,7 @@ static class PopupStateRegressionTests {
             var layout=WirelessLayout.Build(fixture.Owner,0,260);var controls=PopupPages.Build(fixture.Owner,new PopupNavigation(),false,layout);int count=controls.FindAll(delegate(PopupControl row){return row.Id==240;}).Count;
             Check(count==1&&layout.Paged&&layout.Size.Height<=260&&layout.VolumeRect.Bottom<=layout.Footer,"small-screen wireless pagination reserves space for a single shared volume row and footer");
             bool disjoint=true;for(int a=0;a<controls.Count;a++)for(int b=a+1;b<controls.Count;b++)disjoint&=!controls[a].Rect.IntersectsWith(controls[b].Rect);
-            Check(disjoint&&layout.Cards.TrueForAll(delegate(WirelessCard card){return card.Height==60;}),"shared volume keeps compact card heights, transparent gaps and disjoint hit regions");
+            Check(disjoint&&layout.Cards.TrueForAll(delegate(WirelessCard card){return card.Height==66;}),"shared volume keeps compact card heights, transparent gaps and disjoint hit regions");
             string output=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"main-volume-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(output);
             foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})foreach(bool dark in new[]{false,true})foreach(bool highContrast in new[]{false,true}) {
                 VisualDesign.HighContrastOverride=highContrast;var size=UiState.ScaleSize(layout.Size,scale);
@@ -297,11 +297,11 @@ static class PopupStateRegressionTests {
         }
     }
     static Bitmap VolumeSurface(AudioReading audio,PanelFeedback feedback,bool dark,float scale) {
-        var size=UiState.ScaleSize(new Size(268,56),scale);var image=new Bitmap(size.Width,size.Height,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        var size=UiState.ScaleSize(new Size(268,VisualDesign.SystemVolumeHeight+8),scale);var image=new Bitmap(size.Width,size.Height,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using(var drawing=Graphics.FromImage(image)) {
             drawing.Clear(Color.Transparent);drawing.ScaleTransform(scale,scale);
             drawing.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;drawing.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;drawing.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            CompactRenderer.SystemVolume(drawing,new RectangleF(4,4,260,48),audio,dark,feedback);
+            CompactRenderer.SystemVolume(drawing,new RectangleF(4,4,260,VisualDesign.SystemVolumeHeight),audio,dark,feedback);
         }
         return image;
     }
@@ -313,7 +313,7 @@ static class PopupStateRegressionTests {
     static void VolumeSurfaceFeedback() {
         string output=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"volume-surface-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(output);
         var audio=Audio(13);audio.Devices=new[]{new AudioDeviceChoice {Id="speaker",Name="扬声器 (Realtek(R) Audio)",Flow=0}};
-        var full=new RectangleF(0,0,268,56);var leftEdge=new RectangleF(4,25,3,6);var topEdge=new RectangleF(104,4,50,2);
+        var full=new RectangleF(0,0,268,VisualDesign.SystemVolumeHeight+8);var leftEdge=new RectangleF(4,19,3,6);var topEdge=new RectangleF(104,4,50,2);
         foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f})foreach(bool dark in new[]{false,true})foreach(bool highContrast in new[]{false,true}) {
             VisualDesign.HighContrastOverride=highContrast;
             using(var normal=VolumeSurface(audio,new PanelFeedback(),dark,scale))

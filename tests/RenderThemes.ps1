@@ -1,8 +1,10 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly,[switch]$UpdateBadgesOnly)
+param([Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,[switch]$InteractionsOnly,[switch]$DialogsOnly,[switch]$UpdateBadgesOnly,[switch]$MainPanelsOnly,[ValidateSet('all','ring','bar','grid')][string]$PanelLayout='all',[switch]$FullPanelMatrix)
 $ErrorActionPreference='Stop'
 if($InteractionsOnly -and $DialogsOnly){throw 'InteractionsOnly and DialogsOnly cannot be combined.'}
 if($UpdateBadgesOnly -and ($InteractionsOnly -or $DialogsOnly)){throw 'UpdateBadgesOnly cannot be combined with other modes.'}
+if($MainPanelsOnly -and ($InteractionsOnly -or $DialogsOnly -or $UpdateBadgesOnly)){throw 'MainPanelsOnly cannot be combined with other modes.'}
+if($FullPanelMatrix -and ($DialogsOnly -or $UpdateBadgesOnly)){throw 'FullPanelMatrix requires main panel rendering.'}
 $root=Split-Path -Parent $PSScriptRoot
 $previewOutput=[IO.Path]::GetFullPath($OutputDirectory)
 $temporaryRoot=[IO.Path]::GetFullPath($env:TEMP).TrimEnd('\','/')
@@ -34,6 +36,28 @@ if($UpdateBadgesOnly){
     return
 }
 if(-not $DialogsOnly){
+$panelExecutable=Join-Path $compileDirectory 'RenderMainPanels.exe'
+& $compiler /nologo /target:exe /platform:x64 /optimize+ /main:PanelDesignTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$panelExecutable" $sources (Join-Path $PSScriptRoot 'PanelDesignTests.cs')
+if($LASTEXITCODE -ne 0){throw 'Main panel preview compilation failed.'}
+$mainRenderStarted=[DateTime]::UtcNow
+if($FullPanelMatrix){& $panelExecutable --render $previewOutput $PanelLayout --matrix}
+elseif($PanelLayout -eq 'all'){& $panelExecutable --render $previewOutput}else{& $panelExecutable --render $previewOutput $PanelLayout}
+if($LASTEXITCODE -ne 0){throw 'Main panel preview rendering failed.'}
+$mainManifest=[ordered]@{
+    schema=1; generatedAtUtc=[DateTime]::UtcNow.ToString('o'); renderer='tests/RenderThemes.ps1 -> PanelDesignTests --render'
+    baseCommit=(& git -C $root rev-parse HEAD); version=$previewRelease.version; panelLayout=$PanelLayout; fullPanelMatrix=[bool]$FullPanelMatrix
+    scale=2; simulatedState=$true; liveHardware=$false; openingFillProgress=1
+    matrix=[ordered]@{layouts=@(if($PanelLayout -eq 'all'){'ring';'bar';'grid'}else{$PanelLayout});palettes=@('ocean','native','amber','mist');appearance=@('light','dark');fonts=@('normal','large');headset=@($false,$true);highContrast=@($false,$true);renderPaths=@('native','wireless')}
+    fileParameters='Matrix: main-panel-{layout}-{palette}-{appearance}-{font}-{headset|no-headset}-{standard|high-contrast}-{native|wireless}.png. Composite sheets: standard native / multiple devices / large native / multiple devices. Overflow: five mice with eight DPI stages, logical maximum height 520, top/bottom control scroll. Chooser: ring selected, 56x36 logical thumbnails.'
+    sources=@($sources | ForEach-Object {[ordered]@{path=$_;sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash}})
+    files=@(Get-ChildItem -LiteralPath $previewOutput -Filter '*.png' -File | Where-Object {$_.LastWriteTimeUtc -ge $mainRenderStarted -and ($_.Name -like 'main-panel-*' -or $_.Name -like 'layout-chooser-*')} | Sort-Object Name | ForEach-Object {[ordered]@{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}})
+}
+$mainManifest.sources+=([ordered]@{path=$PSCommandPath;sha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash})
+$mainManifest.sources+=([ordered]@{path=(Join-Path $PSScriptRoot 'PanelDesignTests.cs');sha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'PanelDesignTests.cs') -Algorithm SHA256).Hash})
+$manifestPath=Join-Path $previewOutput 'main-panel-manifest.json'
+[IO.File]::WriteAllText($manifestPath,($mainManifest | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))
+Write-Output $manifestPath
+if($MainPanelsOnly){return}
 $interactionExecutable=Join-Path $compileDirectory 'RenderInteractions.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:HoverTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/out:$interactionExecutable" $sources (Join-Path $PSScriptRoot 'HoverTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Interaction preview compilation failed.'}

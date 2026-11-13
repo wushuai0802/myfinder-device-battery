@@ -610,7 +610,7 @@ static class ThemedDialogTests {
             Show(form);var group=Find<ThemedSegments>(form,"Categories");var first=group.GetOption("Category-device");var second=group.GetOption("Category-battery");
             var accessible=group.AccessibilityObject;
             Check(group.Controls.Count==0&&accessible.GetChildCount()==4,"one segment HWND exposes four accessible children");
-            Check(first.Bounds.Height==VisualDesign.StageRect(0,4).Height&&first.Bounds.Top==group.GetOption("Category-ui").Bounds.Top,"wide feedback uses one row of panel-height segments");
+            Check(first.Bounds.Height==VisualDesign.SelectionHeight&&first.Bounds.Top==group.GetOption("Category-ui").Bounds.Top,"wide feedback retains its original single-row segment height independently of compact main-panel insets");
             for(int i=0;i<4;i++){
                 string category=FeedbackInput.CategoryAt(i);var option=group.GetOption("Category-"+category);
                 Check(option==accessible.GetChild(i)&&option.Parent==accessible&&option.Name==FeedbackInput.CategoryLabel(category)&&option.Role==AccessibleRole.RadioButton,"stable segment identifier, accessible name, parent and radio role");
@@ -690,7 +690,7 @@ static class ThemedDialogTests {
             // Keep the English default font fixed while the simulated monitor DPI changes.
             using(var font=new Font("Microsoft Sans Serif",8.25f,FontStyle.Regular,GraphicsUnit.Point)){
                 foreach(var kind in new[]{ThemedButtonKind.Primary,ThemedButtonKind.Secondary,ThemedButtonKind.Text})using(var button=new ThemedButton(theme,kind) {Font=font,Text="按钮",Size=new Size((int)(120*scale),(int)Math.Round(VisualDesign.SelectionHeight*scale))}){
-                    Check(button.GetPreferredSize(Size.Empty).Height==(int)Math.Round(VisualDesign.StageRect(0,4).Height*scale),"dialog/button and DPI segment heights are identical");
+                    Check(button.GetPreferredSize(Size.Empty).Height==(int)Math.Round(VisualDesign.SelectionHeight*scale),"dialog/button retains its original shared selection height rather than the inset main-panel thumb height");
                     for(int interaction=0;interaction<3;interaction++){
                         if(interaction==1)Call(button,"OnMouseEnter",EventArgs.Empty);if(interaction==2)Call(button,"OnMouseDown",new MouseEventArgs(MouseButtons.Left,1,10,10,0));
                         bool hover=interaction>0,pressed=interaction==2;

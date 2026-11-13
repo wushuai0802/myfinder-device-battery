@@ -33,7 +33,7 @@ static class UiFeedbackTests {
         internal int Reads,VolumeWrites,LastVolume=-1,OutputWrites;
         internal readonly ManualResetEvent VolumeGate=new ManualResetEvent(true);
         internal Fixture(AudioBindings settings=null,Func<AudioReading> readAudio=null,Func<string,AudioReading> switchAudio=null){
-            DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {RememberReadings=false,ReducedMotion=true,TraySource="auto",VolumeCollapsed=false});
+            DeviceSettings.UseTransientConfiguration(settings??new AudioBindings {PanelLayout="bar",RememberReadings=false,ReducedMotion=true,TraySource="auto",VolumeCollapsed=false});
             Owner=new TrayContext(false,delegate(bool battery){Interlocked.Increment(ref Reads);return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=Now}};},delegate(int stage){throw new Exception("No DPI writes");},null,delegate{return readAudio==null?Audio():readAudio();},false,
                 delegate(string target){Interlocked.Increment(ref OutputWrites);if(switchAudio!=null)return switchAudio(target);var value=Audio();value.ActiveOutput=target;return value;},delegate(bool mute){throw new Exception("No microphone writes");},
                 delegate(string endpoint,int value){VolumeGate.WaitOne();LastVolume=value;Interlocked.Increment(ref VolumeWrites);var audio=Audio();audio.OutputVolumePercent=value;return audio;},delegate{return false;},null,null,delegate{return Now;},null,
@@ -97,7 +97,7 @@ static class UiFeedbackTests {
     }
     static void VolumeDuringDrag(){
         using(var f=new Fixture()){
-            var slider=f.Controls().Find(delegate(PopupControl c){return c.Id==240;});var point=new PointF(slider.Rect.X+130,slider.Rect.Y+35);f.MouseEvent("OnMouseDown",point);Check((bool)Field(f.Popup,"draggingVolume"),"fake drag starts");
+            var slider=f.Controls().Find(delegate(PopupControl c){return c.Id==240;});var point=new PointF(slider.Rect.X+130,slider.Rect.Y+slider.Rect.Height/2);f.MouseEvent("OnMouseDown",point);Check((bool)Field(f.Popup,"draggingVolume"),"fake drag starts");
             var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);f.MouseEvent("OnMouseUp",point);
             Check(f.VolumeWrites==0&&f.Navigation.VolumePreview==-1&&!(bool)Field(f.Popup,"draggingVolume"),"collapsing cancels uncommitted pointer preview");
             f.VolumeGate.Reset();f.Owner.SelectOutputVolume("speaker",35);f.Owner.SelectOutputVolume("speaker",64);Check(f.Owner.DesiredVolume==64,"queue contains the latest submitted volume");
@@ -157,12 +157,12 @@ static class UiFeedbackTests {
             Check((int)Field(f.Popup,"hoverAction")==241,"hovering the triangle highlights its button");
             f.MouseEvent("OnMouseDown",center);f.MouseEvent("OnMouseUp",center);
             Check(!DeviceSettings.Current.VolumeCollapsed&&f.VolumeWrites==0&&f.Controls().Exists(delegate(PopupControl c){return c.Id==240&&c.Slider;}),"only the triangle expands volume at "+scale);
-            var expanded=VisualDesign.VolumeToggleRect(new RectangleF(0,50,260,48),false);Check(expanded==new RectangleF(228,52,28,24),"expanded hit geometry stays unchanged");
-            Check(VisualDesign.VolumeChevronRect(new RectangleF(0,50,260,48),false)==new RectangleF(235,56,14,14),"expanded triangle drawing stays unchanged");
+            var expanded=VisualDesign.VolumeToggleRect(new RectangleF(0,50,260,36),false);Check(expanded==new RectangleF(228,56,28,24),"expanded hit geometry is centered in the single-line volume card");
+            Check(VisualDesign.VolumeChevronRect(new RectangleF(0,50,260,36),false)==new RectangleF(235,61,14,14),"expanded triangle is centered in its exact hit rectangle");
         }
-        using(var f=new Fixture(new AudioBindings {RememberReadings=false,VolumeCollapsed=true})){
+        using(var f=new Fixture(new AudioBindings {PanelLayout="bar",RememberReadings=false,VolumeCollapsed=true})){
             Set(f.Popup,"headsetProgress",.5f);Call(f.Popup,"UpdateLayoutSize");var toggle=f.Controls().Find(delegate(PopupControl c){return c.Id==241;});
-            var card=new RectangleF(0,VisualDesign.MouseCardHeight(f.Owner.Dpi)+52+VisualDesign.CardGap,260,32);
+            var card=new RectangleF(0,VisualDesign.MouseCardHeight(f.Owner.Dpi)+VisualDesign.SecondCardStep*.5f+VisualDesign.CardGap,260,32);
             Check(toggle.Rect==VisualDesign.VolumeToggleRect(card,true),"classic Id 241 follows the intermediate second-card animation offset");
             f.Click(toggle);Check(!DeviceSettings.Current.VolumeCollapsed&&f.VolumeWrites==0,"the displaced classic arrow still expands without writing volume");
         }
@@ -319,10 +319,10 @@ static class UiFeedbackTests {
     static void PagingAndClassicTray(){
         using(var f=new Fixture()){
             f.Owner.NativeMousePresent=false;f.Owner.GenericReady=true;f.Owner.WirelessDevices=new[]{Mouse(A,PhysA,71),Mouse(B,PhysB,42)};
-            var expanded=WirelessLayout.Build(f.Owner,0,205);Check(expanded.Paged&&expanded.Cards.Count==1,"expanded volume reserves room when paging");
-            var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);var collapsed=WirelessLayout.Build(f.Owner,0,205);
-            Check(!collapsed.Paged&&collapsed.Cards.Count==2&&collapsed.Size.Height<=205&&collapsed.Footer==collapsed.VolumeRect.Bottom,"collapsed volume releases room for the next card without moving the footer into it");
-            var next=WirelessLayout.Build(f.Owner,expanded.End,205);Check(next.Start==1&&next.Cards[0].Id==B,"scroll offset remains usable after collapse");
+            var expanded=WirelessLayout.Build(f.Owner,0,212);Check(expanded.Paged&&expanded.Cards.Count==1,"expanded volume reserves room when paging");
+            var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);var collapsed=WirelessLayout.Build(f.Owner,0,212);
+            Check(!collapsed.Paged&&collapsed.Cards.Count==2&&collapsed.Size.Height<=212&&collapsed.Footer==collapsed.VolumeRect.Bottom,"collapsed volume releases room for the next card without moving the footer into it");
+            var next=WirelessLayout.Build(f.Owner,expanded.End,212);Check(next.Start==1&&next.Cards[0].Id==B,"scroll offset remains usable after collapse");
             f.Owner.NativeMousePresent=true;f.Owner.GenericReady=false;f.Owner.WirelessDevices=new WirelessDevice[0];pref.TraySource="active";DeviceSettings.UseTransientConfiguration(pref);Call(f.Owner,"UpdateIcon");
             Check(!f.Owner.UseWirelessLayout&&(string)Field(f.Owner,"trayDeviceKey")=="native:mouse","classic layout uses the same nonempty active fallback");
             f.Activity(PhysA,true);Check((string)Field(f.Owner,"trayDeviceKey")=="native:mouse","classic native activity keeps its own card");

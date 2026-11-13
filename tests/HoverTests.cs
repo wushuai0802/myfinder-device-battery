@@ -49,7 +49,7 @@ static class HoverTests {
     sealed class Fixture:IDisposable {
         internal TrayContext Owner;
         internal Fixture(){
-            DeviceSettings.UseTransientConfiguration(new AudioBindings {ReducedMotion=true,RememberReadings=false,LowBatteryNotifications=false,VolumeCollapsed=false});
+            DeviceSettings.UseTransientConfiguration(new AudioBindings {PanelLayout="bar",ReducedMotion=true,RememberReadings=false,LowBatteryNotifications=false,VolumeCollapsed=false});
             Owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=new BatteryReading {Percent=80,TimestampUtc=DateTime.UtcNow},Dpi=Dpi()};},delegate(int stage){throw new Exception("No writes");},delegate{return new HeadsetReading();},Audio,false,delegate(string id){throw new Exception("No writes");},delegate(bool muted){throw new Exception("No writes");},delegate(string id,int v){throw new Exception("No writes");},delegate{return false;});
             DateTime until=DateTime.UtcNow.AddSeconds(5);while((Owner.IsRefreshing||Owner.IsAudioBusy||Owner.IsHeadsetRefreshing||Owner.Audio==null)&&DateTime.UtcNow<until){Application.DoEvents();Thread.Sleep(2);}
             Check(!Owner.IsRefreshing&&!Owner.IsAudioBusy&&Owner.Audio!=null,"injected readers settle");
@@ -134,7 +134,7 @@ static class HoverTests {
             Style(style);
             Func<bool,bool,bool,Bitmap> draw=delegate(bool hovered,bool pressed,bool focus){var image=new Bitmap((int)(120*scale),(int)(50*scale));using(var g=Graphics.FromImage(image)){g.Clear(ThemePalette.Current(dark).Card);g.ScaleTransform(scale,scale);g.SmoothingMode=SmoothingMode.AntiAlias;CompactRenderer.Selection(g,new RectangleF(10,10,100,30),"800",null,true,true,hovered,pressed,false,dark,focus);}return image;};
             using(var normal=draw(false,false,false))using(var hover=draw(true,false,false))using(var press=draw(false,true,false))using(var focused=draw(false,false,true)){
-                bool focusVisible=false;for(int y=0;y<normal.Height;y++)for(int x=0;x<normal.Width;x++){Check(normal.GetPixel(x,y)==hover.GetPixel(x,y)&&normal.GetPixel(x,y)==press.GetPixel(x,y),"selected segment ignores pointer fill");focusVisible|=normal.GetPixel(x,y)!=focused.GetPixel(x,y);}Check(focusVisible,"keyboard focus remains visible over selected "+style+" fill");
+                bool focusVisible=false,hoverVisible=false,pressVisible=false;for(int y=0;y<normal.Height;y++)for(int x=0;x<normal.Width;x++){hoverVisible|=normal.GetPixel(x,y)!=hover.GetPixel(x,y);pressVisible|=normal.GetPixel(x,y)!=press.GetPixel(x,y);focusVisible|=normal.GetPixel(x,y)!=focused.GetPixel(x,y);}Check(hoverVisible&&pressVisible,"neutral selected segment retains subtle pointer feedback");Check(focusVisible,"keyboard focus remains visible over selected "+style+" fill");
             }
         }
     }
@@ -173,5 +173,5 @@ static class HoverTests {
             }
         }
     }
-    [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{DeviceSettings.UseTransientConfiguration(new AudioBindings());VisualDesign.HighContrastOverride=false;if(args.Length==2&&args[0]=="--render"){RenderSheets(args[1]);return 0;}Run("fill-only hover and press",Feedback);Run("independent keyboard focus",Focus);Run("glyph bounds match rendered content",InkBounds);Run("all regions: geometry and outline recording at 96/120/144/168/192 DPI",AllRegions);Run("selected segments suppress hover and press",SelectionStates);Run("high contrast system outlines",HighContrast);Console.WriteLine(checks+" checks, "+failures+" failed groups");return failures==0?0:1;}finally{InteractionLayout.Observer=null;CompactRenderer.InteractionOutlineObserver=null;CompactRenderer.LabelObserver=null;DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}}
+    [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{DeviceSettings.UseTransientConfiguration(new AudioBindings());VisualDesign.HighContrastOverride=false;if(args.Length==2&&args[0]=="--render"){RenderSheets(args[1]);return 0;}Run("fill-only hover and press",Feedback);Run("independent keyboard focus",Focus);Run("glyph bounds match rendered content",InkBounds);Run("all regions: geometry and outline recording at 96/120/144/168/192 DPI",AllRegions);Run("selected neutral segments show hover, press and focus",SelectionStates);Run("high contrast system outlines",HighContrast);Console.WriteLine(checks+" checks, "+failures+" failed groups");return failures==0?0:1;}finally{InteractionLayout.Observer=null;CompactRenderer.InteractionOutlineObserver=null;CompactRenderer.LabelObserver=null;DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}}
 }

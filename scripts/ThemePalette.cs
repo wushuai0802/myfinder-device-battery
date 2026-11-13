@@ -52,5 +52,14 @@ namespace AtkBatteryTray {
         }
         internal Color WarningBorder {get{return VisualDesign.HighContrast?Border:Blend(Border,LevelColor(0,dark),80);}}
         internal Color MutedMicrophoneFill {get{return VisualDesign.HighContrast?Track:Color.FromArgb(dark?35:20,LevelColor(0,dark));}}
+        internal Color PanelBorder {get{return VisualDesign.HighContrast?Border:Color.FromArgb(dark?18:15,dark?Color.White:Foreground);}}
+        internal Color PanelShadowNear {get{return VisualDesign.HighContrast?Color.Transparent:Color.FromArgb(dark?30:12,Color.Black);}}
+        internal Color PanelShadowFar {get{return VisualDesign.HighContrast?Color.Transparent:Color.FromArgb(dark?12:5,Color.Black);}}
+        internal Color SegmentFill {get{return VisualDesign.HighContrast?Selected:dark?Blend(Track,Foreground,24):Card;}}
+        internal Color SegmentBorder {get{return VisualDesign.HighContrast?Border:PanelBorder;}}
+        internal Color SegmentHover {get{return VisualDesign.HighContrast?Selected:Color.FromArgb(dark?15:10,dark?Color.White:Color.Black);}}
+        internal Color Charging {get{return VisualDesign.HighContrast?Foreground:LevelColor(100,dark);}}
+        internal Color StatusFill(Color ink){return VisualDesign.HighContrast?Track:Blend(Card,ink,dark?35:20);}
+        internal Color Tertiary {get{return VisualDesign.HighContrast?SystemColors.GrayText:Blend(Card,Muted,190);}}
     }
 }
