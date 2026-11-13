@@ -218,6 +218,44 @@ static class PanelDesignTests {
         using(var g=Graphics.FromImage(image)){g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);if(wireless)CompactRenderer.PaintWireless(g,owner,layout,dark,feedback);else CompactRenderer.Paint(g,owner.Current,owner.LastGood,null,false,owner.Dpi,null,false,dark,owner.Headset,owner.Audio,1,-1,false,1,-1,feedback);}
         return image;
     }
+    static Bitmap OpeningFrame(TrayContext owner,bool wireless,bool dark,float progress){
+        var layout=WirelessLayout.Build(owner,0,10000);var size=wireless?layout.Size:VisualDesign.PanelSizeFor(VisualDesign.HasAudioCard(owner.Headset,owner.Audio),owner.Dpi);
+        var image=new Bitmap(size.Width,size.Height,PixelFormat.Format32bppPArgb);
+        try{using(var g=Graphics.FromImage(image)){
+            var method=typeof(CompactRenderer).GetMethod(wireless?"PaintWireless":"Paint",Static);var parameters=method.GetParameters();
+            Check(parameters[parameters.Length-1].Name=="batteryProgress","both render paths accept independent opening fill progress");
+            object[] args=wireless?new object[]{g,owner,layout,dark,new PanelFeedback(),progress}:new object[]{g,owner.Current,owner.LastGood,null,false,owner.Dpi,null,false,dark,owner.Headset,owner.Audio,1f,-1,false,1f,-1,new PanelFeedback(),false,progress};
+            method.Invoke(null,args);
+        }return image;}catch{image.Dispose();throw;}
+    }
+    static void OpeningFill(){
+        foreach(bool reduced in new[]{false,true})foreach(float elapsed in new[]{-10f,0f,60f,120f,190f,240f,500f}){
+            float actual=(float)Geometry("BatteryOpeningProgress",elapsed,reduced),t=Math.Max(0,Math.Min(1,elapsed/240f));
+            Check(Math.Abs(actual-(reduced?1:1-(float)Math.Pow(1-t,3)))<.0001f,"opening fill uses the specified 240ms ease-out and reduced-motion final state");
+        }
+        foreach(string layout in PanelLayouts.Keys)foreach(string font in new[]{"normal","large"})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true}){
+            Mode(font,"ocean",false,layout);var pref=DeviceSettings.Current;pref.ReducedMotion=false;DeviceSettings.UseTransientConfiguration(pref);VisualDesign.HighContrastOverride=contrast;
+            using(var fixture=new Fixture())foreach(bool wireless in new[]{false,true}){
+                var owner=fixture.Owner;owner.GenericReady=wireless;
+                owner.WirelessDevices=new[]{new WirelessDevice {Id="opening-sleep",Name="注入休眠",Kind="keyboard",Percent=85,Fresh=true,Online=true,ConnectionState="sleeping",ConfirmedAtUtc=DateTime.UtcNow.ToString("o")}};
+                foreach(int? percent in new int?[]{0,1,2,3,50,100,null})foreach(bool fresh in new[]{false,true}){
+                    owner.Current=percent.HasValue?new BatteryReading {Percent=percent.Value,Charging=percent==50,TimestampUtc=fresh?DateTime.UtcNow:DateTime.UtcNow.AddHours(-2)}:null;owner.LastGood=null;
+                    var labels=new List<DrawnLabel>();CompactRenderer.LabelObserver=labels.Add;
+                    try{using(var start=OpeningFrame(owner,wireless,dark,0))using(var middle=OpeningFrame(owner,wireless,dark,.875f))using(var end=OpeningFrame(owner,wireless,dark,1)){
+                        Check(start.Size==end.Size&&middle.Size==end.Size,"opening never changes computed panel height");
+                        Rectangle area=layout=="ring"?Rectangle.Ceiling(VisualDesign.BatteryRingRect(0)):layout=="grid"?Rectangle.Ceiling(GridLayout.Bar((wireless?WirelessLayout.Build(owner,0,10000):GridLayout.Native(owner.Current,null,owner.Dpi,owner.Headset,owner.Audio)).Cards[0].Tile)):Rectangle.Ceiling(VisualDesign.BatteryBarRect(0));
+                        if(!PopupPages.Reduced&&percent.GetValueOrDefault()>0){Check(!SameArea(start,end,area),"opening start has no battery fill");if(percent>=50)Check(!SameArea(start,middle,area)&&!SameArea(middle,end,area),"opening has a distinct intermediate and final fill");}
+                        Check(labels.Count%3==0,"opening frames draw the same number of labels");int count=labels.Count/3;
+                        for(int i=0;i<count;i++)Check(labels[i].Text==labels[count+i].Text&&labels[i].Text==labels[2*count+i].Text,"numbers and state labels keep real values throughout the animation");
+                    }}finally{CompactRenderer.LabelObserver=null;}
+                }
+                pref=DeviceSettings.Current;pref.ReducedMotion=true;DeviceSettings.UseTransientConfiguration(pref);
+                using(var start=OpeningFrame(owner,wireless,dark,0))using(var end=OpeningFrame(owner,wireless,dark,1))Check(!Different(start,end),"reduced motion paints the final state immediately on both paths");
+                pref.ReducedMotion=false;DeviceSettings.UseTransientConfiguration(pref);
+            }
+        }
+        VisualDesign.HighContrastOverride=false;
+    }
     static void BarGeometry(){
         foreach(string font in new[]{"normal","large"}){Mode(font);var track=Rect("BatteryBarRect",0f);Check(track==new RectangleF(12,VisualDesign.LargeFont?56:50,VisualDesign.PanelWidth-24,4),"4px battery track uses the specified header and side insets");
             foreach(int? percent in new int?[]{0,1,2,3,50,100,null})foreach(bool fresh in new[]{false,true})foreach(bool approximate in new[]{false,true}){
@@ -235,7 +273,7 @@ static class PanelDesignTests {
                 foreach(var view in new[]{new BatteryView {Percent=100,Fresh=true,Approximate=true,Charging=true},new BatteryView {Percent=0,Fresh=true},new BatteryView {Percent=1,Fresh=true},new BatteryView {Percent=2,Fresh=true},new BatteryView {Percent=3,Fresh=true},new BatteryView {Percent=50,Fresh=true,Charging=true},new BatteryView {Percent=100,Fresh=false,Unconfirmed=true},new BatteryView(),new BatteryView {Fresh=true}}){
                     g.Clear(Color.Transparent);
                     var labels=new List<DrawnLabel>();var bolts=new List<RectangleF>();CompactRenderer.LabelObserver=labels.Add;CompactRenderer.SymbolObserver=delegate(string symbol,RectangleF rect){if(symbol=="bolt")bolts.Add(rect);};
-                    try{typeof(CompactRenderer).GetMethod("Meter",Static).Invoke(null,new object[]{g,view,0f,(float)VisualDesign.GenericCardHeight,false,new PanelFeedback(),4});}finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;}
+                    try{typeof(CompactRenderer).GetMethod("Meter",Static).Invoke(null,new object[]{g,view,0f,(float)VisualDesign.GenericCardHeight,false,new PanelFeedback(),4,1f});}finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;}
                     string text=view.Percent.HasValue?(view.Approximate?"≈":"")+view.Percent.Value:"--";var digits=labels.Find(delegate(DrawnLabel label){return label.Text==text;});
                     Check(digits!=null&&digits.Bold&&digits.FontSize==(view.Percent.HasValue?VisualDesign.BatteryDigitSize:13),"full sized digits and the smaller existing no-reading placeholder are drawn");
                     var digitInk=InteractionLayout.LabelBounds(g,text,digits.LogicalRect,digits.FontSize,true,StringAlignment.Far,System.Drawing.StringTrimming.None);
@@ -442,7 +480,7 @@ static class PanelDesignTests {
             }
         }}
     }
-    static void RenderPreviews(string directory,string panelLayout="bar"){
+    static void RenderPreviews(string directory,string panelLayout="bar",bool fullMatrix=false){
         Directory.CreateDirectory(directory);const int scale=2;
         foreach(string style in ThemePalette.Keys)foreach(bool dark in new[]{false,true}){
             var frames=new List<Bitmap>();
@@ -453,6 +491,15 @@ static class PanelDesignTests {
                         if(style=="ocean"){
                             string stem=Path.Combine(directory,"main-panel-"+panelLayout+"-ocean-"+(dark?"dark":"light")+"-"+font);
                             frames[frames.Count-1].Save(stem+"-headset.png",ImageFormat.Png);var ear=owner.Headset;owner.Headset=null;using(var noHeadset=Render(owner,false,dark,new PanelFeedback(),scale))noHeadset.Save(stem+"-no-headset.png",ImageFormat.Png);owner.Headset=ear;
+                        }
+                        if(fullMatrix){
+                            var ear=owner.Headset;
+                            foreach(bool contrast in new[]{false,true})foreach(bool headset in new[]{false,true})foreach(bool wireless in new[]{false,true}){
+                                VisualDesign.HighContrastOverride=contrast;owner.Headset=headset?ear:null;
+                                string path=Path.Combine(directory,"main-panel-"+panelLayout+"-"+style+"-"+(dark?"dark":"light")+"-"+font+"-"+(headset?"headset":"no-headset")+"-"+(contrast?"high-contrast":"standard")+"-"+(wireless?"wireless":"native")+".png");
+                                using(var image=Render(owner,wireless,dark,new PanelFeedback(),scale))image.Save(path,ImageFormat.Png);
+                            }
+                            VisualDesign.HighContrastOverride=false;owner.Headset=ear;
                         }
                         owner.GenericReady=true;owner.Audio.MicrophoneMuted=true;
                         owner.WirelessDevices=new[]{
@@ -476,6 +523,16 @@ static class PanelDesignTests {
         }
         if(panelLayout=="grid")RenderGridOverflowPreviews(directory);
     }
+    static void RenderLayoutChoices(string directory,bool fullMatrix){
+        foreach(string style in fullMatrix?ThemePalette.Keys:new[]{"ocean"})foreach(string font in new[]{"normal","large"})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true}){
+            Mode(font,style,false,"ring");VisualDesign.HighContrastOverride=contrast;using(var fixture=new Fixture()){
+                var nav=new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=229};var rows=PopupPages.Build(fixture.Owner,nav,true);var size=UiState.ScaleSize(PopupPages.SizeFor(rows),2);
+                string path=Path.Combine(directory,"layout-chooser-"+style+"-"+(dark?"dark":"light")+"-"+font+"-"+(contrast?"high-contrast":"standard")+".png");
+                using(var image=new Bitmap(size.Width,size.Height,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(image)){g.ScaleTransform(2,2);PopupPages.Paint(g,fixture.Owner,nav,rows,dark,-1,-1,-1);image.Save(path,ImageFormat.Png);}Console.WriteLine(path);
+            }
+        }
+        VisualDesign.HighContrastOverride=false;
+    }
     static void RenderGridOverflowPreviews(string directory){
         foreach(string font in new[]{"normal","large"})foreach(bool dark in new[]{false,true}){
             Mode(font,"ocean",false,"grid");using(var fixture=new Fixture()){
@@ -491,7 +548,16 @@ static class PanelDesignTests {
         }
     }
     [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{
-        if(args.Length>=2&&args[0]=="--render"){VisualDesign.HighContrastOverride=false;foreach(string layout in args.Length>2?new[]{args[2]}:new[]{"ring","bar","grid"})RenderPreviews(args[1],layout);return 0;}
+        if(args.Length>=2&&args[0]=="--render"){
+            VisualDesign.HighContrastOverride=false;bool matrix=Array.IndexOf(args,"--matrix")>=0;var layouts=args.Length>2&&args[2]!="all"&&args[2]!="--matrix"?new[]{args[2]}:PanelLayouts.Keys;
+            foreach(string layout in layouts)RenderPreviews(args[1],layout,matrix);RenderLayoutChoices(args[1],matrix);return 0;
+        }
+        Run("opening fill frames, real labels, states and reduced motion",OpeningFill);
+        if(args.Length==1&&args[0]=="--opening-fill")return failures==0?0:1;
+        if(args.Length==1&&args[0]=="--polish"){
+            foreach(string layout in PanelLayouts.Keys){string key=layout;Run("complete rendering matrix / "+key,delegate{RenderMatrix(key);});}
+            Console.WriteLine("192 layout/palette/light/font/headset/contrast combinations, both render paths; "+checks+" checks, "+failures+" failed groups");return failures==0?0:1;
+        }
         Run("grid overflow 520px, five mice x eight stages, normal",delegate{GridOverflowHeight("normal");});
         Run("grid overflow 520px, five mice x eight stages, large",delegate{GridOverflowHeight("large");});
         Run("grid overflow viewport, clipping, fixed volume and scale matrix",GridOverflowViewportMatrix);

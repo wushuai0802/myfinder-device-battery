@@ -74,7 +74,7 @@ static class InteractionPerformanceTests {
             var page=(System.Windows.Forms.Timer)Field(popup,"pageAnimation");
             if(!timer.Enabled&&!page.Enabled)break;
             Application.DoEvents();if(popup.IsDisposed)break;
-            string state=Field(popup,"frameAlpha")+"|"+Field(popup,"animationProgress")+"|"+Field(popup,"pageProgress");
+            string state=Field(popup,"frameAlpha")+"|"+Field(popup,"animationProgress")+"|"+Field(popup,"pageProgress")+"|"+Field(popup,"batteryProgress");
             if(state!=previous){Draw(popup,index,measured,"animation_draw_ms");previous=state;frames++;}
             if(clock.ElapsedMilliseconds>15000)throw new Exception("Fixture animation failed to settle; this is a lifecycle timeout, not a performance threshold.");
             Thread.Sleep(2);
@@ -98,7 +98,7 @@ static class InteractionPerformanceTests {
         Details popup=null;
         try {
             var clock=Stopwatch.StartNew();popup=new Details(owner);Set(owner,"details",popup);
-            var handle=popup.Handle;Call(popup,"ResetPage");owner.PanelOpened();Call(popup,"AnimateTo",1f,190f);
+            var handle=popup.Handle;Call(popup,"ResetPage");Call(popup,"BeginBatteryOpening");owner.PanelOpened();Call(popup,"AnimateTo",1f,190f);
             Record("construct_open_logic_ms",index,clock.Elapsed.TotalMilliseconds,measured);
             Draw(popup,index,measured,"initial_draw_ms");
             Record("first_frame_from_construction_ms",index,clock.Elapsed.TotalMilliseconds,measured);

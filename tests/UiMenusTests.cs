@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
@@ -186,6 +187,92 @@ static class UiMenusTests {
             f.Page(PopupPage.Main);f.Popup.SyncDevices();pref=DeviceSettings.Current;pref.ReducedMotion=false;pref.PanelLayout="bar";DeviceSettings.UseTransientConfiguration(pref);f.Owner.ConfigurationChanged(false);
             if(!PopupPages.Reduced){Check(((System.Windows.Forms.Timer)Field(f.Popup,"pageAnimation")).Enabled,"layout height change uses the existing animation timer");Pump(delegate{return !((System.Windows.Forms.Timer)Field(f.Popup,"pageAnimation")).Enabled;});}
             var settled=wireless?WirelessLayout.Build(f.Owner,0,10000).Size:VisualDesign.PanelSizeFor(headset,f.Owner.Dpi);Check(f.Popup.ClientSize==UiState.ScaleSize(settled,(float)Field(f.Popup,"dpiScale")),"animated layout change settles at the calculated height");
+        }
+    }
+    static void LayoutThumbnails(){
+        var layoutKey=typeof(PopupControl).GetField("LayoutKey");Check(layoutKey!=null,"layout choices carry a dedicated preview key");
+        var preview=typeof(PopupPages).GetMethod("LayoutPreviewRect",BindingFlags.Static|BindingFlags.NonPublic);Check(preview!=null,"layout thumbnail has shared bounds");
+        foreach(string font in new[]{"normal","large"})foreach(bool dark in new[]{false,true})foreach(bool contrast in new[]{false,true})using(var f=new Fixture()){
+            var pref=DeviceSettings.Current;pref.FontSize=font;DeviceSettings.UseTransientConfiguration(pref);VisualDesign.HighContrastOverride=contrast;
+            var nav=new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=229,VisibleChoices=100};var rows=PopupPages.Build(f.Owner,nav,false);var size=PopupPages.SizeFor(rows);var labels=new List<DrawnLabel>();var checksDrawn=new List<RectangleF>();
+            CompactRenderer.LabelObserver=labels.Add;CompactRenderer.SymbolObserver=delegate(string symbol,RectangleF rect){if(symbol=="check")checksDrawn.Add(rect);};
+            try{using(var image=new Bitmap(size.Width,size.Height))using(var g=Graphics.FromImage(image)){
+                PopupPages.Paint(g,f.Owner,nav,rows,dark,471,-1,472);
+                Check(checksDrawn.Count==1,"layout chooser keeps one selected check mark");
+                for(int index=0;index<3;index++){
+                    var row=rows.Find(delegate(PopupControl item){return item.Id==470+index;});Check((string)layoutKey.GetValue(row)==PanelLayouts.Keys[index]&&row.Text==PanelLayouts.Names[index],"three preview keys preserve action IDs and names");
+                    var rect=(RectangleF)preview.Invoke(null,new object[]{row.Rect});Check(rect.Size==new SizeF(56,36)&&row.Rect.Contains(rect),"56x36 thumbnail stays within its choice row");
+                    var label=labels.Find(delegate(DrawnLabel item){return item.Text==row.Text;});Check(label!=null&&label.LogicalRect.Right<=rect.Left-6&&checksDrawn[0].Left>=rect.Right+6,"name, preview and selected check never overlap");
+                    Check(row.AccessibleName==null||row.AccessibleName.Contains(row.Text),"thumbnail never replaces the accessible name");
+                }
+            }}finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;}
+            var paint=typeof(PopupPages).GetMethod("PaintLayoutPreview",BindingFlags.Static|BindingFlags.NonPublic);Check(paint!=null,"layout preview uses the real schematic painter");
+            using(var ring=new Bitmap(56,36))using(var bar=new Bitmap(56,36))using(var grid=new Bitmap(56,36)){
+                var frames=new[]{ring,bar,grid};
+                for(int index=0;index<3;index++)using(var g=Graphics.FromImage(frames[index])){
+                    paint.Invoke(null,new object[]{g,PanelLayouts.Keys[index],new RectangleF(0,0,56,36),dark});
+                    Check(frames[index].GetPixel(5,5).A>0,"thumbnail contains actual painted pixels");
+                }
+                bool ringBar=false,ringGrid=false,barGrid=false;for(int y=3;y<33;y++)for(int x=3;x<53;x++){
+                    ringBar|=ring.GetPixel(x,y)!=bar.GetPixel(x,y);ringGrid|=ring.GetPixel(x,y)!=grid.GetPixel(x,y);barGrid|=bar.GetPixel(x,y)!=grid.GetPixel(x,y);
+                }
+                Check(ringBar&&ringGrid&&barGrid,"ring, bar and grid draw distinct shapes");
+                var first=rows.Find(delegate(PopupControl item){return item.Id==470;});first.Selected=false;var bounds=Rectangle.Round((RectangleF)preview.Invoke(null,new object[]{first.Rect}));
+                using(var withPreview=new Bitmap(size.Width,size.Height))using(var withoutPreview=new Bitmap(size.Width,size.Height)){
+                    using(var g=Graphics.FromImage(withPreview))PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);
+                    layoutKey.SetValue(first,null);using(var g=Graphics.FromImage(withoutPreview))PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);layoutKey.SetValue(first,"ring");
+                    int differences=0;for(int y=bounds.Top+3;y<bounds.Bottom-3;y++)for(int x=bounds.Left+3;x<bounds.Right-3;x++)if(withPreview.GetPixel(x,y)!=withoutPreview.GetPixel(x,y))differences++;
+                    Check(differences>100,"the shared chooser row actually paints its thumbnail");
+                }
+            }
+            foreach(int action in new[]{210,223,228,224,211,213,216})foreach(var row in Rows(f.Owner,PopupPage.ChoosePreference,action))Check(layoutKey.GetValue(row)==null,"other choosers retain their original row rendering");
+        }
+        VisualDesign.HighContrastOverride=false;
+    }
+    static void OpeningLifecycle(){
+        Check(typeof(Details).GetField("batteryProgress",Private)!=null,"popup owns independent UI-only fill progress");
+        int timers=0;foreach(var field in typeof(Details).GetFields(Private))if(field.FieldType==typeof(System.Windows.Forms.Timer))timers++;Check(timers==6,"opening fill adds no resident timer");
+        foreach(string layout in PanelLayouts.Keys)using(var f=new Fixture()){
+            var pref=DeviceSettings.Current;pref.PanelLayout=layout;pref.ReducedMotion=false;DeviceSettings.UseTransientConfiguration(pref);
+            Call(f.Popup,"BeginBatteryOpening");Call(f.Popup,"AnimateTo",1f,190f);var timer=(System.Windows.Forms.Timer)Field(f.Popup,"animation");var clock=(Stopwatch)Field(f.Popup,"motionClock");
+            if(!PopupPages.Reduced){
+                Check((float)Field(f.Popup,"batteryProgress")==0&&timer.Enabled,"opening starts empty using the existing motion timer");
+                Call(f.Popup,"AdvanceMotion",120f);Check(Math.Abs((float)Field(f.Popup,"batteryProgress")-.875f)<.0001,"middle frame is eased at 120ms");
+                f.Owner.Current=new BatteryReading {Percent=34,TimestampUtc=DateTime.UtcNow};f.Popup.SyncDevices();Check((float)Field(f.Popup,"batteryProgress")==.875f,"refresh never restarts the opening animation");
+                Call(f.Popup,"AdvanceMotion",190f);Check((float)Field(f.Popup,"animationProgress")==1&&timer.Enabled,"fill continues after the 190ms window fade");
+                Call(f.Popup,"AdvanceMotion",240f);
+            }
+            Check((float)Field(f.Popup,"batteryProgress")==1&&!timer.Enabled&&!clock.IsRunning,"opening finishes fully filled with timer and clock stopped");
+            int invalidations=0;f.Popup.Invalidated+=delegate{invalidations++;};Call(f.Popup,"AdvanceMotion",400f);Check(invalidations==0,"settled animation does not request more frames");
+            f.Owner.Current=new BatteryReading {Percent=99,TimestampUtc=DateTime.UtcNow};f.Popup.SyncDevices();Check((float)Field(f.Popup,"batteryProgress")==1&&!timer.Enabled,"later readings appear directly without replay");
+            Call(f.Popup,"BeginBatteryOpening");Call(f.Popup,"AnimateTo",1f,190f);if(!PopupPages.Reduced)Call(f.Popup,"AdvanceMotion",60f);
+            f.Popup.CloseAnimated();Check((float)Field(f.Popup,"batteryProgress")==1&&!(bool)Field(f.Popup,"batteryOpening"),"closing cancels incomplete fill");
+            if(f.Popup.IsDisposed)continue;
+            // Exercise the production reopen branch without showing or activating a window.
+            Set(f.Popup,"closing",false);Call(f.Popup,"BeginBatteryOpening");Call(f.Popup,"AnimateTo",1f,190f);
+            Check((float)Field(f.Popup,"batteryProgress")==0,"reopening begins a fresh fill rather than retaining a partial value");
+            pref=DeviceSettings.Current;pref.ReducedMotion=true;DeviceSettings.UseTransientConfiguration(pref);Call(f.Popup,"AdvanceMotion",80f);
+            Check((float)Field(f.Popup,"batteryProgress")==1&&!timer.Enabled&&!clock.IsRunning,"enabling reduced motion during opening settles immediately");
+            Call(f.Popup,"BeginBatteryOpening");Call(f.Popup,"AnimateTo",1f,190f);Check((float)Field(f.Popup,"batteryProgress")==1&&!timer.Enabled,"reduced-motion reopening starts in the final state");
+            f.Popup.Dispose();Check(!clock.IsRunning,"destroyed popup retains no motion clock");
+        }
+    }
+    static Bitmap HiddenOpeningFrame(Details popup,float progress){
+        Set(popup,"batteryProgress",progress);var image=new Bitmap(popup.ClientSize.Width,popup.ClientSize.Height);
+        using(var g=Graphics.FromImage(image)){float scale=(float)Field(popup,"dpiScale");g.ScaleTransform(scale,scale);Call(popup,"PaintContent",g);}return image;
+    }
+    static void OpeningPresentation(){
+        foreach(string layout in PanelLayouts.Keys)foreach(bool wireless in new[]{false,true})using(var f=new Fixture()){
+            var pref=DeviceSettings.Current;pref.PanelLayout=layout;pref.ReducedMotion=false;DeviceSettings.UseTransientConfiguration(pref);
+            f.Owner.NativeMousePresent=true;f.Owner.GenericReady=wireless;f.Owner.Current=new BatteryReading {Percent=100,TimestampUtc=DateTime.UtcNow};f.Popup.SyncDevices();
+            ((System.Windows.Forms.Timer)Field(f.Popup,"pageAnimation")).Stop();Set(f.Popup,"pageProgress",1f);Call(f.Popup,"UpdateLayoutSize");
+            using(var start=HiddenOpeningFrame(f.Popup,0))using(var end=HiddenOpeningFrame(f.Popup,1)){
+                bool different=false;for(int y=0;y<start.Height&&!different;y++)for(int x=0;x<start.Width;x++)if(start.GetPixel(x,y)!=end.GetPixel(x,y)){different=true;break;}
+                Check(different==!PopupPages.Reduced,"Details forwards fill progress through its actual paint path: "+layout+" / wireless="+wireless);
+            }
+            var handle=f.Popup.Handle;Set(f.Popup,"batteryProgress",.99999f);Check((bool)Call(f.Popup,"RenderLayeredFrame"),"hidden near-final layered frame renders");string partial=(string)Field(f.Popup,"lastPresentedKey");
+            Set(f.Popup,"batteryProgress",1f);Check((bool)Call(f.Popup,"RenderLayeredFrame"),"hidden final layered frame renders");Check(partial!=(string)Field(f.Popup,"lastPresentedKey"),"exact full circle is never skipped by rounded presentation cache keys");
+            Check(!f.Popup.Visible,"presentation regression never shows a real or fixture window");
         }
     }
     static DpiConfig GridDpi(int count=4){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("grid-input"),ActiveStage=0,TimestampUtc=DateTime.UtcNow};for(int i=0;i<count;i++)dpi.Stages.Add(new DpiStage {XDpi=(i+1)*400,YDpi=(i+1)*400});return dpi;}
@@ -542,6 +629,8 @@ static class UiMenusTests {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=cached.GetValue(null);
         try{
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
+            Run("layout preview bounds, names, checkmarks and chooser isolation",LayoutThumbnails);Run("opening fill lifetime, refresh, reopen and reduced motion",OpeningLifecycle);Run("hidden popup paint paths and exact final-frame presentation",OpeningPresentation);
+            if(args.Length==1&&args[0]=="--polish"){Run("layout preferences, immediate save and popup heights",PanelLayoutPreferences);Console.WriteLine(checks+" checks, "+failures+" failed groups");return failures==0?0:1;}
             Run("grid overflow keyboard reveal and independent pointer wheel matrix",GridOverflowKeyboardAndWheel);
             Run("grid overflow accessibility clipping, mutation and stable identity",GridOverflowAccessibilityAndMutation);
             if(args.Length==1&&args[0]=="--grid-overflow")return failures==0?0:1;

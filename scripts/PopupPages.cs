@@ -13,7 +13,7 @@ namespace AtkBatteryTray {
         public RectangleF Rect;
         public RectangleF? Viewport;
         public RectangleF VisibleRect {get{if(!Viewport.HasValue)return Rect;var visible=RectangleF.Intersect(Rect,Viewport.Value);return visible.Width>0&&visible.Height>0?visible:RectangleF.Empty;}}
-        public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey,AccessibleName;
+        public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey,LayoutKey,AccessibleName;
         public string GroupKey;
         public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy,WrapText,Section;
         public string StableKey {get {
@@ -174,7 +174,7 @@ namespace AtkBatteryTray {
                 else if(nav.PreferenceAction==213){labels=new[]{"10%","15%","20%"};first=420;selected=pref.WarningThreshold==10?0:pref.WarningThreshold==15?1:2;}
                 else {labels=new[]{"1分钟","2分钟","5分钟"};first=430;selected=pref.BackgroundSeconds==60?0:pref.BackgroundSeconds==120?1:2;}
                 int[] trayRuleIds={415,414,410,411,412,413};
-                for(int i=0;i<labels.Length;i++){var choice=Row(nav.PreferenceAction==211?trayRuleIds[i]:first+i,labels[i]);choice.Selected=i==selected&&(nav.PreferenceAction!=211||String.IsNullOrEmpty(pref.TrayDeviceId));if(nav.PreferenceAction==223)choice.PaletteKey=ThemePalette.Keys[i];rows.Add(choice);}
+                for(int i=0;i<labels.Length;i++){var choice=Row(nav.PreferenceAction==211?trayRuleIds[i]:first+i,labels[i]);choice.Selected=i==selected&&(nav.PreferenceAction!=211||String.IsNullOrEmpty(pref.TrayDeviceId));if(nav.PreferenceAction==223)choice.PaletteKey=ThemePalette.Keys[i];if(nav.PreferenceAction==229)choice.LayoutKey=PanelLayouts.Keys[i];rows.Add(choice);}
                 if(nav.PreferenceAction==211) {
                     rows[0].Detail="仅跟随 USB 鼠标活动";
                     foreach(var device in TrayDevices(owner)) {
@@ -299,6 +299,7 @@ namespace AtkBatteryTray {
         static float RowHeight(PopupControl row) {
             int sectionHeight=VisualDesign.LargeFont?28:24,sliderHeight=VisualDesign.LargeFont?60:54,detailBase=VisualDesign.LargeFont?30:26,detailStep=VisualDesign.LargeFont?20:18;
             float height=row.Section?sectionHeight:row.Slider?sliderHeight:!String.IsNullOrEmpty(row.Detail)?detailBase+detailStep*row.Detail.Split('\n').Length:OrdinaryRowHeight;
+            if(!String.IsNullOrEmpty(row.LayoutKey))height=Math.Max(height,48);
             if(row.WrapText)using(var bitmap=new Bitmap(1,1))using(var g=Graphics.FromImage(bitmap))using(var font=new Font("Microsoft YaHei UI",VisualDesign.DeviceNameFontSize,FontStyle.Regular,GraphicsUnit.Pixel))height=Math.Max(height,(float)Math.Ceiling(g.MeasureString(WrappedText(row),font,new SizeF(VisualDesign.PanelWidth-49,1000)).Height)+12);
             return height;
         }
@@ -490,6 +491,37 @@ namespace AtkBatteryTray {
             using(var brush=new SolidBrush(!enabled?palette.Muted:isChecked?palette.SelectedForeground:VisualDesign.HighContrast?palette.Knob:dark?palette.Muted:Color.White))g.FillEllipse(brush,knob);
             if(enabled&&!isChecked&&!dark&&!VisualDesign.HighContrast)using(var pen=new Pen(palette.Muted,1))g.DrawEllipse(pen,knob);
         }
+        internal static RectangleF LayoutPreviewRect(RectangleF row){return new RectangleF(row.Right-88,row.Y+(float)Math.Floor((row.Height-36)/2),56,36);}
+        static void PaintLayoutPreview(Graphics g,string layout,RectangleF rect,bool dark) {
+            var palette=ThemePalette.Current(dark);var body=rect;body.Inflate(-.5f,-.5f);
+            InteractionLayout.Include(rect);
+            CompactRenderer.Fill(g,body,palette.Card,4);
+            using(var shape=VisualDesign.RoundRect(body.X,body.Y,body.Width,body.Height,4))using(var pen=new Pen(VisualDesign.HighContrast?palette.Foreground:palette.Border,1))g.DrawPath(pen,shape);
+            if(layout=="grid"){
+                for(int i=0;i<4;i++){
+                    var tile=new RectangleF(rect.X+4+(i%2)*25,rect.Y+4+(i/2)*15,23,13);
+                    using(var shape=VisualDesign.RoundRect(tile.X,tile.Y,tile.Width,tile.Height,2))using(var pen=new Pen(palette.Muted,1))g.DrawPath(pen,shape);
+                    CompactRenderer.Fill(g,new RectangleF(tile.X+3,tile.Y+3,8,3),palette.Foreground,1);
+                    CompactRenderer.Fill(g,new RectangleF(tile.X+3,tile.Y+9,17,2),palette.Track,1);
+                    CompactRenderer.Fill(g,new RectangleF(tile.X+3,tile.Y+9,i==0?13:9,2),palette.Accent,1);
+                }
+            }else for(int i=0;i<2;i++){
+                float y=rect.Y+5+i*15;
+                if(layout=="ring"){
+                    var ring=new RectangleF(rect.X+5,y,11,11);
+                    using(var pen=new Pen(palette.Track,2))g.DrawEllipse(pen,ring);
+                    using(var pen=new Pen(palette.Accent,2) {StartCap=LineCap.Round,EndCap=LineCap.Round})g.DrawArc(pen,ring,-90,i==0?270:180);
+                    CompactRenderer.Fill(g,new RectangleF(rect.X+22,y+2,27,2),palette.Foreground,1);
+                    CompactRenderer.Fill(g,new RectangleF(rect.X+22,y+7,19,2),palette.Muted,1);
+                }else{
+                    CompactRenderer.Fill(g,new RectangleF(rect.X+5,y,6,6),palette.Muted,2);
+                    CompactRenderer.Fill(g,new RectangleF(rect.X+15,y+1,21,2),palette.Foreground,1);
+                    CompactRenderer.Fill(g,new RectangleF(rect.X+42,y+1,8,2),palette.Muted,1);
+                    CompactRenderer.Fill(g,new RectangleF(rect.X+5,y+9,46,3),palette.Track,1);
+                    CompactRenderer.Fill(g,new RectangleF(rect.X+5,y+9,i==0?34:23,3),palette.Accent,1);
+                }
+            }
+        }
         internal static void Paint(Graphics g,TrayContext owner,PopupNavigation nav,List<PopupControl> controls,bool dark,int hover,int pressed,int focus) {
             Size size=SizeFor(controls);var palette=ThemePalette.Current(dark);var fg=palette.Foreground;var muted=palette.Muted;var blue=palette.Accent;var track=palette.Track;
             g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
@@ -552,9 +584,11 @@ namespace AtkBatteryTray {
                     int titleHeight=VisualDesign.LargeFont?24:22,detailStep=VisualDesign.LargeFont?20:18;
                     float maxTitleWidth=VisualDesign.LargeFont?128:105,valueReserve=VisualDesign.LargeFont?102:90;
                     float textWidth=String.IsNullOrEmpty(row.Value)?rect.Right-x-23:Math.Min(maxTitleWidth,rect.Right-x-valueReserve);
+                    if(!String.IsNullOrEmpty(row.LayoutKey))textWidth=LayoutPreviewRect(rect).Left-x-10;
                     VisualDesign.DrawLabel(g,row.Text,new RectangleF(x,rect.Y+(String.IsNullOrEmpty(row.Detail)?0:1),textWidth,String.IsNullOrEmpty(row.Detail)?rect.Height:titleHeight),VisualDesign.DeviceNameFontSize,false,row.Id==204&&!(VisualDesign.HighContrast&&highlighted)?ThemePalette.LevelColor(10,dark):color,StringAlignment.Near);
                     if(!String.IsNullOrEmpty(row.Detail)){var lines=row.Detail.Split('\n');for(int i=0;i<lines.Length;i++)VisualDesign.DrawLabel(g,lines[i],new RectangleF(x,rect.Y+titleHeight+detailStep*i,rect.Right-x-(row.Id==217?12:24),detailStep),VisualDesign.SubtitleFontSize,false,detailColor,StringAlignment.Near);}
                     if(!String.IsNullOrEmpty(row.Value))VisualDesign.DrawLabel(g,row.Value,new RectangleF(x+textWidth,rect.Y,rect.Right-x-textWidth-19,rect.Height),VisualDesign.SubtitleFontSize,false,detailColor,StringAlignment.Far);
+                    if(!String.IsNullOrEmpty(row.LayoutKey))PaintLayoutPreview(g,row.LayoutKey,LayoutPreviewRect(rect),dark);
                     if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(float)Math.Floor((rect.Height-14)/2),14,14),themeChoice?blue:palette.SelectedForeground);
                     else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=224||row.Id==228||row.Id==229||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000&&row.ActionKey!="tray:member"&&row.ActionKey!="tray:group-pin"||row.ActionKey=="tray:group"||row.ActionKey=="tray:rename"||row.ActionKey=="tray:rules"||row.ActionKey=="tray:members")VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(float)Math.Floor((rect.Height-12)/2),12,12),detailColor);
                 }

@@ -78,6 +78,8 @@ namespace AtkBatteryTray {
         internal static RectangleF AudioHeaderChevronRect(float top){return new RectangleF(PanelWidth-21,top+(LargeFont?16:13),7,10);}
         internal static RectangleF BatteryBarRect(float top){return BarGeometry.BatteryBar(top);}
         internal static RectangleF BatteryFillRect(float top,BatteryView view){var rect=BatteryBarRect(top);rect.Width*=Math.Max(0,Math.Min(100,view==null?0:view.Percent.GetValueOrDefault()))/100f;return rect;}
+        internal static float BatteryOpeningProgress(float elapsedMs,bool reduced){float t=Math.Max(0,Math.Min(1,elapsedMs/240f));return reduced?1:1-(float)Math.Pow(1-t,3);}
+        internal static float BatteryFillProgress(float progress){return PopupPages.Reduced?1:Math.Max(0,Math.Min(1,progress));}
         public static float BatteryRingSize {get{return RingLayout?(LargeFont?44:38):28;}}
         public static float BatteryRingWidth {get{return RingLayout?(LargeFont?3.8f:3.4f):3.2f;}}
         public static float BatteryDigitSize {get{return LargeFont?22f:19f;}}
@@ -177,8 +179,8 @@ namespace AtkBatteryTray {
         public static void PaintPanel(Graphics g,BatteryReading current,BatteryReading lastGood,string error,bool busy,DpiConfig dpi,string dpiError,bool dpiBusy,bool dark,float openProgress=1,int hoverStage=-1,bool hoverRefresh=false) {
             PaintDevicesPanel(g,current,lastGood,error,busy,dpi,dpiError,dpiBusy,dark,null,null,openProgress,hoverStage,hoverRefresh,0);
         }
-        public static void PaintDevicesPanel(Graphics g,BatteryReading current,BatteryReading lastGood,string error,bool busy,DpiConfig dpi,string dpiError,bool dpiBusy,bool dark,HeadsetReading headset,AudioReading audio,float openProgress=1,int hoverStage=-1,bool hoverRefresh=false,float headsetProgress=1,int hoverAudio=-1,PanelFeedback feedback=null,bool hoverSettings=false) {
-            CompactRenderer.Paint(g,current,lastGood,error,busy,dpi,dpiError,dpiBusy,dark,headset,audio,openProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,feedback,hoverSettings);
+        public static void PaintDevicesPanel(Graphics g,BatteryReading current,BatteryReading lastGood,string error,bool busy,DpiConfig dpi,string dpiError,bool dpiBusy,bool dark,HeadsetReading headset,AudioReading audio,float openProgress=1,int hoverStage=-1,bool hoverRefresh=false,float headsetProgress=1,int hoverAudio=-1,PanelFeedback feedback=null,bool hoverSettings=false,float batteryProgress=1) {
+            CompactRenderer.Paint(g,current,lastGood,error,busy,dpi,dpiError,dpiBusy,dark,headset,audio,openProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,feedback,hoverSettings,batteryProgress);
         }
         public static GraphicsPath RoundRect(float x,float y,float width,float height,float radius) {
             var path=new GraphicsPath();float d=Math.Max(.01f,Math.Min(radius*2,Math.Min(width,height)));

@@ -79,6 +79,8 @@ namespace AtkBatteryTray {
         string updatedNotice;
         readonly System.Windows.Forms.Timer updatedNoticeTimer=new System.Windows.Forms.Timer {Interval=6000};
         float animationProgress;
+        float batteryProgress=1f;
+        bool batteryOpening;
         readonly Stopwatch motionClock=new Stopwatch();
         float motionStart,motionTarget,motionDurationMs;
         bool closing;
@@ -544,7 +546,7 @@ namespace AtkBatteryTray {
             try {
                 BeginPresentation();updatedAnchor=placement;anchor=placement.HasValue?placement.Value.Point:click??owner.CursorPosition();
                 if(!placement.HasValue&&fromLauncher){var screen=PanelWorkArea;anchor=new Point(screen.Right-24,screen.Top+16);}
-                dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;
+                dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;BeginBatteryOpening();
                 frameAlpha=3;PositionForSize(6);Show();Activate();owner.PanelOpened();AnimateTo(1f,190f);
             } finally {
                 // Native Show/Activate can pump HandleCreated callbacks before setup finishes.
@@ -568,7 +570,7 @@ namespace AtkBatteryTray {
             presentationDepth++;
             try {
                 BeginPresentation();ResetPage();
-                if(closing){closing=false;owner.PanelOpened();AnimateTo(1f,190f);}
+                if(closing){closing=false;BeginBatteryOpening();owner.PanelOpened();AnimateTo(1f,190f);}
                 Show();Activate();
             } finally {presentationDepth--;if(presentationDepth==0)QueueOpeningGuardRelease(presentationEpoch);}
         }
@@ -598,24 +600,31 @@ namespace AtkBatteryTray {
         }
         public void CloseAnimated() {
             if(disposingPopup||Disposing||IsDisposed)return;
-            CancelPointerInteraction();HidePointerTip();CancelDeferredDeactivation();if(closing)return;closing=true;owner.SetAudioScope(null);owner.PanelClosed();AnimateTo(0f,135f);
+            CancelPointerInteraction();HidePointerTip();CancelDeferredDeactivation();if(closing)return;closing=true;batteryOpening=false;batteryProgress=1;owner.SetAudioScope(null);owner.PanelClosed();AnimateTo(0f,135f);
         }
         public void ToggleAnimated() {
             if(closing)Reveal();
             else CloseAnimated();
         }
         void ResetPage(){updatedNotice=null;updatedNoticeTimer.Stop();CancelPointerInteraction();gridControlScroll=0;gridControlKey=null;gridFocusNeedsReveal=false;navigation.Reset();SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
+        void BeginBatteryOpening(){batteryOpening=!PopupPages.Reduced;batteryProgress=batteryOpening?0:1;}
         void AnimateTo(float target,float durationMs) {
-            if(PopupPages.Reduced){animationProgress=target;frameAlpha=target>0? (byte)255:(byte)0;animation.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
+            if(PopupPages.Reduced){animationProgress=target;batteryOpening=false;batteryProgress=1;frameAlpha=target>0? (byte)255:(byte)0;animation.Stop();motionClock.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
             motionStart=animationProgress;motionTarget=target;
             motionDurationMs=Math.Max(60f,durationMs*Math.Abs(target-animationProgress));
             motionClock.Restart();animation.Start();
         }
         void AdvanceAnimation() {
-            float progress=Math.Min(1f,(float)motionClock.Elapsed.TotalMilliseconds/motionDurationMs);
+            AdvanceMotion((float)motionClock.Elapsed.TotalMilliseconds);
+        }
+        void AdvanceMotion(float elapsedMs) {
+            if(disposingPopup||Disposing||IsDisposed||!animation.Enabled)return;
+            bool reduced=PopupPages.Reduced;
+            float progress=reduced?1:Math.Min(1f,elapsedMs/motionDurationMs);
             float eased=1f-(float)Math.Pow(1f-progress,3);
             animationProgress=motionStart+(motionTarget-motionStart)*eased;
-            if(progress>=1f){animationProgress=motionTarget;animation.Stop();motionClock.Stop();}
+            if(batteryOpening){batteryProgress=VisualDesign.BatteryOpeningProgress(elapsedMs,reduced);if(batteryProgress>=1)batteryOpening=false;}
+            if(progress>=1f){animationProgress=motionTarget;if(!batteryOpening){animation.Stop();motionClock.Stop();}}
             if(animationProgress<=0f&&closing){Hide();Dispose();return;}
             PositionForSize((int)Math.Round((1-animationProgress)*6));frameAlpha=(byte)Math.Round(3+252*animationProgress);
             if(!layeredRendering)Opacity=.01+.99*animationProgress;
@@ -623,7 +632,7 @@ namespace AtkBatteryTray {
         }
         protected override void Dispose(bool disposing) {
             if(disposing&&!disposingPopup)updatedNoticeTimer.Dispose();
-            if(disposing&&!disposingPopup){disposingPopup=true;presentationEpoch++;ignoreDeactivate=true;CancelPointerInteraction();lastHoverTip=null;owner.SetAudioScope(null);CancelDeferredDeactivation();deactivateRelease.Stop();deactivateRelease.Dispose();owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
+            if(disposing&&!disposingPopup){disposingPopup=true;batteryOpening=false;batteryProgress=1;motionClock.Stop();presentationEpoch++;ignoreDeactivate=true;CancelPointerInteraction();lastHoverTip=null;owner.SetAudioScope(null);CancelDeferredDeactivation();deactivateRelease.Stop();deactivateRelease.Dispose();owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
             base.Dispose(disposing);
         }
         protected override void OnPaintBackground(PaintEventArgs e) {if(!layeredRendering)base.OnPaintBackground(e);}
@@ -653,8 +662,8 @@ namespace AtkBatteryTray {
         void PaintContent(Graphics g) {
             var saved=g.Save();
             if(navigation.Page!=PopupPage.Main){g.TranslateTransform(8*(1-pageProgress),0);PopupPages.Paint(g,owner,navigation,ControlsForPage(),Style.Dark,hoverAction,pressedAction,keyboardFocusVisible?keyboardFocus:-1);}
-            else if(MainUsesDeviceLayout)CompactRenderer.PaintWireless(g,owner,MainWireless(),Style.Dark,Feedback());
-            else VisualDesign.PaintDevicesPanel(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,Style.Dark,displayHeadset,displayAudio,animationProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,Feedback(),hoverSettings);
+            else if(MainUsesDeviceLayout)CompactRenderer.PaintWireless(g,owner,MainWireless(),Style.Dark,Feedback(),batteryProgress);
+            else VisualDesign.PaintDevicesPanel(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,Style.Dark,displayHeadset,displayAudio,animationProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,Feedback(),hoverSettings,batteryProgress);
             g.Restore(saved);
         }
         bool RenderLayeredFrame() {
@@ -662,6 +671,8 @@ namespace AtkBatteryTray {
             var shown=owner.Current??owner.LastGood;
             var visible=new StringBuilder();
             visible.Append(ClientSize).Append('|').Append(Left).Append('|').Append(Top).Append('|').Append(frameAlpha).Append('|').Append(animationProgress.ToString("F4",System.Globalization.CultureInfo.InvariantCulture));
+            // Preserve the exact final frame (not a rounded 99.99% arc with end caps).
+            visible.Append('|').Append(batteryProgress.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
             visible.Append('|').Append(Style.Dark).Append('|').Append(hoverStage).Append('|').Append(hoverRefresh);
             visible.Append('|').Append(owner.Current!=null).Append('|').Append(shown==null?-1:shown.Percent).Append('|').Append(owner.Current!=null&&owner.Current.Charging);
             if(owner.Current==null&&owner.LastGood!=null)visible.Append('|').Append(owner.LastGood.TimestampUtc.ToLocalTime().ToString("HH:mm"));
