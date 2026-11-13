@@ -93,23 +93,57 @@ static class PanelDesignTests {
             int a=left.GetPixel(x,y).ToArgb(),b=right.GetPixel(x,y).ToArgb();if(a==b)continue;
             if(firstX<0){firstX=x;firstY=y;leftArgb=a;rightArgb=b;}count++;minX=Math.Min(minX,x);minY=Math.Min(minY,y);maxX=Math.Max(maxX,x);maxY=Math.Max(maxY,y);
         }
-        return count==0?"none":"count="+count+" first=("+firstX+","+firstY+") left=0x"+leftArgb.ToString("X8")+" right=0x"+rightArgb.ToString("X8")+" bounds=("+minX+","+minY+")- ("+maxX+","+maxY+") area="+area;
+        return "GetPixel area="+area+" count="+count+(count==0?"":" first=("+firstX+","+firstY+") left=0x"+leftArgb.ToString("X8")+" right=0x"+rightArgb.ToString("X8")+" bounds=("+minX+","+minY+")- ("+maxX+","+maxY+")");
     }
+    // Use exactly the LockBits format and row width used by GridSameArea, not GetPixel conversions.
+    static string GridRawDifference(Bitmap left,Bitmap right,Rectangle area){
+        string result="LockBits area="+area+" bitmapFormats="+left.PixelFormat+"/"+right.PixelFormat+" requested="+PixelFormat.Format32bppArgb;
+        if(area.Width<=0||area.Height<=0)return result+" empty";
+        BitmapData a=null,b=null;
+        try{
+            a=left.LockBits(area,ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);b=right.LockBits(area,ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
+            result+=" lockedFormats="+a.PixelFormat+"/"+b.PixelFormat+" stride="+a.Stride+"/"+b.Stride+" rowBytes="+(area.Width*4);
+            var x=new byte[area.Width*4];var y=new byte[x.Length];
+            for(int row=0;row<area.Height;row++){
+                System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(a.Scan0,row*a.Stride),x,0,x.Length);System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(b.Scan0,row*b.Stride),y,0,y.Length);
+                for(int i=0;i<x.Length;i++)if(x[i]!=y[i])return result+" first=("+(area.Left+i/4)+","+(area.Top+row)+") row="+row+" rowByte="+i+" channel="+"BGRA"[i%4]+" scan0Offsets="+((long)row*a.Stride+i)+"/"+((long)row*b.Stride+i)+" left="+x[i]+" right="+y[i];
+            }
+            return result+" first=<none>";
+        }finally{try{if(a!=null)left.UnlockBits(a);}finally{if(b!=null)right.UnlockBits(b);}}
+    }
+    static string GridText(string text){if(text==null)return "<null>";text=text.Replace("\r","\\r").Replace("\n","\\n");return text.Length<=192?text:text.Substring(0,192)+"<truncated>";}
     static string GridFeedback(PanelFeedback feedback){return feedback==null?"<null>":feedback.Key;}
     static string GridControl(PopupControl control){
         if(control==null)return "<null>";
-        return "id="+control.Id+" deviceKey="+control.DeviceKey+" rect="+control.Rect+" visible="+control.VisibleRect+" viewport="+(control.Viewport.HasValue?control.Viewport.Value.ToString():"<none>");
+        return "id="+control.Id+" deviceKey="+GridText(control.DeviceKey)+" rect="+control.Rect+" visible="+control.VisibleRect+" viewport="+(control.Viewport.HasValue?control.Viewport.Value.ToString():"<none>")+" enabled="+control.Enabled+" text="+GridText(control.Text)+" value="+GridText(control.Value);
     }
     static string GridFrameState(TrayContext owner,WirelessLayout layout,PanelFeedback feedback){
+        try{
         var grid=layout.Grid;
-        string tags="";for(int i=0;i<layout.Cards.Count;i++){var card=layout.Cards[i];bool sleeping=card.Device!=null&&(card.Device.ConnectionState=="sleeping"||card.Device.MeasurementState=="sleeping");string status=GridLayout.Status(card.Battery,sleeping)??"<none>";bool dpiFresh=card.Device!=null&&WirelessLayout.DpiStageCount(card.Device)>0&&WirelessLayout.DpiFresh(card.Device);tags+=(i==0?"":";")+"card"+i+"="+status+"/batteryFresh="+(card.Battery!=null&&card.Battery.Fresh)+"/dpiFresh="+dpiFresh;}
-        return "feedback="+GridFeedback(feedback)+" size="+layout.Size+" cards="+layout.Cards.Count+" all="+layout.All.Count+" controls="+grid.Controls+" viewport="+grid.Viewport+" scroll="+grid.ScrollOffset+"/"+grid.MaximumScroll+" groups="+grid.Groups.Count+" volume="+layout.VolumeRect+" footer="+layout.Footer+" tags="+tags+" owner(native="+owner.NativeMousePresent+",genericReady="+owner.GenericReady+",genericScanning="+owner.GenericScanning+",audio="+(owner.Audio!=null)+",headset="+(owner.Headset!=null)+",dpi="+(owner.Dpi!=null)+",refresh="+owner.IsRefreshing+",audioBusy="+owner.IsAudioBusy+",headsetBusy="+owner.IsHeadsetRefreshing+")";
+        string state="utc="+DateTime.UtcNow.ToString("o")+" feedback="+GridText(GridFeedback(feedback))+" size="+layout.Size+" cards="+layout.Cards.Count+" all="+layout.All.Count+" controls="+grid.Controls+" viewport="+grid.Viewport+" scroll="+grid.ScrollOffset+"/"+grid.MaximumScroll+" groups="+grid.Groups.Count+" volume="+layout.VolumeRect+" footer="+layout.Footer+
+            " owner(native="+owner.NativeMousePresent+",genericReady="+owner.GenericReady+",genericScanning="+owner.GenericScanning+",refresh="+owner.IsRefreshing+",audioBusy="+owner.IsAudioBusy+",headsetBusy="+owner.IsHeadsetRefreshing+",dpiBusy="+owner.IsDpiRefreshing+",CanSetNativeDpi="+owner.CanSetNativeDpi+",dpiError="+GridText(owner.DpiError)+",genericError="+GridText(owner.GenericError)+",health="+GridText(owner.GenericHealthSummary)+",idle="+GridText(owner.GenericIdleSummary)+")"+
+            " fixtureBatteryUtc="+(owner.Current==null?"<null>":owner.Current.TimestampUtc.ToString("o"))+" lastGoodUtc="+(owner.LastGood==null?"<null>":owner.LastGood.TimestampUtc.ToString("o"))+" fixtureDpi="+(owner.Dpi==null?"<null>":owner.Dpi.TimestampUtc.ToString("o")+"/stage="+owner.Dpi.ActiveStage)+" headsetBatteryUtc="+(owner.Headset==null?"<null>":owner.Headset.BatteryTimestampUtc.ToString("o"))+" audioUtc="+(owner.Audio==null?"<null>":owner.Audio.TimestampUtc.ToString("o"));
+        // The fixture has at most six objects; cap unexpected input and individual free-text fields.
+        for(int i=0;i<Math.Min(8,layout.All.Count);i++){
+            var card=layout.All[i];var device=card.Device;var battery=card.Battery;var dpi=device==null?null:device.Dpi;bool sleeping=device!=null&&(device.ConnectionState=="sleeping"||device.MeasurementState=="sleeping");
+            state+="; object"+i+"="+GridText(card.Id)+"/visible="+layout.Cards.Contains(card)+"/status="+GridText(GridLayout.Status(battery,sleeping))+"/battery="+(battery==null?"<null>":battery.Percent+"/fresh="+battery.Fresh+"/charging="+battery.Charging+"/confirmedUtc="+battery.ConfirmedAt.ToString("o"))+"/title="+GridText(card.Name)+"/subtitle="+GridText(card.Subtitle);
+            if(device!=null)state+="/rawBattery="+device.Percent+"/fresh="+device.Fresh+"/online="+device.Online+"/connection="+GridText(device.ConnectionState)+"/measurement="+GridText(device.MeasurementState)+"/batteryConfirmedUtc="+GridText(device.ConfirmedAtUtc)+"/batteryMeasuredUtc="+GridText(device.MeasuredAtUtc);
+            if(dpi!=null){var pending=owner.DesiredWirelessDpi(card.Id,dpi.TargetToken);string failure=owner.WirelessDpiFailure(card.Id,dpi.TargetToken);state+="/dpiUtc="+GridText(dpi.CheckedAtUtc)+"/dpiCurrent="+dpi.Current+"/dpiFresh="+WirelessLayout.DpiFresh(device)+"/supported="+dpi.Supported+"/CanSet="+dpi.CanSet+"/CanSetWirelessDpi="+owner.CanSetWirelessDpi(card.Id,dpi.TargetToken)+"/pending="+pending+"/failure="+GridText(failure)+"/dpiError="+GridText(dpi.Error)+"/dpiLabel="+GridText(WirelessLayout.DpiSubtitle(device,pending,failure??dpi.Error));}
+        }
+        return state+(layout.All.Count>8?"; objectsOmitted="+(layout.All.Count-8):"");
+        }catch(Exception error){return "STATE_CAPTURE_FAILED utc="+DateTime.UtcNow.ToString("o")+" "+GridText(error.Message);}
     }
-    static void GridDiagnostic(string label,string parameters,TrayContext owner,WirelessLayout leftLayout,WirelessLayout rightLayout,PanelFeedback leftFeedback,PanelFeedback rightFeedback,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area){
-        string path=Path.Combine(Path.GetTempPath(),"myfinder-ui-grid-ci-1113h-"+Guid.NewGuid().ToString("N")+".log");
-        string text="label="+label+Environment.NewLine+"parameters="+parameters+Environment.NewLine+"hidden="+GridControl(hidden)+Environment.NewLine+"left="+GridFrameState(owner,leftLayout,leftFeedback)+Environment.NewLine+"right="+GridFrameState(owner,rightLayout,rightFeedback)+Environment.NewLine+"diff="+GridDifference(left,right,area)+Environment.NewLine;
-        try{File.WriteAllText(path,text);Console.Error.WriteLine("GRID_DIAGNOSTIC "+path);}
-        catch(Exception error){Console.Error.WriteLine("GRID_DIAGNOSTIC_WRITE_FAILED "+error.Message+"; "+text);}
+    static Bitmap RenderGridObserved(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback,out string state){
+        string before=GridFrameState(owner,layout,feedback);var image=RenderGrid(owner,layout,dark,scale,feedback);string after=GridFrameState(owner,layout,feedback);
+        state="before={"+before+"}"+Environment.NewLine+"after={"+after+"}";return image;
+    }
+    static void GridDiagnostic(string label,string parameters,string leftState,string rightState,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area){
+        // No temporary-file dependency in CI. Diagnostic failures must never replace the caller's Check.
+        try{
+            string raw,pixels;try{raw=GridRawDifference(left,right,area);}catch(Exception error){raw="RAW_DIFF_FAILED "+GridText(error.Message);}
+            try{pixels=GridDifference(left,right,area);}catch(Exception error){pixels="GETPIXEL_DIFF_FAILED "+GridText(error.Message);}
+            Console.Error.WriteLine("GRID_DIAGNOSTIC label="+label+Environment.NewLine+"parameters="+parameters+Environment.NewLine+"hidden="+GridControl(hidden)+Environment.NewLine+"left="+leftState+Environment.NewLine+"right="+rightState+Environment.NewLine+"raw="+raw+Environment.NewLine+"diff="+pixels);
+        }catch(Exception){/* Preserve the original assertion even if stderr itself is unavailable. */}
     }
     static void GridOverflowViewportMatrix(){
         foreach(string font in new[]{"normal","large"})foreach(bool native in new[]{false,true})foreach(bool audio in new[]{false,true})foreach(bool collapsed in new[]{false,true}){
@@ -123,7 +157,7 @@ static class PanelDesignTests {
                 Check(normal.Grid.MaximumScroll==0&&normal.Grid.ScrollOffset==0&&normal.Grid.Viewport.Bottom==normal.VolumeTop,"normal height keeps every group and introduces no scrolling");
                 Check(first.Grid.Groups.Count==(audio?6:5)&&first.Grid.Groups.TrueForAll(delegate(GridControlGroup group){return group.Audio||group.Count==8;}),"all five eight-stage mice and optional audio group remain present");
                 foreach(float scale in new[]{1f,1.25f,1.5f,2f})foreach(bool dark in new[]{false,true}){
-                    using(var baseline=RenderGrid(owner,first,dark,scale,new PanelFeedback()))foreach(int offset in new[]{0,31,Int32.MaxValue}){
+                    string baselineState;using(var baseline=RenderGridObserved(owner,first,dark,scale,new PanelFeedback(),out baselineState))foreach(int offset in new[]{0,31,Int32.MaxValue}){
                         var layout=WirelessLayout.Build(owner,0,520,false,offset);var rows=PopupPages.Build(owner,new PopupNavigation(),audio,layout);var regions=new List<InteractionRegion>();
                         Check(layout.Size.Height==520&&layout.Grid.Controls==first.Grid.Controls&&layout.VolumeRect==first.VolumeRect&&layout.Footer==first.Footer,"scrolling never moves the bounded card, system volume or footer");
                         Check(rows.FindAll(delegate(PopupControl row){return row.DpiValue>0||row.Id>=10&&row.Id<18;}).Count==40,"no DPI stages are discarded by clipping");
@@ -132,12 +166,12 @@ static class PanelDesignTests {
                         Check(rows.FindAll(delegate(PopupControl row){return row.Id>=100&&row.Id<=102;}).Count==(audio?3:0),"audio controls follow audio group presence");
                         Check(rows.Exists(delegate(PopupControl row){return row.Id==240;})!=collapsed,"volume expansion is independent of group scrolling");
                         InteractionLayout.Observer=regions.Add;
-                        try{using(var image=RenderGrid(owner,layout,dark,scale,new PanelFeedback())){
+                        string imageState;try{using(var image=RenderGridObserved(owner,layout,dark,scale,new PanelFeedback(),out imageState)){
                             var topArea=new Rectangle(0,0,image.Width,(int)(first.Grid.Controls.Top*scale));bool topSame=GridSameArea(baseline,image,topArea);
-                            if(!topSame)GridDiagnostic("scrolling cannot paint into the device tiles","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,owner,first,layout,new PanelFeedback(),new PanelFeedback(),null,baseline,image,topArea);
+                            if(!topSame)GridDiagnostic("scrolling cannot paint into the device tiles","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,baselineState,imageState,null,baseline,image,topArea);
                             Check(topSame,"scrolling cannot paint into the device tiles");
                             int fixedTop=(int)Math.Ceiling(first.VolumeTop*scale);var fixedArea=new Rectangle(0,fixedTop,image.Width,image.Height-fixedTop);bool fixedSame=GridSameArea(baseline,image,fixedArea);
-                            if(!fixedSame)GridDiagnostic("scrolling cannot paint over system volume or the footer","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,owner,first,layout,new PanelFeedback(),new PanelFeedback(),null,baseline,image,fixedArea);
+                            if(!fixedSame)GridDiagnostic("scrolling cannot paint over system volume or the footer","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,baselineState,imageState,null,baseline,image,fixedArea);
                             Check(fixedSame,"scrolling cannot paint over system volume or the footer");
                         }}finally{InteractionLayout.Observer=null;}
                         foreach(var row in rows){
@@ -152,9 +186,9 @@ static class PanelDesignTests {
                         if(offset==31)Check(partial!=null,"the regression exercises a genuinely enabled partially visible stage");
                         if(partial!=null){var point=new PointF(partial.Rect.X+partial.Rect.Width/2,partial.Rect.Top<partial.VisibleRect.Top?partial.Rect.Top+.25f:partial.Rect.Bottom-.25f);Check(PopupPages.Hit(rows,point)!=partial,"the cropped part of a partially visible control cannot be hit");}
                         var hidden=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&!row.Information&&row.VisibleRect.IsEmpty;});
-                        if(hidden!=null){var ordinaryFeedback=new PanelFeedback();var hoveredFeedback=new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id};using(var ordinary=RenderGrid(owner,layout,dark,scale,ordinaryFeedback))using(var hovered=RenderGrid(owner,layout,dark,scale,hoveredFeedback)){
+                        if(hidden!=null){var ordinaryFeedback=new PanelFeedback();var hoveredFeedback=new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id};string ordinaryState,hoveredState;using(var ordinary=RenderGridObserved(owner,layout,dark,scale,ordinaryFeedback,out ordinaryState))using(var hovered=RenderGridObserved(owner,layout,dark,scale,hoveredFeedback,out hoveredState)){
                             var fullArea=new Rectangle(Point.Empty,ordinary.Size);bool same=GridSameArea(ordinary,hovered,fullArea);
-                            if(!same)GridDiagnostic("offscreen hover, press and focus feedback leaves no ink in another region","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,owner,layout,layout,ordinaryFeedback,hoveredFeedback,hidden,ordinary,hovered,fullArea);
+                            if(!same)GridDiagnostic("offscreen hover, press and focus feedback leaves no ink in another region","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,ordinaryState,hoveredState,hidden,ordinary,hovered,fullArea);
                             Check(same,"offscreen hover, press and focus feedback leaves no ink in another region");
                         }}
                     }
