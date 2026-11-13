@@ -28,6 +28,75 @@ static class UpdateBadgeTests {
         internal int Requests;internal UpdateRelease Release;
         public UpdateResponse Get(Uri uri,CancellationToken token){Requests++;token.ThrowIfCancellationRequested();var bytes=Encoding.UTF8.GetBytes(UpdateJson.Text(Release==null?new UpdateRelease[0]:new[]{Release}));return new UpdateResponse(200,new MemoryStream(bytes),bytes.Length,null,null);}
     }
+    sealed class PendingHttp:IUpdateTransport,IDisposable {
+        internal readonly ManualResetEvent Entered=new ManualResetEvent(false),ReleaseResponse=new ManualResetEvent(false);
+        internal int Requests;
+        public UpdateResponse Get(Uri uri,CancellationToken token){
+            Interlocked.Increment(ref Requests);Entered.Set();
+            if(!ReleaseResponse.WaitOne(6000))throw new TimeoutException("fixture response was not released");
+            token.ThrowIfCancellationRequested();return new UpdateResponse(200,new MemoryStream(Encoding.UTF8.GetBytes("[]")),2,null,null);
+        }
+        public void Dispose(){Entered.Dispose();ReleaseResponse.Dispose();}
+    }
+    static void CompletionStatus(){
+        int before=checks;
+        using(var dispatch=new Control())using(var http=new PendingHttp()){
+            dispatch.CreateControl();var handle=dispatch.Handle;string rendered=null;int changes=0;UpdateController controller=null;
+            using(controller=new UpdateController(dispatch,delegate{rendered=controller.Status;changes++;},delegate{},http,Path.Combine(output,"completion"),Path.Combine(output,"portable.exe"),false)){
+                controller.Check(false);Check(http.Entered.WaitOne(6000),"fake controller request starts");controller.Check(false);controller.Check(true);
+                // Hold cleanup while the UI consumes the posted result: reproduce the real cross-thread ordering.
+                lock(Field(controller,"gate")){http.ReleaseResponse.Set();Pump(delegate{return changes>=2;});Check(rendered=="正在检查更新…","result callback can precede worker cleanup");}
+                Pump(delegate{return rendered=="未发现新版本";});
+                Check(rendered=="未发现新版本","changed callback renders final status after checking clears");
+                Check(http.Requests==1,"completion notification sends no extra HTTP");
+            }
+        }
+        foreach(bool cancel in new[]{false,true})foreach(bool dispose in new[]{false,true}){
+            DeviceSettings.UseTransientConfiguration(new AudioBindings {AutoCheckUpdates=true});
+            string directory=Path.Combine(output,"completion-"+cancel+"-"+dispose);Directory.CreateDirectory(directory);
+            if(cancel)File.WriteAllText(Path.Combine(directory,"update-state.json"),UpdateJson.Text(new UpdateState {AvailableRelease=Release("99.0.1")}));
+            // Deduplicate only the expected diagnostic in memory, so cancellation cannot touch the user's diagnostics.log.
+            var diagnosticGate=typeof(SafeDiagnostic).GetField("gate",BindingFlags.Static|BindingFlags.NonPublic).GetValue(null);
+            var diagnostics=(Dictionary<string,string>)typeof(SafeDiagnostic).GetField("last",BindingFlags.Static|BindingFlags.NonPublic).GetValue(null);string previous;
+            lock(diagnosticGate){diagnostics.TryGetValue("updates",out previous);diagnostics["updates"]="update_cancelled";}
+            try{
+                using(var dispatch=new Control())using(var http=new PendingHttp()){
+                    dispatch.CreateControl();var handle=dispatch.Handle;string rendered=null;int changes=0,balloons=0;UpdateController controller=null;
+                    using(controller=new UpdateController(dispatch,delegate{rendered=controller.Status;changes++;},delegate{balloons++;},http,directory,Path.Combine(directory,"portable.exe"),false)){
+                        Set(controller,"started",DateTime.UtcNow.AddDays(-1));controller.Check(true);Check(http.Entered.WaitOne(6000),"automatic fake request starts");Application.DoEvents();
+                        controller.Check(true);controller.Check(false);Check(http.Requests==1,"concurrent automatic/manual checks share one flight");
+                        if(cancel){DeviceSettings.UseTransientConfiguration(new AudioBindings {AutoCheckUpdates=false});controller.ConfigurationChanged();}
+                        int beforeDispose=changes;if(dispose)controller.Dispose();http.ReleaseResponse.Set();
+                        if(dispose){Pump(delegate{return (int)Field(controller,"checking")==0;});Application.DoEvents();Check(changes==beforeDispose,"disposed controller suppresses queued and final callbacks");}
+                        else{
+                            string expected=cancel?"已缓存版本 99.0.1":"尚未检查";Pump(delegate{return rendered==expected;});
+                            Check(rendered!="正在检查更新…"&&changes>0,"automatic completion/cancellation renders final status through changed");
+                        }
+                        Check(((UpdateChecker)Field(controller,"checker")).ErrorCode==(cancel||dispose?"update_cancelled":null),"controller cancellation reaches the real checker");
+                        Check(http.Requests==1&&balloons==0&&Application.OpenForms.Count==0,"completion/cancel/dispose adds no request, balloon or dialog");
+                        if(cancel)Check(controller.Available,"cancelled automatic check preserves cached version");
+                    }
+                }
+            }finally{lock(diagnosticGate){if(previous==null)diagnostics.Remove("updates");else diagnostics["updates"]=previous;}}
+        }
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {AutoCheckUpdates=true});
+        using(var dispatch=new Control()){
+            dispatch.CreateControl();var handle=dispatch.Handle;var now=DateTime.UtcNow;string directory=Path.Combine(output,"completion-expired");Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory,"update-state.json"),UpdateJson.Text(new UpdateState {LastCheckUtc=now,CatalogNotBeforeUtc=now.AddMinutes(5),CatalogBackoffSource="server"}));
+            var http=new Http();string rendered=null;UpdateController controller=null;
+            using(controller=new UpdateController(dispatch,delegate{rendered=controller.Status;},delegate{},http,directory,Path.Combine(directory,"portable.exe"),false)){
+                controller.Check(false);Pump(delegate{return rendered!=null&&rendered!="正在检查更新…";});
+                Check(rendered.Contains("剩余"),"manual gated result renders a live wait");
+                // After expiry an ordinary automatic schedule gate clears ErrorCode without another HTTP check.
+                var checker=(UpdateChecker)Field(controller,"checker");checker.Check(true,true,now.AddMinutes(5));
+                Check(checker.ErrorCode==null&&http.Requests==0,"ordinary schedule gate at expiry sends no HTTP");
+                string expired=controller.StatusAt(now.AddMinutes(5));
+                Check(expired.Contains("可手动重试")&&!expired.Contains("剩余")&&!expired.Contains("不到1分钟")&&!expired.Contains("未发现新版本"),"expired stored wait cannot reappear after the schedule gate clears ErrorCode");
+            }
+        }
+        DeviceSettings.UseTransientConfiguration(new AudioBindings());
+        Console.WriteLine("PASS CompletionStatus: "+(checks-before)+" checks (actual controller/changed, completion/cancel/dispose/single-flight)");
+    }
     static void State(){
         var http=new Http {Release=Release("99.0.1")};string path=Path.Combine(output,"state.json");var now=DateTime.UtcNow;
         File.WriteAllText(path,"{\"NotifiedVersion\":\"98.0.1\",\"SkippedVersion\":\"98.0.2\"}");
@@ -201,8 +270,8 @@ static class UpdateBadgeTests {
     }
     [STAThread] static int Main(string[] args){
         bool render=args[0]=="--render";output=Path.Combine(Path.GetFullPath(args[render?1:0]),"update-badge");Directory.CreateDirectory(output);
-        var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
-        try{if(!render){State();AutomaticDiscovery();Tooltips();Ui();}Drawings();Console.WriteLine("PASS "+checks+" update badge checks; fake HTTP/hardware and isolated state only");return 0;}
+        DeviceSettings.UseTransientConfiguration(new AudioBindings());var previous=DeviceSettings.Current;VisualDesign.HighContrastOverride=false;
+        try{if(!render){CompletionStatus();State();AutomaticDiscovery();Tooltips();Ui();}Drawings();Console.WriteLine("PASS "+checks+" update badge checks; fake HTTP/hardware and isolated state only");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{DeviceSettings.UseTransientConfiguration(previous);VisualDesign.HighContrastOverride=null;}
     }
