@@ -186,7 +186,8 @@ namespace AtkBattery {
         static bool TryServerDeadline(DateTime now,string retry,string remaining,string reset,out DateTime deadline){
             deadline=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);bool found=false;DateTime candidate;long seconds;
             if(!String.IsNullOrWhiteSpace(retry)&&Int64.TryParse(retry.Trim(),NumberStyles.None,CultureInfo.InvariantCulture,out seconds)&&seconds>=0&&TryAdd(now,seconds,out candidate)){if(candidate>=now){deadline=candidate;found=true;}}
-            DateTime date;if(!String.IsNullOrWhiteSpace(retry)&&DateTime.TryParse(retry,CultureInfo.InvariantCulture,DateTimeStyles.AdjustToUniversal|DateTimeStyles.AssumeUniversal,out date)&&Utc(date)>now){deadline=found?Max(deadline,Utc(date)):Utc(date);found=true;}
+            DateTime date;string httpDate=String.IsNullOrWhiteSpace(retry)?null:retry.Trim();
+            if(httpDate!=null&&DateTime.TryParseExact(httpDate,"R",CultureInfo.InvariantCulture,DateTimeStyles.AdjustToUniversal|DateTimeStyles.AssumeUniversal,out date)&&Utc(date)>now){deadline=found?Max(deadline,Utc(date)):Utc(date);found=true;}
             long left,epoch;if(Int64.TryParse((remaining??"").Trim(),NumberStyles.Integer,CultureInfo.InvariantCulture,out left)&&left==0&&Int64.TryParse((reset??"").Trim(),NumberStyles.Integer,CultureInfo.InvariantCulture,out epoch)&&TryEpoch(epoch,out date)&&date>now){deadline=found?Max(deadline,date):date;found=true;}
             return found;
         }

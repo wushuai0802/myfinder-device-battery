@@ -108,7 +108,14 @@ namespace AtkBatteryTray {
         volatile bool disposed;int checking,installing;
         string status="尚未检查";
         internal string LastFailure {get;private set;}
-        internal string Status {get{return available!=null?(availableCached?"已缓存版本 ":"有新版本 ")+available.Version:!DeviceSettings.Current.AutoCheckUpdates&&checking==0?"自动检查已关闭":status;}}
+        internal string Status {get{
+            if(checking!=0)return "正在检查更新…";
+            if(checker!=null){
+                DateTime now=DateTime.UtcNow;var wait=checker.Backoff(UpdateBackoffScope.Catalog,now);string code=checker.ErrorCode;
+                if(code=="update_waiting_catalog"||wait.Waiting(now)||code=="update_http_403"||code=="update_http_429")return CheckStatus(available,now);
+            }
+            return available!=null?(availableCached?"已缓存版本 ":"有新版本 ")+available.Version:!DeviceSettings.Current.AutoCheckUpdates?"自动检查已关闭":status;
+        }}
         internal bool Available {get{return available!=null;}}
         internal string Version {get{return available==null?null:available.Version;}}
         internal bool BadgeVisible {get{return Available&&checker!=null&&checker.BadgeVisible(DeviceSettings.Current.ShowUpdateBadge,DeviceSettings.Current.AutoCheckUpdates);}}
