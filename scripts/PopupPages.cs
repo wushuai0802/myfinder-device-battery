@@ -11,6 +11,8 @@ namespace AtkBatteryTray {
         public int DpiValue;
         public int PageOffset=-1;
         public RectangleF Rect;
+        public RectangleF? Viewport;
+        public RectangleF VisibleRect {get{if(!Viewport.HasValue)return Rect;var visible=RectangleF.Intersect(Rect,Viewport.Value);return visible.Width>0&&visible.Height>0?visible:RectangleF.Empty;}}
         public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey,AccessibleName;
         public string GroupKey;
         public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy,WrapText,Section;
@@ -440,7 +442,8 @@ namespace AtkBatteryTray {
             var rows=new List<PopupControl>();
             foreach(var card in layout.Cards)rows.Add(new PopupControl {Id=GridLayout.DetailAction(layout,card),Text=card.Id=="empty"?layout.AllHidden?"设备管理":"设备没显示？":card.AudioOnly?"音源与麦克风":card.Name,Value=card.AudioOnly?card.Subtitle:null,Detail=card.Subtitle,DeviceKey=card.Id,Rect=card.Tile,ActionKey=card.Id=="empty"?layout.AllHidden?"devices":"device-missing":null,Enabled=card.Id!="empty"||!owner.GenericScanning});
             foreach(var group in layout.Grid.Groups){
-                var card=group.Card;rows.Add(new PopupControl {Id=-1,Text=group.Audio?"音源":card.Name+" · DPI",Rect=group.Title,Information=true,Section=true});
+                int first=rows.Count;
+                var card=group.Card;rows.Add(new PopupControl {Id=-1,Text=group.Audio?"音源":card.Name+" · DPI",Rect=group.Title,Information=true,Section=true,DeviceKey=card.Id,ActionKey=group.Audio?"grid:audio-heading":"grid:dpi-heading"});
                 if(group.Audio){
                     foreach(int id in new[]{100,101,102}){var audio=owner.Audio;bool enabled=audio!=null&&(id==100?audio.SpeakerAvailable:id==101?audio.HeadsetAvailable:audio.MicrophoneAvailable&&audio.MicrophoneMuted.HasValue);
                         rows.Add(new PopupControl {Id=id,Text="音源，"+(id==100?"输出到扬声器":id==101?"输出到耳机":"Windows麦克风静音"),Rect=id==102?GridLayout.Microphone(group):GridLayout.Segment(group,id-100),Enabled=enabled,DeviceKey=card.Id});
@@ -451,6 +454,7 @@ namespace AtkBatteryTray {
                     if(card.NativeMouse)rows.Add(new PopupControl {Id=10+i,Rect=hit,Text=card.Name+" DPI "+card.Dpi.Stages[i].XDpi+(card.Dpi.Stages[i].XDpi==card.Dpi.Stages[i].YDpi?"":"，Y "+card.Dpi.Stages[i].YDpi),DeviceKey=card.Id});
                     else {var dpi=card.Device.Dpi;int value=dpi.Stages[i];rows.Add(new PopupControl {Id=WirelessLayout.DpiActionId(layout.All.IndexOf(card),i),DpiValue=value,TargetToken=dpi.TargetToken,DeviceKey=card.Id,Rect=WirelessLayout.DpiRect(card,i),Text=card.Name+"，设置"+WirelessLayout.DpiLabel(card.Device)+"为 "+value,Value=value+" DPI",Detail=dpi.StageSource=="quick"?"软件快捷值，不代表设备板载预设":"设备板载DPI档位",Enabled=owner.CanSetWirelessDpi(card.Id,dpi.TargetToken)});}
                 }
+                for(int i=first;i<rows.Count;i++)rows[i].Viewport=layout.Grid.Viewport;
             }
             AddMainVolume(rows,owner,nav,layout.VolumeRect,layout.VolumeCollapsed);
             rows.Add(new PopupControl {Id=0,Text="立即同步全部设备",Rect=VisualDesign.FooterRefreshRect(layout.Footer)});rows.Add(new PopupControl {Id=1,Text="更多选项",Rect=VisualDesign.FooterMoreRect(layout.Footer)});
@@ -458,7 +462,7 @@ namespace AtkBatteryTray {
             return rows;
         }
         internal static Size SizeFor(List<PopupControl> controls){float bottom=PageHeaderHeight;foreach(var c in controls)bottom=Math.Max(bottom,c.Rect.Bottom);return new Size(VisualDesign.PanelWidth,(int)bottom+PageFooterHeight);}
-        internal static PopupControl Hit(List<PopupControl> controls,PointF point){foreach(var c in controls)if(c.Id>=0&&c.Enabled&&!c.Information&&c.Rect.Contains(point))return c;return null;}
+        internal static PopupControl Hit(List<PopupControl> controls,PointF point){foreach(var c in controls)if(c.Id>=0&&c.Enabled&&!c.Information&&c.VisibleRect.Contains(point))return c;return null;}
         internal static string StartupState() {
             return StartupDiagnostics.Describe();
         }

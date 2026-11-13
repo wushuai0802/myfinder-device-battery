@@ -189,6 +189,87 @@ static class UiMenusTests {
         }
     }
     static DpiConfig GridDpi(int count=4){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("grid-input"),ActiveStage=0,TimestampUtc=DateTime.UtcNow};for(int i=0;i<count;i++)dpi.Stages.Add(new DpiStage {XDpi=(i+1)*400,YDpi=(i+1)*400});return dpi;}
+    static WirelessDevice GridMouse(int index){
+        var device=Device("device-"+index.ToString().PadLeft(24,'0'),"溢出鼠标 "+index);device.Provider="logitech";
+        device.Dpi=new WirelessDpi {Supported=true,CanSet=true,Current=800,Stages=new[]{400,800,1200,1600,2000,2400,2800,3200},TargetToken=new string((char)('a'+index),64),StageSource="onboard",CheckedAtUtc=DateTime.UtcNow.ToString("o")};return device;
+    }
+    static void Wheel(Fixture f,float x,float y,int delta){float scale=(float)Field(f.Popup,"dpiScale");typeof(Control).GetMethod("OnMouseWheel",Private).Invoke(f.Popup,new object[]{new MouseEventArgs(MouseButtons.None,0,(int)(x*scale),(int)(y*scale),delta)});}
+    static void GridOverflowSetup(Fixture f,string font,bool audio,bool collapsed,float scale){
+        var pref=DeviceSettings.Current;pref.PanelLayout="grid";pref.FontSize=font;pref.VolumeCollapsed=collapsed;DeviceSettings.UseTransientConfiguration(pref);
+        f.Owner.NativeMousePresent=true;f.Owner.GenericReady=true;f.Owner.Current=new BatteryReading {Percent=85,TimestampUtc=DateTime.UtcNow};f.Owner.Dpi=GridDpi(8);
+        f.Owner.WirelessDevices=new[]{GridMouse(0),GridMouse(1),GridMouse(2),GridMouse(3)};
+        f.Owner.Headset=audio?new HeadsetReading {Connected=true,ConnectionVerified=true,Percent=50,BatteryTimestampUtc=DateTime.UtcNow}:null;
+        f.Owner.Audio=new AudioReading {TimestampUtc=DateTime.UtcNow,OperationSucceeded=true,ActiveOutput="speaker",ConsoleOutputId="speaker",SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="扬声器",HeadsetAvailable=true,HeadsetId="headset",HeadsetName="耳机",MicrophoneAvailable=true,MicrophoneId="mic",MicrophoneName="麦克风",MicrophoneMuted=false,VolumeEndpointId="speaker",OutputVolumePercent=55,Devices=new AudioDeviceChoice[0]};
+        Set(f.Owner,"nativeNeedsReconcile",false);Set(f.Owner,"audioNeedsReconcile",false);f.Owner.DpiError=null;
+        Set(f.Popup,"dpiScale",scale);Set(f.Popup,"updatedAnchor",new TrayPanelAnchor(new Point(300,(int)(544*scale)-20),new Rectangle(0,0,(int)(800*scale),(int)(544*scale)),TaskbarEdge.Bottom));f.Page(PopupPage.Main);f.Popup.SyncDevices();
+    }
+    static void GridOverflowKeyboardAndWheel(){
+        foreach(string font in new[]{"normal","large"})foreach(bool audio in new[]{false,true})foreach(bool collapsed in new[]{false,true})foreach(float scale in new[]{1f,1.25f,1.5f,2f})using(var f=new Fixture()){
+            GridOverflowSetup(f,font,audio,collapsed,scale);var first=(WirelessLayout)Call(f.Popup,"MainWireless");var rows=f.Controls();
+            Check(first.Size.Height==520&&f.Popup.ClientSize==UiState.ScaleSize(first.Size,scale),"actual popup uses the 520 logical pixel work-area limit at every monitor scale");
+            var stages=rows.FindAll(delegate(PopupControl row){return row.Viewport.HasValue&&row.Enabled&&!row.Information;});Check(stages.Count==(audio?43:40),"all DPI and optional audio controls remain keyboard accessible");
+            f.Key(Keys.Tab);f.Key(Keys.Tab);Check((int)Field(f.Popup,"keyboardFocus")==10,"Tab enters native DPI from a tile");
+            foreach(var expected in stages){
+                var live=PopupPages.FindStable(f.Controls(),(string)Field(f.Popup,"keyboardFocusKey"));Check(live!=null&&live.StableKey==expected.StableKey&&live.VisibleRect==live.Rect,"Tab automatically reveals every stage and audio/mic target in order");
+                Check(((WirelessLayout)Call(f.Popup,"MainWireless")).Grid.Controls==first.Grid.Controls&&f.Navigation.DeviceScroll==0,"keyboard reveal moves neither the card nor the tile page");f.Key(Keys.Tab);
+            }
+            // Reverse traversal enters the last group from fixed volume, then
+            // reveals every earlier group without dropping offscreen targets.
+            Call(f.Popup,"FocusControl",f.Controls().Find(delegate(PopupControl row){return row.Id==(collapsed?241:240);}));
+            for(int i=stages.Count-1;i>=0;i--){f.Key(Keys.Tab|Keys.Shift);var live=PopupPages.FindStable(f.Controls(),(string)Field(f.Popup,"keyboardFocusKey"));Check(live!=null&&live.StableKey==stages[i].StableKey&&live.VisibleRect==live.Rect,"Shift+Tab automatically reveals all groups in reverse order");}
+            Set(f.Popup,"keyboardFocus",-1);Set(f.Popup,"keyboardFocusKey",null);
+            for(int i=0;i<10;i++)Wheel(f,30,first.Grid.Viewport.Top+20,-120);
+            var bottom=(WirelessLayout)Call(f.Popup,"MainWireless");Check(bottom.Grid.ScrollOffset==bottom.Grid.MaximumScroll&&f.Navigation.DeviceScroll==0,"unfocused wheel over groups reaches the final group without paging tiles");
+            var last=bottom.Grid.Groups[bottom.Grid.Groups.Count-1];Check(bottom.Grid.Viewport.Contains(last.Track),"bottom group is fully visible and cannot extend into fixed volume");
+            Wheel(f,30,bottom.VolumeTop+15,120);Check(((WirelessLayout)Call(f.Popup,"MainWireless")).Grid.ScrollOffset==bottom.Grid.ScrollOffset&&f.Navigation.DeviceScroll==0,"wheel over expanded or collapsed system volume never scrolls groups or tiles");
+            Wheel(f,30,30,-120);var paged=(WirelessLayout)Call(f.Popup,"MainWireless");Check(paged.Start==2&&paged.Grid.ScrollOffset==bottom.Grid.ScrollOffset&&paged.Grid.Controls==bottom.Grid.Controls,"unfocused wheel over tiles preserves the independent group offset and fixed card");
+            for(int i=0;i<10;i++)Wheel(f,30,first.Grid.Viewport.Top+20,120);
+            Check(((WirelessLayout)Call(f.Popup,"MainWireless")).Grid.ScrollOffset==0&&f.Navigation.DeviceScroll==2,"wheel scrolls all the way back up without changing the tile page");
+            Call(f.Popup,"UpdateFallbackRegion");Check(f.Popup.Region.IsVisible(30*scale,(first.VolumeTop+10)*scale)&&f.Popup.Region.IsVisible(20*scale,(first.Footer+15)*scale),"fallback window region retains the fixed volume and footer");
+            Check(!f.Popup.Region.IsVisible(130*scale,(first.Grid.Controls.Top-4)*scale),"fallback keeps the gap above the fixed card transparent");
+            var tile=f.Controls().Find(delegate(PopupControl row){return !row.Viewport.HasValue&&row.Id>=1000&&row.Id<2000;});
+            string tileKey=tile.StableKey;Call(f.Popup,"FocusControl",tile);f.Key(Keys.Enter);Check(f.Navigation.Page==PopupPage.Device,"Enter still opens a paged tile's details directly");f.Key(Keys.Escape);Check((string)Field(f.Popup,"keyboardFocusKey")==tileKey,"returning restores the tile's stable identity");
+            f.Key(Keys.Space);Check(f.Navigation.Page==PopupPage.Device,"Space still opens tile details directly after group scrolling");f.Key(Keys.Escape);
+        }
+    }
+    static void GridOverflowAccessibilityAndMutation(){
+        foreach(string font in new[]{"normal","large"})using(var f=new Fixture()){
+            GridOverflowSetup(f,font,true,false,1.5f);Set(f.Popup,"gridControlScroll",31);var handle=f.Popup.Handle;var tree=(AccessibleObject)Call(f.Popup,"CreateAccessibilityInstance");var rows=f.Controls();
+            var partial=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&row.Enabled&&!row.Information&&!row.VisibleRect.IsEmpty&&row.VisibleRect!=row.Rect;});Check(partial!=null,"the actual popup contains an enabled partially clipped stage");
+            var partialPoint=new MouseEventArgs(MouseButtons.Left,1,(int)((partial.VisibleRect.X+partial.VisibleRect.Width/2)*1.5f),(int)((partial.VisibleRect.Y+partial.VisibleRect.Height/2)*1.5f),0);
+            typeof(Control).GetMethod("OnMouseMove",Private).Invoke(f.Popup,new object[]{partialPoint});typeof(Control).GetMethod("OnMouseDown",Private).Invoke(f.Popup,new object[]{partialPoint});
+            Check((int)Field(f.Popup,"hoverAction")==partial.Id&&((PopupControl)Field(f.Popup,"pressedControl")).StableKey==partial.StableKey,"hover and press use the visible part of a partially clipped control");Call(f.Popup,"ClearGridPointer");
+            var croppedPoint=new MouseEventArgs(MouseButtons.Left,1,partialPoint.X,(int)((partial.Rect.Top+.25f)*1.5f),0);
+            typeof(Control).GetMethod("OnMouseMove",Private).Invoke(f.Popup,new object[]{croppedPoint});typeof(Control).GetMethod("OnMouseDown",Private).Invoke(f.Popup,new object[]{croppedPoint});
+            var cropped=(PopupControl)Field(f.Popup,"pressedControl");Check((int)Field(f.Popup,"hoverAction")!=partial.Id&&(cropped==null||cropped.StableKey!=partial.StableKey),"the cropped part cannot hover or capture that control");Call(f.Popup,"ClearGridPointer");
+            for(int i=0;i<rows.Count;i++){
+                var row=rows[i];var child=tree.GetChild(i);var visible=row.VisibleRect;
+                if(visible.IsEmpty){Check(child.Bounds.IsEmpty&&(child.State&AccessibleStates.Offscreen)!=0,"fully clipped controls expose no accessible screen bounds");continue;}
+                var expected=Rectangle.FromLTRB((int)Math.Floor(visible.Left*1.5f),(int)Math.Floor(visible.Top*1.5f),(int)Math.Ceiling(visible.Right*1.5f),(int)Math.Ceiling(visible.Bottom*1.5f));
+                Check(child.Bounds==f.Popup.RectangleToScreen(expected),"accessibility locations use the same clipped and scaled rectangles, including distinct headings");
+            }
+            var last=rows.FindLast(delegate(PopupControl row){return row.DpiValue>0;});var accessible=tree.GetChild(rows.IndexOf(last));accessible.Select(AccessibleSelection.TakeFocus);
+            var live=PopupPages.FindStable(f.Controls(),last.StableKey);Check(live.VisibleRect==live.Rect&&(string)Field(f.Popup,"keyboardFocusKey")==last.StableKey,"screen-reader focus automatically reveals an offscreen DPI control");
+            int savedScroll=(int)Field(f.Popup,"gridControlScroll");Call(f.Popup,"Go",PopupPage.More);f.Key(Keys.Escape);Check((int)Field(f.Popup,"gridControlScroll")==savedScroll&&(string)Field(f.Popup,"keyboardFocusKey")==last.StableKey,"page round trip retains and reveals the same group identity");
+            var point=new MouseEventArgs(MouseButtons.Left,1,(int)((live.VisibleRect.X+live.VisibleRect.Width/2)*1.5f),(int)((live.VisibleRect.Y+live.VisibleRect.Height/2)*1.5f),0);
+            typeof(Control).GetMethod("OnMouseDown",Private).Invoke(f.Popup,new object[]{point});Check(Field(f.Popup,"pressedControl")!=null,"visible stage captures its original identity before mutation");
+            var pref=DeviceSettings.Current;pref.DeviceOrder=new List<string>{f.Owner.WirelessDevices[3].Id,f.Owner.WirelessDevices[2].Id,f.Owner.WirelessDevices[1].Id,f.Owner.WirelessDevices[0].Id,"native:mouse","native:headset"};DeviceSettings.UseTransientConfiguration(pref);f.Popup.SyncDevices();
+            Check(Field(f.Popup,"pressedControl")==null&&(int)Field(f.Popup,"hoverAction")==-1,"group reorder cancels captured pointer and hover state");
+            live=PopupPages.FindStable(f.Controls(),last.StableKey);
+            Check(live!=null&&live.Id!=last.Id&&live.DeviceKey==last.DeviceKey&&PopupPages.SameAction(last,live)&&(string)Field(f.Popup,"keyboardFocusKey")==last.StableKey,"keyboard and cached accessible targets follow identity, not a reused numeric slot");
+            Check(accessible.Bounds==f.Popup.RectangleToScreen(Rectangle.FromLTRB((int)Math.Floor(live.VisibleRect.Left*1.5f),(int)Math.Floor(live.VisibleRect.Top*1.5f),(int)Math.Ceiling(live.VisibleRect.Right*1.5f),(int)Math.Ceiling(live.VisibleRect.Bottom*1.5f))),"cached accessibility child resolves its moved target");
+            typeof(Control).GetMethod("OnMouseUp",Private).Invoke(f.Popup,new object[]{point});accessible.Select(AccessibleSelection.TakeFocus);
+            pref=DeviceSettings.Current;pref.HiddenDeviceIds.Add(last.DeviceKey);DeviceSettings.UseTransientConfiguration(pref);f.Popup.SyncDevices();
+            Check(!f.Controls().Exists(delegate(PopupControl row){return row.DeviceKey==last.DeviceKey;})&&Field(f.Popup,"keyboardFocusKey")==null,"hiding the focused mouse removes its controls without transferring focus to a stale index");
+            Check(accessible.Bounds.IsEmpty&&(accessible.State&AccessibleStates.Unavailable)!=0,"cached accessibility actions retire when the mouse is hidden");
+            var layout=(WirelessLayout)Call(f.Popup,"MainWireless");Set(f.Popup,"gridControlScroll",layout.Grid.MaximumScroll);layout=(WirelessLayout)Call(f.Popup,"MainWireless");
+            var visibleRows=f.Controls();var hidden=visibleRows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&!row.Information&&row.VisibleRect.IsEmpty;});
+            var tile=visibleRows.Find(delegate(PopupControl row){return row.Id>=0&&!row.Viewport.HasValue&&row.Rect.Top==0;});var hit=PopupPages.Hit(visibleRows,new PointF(tile.Rect.X+20,tile.Rect.Y+20));Check(hit==tile&&hit!=hidden,"offscreen controls cannot intercept the tile viewport");
+            var volume=visibleRows.Find(delegate(PopupControl row){return row.Id==240;});Check(PopupPages.Hit(visibleRows,new PointF(volume.Rect.X+20,volume.Rect.Y+10))==volume,"offscreen controls cannot intercept fixed volume");
+            f.Owner.WirelessDevices=new WirelessDevice[0];f.Owner.Headset=null;f.Popup.SyncDevices();layout=(WirelessLayout)Call(f.Popup,"MainWireless");Check(!layout.Grid.Overflow&&layout.Grid.ScrollOffset==0&&(int)Field(f.Popup,"gridControlScroll")==0,"group reduction clamps and clears obsolete control scrolling");
+            foreach(string other in new[]{"ring","bar","grid"}){pref=DeviceSettings.Current;pref.PanelLayout=other;DeviceSettings.UseTransientConfiguration(pref);f.Popup.SyncDevices();Check((int)Field(f.Popup,"gridControlScroll")==0,"layout switches reset grid-only scrolling without changing other layouts");}
+        }
+    }
     static string QuickControls(List<PopupControl> controls,float top){return String.Join("|",controls.FindAll(delegate(PopupControl c){return c.Rect.Top>=top&&c.Id!=0&&c.Id!=1&&c.Id!=902&&c.Id!=903;}).ConvertAll(delegate(PopupControl c){return c.StableKey+":"+c.Rect+":"+c.Text;}).ToArray());}
     static void GridInputAndRegion(){
         foreach(string font in new[]{"normal","large"})foreach(bool wireless in new[]{false,true})using(var f=new Fixture()){
@@ -214,7 +295,7 @@ static class UiMenusTests {
             var pref=DeviceSettings.Current;pref.PanelLayout="grid";pref.FontSize=font;DeviceSettings.UseTransientConfiguration(pref);f.Owner.NativeMousePresent=true;f.Owner.Current=new BatteryReading {Percent=85,TimestampUtc=DateTime.UtcNow};f.Owner.Dpi=GridDpi(8);f.Owner.Headset=null;f.Owner.Audio=new AudioReading {Devices=new AudioDeviceChoice[0]};var devices=new List<WirelessDevice>();for(int i=0;i<18;i++)devices.Add(Device("scroll-"+i,"设备 "+i,"keyboard"));f.Owner.WirelessDevices=devices.ToArray();Set(f.Popup,"dpiScale",2f);f.Page(PopupPage.Main);f.Popup.SyncDevices();
             var first=(WirelessLayout)Call(f.Popup,"MainWireless");Check(first.Paged,"bounded screen pages the grid");string controls=QuickControls(f.Controls(),first.Grid.Controls.Top);
             Action<float,int> wheel=delegate(float y,int delta){typeof(Control).GetMethod("OnMouseWheel",Private).Invoke(f.Popup,new object[]{new MouseEventArgs(MouseButtons.None,0,30,(int)(y*2),delta)});};
-            wheel(first.Grid.Controls.Top+20,-120);Check(f.Navigation.DeviceScroll==0,"wheel over fixed controls never scrolls the grid");wheel(30,-120);var next=(WirelessLayout)Call(f.Popup,"MainWireless");Check(next.Start==2&&next.Grid.Controls==first.Grid.Controls&&QuickControls(f.Controls(),next.Grid.Controls.Top)==controls,"wheel over tiles scrolls exactly one row without moving or replacing controls");
+            wheel(first.Grid.Controls.Top+20,-120);Check(f.Navigation.DeviceScroll==0,"wheel over the fixed control card never scrolls tiles (groups may scroll only on overflow)");wheel(30,-120);var next=(WirelessLayout)Call(f.Popup,"MainWireless");Check(next.Start==2&&next.Grid.Controls==first.Grid.Controls&&QuickControls(f.Controls(),next.Grid.Controls.Top)==controls,"wheel over tiles scrolls exactly one row without moving or replacing controls");
             f.Activate(f.ById(902));Check(((WirelessLayout)Call(f.Popup,"MainWireless")).Start==0,"previous page returns to the first full row");f.Activate(f.ById(903));next=(WirelessLayout)Call(f.Popup,"MainWireless");Check(next.Start==first.End&&next.Start%2==0,"next page starts on a grid row boundary");
             f.Navigation.DeviceScroll=0;f.Page(PopupPage.Main);var last=first.Cards[first.Cards.Count-1];Call(f.Popup,"FocusControl",f.Controls().Find(delegate(PopupControl c){return c.DeviceKey==last.Id&&c.Id>=1000&&c.Id<2000;}));int index=first.All.IndexOf(last);f.Key(Keys.Down);next=(WirelessLayout)Call(f.Popup,"MainWireless");var focused=f.Controls().Find(delegate(PopupControl c){return c.StableKey==(string)Field(f.Popup,"keyboardFocusKey");});Check(next.Start==2&&focused.DeviceKey==first.All[index+2].Id,"Down at a viewport edge reveals the next row and preserves its column");
             f.Owner.WirelessDevices=new WirelessDevice[0];f.Navigation.DeviceScroll=0;Set(f.Popup,"dpiScale",1f);f.Page(PopupPage.Main);f.Popup.SyncDevices();int oldHeight=f.Popup.ClientSize.Height;
@@ -461,6 +542,9 @@ static class UiMenusTests {
         var cached=typeof(DeviceSettings).GetField("current",BindingFlags.Static|BindingFlags.NonPublic);object previous=cached.GetValue(null);
         try{
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
+            Run("grid overflow keyboard reveal and independent pointer wheel matrix",GridOverflowKeyboardAndWheel);
+            Run("grid overflow accessibility clipping, mutation and stable identity",GridOverflowAccessibilityAndMutation);
+            if(args.Length==1&&args[0]=="--grid-overflow")return failures==0?0:1;
             Run("grid pointer, spatial keyboard, focus and fallback region",GridInputAndRegion);Run("grid whole-row scroll, fixed controls and group height animation",GridScrollAndAnimation);
             if(args.Length==1&&args[0]=="--grid")return failures==0?0:1;
             Run("layout preferences, immediate save and popup heights",PanelLayoutPreferences);

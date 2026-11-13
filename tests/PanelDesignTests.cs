@@ -66,6 +66,72 @@ static class PanelDesignTests {
         }}
     }
     static WirelessDevice GridDevice(int index,int stages=0){var values=new int[stages];for(int i=0;i<stages;i++)values[i]=400*(i+1);return new WirelessDevice {Id="grid-"+index,Name="设备 "+index,Kind=stages>0?"mouse":"keyboard",Percent=85,Fresh=true,Online=true,ConnectionState="connected",ConfirmedAtUtc=DateTime.UtcNow.ToString("o"),Dpi=stages>0?new WirelessDpi {Supported=true,CanSet=true,Current=800,Stages=values,TargetToken=new string((char)('a'+index%6),64),CheckedAtUtc=DateTime.UtcNow.ToString("o")}:null};}
+    static void GridOverflowHeight(string font){
+        Mode(font,"ocean",false,"grid");using(var fixture=new Fixture()){
+            var owner=fixture.Owner;owner.GenericReady=true;owner.Dpi=Dpi(8);owner.WirelessDevices=new[]{GridDevice(0,8),GridDevice(1,8),GridDevice(2,8),GridDevice(3,8)};
+            var layout=WirelessLayout.Build(owner,0,520);
+            Console.WriteLine("grid overflow "+font+": height="+layout.Size.Height+", volume="+layout.VolumeRect+", footer="+layout.Footer);
+            Check(layout.Size.Height<=520,"five mice x eight stages must fit the actual 520px available height");
+            Check(layout.VolumeRect.Bottom<=520-VisualDesign.FooterHeight&&layout.Footer+VisualDesign.FooterHeight<=520,"system volume and footer stay visible at 520px");
+        }
+    }
+    static Bitmap RenderGrid(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback){
+        var size=UiState.ScaleSize(layout.Size,scale);var image=new Bitmap(size.Width,size.Height,PixelFormat.Format32bppPArgb);
+        using(var g=Graphics.FromImage(image)){g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);CompactRenderer.PaintWireless(g,owner,layout,dark,feedback);}return image;
+    }
+    static bool GridSameArea(Bitmap left,Bitmap right,Rectangle area){
+        if(area.Width<=0||area.Height<=0)return true;
+        var a=left.LockBits(area,ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);var b=right.LockBits(area,ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
+        try{var x=new byte[area.Width*4];var y=new byte[x.Length];for(int row=0;row<area.Height;row++){
+            System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(a.Scan0,row*a.Stride),x,0,x.Length);System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(b.Scan0,row*b.Stride),y,0,y.Length);
+            for(int i=0;i<x.Length;i++)if(x[i]!=y[i])return false;
+        }return true;}finally{left.UnlockBits(a);right.UnlockBits(b);}
+    }
+    static void GridOverflowViewportMatrix(){
+        foreach(string font in new[]{"normal","large"})foreach(bool native in new[]{false,true})foreach(bool audio in new[]{false,true})foreach(bool collapsed in new[]{false,true}){
+            Mode(font,"ocean",collapsed,"grid");using(var fixture=new Fixture()){
+                var owner=fixture.Owner;owner.GenericReady=true;owner.NativeMousePresent=native;owner.Dpi=Dpi(8);var devices=new List<WirelessDevice>();
+                for(int i=0;i<(native?4:5);i++){var device=GridDevice(i,8);device.Id="device-"+i.ToString().PadLeft(24,'0');device.Provider="logitech";device.SourceQuality="verified";device.MeasurementState="measured";device.Dpi.StageSource="onboard";devices.Add(device);}owner.WirelessDevices=devices.ToArray();
+                typeof(TrayContext).GetField("nativeNeedsReconcile",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(owner,false);
+                if(!audio){owner.Headset=null;owner.Audio=null;}
+                var first=WirelessLayout.Build(owner,0,520);var normal=WirelessLayout.Build(owner,0,10000);
+                Check(first.Grid.Overflow&&first.Grid.VisibleRows==1&&first.Cards.Count==2,"overflow reserves a complete tile row, not a zero-height device viewport");
+                Check(normal.Grid.MaximumScroll==0&&normal.Grid.ScrollOffset==0&&normal.Grid.Viewport.Bottom==normal.VolumeTop,"normal height keeps every group and introduces no scrolling");
+                Check(first.Grid.Groups.Count==(audio?6:5)&&first.Grid.Groups.TrueForAll(delegate(GridControlGroup group){return group.Audio||group.Count==8;}),"all five eight-stage mice and optional audio group remain present");
+                foreach(float scale in new[]{1f,1.25f,1.5f,2f})foreach(bool dark in new[]{false,true}){
+                    using(var baseline=RenderGrid(owner,first,dark,scale,new PanelFeedback()))foreach(int offset in new[]{0,31,Int32.MaxValue}){
+                        var layout=WirelessLayout.Build(owner,0,520,false,offset);var rows=PopupPages.Build(owner,new PopupNavigation(),audio,layout);var regions=new List<InteractionRegion>();
+                        Check(layout.Size.Height==520&&layout.Grid.Controls==first.Grid.Controls&&layout.VolumeRect==first.VolumeRect&&layout.Footer==first.Footer,"scrolling never moves the bounded card, system volume or footer");
+                        Check(rows.FindAll(delegate(PopupControl row){return row.DpiValue>0||row.Id>=10&&row.Id<18;}).Count==40,"no DPI stages are discarded by clipping");
+                        int enabled=rows.FindAll(delegate(PopupControl row){return row.Enabled&&(row.DpiValue>0||row.Id>=10&&row.Id<18);}).Count;
+                        Check(enabled==40,"clipping tests use forty genuinely enabled fixture DPI actions: "+font+"/native="+native+"/audio="+audio+"/collapsed="+collapsed+" actual="+enabled);
+                        Check(rows.FindAll(delegate(PopupControl row){return row.Id>=100&&row.Id<=102;}).Count==(audio?3:0),"audio controls follow audio group presence");
+                        Check(rows.Exists(delegate(PopupControl row){return row.Id==240;})!=collapsed,"volume expansion is independent of group scrolling");
+                        InteractionLayout.Observer=regions.Add;
+                        try{using(var image=RenderGrid(owner,layout,dark,scale,new PanelFeedback())){
+                            Check(GridSameArea(baseline,image,new Rectangle(0,0,image.Width,(int)(first.Grid.Controls.Top*scale))),"scrolling cannot paint into the device tiles");
+                            int fixedTop=(int)Math.Ceiling(first.VolumeTop*scale);Check(GridSameArea(baseline,image,new Rectangle(0,fixedTop,image.Width,image.Height-fixedTop)),"scrolling cannot paint over system volume or the footer");
+                        }}finally{InteractionLayout.Observer=null;}
+                        foreach(var row in rows){
+                            var visible=row.VisibleRect;if(!visible.IsEmpty)Check(visible.Left>=0&&visible.Right<=layout.Size.Width&&visible.Top>=0&&visible.Bottom<=layout.Size.Height,"all visible rectangles fit the actual 520px panel at every scale");
+                            if(row.Viewport.HasValue&&!visible.IsEmpty)Check(layout.Grid.Viewport.Contains(visible)&&visible.Bottom<=layout.VolumeTop,"group hit and accessibility bounds stay inside their shared viewport");
+                            if(row.Information||row.Id<0)continue;var region=regions.Find(delegate(InteractionRegion item){return item.Id==row.Id;});
+                            Check(visible.IsEmpty?region==null:region!=null&&region.Limit==visible,"clipped drawing limits equal the visible hit rectangle, including partial controls");
+                            if(row.Enabled&&!visible.IsEmpty)Check(PopupPages.Hit(rows,new PointF(visible.X+visible.Width/2,visible.Y+visible.Height/2))==row,"visible parts alone remain clickable");
+                        }
+                        var last=layout.Grid.Groups[layout.Grid.Groups.Count-1];if(offset==Int32.MaxValue)Check(layout.Grid.ScrollOffset==layout.Grid.MaximumScroll&&layout.Grid.Viewport.Contains(last.Track),"scrolling to the end fully exposes the last group without bottom overflow");
+                        var partial=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&row.Enabled&&!row.Information&&!row.VisibleRect.IsEmpty&&row.VisibleRect!=row.Rect;});
+                        if(offset==31)Check(partial!=null,"the regression exercises a genuinely enabled partially visible stage");
+                        if(partial!=null){var point=new PointF(partial.Rect.X+partial.Rect.Width/2,partial.Rect.Top<partial.VisibleRect.Top?partial.Rect.Top+.25f:partial.Rect.Bottom-.25f);Check(PopupPages.Hit(rows,point)!=partial,"the cropped part of a partially visible control cannot be hit");}
+                        var hidden=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&!row.Information&&row.VisibleRect.IsEmpty;});
+                        if(hidden!=null)using(var ordinary=RenderGrid(owner,layout,dark,scale,new PanelFeedback()))using(var hovered=RenderGrid(owner,layout,dark,scale,new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id}))Check(GridSameArea(ordinary,hovered,new Rectangle(Point.Empty,ordinary.Size)),"offscreen hover, press and focus feedback leaves no ink in another region");
+                    }
+                }
+                var clamped=WirelessLayout.Build(owner,0,520,false,Int32.MaxValue);owner.WirelessDevices=new WirelessDevice[0];owner.Headset=null;owner.Audio=null;
+                var reduced=WirelessLayout.Build(owner,0,520,false,clamped.Grid.ScrollOffset);Check(reduced.Grid.ScrollOffset==0&&!reduced.Grid.Overflow,"shrinking the group list clamps obsolete offsets to zero");
+            }
+        }
+    }
     static void GridCountsAndPaging(){
         foreach(string font in new[]{"normal","large"})foreach(int count in new[]{1,2,3,4,5}){Mode(font,"ocean",false,"grid");using(var fixture=new Fixture()){
             var owner=fixture.Owner;owner.NativeMousePresent=false;owner.Headset=null;owner.GenericReady=true;var devices=new List<WirelessDevice>();for(int i=0;i<count;i++)devices.Add(GridDevice(i));owner.WirelessDevices=devices.ToArray();
@@ -408,9 +474,28 @@ static class PanelDesignTests {
                 }
             }finally{foreach(var frame in frames)frame.Dispose();}
         }
+        if(panelLayout=="grid")RenderGridOverflowPreviews(directory);
+    }
+    static void RenderGridOverflowPreviews(string directory){
+        foreach(string font in new[]{"normal","large"})foreach(bool dark in new[]{false,true}){
+            Mode(font,"ocean",false,"grid");using(var fixture=new Fixture()){
+                var owner=fixture.Owner;owner.GenericReady=true;owner.Dpi=Dpi(8);owner.WirelessDevices=new[]{GridDevice(0,8),GridDevice(1,8),GridDevice(2,8),GridDevice(3,8)};
+                for(int i=0;i<owner.WirelessDevices.Length;i++){var device=owner.WirelessDevices[i];device.Id="device-"+i.ToString().PadLeft(24,'0');device.Provider="logitech";device.SourceQuality="verified";device.MeasurementState="measured";device.Dpi.StageSource="onboard";}
+                string stem=Path.Combine(directory,"main-panel-grid-five-mice-ocean-"+(dark?"dark":"light")+"-"+font);
+                var normal=WirelessLayout.Build(owner,0,10000);using(var image=RenderGrid(owner,normal,dark,2,new PanelFeedback()))image.Save(stem+"-normal.png",ImageFormat.Png);
+                foreach(int offset in new[]{0,Int32.MaxValue}){
+                    var bounded=WirelessLayout.Build(owner,0,520,false,offset);string path=stem+"-520-"+(offset==0?"top":"bottom")+".png";
+                    using(var image=RenderGrid(owner,bounded,dark,2,new PanelFeedback()))image.Save(path,ImageFormat.Png);Console.WriteLine(path);
+                }
+            }
+        }
     }
     [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{
         if(args.Length>=2&&args[0]=="--render"){VisualDesign.HighContrastOverride=false;foreach(string layout in args.Length>2?new[]{args[2]}:new[]{"ring","bar","grid"})RenderPreviews(args[1],layout);return 0;}
+        Run("grid overflow 520px, five mice x eight stages, normal",delegate{GridOverflowHeight("normal");});
+        Run("grid overflow 520px, five mice x eight stages, large",delegate{GridOverflowHeight("large");});
+        Run("grid overflow viewport, clipping, fixed volume and scale matrix",GridOverflowViewportMatrix);
+        if(args.Length==1&&args[0]=="--grid-overflow")return failures==0?0:1;
         Run("grid dispatch, two-column tiles and fixed quick controls",GridBasics);
         Run("grid 1..5 devices, whole-row paging and fixed controls",GridCountsAndPaging);Run("grid all-device control groups and hidden devices",GridGroupsAndHidden);
         Run("grid shared drawing and hit geometry",delegate{HitGeometry("grid");});Run("grid complete theme and render path matrix",delegate{RenderMatrix("grid");});Run("grid typography, status and accessibility at five DPI scales",GridTypographyAndStates);

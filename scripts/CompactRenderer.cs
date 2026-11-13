@@ -196,7 +196,7 @@ namespace AtkBatteryTray {
             DrawLabel(g,subtitle,VisualDesign.HeaderTextRect(top,true,audioOnly),VisualDesign.SubtitleFontSize,false,Muted(dark),StringAlignment.Near);
             });
         }
-        internal static void Selection(Graphics g,RectangleF rect,string label,string icon,bool selected,bool enabled,bool hovered,bool pressed,bool pending,bool dark,bool focused=false,RectangleF? card=null,int id=0,Action extra=null) {
+        internal static void Selection(Graphics g,RectangleF rect,string label,string icon,bool selected,bool enabled,bool hovered,bool pressed,bool pending,bool dark,bool focused=false,RectangleF? card=null,int id=0,Action extra=null,RectangleF? viewport=null) {
             var palette=ThemePalette.Current(dark);
             if(pending)label+="…";
             if(selected) {
@@ -218,7 +218,7 @@ namespace AtkBatteryTray {
                 if(pending)for(int i=0;i<3;i++)Fill(g,VisualDesign.SelectionPendingDotRect(rect,i),ink,1);
                 else Fill(g,pip,ink,1);
             }
-            },false,1,2,VisualDesign.SelectionFocusRect(rect));
+            },false,1,2,VisualDesign.SelectionFocusRect(rect),viewport);
         }
         internal static void DrawVolumeTrack(Graphics g,RectangleF meter,bool dark,float fraction,float start=0,Color? fill=null) {
             Fill(g,meter,Track(dark),VisualDesign.VolumeTrackRadius);
@@ -274,10 +274,10 @@ namespace AtkBatteryTray {
                 for(int i=0;i<count;i++) {
                     var rect=group==null?VisualDesign.StageRect(i,count):GridLayout.Segment(group,i);if(group==null)rect.Y+=top;var value=dpi.Stages[i];bool selected=dpi.ActiveStage==i,hint=feedback!=null&&feedback.ShowPendingHints&&feedback.PendingStage==i;
                     var card=surface??VisualDesign.PanelCardRect(top,VisualDesign.MouseCardHeight(dpi));bool focused=feedback!=null&&feedback.KeyboardFocus==10+i;
-                    if(value.XDpi==value.YDpi)Selection(g,rect,value.XDpi.ToString(),null,selected,true,hoverStage==i||feedback!=null&&feedback.HoverAction==10+i,feedback!=null&&feedback.PressedAction==10+i,hint,dark,focused,card,10+i);
+                    if(value.XDpi==value.YDpi)Selection(g,rect,value.XDpi.ToString(),null,selected,true,hoverStage==i||feedback!=null&&feedback.HoverAction==10+i,feedback!=null&&feedback.PressedAction==10+i,hint,dark,focused,card,10+i,null,group==null?null:(RectangleF?)group.Viewport);
                     else Selection(g,rect,"",null,selected,true,hoverStage==i||feedback!=null&&feedback.HoverAction==10+i,feedback!=null&&feedback.PressedAction==10+i,hint,dark,focused,card,10+i,delegate{
                         Color color=selected?VisualDesign.HighContrast?PopupPages.SelectedForeground(dark):Fg(dark):Muted(dark);DrawLabel(g,"X "+value.XDpi,VisualDesign.SelectionDetailRect(rect,false),VisualDesign.SmallFontSize,selected,color,StringAlignment.Center);DrawLabel(g,"Y "+value.YDpi+(hint?"…":""),VisualDesign.SelectionDetailRect(rect,true),VisualDesign.SmallFontSize,selected,color,StringAlignment.Center);
-                    });
+                    },group==null?null:(RectangleF?)group.Viewport);
                 }
             }else{var waiting=VisualDesign.StageTrackRect(top,0);Fill(g,waiting,Track(dark),9);DrawLabel(g,"等待DPI档位回读",waiting,VisualDesign.SubtitleFontSize,false,Muted(dark),StringAlignment.Center);}
         }
@@ -285,14 +285,14 @@ namespace AtkBatteryTray {
             Fill(g,group==null?VisualDesign.AudioSelectionTrack(top):group.Track,Track(dark),9);
             for(int i=0;i<2;i++) {
                 var rect=group==null?VisualDesign.AudioOutputRect(top,i):GridLayout.Segment(group,i);string target=i==0?"speaker":"headset";
-                Selection(g,rect,i==0?"扬声器":"耳机",target,audio!=null&&audio.ActiveOutput==target,(feedback==null||!feedback.AudioBlocked)&&audio!=null&&(i==0?audio.SpeakerAvailable:audio.HeadsetAvailable&&(audioCard==null||audioCard.HasTarget)),hoverAudio==i||feedback!=null&&feedback.HoverAction==100+i,feedback!=null&&feedback.PressedAction==100+i,feedback!=null&&feedback.ShowPendingHints&&feedback.PendingOutput==target,dark,feedback!=null&&feedback.KeyboardFocus==100+i,surface??VisualDesign.PanelCardRect(top,VisualDesign.HeadsetCardHeight),100+i);
+                Selection(g,rect,i==0?"扬声器":"耳机",target,audio!=null&&audio.ActiveOutput==target,(feedback==null||!feedback.AudioBlocked)&&audio!=null&&(i==0?audio.SpeakerAvailable:audio.HeadsetAvailable&&(audioCard==null||audioCard.HasTarget)),hoverAudio==i||feedback!=null&&feedback.HoverAction==100+i,feedback!=null&&feedback.PressedAction==100+i,feedback!=null&&feedback.ShowPendingHints&&feedback.PendingOutput==target,dark,feedback!=null&&feedback.KeyboardFocus==100+i,surface??VisualDesign.PanelCardRect(top,VisualDesign.HeadsetCardHeight),100+i,null,group==null?null:(RectangleF?)group.Viewport);
             }
             var mic=group==null?VisualDesign.MicrophoneRect(top):GridLayout.Microphone(group);bool muted=audio!=null&&audio.MicrophoneMuted==true,blocked=feedback!=null&&feedback.AudioBlocked;
             bool uncertain=blocked||feedback!=null&&feedback.MicrophonePending||audio==null||!audio.MicrophoneAvailable||!audio.MicrophoneMuted.HasValue;
             Color red=ThemePalette.LevelColor(10,dark);Fill(g,mic,!uncertain&&muted?ThemePalette.Current(dark).MutedMicrophoneFill:Track(dark),VisualDesign.MicrophoneRadius);
             var micFeedback=blocked||audio==null||!audio.MicrophoneAvailable||!audio.MicrophoneMuted.HasValue?null:new PanelFeedback {HoverAction=hoverAudio==2||feedback!=null&&feedback.HoverAction==102?102:-1,PressedAction=feedback==null?-1:feedback.PressedAction,KeyboardFocus=feedback==null?-1:feedback.KeyboardFocus};
             if(feedback!=null&&feedback.ShowPendingHints&&feedback.MicrophonePending)Outline(g,mic,Blue(dark),1.2f);
-            InteractionLayout.Paint(g,surface??VisualDesign.PanelCardRect(top,VisualDesign.HeadsetCardHeight),mic,102,micFeedback,dark,false,delegate{DrawSymbol(g,muted?"mic-off":"mic",VisualDesign.CenteredRect(mic,14,16),uncertain?Muted(dark):muted?red:Fg(dark));},true,1);
+            InteractionLayout.Paint(g,surface??VisualDesign.PanelCardRect(top,VisualDesign.HeadsetCardHeight),mic,102,micFeedback,dark,false,delegate{DrawSymbol(g,muted?"mic-off":"mic",VisualDesign.CenteredRect(mic,14,16),uncertain?Muted(dark):muted?red:Fg(dark));},true,1,1,null,group==null?null:(RectangleF?)group.Viewport);
         }
         internal static void RingGauge(Graphics g,BatteryView view,string icon,float top,bool dark,bool sleeping=false) {
             var palette=ThemePalette.Current(dark);var outer=VisualDesign.BatteryRingRect(top);float width=VisualDesign.BatteryRingWidth;var circle=outer;circle.Inflate(-width/2,-width/2);
@@ -356,7 +356,7 @@ namespace AtkBatteryTray {
             int count=WirelessLayout.DpiStageCount(card.Device);if(count==0)return;
             var dpi=card.Device.Dpi;bool enabled=owner.CanSetWirelessDpi(card.Id,dpi.TargetToken),confirmed=WirelessLayout.DpiFresh(card.Device)&&String.IsNullOrEmpty(owner.WirelessDpiFailure(card.Id,dpi.TargetToken));int? pending=owner.DesiredWirelessDpi(card.Id,dpi.TargetToken);
             Fill(g,layout!=null&&layout.Grid!=null?layout.Grid.Group(card).Track:VisualDesign.StageTrackRect(card.Top,count),Track(dark),9);
-            for(int i=0;i<count;i++){var rect=WirelessLayout.DpiRect(card,i);int id=WirelessLayout.DpiActionId(index,i);bool selected=confirmed&&dpi.Current==dpi.Stages[i];Selection(g,rect,dpi.Stages[i].ToString(),null,selected,enabled||selected&&pending.HasValue,enabled&&feedback.HoverAction==id,enabled&&feedback.PressedAction==id,pending==dpi.Stages[i],dark,feedback.KeyboardFocus==id,layout!=null&&layout.Grid!=null?VisualDesign.PanelCardSurface(layout.Grid.Controls):VisualDesign.PanelCardRect(card.Top,card.Height),id);}
+            for(int i=0;i<count;i++){var rect=WirelessLayout.DpiRect(card,i);int id=WirelessLayout.DpiActionId(index,i);bool selected=confirmed&&dpi.Current==dpi.Stages[i];Selection(g,rect,dpi.Stages[i].ToString(),null,selected,enabled||selected&&pending.HasValue,enabled&&feedback.HoverAction==id,enabled&&feedback.PressedAction==id,pending==dpi.Stages[i],dark,feedback.KeyboardFocus==id,layout!=null&&layout.Grid!=null?layout.Grid.GroupSurface:VisualDesign.PanelCardRect(card.Top,card.Height),id,null,layout!=null&&layout.Grid!=null?(RectangleF?)layout.Grid.Viewport:null);}
         }
         static RectangleF GridNumber(Graphics g,WirelessCard card,bool dark,bool draw) {
             var tile=card.Tile;var view=card.Battery;bool sleeping=RingSleeping(card.Device),reading=view!=null&&view.Percent.HasValue&&!sleeping;
@@ -388,10 +388,18 @@ namespace AtkBatteryTray {
             g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=TextRenderingHint.AntiAliasGridFit;
             foreach(var card in layout.Cards)GridTile(g,layout,card,dark,feedback);
             var surface=VisualDesign.PanelCardSurface(layout.Grid.Controls);DrawPanelSurface(g,surface,dark,null);
+            var saved=g.Save();g.SetClip(layout.Grid.Viewport,CombineMode.Intersect);
+            try{
             foreach(var group in layout.Grid.Groups){DrawLabel(g,group.Audio?"音源":group.Card.Name+" · DPI",group.Title,VisualDesign.SmallFontSize,false,Muted(dark),StringAlignment.Near);
-                if(group.Audio)AudioControls(g,0,audio,audioCard,dark,feedback,-1,group,surface);
-                else if(group.Card.NativeMouse)NativeDpiControls(g,dpi,0,dark,feedback,-1,group,surface);
+                if(group.Audio)AudioControls(g,0,audio,audioCard,dark,feedback,-1,group,layout.Grid.GroupSurface);
+                else if(group.Card.NativeMouse)NativeDpiControls(g,dpi,0,dark,feedback,-1,group,layout.Grid.GroupSurface);
                 else WirelessDpiControls(g,owner,group.Card,layout.All.IndexOf(group.Card),dark,feedback,layout);
+            }
+            }finally{g.Restore(saved);}
+            if(layout.Grid.Overflow&&layout.Grid.Viewport.Height>=4){
+                var view=layout.Grid.Viewport;float height=Math.Max(16,view.Height*view.Height/layout.Grid.ContentHeight),top=view.Top+(view.Height-height)*layout.Grid.ScrollOffset/layout.Grid.MaximumScroll;
+                Fill(g,new RectangleF(VisualDesign.PanelWidth-5,view.Top+2,2,Math.Max(1,view.Height-4)),Track(dark),1);
+                Fill(g,new RectangleF(VisualDesign.PanelWidth-5,top+2,2,Math.Max(1,height-4)),Muted(dark),1);
             }
             if(layout.Grid.Groups.Count>0)RingSeparator(g,layout.VolumeTop,dark);SystemVolume(g,layout.VolumeRect,audio,dark,feedback,false);
         }

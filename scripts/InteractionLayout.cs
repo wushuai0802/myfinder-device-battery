@@ -98,8 +98,9 @@ namespace AtkBatteryTray {
             if(!InsideRoundedCard(bounds,Radius(bounds,card),card))throw new InvalidOperationException("Interaction content enters a card corner: "+id);
             return new InteractionRegion {Content=content,Bounds=bounds,Card=card,Limit=limit,Padding=padding,Radius=Radius(bounds,card),Id=id};
         }
-        internal static InteractionRegion Paint(Graphics g,RectangleF card,RectangleF limit,int id,PanelFeedback feedback,bool dark,bool selected,Action draw,bool pointerFill=true,float pressOffset=0,float focusWidth=1,RectangleF? focusRect=null){
-            if(!g.IsVisible(limit))return null;
+        internal static InteractionRegion Paint(Graphics g,RectangleF card,RectangleF limit,int id,PanelFeedback feedback,bool dark,bool selected,Action draw,bool pointerFill=true,float pressOffset=0,float focusWidth=1,RectangleF? focusRect=null,RectangleF? viewport=null){
+            var visible=viewport.HasValue?RectangleF.Intersect(limit,viewport.Value):limit;
+            if(visible.Width<=0||visible.Height<=0||!g.IsVisible(visible))return null;
             var previous=measured;bool wasMeasuring=measuring;var state=g.Save();RectangleF content;
             try{measuring=true;measured=RectangleF.Empty;g.SetClip(RectangleF.Empty);draw();content=measured;}
             finally{g.Restore(state);measured=previous;measuring=wasMeasuring;}
@@ -108,7 +109,10 @@ namespace AtkBatteryTray {
             if(feedback!=null&&feedback.PressedAction==id)content.Offset(0,pressOffset);
             var region=Create(content,card,limit,id);
             region.Enabled=feedback!=null&&id>=0;
-            if(Observer!=null)Observer(region);
+            if(Observer!=null){
+                if(!viewport.HasValue)Observer(region);
+                else Observer(new InteractionRegion {Content=RectangleF.Intersect(region.Content,viewport.Value),Bounds=RectangleF.Intersect(region.Bounds,viewport.Value),Card=RectangleF.Intersect(card,viewport.Value),Limit=visible,Padding=region.Padding,Radius=region.Radius,Id=id,Enabled=region.Enabled});
+            }
             var value=feedback??new PanelFeedback();
             var palette=ThemePalette.Current(dark);
             if(selected&&value.KeyboardFocus==id&&!VisualDesign.HighContrast&&palette.Accent==palette.Selected){

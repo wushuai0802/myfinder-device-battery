@@ -7,21 +7,26 @@ namespace AtkBatteryTray {
     internal sealed class GridControlGroup {
         internal WirelessCard Card;
         internal RectangleF Title,Track;
+        internal RectangleF Viewport;
         internal int Count;
         internal bool Audio;
     }
     // One composition for native rendering, universal rendering, input and size.
     internal sealed class GridLayout {
         internal readonly List<GridControlGroup> Groups=new List<GridControlGroup>();
-        internal RectangleF Controls;
-        internal int VisibleRows;
+        internal RectangleF Controls,Viewport;
+        internal int VisibleRows,ContentHeight,ScrollOffset,MaximumScroll;
+        internal bool Overflow {get{return MaximumScroll>0;}}
+        // The uncut content surface is used for measuring feedback; only the
+        // viewport is painted/hit. Volume never belongs to this surface's scroll.
+        internal RectangleF GroupSurface {get{return VisualDesign.PanelCardSurface(new RectangleF(Controls.X,Controls.Y-ScrollOffset,Controls.Width,ContentHeight+Controls.Bottom-Viewport.Bottom));}}
         internal static int TileHeight {get{return VisualDesign.LargeFont?104:92;}}
         internal static int TileWidth {get{return (VisualDesign.PanelWidth-8)/2;}}
         internal static int Inset {get{return VisualDesign.LargeFont?12:11;}}
         internal static int TitleHeight {get{return VisualDesign.LargeFont?20:18;}}
         internal static int DpiCount(WirelessCard card){return card.NativeMouse?card.Dpi==null||card.Dpi.Stages==null?0:Math.Min(8,card.Dpi.Stages.Count):WirelessLayout.DpiStageCount(card.Device);}
         internal static int DetailAction(WirelessLayout layout,WirelessCard card){return card.NativeMouse?2:card.NativeHeadset?3:card.AudioOnly?200:1000+layout.All.IndexOf(card);}
-        internal static void Arrange(WirelessLayout layout,int offset,int maximumHeight) {
+        internal static void Arrange(WirelessLayout layout,int offset,int maximumHeight,int controlOffset=0) {
             var grid=new GridLayout();layout.Grid=grid;float y=9;
             var mice=layout.All.FindAll(delegate(WirelessCard card){return !card.Hidden&&DpiCount(card)>0;});
             mice.Sort(delegate(WirelessCard a,WirelessCard b){return a.NativeMouse==b.NativeMouse?layout.All.IndexOf(a).CompareTo(layout.All.IndexOf(b)):a.NativeMouse?-1:1;});
@@ -29,7 +34,11 @@ namespace AtkBatteryTray {
             var audio=layout.All.Find(delegate(WirelessCard card){return !card.Hidden&&(card.NativeHeadset||card.AudioOnly);})??layout.All.Find(delegate(WirelessCard card){return !card.Hidden&&card.Kind=="headset";});
             if(audio!=null){grid.Groups.Add(new GridControlGroup {Card=audio,Audio=true,Count=2,Title=new RectangleF(12,y,VisualDesign.PanelWidth-24,TitleHeight),Track=new RectangleF(10,y+TitleHeight,VisualDesign.PanelWidth-VisualDesign.MicrophoneWidth-26,VisualDesign.SelectionHeight)});y+=TitleHeight+VisualDesign.SelectionHeight+8;}
             if(grid.Groups.Count==0)y=0;
-            int controlsHeight=(int)y+VisualDesign.SystemVolumeHeightFor(layout.VolumeCollapsed)+2;
+            grid.ContentHeight=(int)y;
+            int volumeHeight=VisualDesign.SystemVolumeHeightFor(layout.VolumeCollapsed)+2;
+            int groupHeight=Math.Min(grid.ContentHeight,Math.Max(0,maximumHeight-(TileHeight+8)-VisualDesign.FooterHeight-volumeHeight));
+            int controlsHeight=groupHeight+volumeHeight;
+            grid.MaximumScroll=grid.ContentHeight-groupHeight;
             int rows=Math.Max(1,(layout.All.Count+1)/2),available=maximumHeight-controlsHeight-8-VisualDesign.FooterHeight;
             grid.VisibleRows=Math.Min(rows,Math.Max(1,(available+8)/(TileHeight+8)));
             layout.Start=Math.Max(0,Math.Min(offset/2,rows-grid.VisibleRows))*2;
@@ -40,8 +49,19 @@ namespace AtkBatteryTray {
             }
             float controlsTop=grid.VisibleRows*(TileHeight+8);
             grid.Controls=new RectangleF(0,controlsTop,VisualDesign.PanelWidth,controlsHeight);
-            foreach(var group in grid.Groups){group.Title.Offset(0,controlsTop);group.Track.Offset(0,controlsTop);if(!group.Audio)group.Card.DpiTrack=group.Track;}
-            layout.VolumeTop=controlsTop+y;layout.Footer=grid.Controls.Bottom;
+            int topInset=grid.Overflow?8:0;
+            grid.Viewport=new RectangleF(0,controlsTop+topInset,VisualDesign.PanelWidth,Math.Max(0,groupHeight-topInset));
+            foreach(var group in grid.Groups){group.Viewport=grid.Viewport;group.Title.Offset(0,controlsTop);group.Track.Offset(0,controlsTop);if(!group.Audio)group.Card.DpiTrack=group.Track;}
+            layout.VolumeTop=controlsTop+groupHeight;layout.Footer=grid.Controls.Bottom;grid.ScrollTo(controlOffset);
+        }
+        internal void ScrollTo(int offset){
+            int next=Math.Max(0,Math.Min(offset,MaximumScroll)),delta=ScrollOffset-next;ScrollOffset=next;
+            if(delta==0)return;
+            foreach(var group in Groups){group.Title.Offset(0,delta);group.Track.Offset(0,delta);if(!group.Audio)group.Card.DpiTrack=group.Track;}
+        }
+        internal int RevealOffset(RectangleF rect){
+            float delta=rect.Top<Viewport.Top?rect.Top-Viewport.Top:rect.Bottom>Viewport.Bottom?rect.Bottom-Viewport.Bottom:0;
+            return Math.Max(0,Math.Min(MaximumScroll,ScrollOffset+(int)(delta<0?Math.Floor(delta):Math.Ceiling(delta))));
         }
         internal static WirelessLayout Native(bool second,DpiConfig dpi) {
             var layout=new WirelessLayout {VolumeCollapsed=DeviceSettings.Current.VolumeCollapsed};var pref=DeviceSettings.Current;

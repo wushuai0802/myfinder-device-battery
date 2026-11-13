@@ -106,6 +106,9 @@ namespace AtkBatteryTray {
         bool draggingVolume;
         bool volumeCollapsed;
         string panelLayout;
+        int gridControlScroll;
+        string gridControlKey;
+        bool gridFocusNeedsReveal;
         string volumeEndpoint;
         string lastHoverTip;
         readonly System.Windows.Forms.Timer feedbackTimer=new System.Windows.Forms.Timer();
@@ -174,14 +177,14 @@ namespace AtkBatteryTray {
                 // Releasing capture cancels the stored interaction synchronously.
                 // Commit only the valid drag snapshot taken before that callback.
                 if(wasDragging){if(pressed!=null&&pressed.Id==240&&page==navigation.Page&&value>=0&&value<=100&&VolumeTargetAvailable(endpoint))owner.SelectOutputVolume(endpoint,value);}
-                else if(target!=null&&pressed!=null&&PopupPages.SameAction(target,pressed)&&page==navigation.Page&&target.Rect==pressed.Rect)PerformAction(target);
+                else if(target!=null&&pressed!=null&&PopupPages.SameAction(target,pressed)&&page==navigation.Page&&target.Rect==pressed.Rect&&target.VisibleRect==pressed.VisibleRect)PerformAction(target);
                 Invalidate();
             };
             MouseMove+=delegate(object sender,MouseEventArgs e) {
                 var point=PanelPoint(e.Location);
                 if(draggingVolume&&pressedControl!=null){navigation.VolumePreview=PopupPages.VolumeAt(pressedControl.Rect,point.X);Invalidate();return;}
                 var controls=ControlsForPage();var target=PopupPages.Hit(controls,point);int next=target==null?-1:target.Id;
-                var tipTarget=target??controls.Find(delegate(PopupControl c){return c.Rect.Contains(point);});
+                var tipTarget=target??controls.Find(delegate(PopupControl c){return c.VisibleRect.Contains(point);});
                 string tip=tipTarget==null?null:tipTarget.Text+(String.IsNullOrEmpty(tipTarget.Value)?"":"："+tipTarget.Value)+(String.IsNullOrEmpty(tipTarget.Detail)?"":"\n"+tipTarget.Detail);
                 if(navigation.Page!=PopupPage.Main&&point.Y>targetSize.Height-28){var feedback=owner.GetFeedback();tip=feedback.AudioFailure??feedback.DpiFailure??navigation.Notice;}
                 if(next!=hoverAction||tip!=lastHoverTip){
@@ -194,7 +197,14 @@ namespace AtkBatteryTray {
             MouseWheel+=delegate(object sender,MouseEventArgs e) {
                 if(navigation.Page!=PopupPage.Main){navigation.Offset=Math.Max(0,navigation.Offset+(e.Delta<0?1:-1));UpdateLayoutSize();Invalidate();}
                 else if(MainUsesDeviceLayout){
-                    if(VisualDesign.GridLayout&&PanelPoint(e.Location).Y>=MainWireless().Grid.Controls.Top)return;
+                    if(VisualDesign.GridLayout){
+                        var layout=MainWireless();var point=PanelPoint(e.Location);
+                        if(layout.Grid.Viewport.Contains(point)){
+                            int next=Math.Max(0,Math.Min(layout.Grid.MaximumScroll,gridControlScroll+(e.Delta<0?1:-1)*(VisualDesign.SelectionHeight+GridLayout.TitleHeight+8)));
+                            if(next!=gridControlScroll){ClearGridPointer();gridControlScroll=next;AccessibilityNotifyClients(AccessibleEvents.LocationChange,-1);Invalidate();}return;
+                        }
+                        if(point.Y>=layout.Grid.Controls.Top)return;
+                    }
                     CancelPointerInteraction();navigation.DeviceScroll=Math.Max(0,navigation.DeviceScroll+(e.Delta<0?1:-1)*(VisualDesign.GridLayout?2:1));
                     if(VisualDesign.GridLayout)navigation.DeviceScroll=MainWireless().Start;UpdateLayoutSize();ReconcileKeyboardFocus(ControlsForPage());Invalidate();
                 }
@@ -218,14 +228,43 @@ namespace AtkBatteryTray {
             owner.SetAudioScope(audioPage?navigation.AudioDeviceKey:null);
         }
         Rectangle PanelWorkArea {get{return updatedAnchor.HasValue?updatedAnchor.Value.WorkArea:TrayPanelPlacement.WorkingArea(Screen.FromPoint(anchor));}}
-        WirelessLayout MainWireless(){return WirelessLayout.Build(owner,navigation.DeviceScroll,(int)(PanelWorkArea.Height/dpiScale)-24);}
+        void ClearGridPointer(){CancelPointerInteraction();HidePointerTip();hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;Cursor=Cursors.Default;}
+        string GridControlKey(WirelessLayout layout){
+            var key=new StringBuilder();
+            foreach(var group in layout.Grid.Groups){
+                key.Append('|').Append(group.Card.Id).Append(':').Append(group.Audio).Append(':').Append(group.Count);
+                if(group.Card.NativeMouse){key.Append(':').Append(owner.NativeDpiToken);foreach(var stage in group.Card.Dpi.Stages)key.Append(':').Append(stage.XDpi).Append('/').Append(stage.YDpi);}
+                else if(!group.Audio){key.Append(':').Append(group.Card.Device.Dpi.TargetToken);foreach(int stage in group.Card.Device.Dpi.Stages)key.Append(':').Append(stage);}
+            }
+            return key.ToString();
+        }
+        WirelessLayout MainWireless(){
+            var layout=WirelessLayout.Build(owner,navigation.DeviceScroll,(int)(PanelWorkArea.Height/dpiScale)-24,false,gridControlScroll);
+            if(layout.Grid!=null){
+                string key=GridControlKey(layout);
+                if(key!=gridControlKey){if(gridControlKey!=null)ClearGridPointer();gridControlKey=key;layout.Grid.ScrollTo(0);gridFocusNeedsReveal=true;}
+                if(gridControlScroll!=layout.Grid.ScrollOffset)gridFocusNeedsReveal=true;
+                gridControlScroll=layout.Grid.ScrollOffset;navigation.DeviceScroll=layout.Start;
+            }
+            return layout;
+        }
+        PopupControl RevealGridControl(PopupControl control){
+            if(control==null||!control.Viewport.HasValue||navigation.Page!=PopupPage.Main||!VisualDesign.GridLayout)return control;
+            var layout=MainWireless();var group=layout.Grid.Groups.Find(delegate(GridControlGroup item){return item.Card.Id==control.DeviceKey&&item.Audio==(control.Id>=100&&control.Id<=102);});
+            if(group==null)return null;
+            var rect=RectangleF.Union(group.Title,group.Track);rect.Inflate(0,3);
+            if(rect.Height>layout.Grid.Viewport.Height){rect=control.Rect;rect.Inflate(0,3);}
+            int next=layout.Grid.RevealOffset(rect);
+            if(next!=gridControlScroll){ClearGridPointer();gridControlScroll=next;AccessibilityNotifyClients(AccessibleEvents.LocationChange,-1);}
+            return PopupPages.FindStable(ControlsForPage(),control.StableKey);
+        }
         bool MainUsesDeviceLayout {get{return owner.UseWirelessLayout||VisualDesign.GridLayout;}}
         List<PopupControl> ControlsForPage(){
             float workHeight=PanelWorkArea.Height/dpiScale;
             navigation.MaximumHeight=(int)workHeight-24;
             int rowStep=VisualDesign.LargeFont?40:36;
             navigation.VisibleChoices=Math.Max(2,Math.Min(7,(int)((workHeight-88)/rowStep)-2));
-            var controls=PopupPages.Build(owner,navigation,headsetProgress>.98f,MainUsesDeviceLayout?MainWireless():null);
+            var controls=PopupPages.Build(owner,navigation,headsetProgress>.98f,navigation.Page==PopupPage.Main&&MainUsesDeviceLayout?MainWireless():null);
             if(navigation.Page==PopupPage.Main&&!MainUsesDeviceLayout){
                 float top=VisualDesign.MouseCardHeight(owner.Dpi)+VisualDesign.SecondCardStep*headsetProgress+VisualDesign.CardGap;
                 bool secondCard=headsetProgress>.98f||VisualDesign.AudioCardFor(owner.Headset,owner.Audio)!=null;
@@ -239,7 +278,7 @@ namespace AtkBatteryTray {
         }
         public void ShowPreferences(){Go(PopupPage.Preferences);}
         internal string CurrentPage {get{return navigation.Page.ToString();}}
-        void Back() {pageStartHeight=targetSize.Height;keyboardFocus=navigation.Back();keyboardFocusKey=navigation.ReturnedFocusKey;SyncAudioScope();StartPageMotion();ReconcileKeyboardFocus(ControlsForPage());}
+        void Back() {pageStartHeight=targetSize.Height;keyboardFocus=navigation.Back();keyboardFocusKey=navigation.ReturnedFocusKey;SyncAudioScope();StartPageMotion();var controls=ControlsForPage();ReconcileKeyboardFocus(controls);if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout&&keyboardFocusKey!=null)FocusControl(PopupPages.FindStable(controls,keyboardFocusKey));}
         void StartPageMotion(){CancelPointerInteraction();hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageProgress=PopupPages.Reduced?1:0;pageClock.Restart();if(pageProgress==0)pageAnimation.Start();UpdateLayoutSize();Invalidate();}
         void PerformAction(PopupControl control) {
             if(control==null||!control.Enabled||control.Information)return;
@@ -372,7 +411,7 @@ namespace AtkBatteryTray {
             if(keys==Keys.Escape){if(navigation.Page==PopupPage.Main)CloseAnimated();else Back();return true;}
             var controls=ControlsForPage();ReconcileKeyboardFocus(controls);var targets=new List<PopupControl>();foreach(var control in controls)if(control.Id>=0&&control.Enabled&&!control.Information)targets.Add(control);
             if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout){
-                var layout=MainWireless();var tiles=targets.FindAll(delegate(PopupControl c){return c.Rect.Bottom<=layout.Grid.Controls.Top;});var current=tiles.Find(delegate(PopupControl c){return c.StableKey==keyboardFocusKey;});
+                var layout=MainWireless();var tiles=targets.FindAll(delegate(PopupControl c){return !c.Viewport.HasValue&&c.Rect.Bottom<=layout.Grid.Controls.Top;});var current=tiles.Find(delegate(PopupControl c){return c.StableKey==keyboardFocusKey;});
                 if((current!=null||keyboardFocusKey==null)&&(keys==Keys.Left||keys==Keys.Right||keys==Keys.Up||keys==Keys.Down)){
                     int dy=keys==Keys.Up?-1:keys==Keys.Down?1:0;var next=GridLayout.Spatial(tiles,current,keys==Keys.Left?-1:keys==Keys.Right?1:0,dy);
                     if(next==current&&current!=null&&dy!=0&&(dy<0?layout.Start>0:layout.End<layout.All.Count)){
@@ -381,7 +420,7 @@ namespace AtkBatteryTray {
                     }
                     FocusControl(next);return true;
                 }
-                if(current!=null&&keys==Keys.Tab){FocusControl(targets.Find(delegate(PopupControl c){return c.Rect.Top>=layout.Grid.Controls.Top;}));return true;}
+                if(current!=null&&keys==Keys.Tab){FocusControl(targets.Find(delegate(PopupControl c){return c.Viewport.HasValue||c.Rect.Top>=layout.Grid.Controls.Top;}));return true;}
             }
             if(keyboardFocus==240&&(keys==Keys.Left||keys==Keys.Right)&&owner.Audio!=null&&owner.Audio.OutputVolumePercent.HasValue){var slider=controls.Find(delegate(PopupControl row){return row.Id==240&&row.Enabled&&row.Slider;});if(slider!=null)SetSliderValue(slider,(owner.DesiredVolume??owner.Audio.OutputVolumePercent.Value)+(keys==Keys.Left?-2:2));return true;}
             if(keys==Keys.Tab||keys==(Keys.Tab|Keys.Shift)||keys==Keys.Right||keys==Keys.Left) {
@@ -389,14 +428,14 @@ namespace AtkBatteryTray {
                 FocusControl(targets[(index<0?(direction>0?0:targets.Count-1):(index+direction+targets.Count)%targets.Count)]);return true;
             }
             if(keys==Keys.Enter||keys==Keys.Space) {
-                var target=PopupPages.FindStable(controls,keyboardFocusKey);if(target!=null&&target.Enabled&&!target.Information)PerformAction(target);
+                var target=RevealGridControl(PopupPages.FindStable(controls,keyboardFocusKey));if(target!=null&&target.Enabled&&!target.Information)PerformAction(target);
                 return true;
             }
             return base.ProcessCmdKey(ref message,keys);
         }
-        void FocusControl(PopupControl control){keyboardFocusVisible=true;HidePointerTip();keyboardFocus=control==null?-1:control.Id;keyboardFocusKey=control==null?null:control.StableKey;keyboardFocusIndex=control==null?0:ControlsForPage().FindIndex(delegate(PopupControl c){return c.StableKey==control.StableKey;});AccessibilityNotifyClients(AccessibleEvents.Focus,-1);Invalidate();}
+        void FocusControl(PopupControl control){if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout&&control!=null)control=RevealGridControl(PopupPages.FindStable(ControlsForPage(),control.StableKey));keyboardFocusVisible=true;HidePointerTip();keyboardFocus=control==null?-1:control.Id;keyboardFocusKey=control==null?null:control.StableKey;keyboardFocusIndex=control==null?0:ControlsForPage().FindIndex(delegate(PopupControl c){return c.StableKey==control.StableKey;});AccessibilityNotifyClients(AccessibleEvents.Focus,-1);Invalidate();}
         void ReconcileKeyboardFocus(List<PopupControl> controls){if(keyboardFocus<0&&keyboardFocusKey==null)return;if(keyboardFocusKey==null){var previous=controls.Find(delegate(PopupControl c){return c.Id==keyboardFocus;});if(previous!=null)keyboardFocusKey=previous.StableKey;}
-            var next=PopupPages.ReconcileFocus(controls,keyboardFocusKey,keyboardFocusIndex);keyboardFocus=next==null?-1:next.Id;keyboardFocusKey=next==null?null:next.StableKey;}
+            var next=navigation.Page==PopupPage.Main&&VisualDesign.GridLayout?PopupPages.FindStable(controls,keyboardFocusKey):PopupPages.ReconcileFocus(controls,keyboardFocusKey,keyboardFocusIndex);keyboardFocus=next==null?-1:next.Id;keyboardFocusKey=next==null?null:next.StableKey;}
         protected override AccessibleObject CreateAccessibilityInstance(){return new PopupAccessibility(this,ControlsForPage,delegate{return keyboardFocus;},PerformAction,delegate{return dpiScale;},FocusControl,SetSliderValue);}
         protected override void WndProc(ref Message message) {
             if(message.Msg==0x001F){CancelPointerInteraction();Invalidate();}
@@ -412,7 +451,7 @@ namespace AtkBatteryTray {
         }
         public void SyncDevices() {
             bool layoutChanged=panelLayout!=DeviceSettings.Current.PanelLayout;panelLayout=DeviceSettings.Current.PanelLayout;
-            if(layoutChanged)CancelPointerInteraction();
+            if(layoutChanged){CancelPointerInteraction();gridControlScroll=0;gridControlKey=null;gridFocusNeedsReveal=true;}
             bool volumeChanged=volumeCollapsed!=DeviceSettings.Current.VolumeCollapsed;volumeCollapsed=DeviceSettings.Current.VolumeCollapsed;
             if(draggingVolume&&(!VolumeTargetAvailable(volumeEndpoint)||navigation.Page==PopupPage.Main&&volumeCollapsed))CancelPointerInteraction();
             if(volumeChanged){pageAnimation.Stop();pageProgress=1;}
@@ -425,7 +464,9 @@ namespace AtkBatteryTray {
                 if(PopupPages.Reduced){headsetProgress=next;layoutAnimation.Stop();UpdateLayoutSize();}
                 else{layoutClock.Restart();layoutAnimation.Start();}
             } else UpdateLayoutSize();
-            ReconcileKeyboardFocus(ControlsForPage());AccessibilityNotifyClients(AccessibleEvents.Reorder,-1);
+            var controls=ControlsForPage();ReconcileKeyboardFocus(controls);
+            if(gridFocusNeedsReveal){gridFocusNeedsReveal=false;if(keyboardFocusVisible&&keyboardFocusKey!=null)FocusControl(PopupPages.FindStable(controls,keyboardFocusKey));}
+            AccessibilityNotifyClients(AccessibleEvents.Reorder,-1);
             if(layoutChanged&&!layeredRendering)UpdateFallbackRegion();
             Invalidate();
         }
@@ -563,7 +604,7 @@ namespace AtkBatteryTray {
             if(closing)Reveal();
             else CloseAnimated();
         }
-        void ResetPage(){updatedNotice=null;updatedNoticeTimer.Stop();CancelPointerInteraction();navigation.Reset();SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
+        void ResetPage(){updatedNotice=null;updatedNoticeTimer.Stop();CancelPointerInteraction();gridControlScroll=0;gridControlKey=null;gridFocusNeedsReveal=false;navigation.Reset();SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
         void AnimateTo(float target,float durationMs) {
             if(PopupPages.Reduced){animationProgress=target;frameAlpha=target>0? (byte)255:(byte)0;animation.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
             motionStart=animationProgress;motionTarget=target;
@@ -637,6 +678,7 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(preferences.MouseAlias).Append('|').Append(preferences.HeadsetAlias).Append('|').Append(preferences.Theme).Append('|').Append(preferences.ThemeStyle).Append('|').Append(preferences.FontSize).Append('|').Append(preferences.TraySource).Append('|').Append(preferences.TrayDeviceId).Append('|').Append(preferences.LowBatteryNotifications).Append('|').Append(preferences.WarningThreshold).Append('|').Append(preferences.RememberReadings).Append('|').Append(preferences.ReducedMotion).Append('|').Append(preferences.BackgroundSeconds);
             visible.Append('|').Append(preferences.VolumeCollapsed);
             visible.Append('|').Append(preferences.PanelLayout);
+            visible.Append('|').Append(gridControlScroll);
             visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(preferences.IncludeBetaUpdates).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb()).Append('|').Append(preferences.CheckFeedbackReplies).Append('|').Append(owner.FeedbackReplies.Store.Unread);
             visible.Append('|').Append(preferences.TrayIconStyle).Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint);
             foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId);foreach(string id in group.Members)visible.Append('|').Append(id);}

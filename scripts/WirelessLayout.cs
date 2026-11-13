@@ -28,7 +28,7 @@ namespace AtkBatteryTray {
         internal RectangleF VolumeRect {get{return new RectangleF(0,VolumeTop,VisualDesign.PanelWidth,VisualDesign.SystemVolumeHeightFor(VolumeCollapsed));}}
         internal bool Paged {get{return Start>0||End<All.Count;}}
         internal Size Size {get{return new Size(VisualDesign.PanelWidth,(int)Footer+VisualDesign.FooterHeight);}}
-        internal static WirelessLayout Build(TrayContext owner,int offset,int maximumHeight,bool includeHidden=false) {
+        internal static WirelessLayout Build(TrayContext owner,int offset,int maximumHeight,bool includeHidden=false,int controlOffset=0) {
             var layout=new WirelessLayout();var pref=DeviceSettings.Current;var now=DateTime.UtcNow;
             layout.VolumeCollapsed=pref.VolumeCollapsed;
             if(owner.NativeMousePresent)layout.All.Add(new WirelessCard {Id="native:mouse",Name=pref.MouseAlias,Kind="mouse",Battery=UiState.Mouse(owner.Current,owner.LastGood,now),NativeMouse=true,Dpi=owner.Dpi});
@@ -52,7 +52,7 @@ namespace AtkBatteryTray {
             foreach(var card in discovered)add(card);
             layout.AllHidden=layout.All.Count==0&&discovered.Count>0;
             if(layout.All.Count==0)layout.All.Add(new WirelessCard {Id="empty",Name="无线设备",Kind="device",Battery=new BatteryView {Name="无线设备"},Subtitle=owner.GenericScanning?"正在识别设备…":layout.AllHidden?EmptyReason(owner,true):"点这里查看原因"});
-            if(VisualDesign.GridLayout){GridLayout.Arrange(layout,offset,maximumHeight);return layout;}
+            if(VisualDesign.GridLayout){GridLayout.Arrange(layout,offset,maximumHeight,controlOffset);return layout;}
             layout.Start=Math.Max(0,Math.Min(offset,layout.All.Count-1));
             float y=0;int end=layout.Start;
             foreach(var card in layout.All.GetRange(layout.Start,layout.All.Count-layout.Start)) {

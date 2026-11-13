@@ -64,7 +64,7 @@ namespace AtkBatteryTray {
             public override Rectangle Bounds {
                 get {
                     var row=Row;if(row==null||!tree.host.IsHandleCreated)return Rectangle.Empty;
-                    float factor=Math.Max(.5f,tree.scale());var rect=row.Rect;
+                    float factor=Math.Max(.5f,tree.scale());var rect=row.VisibleRect;if(rect.IsEmpty)return Rectangle.Empty;
                     var scaled=Rectangle.FromLTRB((int)Math.Floor(rect.Left*factor),(int)Math.Floor(rect.Top*factor),(int)Math.Ceiling(rect.Right*factor),(int)Math.Ceiling(rect.Bottom*factor));
                     scaled=Rectangle.Intersect(scaled,tree.host.ClientRectangle);return scaled.IsEmpty?Rectangle.Empty:tree.host.RectangleToScreen(scaled);
                 }
@@ -84,7 +84,7 @@ namespace AtkBatteryTray {
                 }
             }
             public override void DoDefaultAction() {
-                tree.Run(delegate {var row=Row;if(row!=null&&row.Enabled&&!row.Information&&!row.Slider){if(tree.setFocus!=null)tree.setFocus(row);tree.invoke(row);}});
+                tree.Run(delegate {var row=Row;if(row!=null&&row.Enabled&&!row.Information&&!row.Slider){if(tree.setFocus!=null)tree.setFocus(row);row=Row;if(row!=null&&row.Enabled)tree.invoke(row);}});
             }
             public override void Select(AccessibleSelection flags) {
                 if((flags&(AccessibleSelection.TakeFocus|AccessibleSelection.TakeSelection))==0)return;
