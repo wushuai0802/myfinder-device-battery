@@ -1281,6 +1281,49 @@ links are mutable `main` references, not the supplied pinned ATK snapshot.
 The K99 community source has no confirmed reuse licence in the research and
 is not copied. No vendor driver code, settings writes or DPI commands are added.
 
+### VGN F1 Moba F503 (3554:F503)
+
+**C / 待本项目实机验证; read-only battery candidate.** Issue
+[#592](https://github.com/wushuai0802/myfinder-device-battery/issues/592)
+contains a user's in-app report from `1.3.11-beta.6`, snapshotted on
+**2026-11-14** in `.ai/evidence/vgn-f503-1114i/issue-592-evidence.md`.
+This is user-supplied protocol evidence, not a maintainer hardware test or
+proof that the reader shipped in that release.
+
+The reported receiver is exactly `3554:F503`, product string
+`VGN Mouse 2.4G Receiver`, interface 1, collection `FF02:0002`, with
+`OutputReportByteLength = 17`. Its read-only query matches the existing
+CompX power request byte for byte:
+
+```text
+08 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 49
+```
+
+The user's exact reply is replayed by `ISSUE592_F503_REPLY` in
+`engine/tests/test_pulsar.py`:
+
+```text
+08 04 00 00 00 02 5F 00 10 05 00 00 00 00 00 00 D3
+```
+
+Byte 6 is `0x5F` (**95%**), byte 7 is zero (not charging), and the checksum
+is `0x55 - sum(bytes 0..15) mod 256`, matching the existing parser. Only
+this exact VID/PID is admitted to `STRICT_COMPX_IDS`: runtime proof of
+`FF02:0002` and an output report length of **exactly 17 bytes** is required
+before I/O. Unknown/other lengths and sibling collections receive no query;
+there is no legacy fallback, broader `3554` family match, new protocol or DPI
+support. The existing header/command/checksum/0..100 checks remain unchanged.
+
+The user reports that deep sleep yields only `08 03` events and that replies
+resume on wake. No complete sleep-event frame was supplied: regression event
+payloads and descriptor/path fixtures are synthetic. Silence or those events
+produce no fresh percentage; a prior valid reading stays greyed while the
+guarded receiver remains present. Standalone reads against the vendor display,
+charging transitions, cold start, deep sleep/wake and vendor-driver coexistence
+still require real-device verification. The status remains `researching`
+until a release containing this candidate is published; no release version is
+claimed here.
+
 ### Windows XInput gamepad battery
 
 Independent read-only use of Microsoft's public
