@@ -15,18 +15,19 @@
     "1D57:FA65": {
       "status": "beta",
       "version": "1.3.11-beta.5",
-      "note": "候选修复，读不到请补交一次诊断"
+      "note": "候选修复，读不到请补交一次诊断",
+      "reports": 0
     },
     "248A:5B2F": {
       "status": "no-evidence",
       "reports": 6,
-      "rank": 11
+      "rank": 16
     },
     "3554:F503": {
-      "status": "researching",
-      "note": "用户已提供17字节电量样本；候选读取待发布及实机验证",
-      "reports": 7,
-      "rank": 8
+      "status": "beta",
+      "version": "1.3.11-beta.8",
+      "note": "F503接收器只读电量候选；请对照官方软件验证",
+      "reports": 0
     },
     "3837:1012": {
       "status": "not-a-device",
@@ -35,8 +36,8 @@
     },
     "3837:6011": {
       "status": "no-evidence",
-      "reports": 8,
-      "rank": 5
+      "reports": 9,
+      "rank": 4
     }
   }
 }
