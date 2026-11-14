@@ -350,6 +350,7 @@ def discover(paths, excluded=(), *, full=False):
                     (0x35D8, 0x0133, 0xFF02, 0x0002),
                     (0x35D8, 0x0133, 0x000C, 0x0001),
                     (0x3710, 0x5501, 0xFF02, 0x0002),
+                    (0x3554, 0xFB26, 0xFF02, 0x0002),
                     (0x41E4, 0x2001, 0xFF04, 0x0002),
                     (0x41E4, 0x2001, 0xFF02, 0x0002),
                     (0x3554, 0xFA09, 0xFF02, 0x0002),
@@ -362,7 +363,7 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 if (attrs.vendor, attrs.product) in (
                         (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014),
-                        (0x41E4, 0x2001), (0x3554, 0xFA09)):
+                        (0x41E4, 0x2001), (0x3554, 0xFA09), (0x3554, 0xFB26)):
                     # The alternate 1018 collection is useful only at 4D/64.
                     # Do not repeatedly open a known 41-byte/zero-capacity TLC
                     # for raw metadata. Keep all prior primary/provider gates.
