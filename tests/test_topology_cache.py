@@ -132,6 +132,253 @@ class DescriptorCacheTests(unittest.TestCase):
         self.assertNotIn("input_report_length", info)
         self.assertNotIn("output_report_length", info)
 
+    def a5v2_descriptor(self, reports=None, *, maximum=None, collection=(0xFF01, 1),
+                         identity=(0x3837, 0x100C), product="MCHOSE A5 V2 Ultra"):
+        # Entirely synthetic Windows metadata; no target descriptor/capture.
+        self.a5_path = r"\\?\hid#vid_3837&pid_100c&mi_02&col03#synthetic-a5v2"
+        self.a5_cfu = r"\\?\hid#vid_3837&pid_100c&mi_02&col04#synthetic-a5v2"
+        self.a5_parent = r"pnp:usb\vid_3837&pid_100c\synthetic-a5v2"
+        reports = {17: 21} if reports is None else reports
+        for path in (self.a5_path, self.a5_cfu):
+            self.identities[path] = identity
+            self.products[path] = product
+        self.parent.side_effect = lambda path: self.a5_parent if "pid_100c" in path else "physical:" + path
+        self.a5_collections = {self.a5_path: collection, self.a5_cfu: (0xFF0B, 0x104)}
+
+        def caps(data, pointer):
+            path = self.handles[data.value]
+            if path in self.fail_caps:
+                return 0
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = self.a5_collections.get(path, (0xFF1C, 0x92))
+            value.input, value.output = 8, 32  # Not Feature lengths or gates.
+            if self.a5_collections.get(path) == (0xFF01, 1):
+                value.feature = max(reports.values(), default=0) if maximum is None else maximum
+                value.fv = len(reports)
+            return 0x00110000
+
+        def fields(report_type, values, length, data):
+            self.assertEqual(report_type, 2)
+            for field, (report, size) in zip(values, reports.items()):
+                field.report, field.bits, field.count = report, 8, size - 1
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetValueCaps.side_effect = fields
+        return [self.a5_path, self.a5_cfu]
+
+    def assert_a5v2_refused(self, paths, *, full=True):
+        from providers.mchose import MchoseProvider
+        infos = self.scan(paths, full=full)
+        self.assertFalse(any(d.get("a5v2_topology") for d in infos))
+        with patch("providers.mchose.hid.device", side_effect=AssertionError("no device I/O")):
+            self.assertIsNone(MchoseProvider()._pick_a5v2([
+                d for d in infos if (d["vendor_id"], d["product_id"]) == (0x3837, 0x100C)]))
+        return infos
+
+    def test_a5v2_feature_type2_exact_lengths_multiple_ids_and_different_directions(self):
+        from providers.mchose import MchoseProvider
+        for size in (21, 65):
+            with self.subTest(size=size), patch.object(topology, "_read_report_descriptor") as raw:
+                self.cache.clear()
+                paths = self.a5v2_descriptor({17: size, 18: 13}, product="  MCHOSE A5 V2 Ultra  ")
+                infos = self.scan(paths)
+                info = MchoseProvider()._pick_a5v2(infos)
+                self.assertIsNotNone(info)
+                self.assertEqual((info["feature_report_length"], info["feature_report_sizes"]),
+                                 (size, {"17": size, "18": 13}))
+                self.assertEqual((info["input_report_length"], info["output_report_length"]), (8, 32))
+                self.assertEqual(info["a5v2_topology"],
+                                 {"paths": sorted(paths), "parent": self.a5_parent, "collection": self.a5_path})
+                self.assertTrue(all(call.args[0] == 2 for call in self.hid.HidP_GetValueCaps.call_args_list))
+                raw.assert_not_called()
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+        self.assertTrue(all(call.args[1] == 0 for call in self.kernel.CreateFileW.call_args_list))
+        self.assertEqual(self.kernel.CloseHandle.call_count, self.kernel.CreateFileW.call_count)
+
+    def test_a5v2_missing_id_l_below_f_or_wrong_maximum_stays_uncached(self):
+        for reports, maximum in (({18: 21}, 21), ({17: 21, 18: 65}, 65),
+                                 ({17: 21}, 65), ({17: 20}, 20), ({17: 66}, 66), ({}, 21)):
+            with self.subTest(reports=reports, maximum=maximum):
+                paths = self.a5v2_descriptor(reports, maximum=maximum)
+                self.assert_a5v2_refused(paths)
+                self.assertNotIn(self.a5_path, self.cache)
+
+    def test_a5v2_bad_feature_caps_fail_closed_then_retry_without_raw_fallback(self):
+        for defect in ("failure", "partial", "extra", "alias", "bits", "count", "split", "buttons", "fixed"):
+            with self.subTest(defect=defect), patch.object(topology, "_read_report_descriptor") as raw:
+                paths = self.a5v2_descriptor({17: 21, 18: 13})
+                original = self.hid.HidP_GetValueCaps.side_effect
+                original_caps = self.hid.HidP_GetCaps.side_effect
+
+                def caps(data, pointer):
+                    result = original_caps(data, pointer)
+                    value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+                    if self.handles[data.value] == self.a5_path:
+                        if defect == "buttons":
+                            value.fb = 1
+                        elif defect == "fixed":
+                            value.fb, value.fv = 1, 0
+                    return result
+
+                def fields(report_type, values, length, data):
+                    result = original(report_type, values, length, data)
+                    if defect == "failure":
+                        return 0
+                    if defect in ("partial", "extra"):
+                        ctypes.cast(length, ctypes.POINTER(ctypes.c_ushort))[0] = 1 if defect == "partial" else 3
+                    elif defect == "alias":
+                        values[0].alias = 1
+                    elif defect == "bits":
+                        values[0].bits = 16
+                    elif defect == "count":
+                        values[0].count = 0
+                    elif defect == "split":
+                        values[1].report = values[0].report
+                    return result
+
+                self.hid.HidP_GetCaps.side_effect = caps
+                self.hid.HidP_GetValueCaps.side_effect = fields
+                # Fixed usage must not opt into the generic helper's exception.
+                def buttons(kind, values, length, data):
+                    values[0].report, values[0].report_count = 17, 20
+                    values[0].usage_min = values[0].usage_max = 1
+                    return 0x00110000
+                self.hid.HidP_GetButtonCaps.side_effect = buttons
+                self.assert_a5v2_refused(paths)
+                self.assertNotIn(self.a5_path, self.cache)
+                paths = self.a5v2_descriptor()
+                infos = self.scan(paths)
+                self.assertTrue(infos[0].get("a5v2_topology"))
+                raw.assert_not_called()
+
+    def test_a5v2_snapshot_failures_cannot_hide_behind_one_returned_ff01(self):
+        for full in (True, False):
+            for failure in (self.fail_open, self.fail_attrs, self.fail_preparsed, self.fail_caps):
+                with self.subTest(full=full, failure=id(failure)):
+                    paths = self.a5v2_descriptor()
+                    self.scan([PATH_A])
+                    unrelated = self.cache[PATH_A]
+                    self.scan(paths + [PATH_A], full=full)
+                    self.kernel.CreateFileW.reset_mock()
+                    failure.add(self.a5_cfu)
+                    self.assert_a5v2_refused(paths + [PATH_A], full=full)
+                    self.assertNotIn(self.a5_path, self.cache)
+                    # Target failures do not invalidate a different cached device.
+                    self.assertEqual(self.cache[PATH_A], unrelated)
+                    if full:
+                        self.assertNotIn(PATH_A, [call.args[0] for call in self.kernel.CreateFileW.call_args_list])
+                    failure.clear()
+                    infos = self.scan(paths + [PATH_A], full=full)
+                    self.assertTrue(next(i for i in infos if i["path"] == self.a5_path.encode()).get("a5v2_topology"))
+
+    def test_a5v2_cached_candidate_rechecks_unknown_usage_attrs_name_and_parent(self):
+        for defect in ("usage", "attrs", "name", "collection_parent", "parent_conflict", "wrong_parent"):
+            with self.subTest(defect=defect):
+                paths = self.a5v2_descriptor()
+                self.assertTrue(self.scan(paths)[0].get("a5v2_topology"))
+                if defect == "usage":
+                    self.a5_collections[self.a5_cfu] = (0, 0)
+                elif defect == "attrs":
+                    self.identities[self.a5_cfu] = (0x3837, 0x100B)
+                elif defect == "name":
+                    self.products[self.a5_cfu] = "MCHOSE A5 ultra"
+                elif defect == "collection_parent":
+                    self.parent.side_effect = lambda path: None
+                elif defect == "parent_conflict":
+                    self.parent.side_effect = lambda path: self.a5_parent + ("-other" if path == self.a5_cfu else "")
+                else:
+                    self.parent.side_effect = lambda path: self.a5_parent.replace("100c", "100b")
+                self.assert_a5v2_refused(paths)
+
+    def test_a5v2_duplicate_paths_tlcs_multiple_parents_and_512_truncation(self):
+        for full in (True, False):
+            for defect in ("duplicate", "case_duplicate", "tlc", "parents", "truncated", "target_truncated"):
+                with self.subTest(full=full, defect=defect):
+                    paths = self.a5v2_descriptor()
+                    if defect == "duplicate":
+                        paths.append(paths[0])
+                    elif defect == "case_duplicate":
+                        paths.append(paths[0].upper())
+                    elif defect in ("tlc", "parents"):
+                        other = self.a5_path + "-other"
+                        paths.append(other)
+                        self.identities[other] = (0x3837, 0x100C)
+                        self.products[other] = "MCHOSE A5 V2 Ultra"
+                        self.a5_collections[other] = (0xFF01, 1)
+                        if defect == "parents":
+                            self.parent.side_effect = lambda path: self.a5_parent + ("-other" if path == other else "")
+                    elif defect == "truncated":
+                        paths += [f"zz-unused-{i}" for i in range(511)]
+                    else:
+                        paths += [f"000-unused-{i}" for i in range(513)]
+                    self.assert_a5v2_refused(paths, full=full)
+
+    def test_a5v2_conflicting_sibling_parent_or_path_attrs_cannot_authorize(self):
+        for defect in ("extra_sibling", "path_mismatch"):
+            with self.subTest(defect=defect):
+                paths = self.a5v2_descriptor()
+                if defect == "extra_sibling":
+                    # An otherwise non-target identity under the target USB
+                    # parent is contradictory evidence, not a second device.
+                    paths.append(PATH_A)
+                    self.parent.side_effect = lambda path: self.a5_parent
+                else:
+                    wrong = self.a5_path.replace("100c", "100b")
+                    self.identities[wrong] = (0x3837, 0x100C)
+                    self.products[wrong] = "MCHOSE A5 V2 Ultra"
+                    self.a5_collections[wrong] = (0xFF01, 1)
+                    paths[0] = wrong
+                self.assert_a5v2_refused(paths)
+
+    def test_a5v2_plain_non_windows_inventory_has_no_new_proof_and_exclusions_still_win(self):
+        paths = self.a5v2_descriptor()
+        plain = [{"vendor_id": 0x3837, "product_id": 0x100C, "path": paths[0].encode(),
+                  "product_string": "MCHOSE A5 V2 Ultra", "usage_page": 0xFF01, "usage": 1}]
+        from providers.mchose import MchoseProvider
+        with patch.object(topology, "os", SimpleNamespace(name="posix")), \
+             patch("providers.hidlist.enumerate", return_value=plain):
+            infos = topology.discover(paths)
+            self.assertIsNone(MchoseProvider()._pick_a5v2(infos))
+        self.assertFalse(any(d.get("a5v2_topology") for d in infos))
+        self.kernel.CreateFileW.assert_not_called()
+        self.assertEqual(topology.discover(paths, excluded=((0x3837, 0x100C),), full=True), [])
+        self.kernel.CreateFileW.assert_not_called()
+
+    def test_a5v2_proof_is_recomputed_and_never_reused_from_descriptor_cache(self):
+        for full in (True, False):
+            with self.subTest(full=full):
+                paths = self.a5v2_descriptor()
+                first = self.scan(paths, full=full)
+                self.assertTrue(first[0].get("a5v2_topology"))
+                self.assertFalse(any(d.get("a5v2_topology") for d in self.cache.values()))
+                self.fail_attrs.add(self.a5_cfu)
+                self.assert_a5v2_refused(paths, full=full)
+                self.fail_attrs.clear()
+                recovered = self.scan(paths, full=full)
+                self.assertTrue(recovered[0].get("a5v2_topology"))
+                first[0]["a5v2_topology"]["paths"].clear()
+                self.assertEqual(recovered[0]["a5v2_topology"]["paths"], sorted(paths))
+
+    def test_a5v2_proof_scope_and_native_preopen_exclusion_do_not_expand(self):
+        for identity, collection, name in (((0x3837, 0x100B), (0xFF01, 1), "MCHOSE A5 V2 Ultra"),
+                                          ((0x5253, 0x100C), (0xFF01, 1), "MCHOSE A5 V2 Ultra"),
+                                          ((0x3837, 0x100C), (0xFF01, 1), "MCHOSE A5 ultra"),
+                                          ((0x3837, 0x100C), (0xFF01, 2), "MCHOSE A5 V2 Ultra"),
+                                          ((0x3837, 0x100C), (0xFF0B, 0x104), "MCHOSE A5 V2 Ultra")):
+            with self.subTest(identity=identity, collection=collection, name=name):
+                self.hid.HidP_GetValueCaps.reset_mock()
+                paths = self.a5v2_descriptor(identity=identity, collection=collection, product=name)
+                self.assert_a5v2_refused(paths)
+                self.hid.HidP_GetValueCaps.assert_not_called()
+        self.kernel.CreateFileW.reset_mock()
+        native = r"\\?\hid#vid_373b&pid_1278&mi_01#native"
+        self.scan([native])
+        self.kernel.CreateFileW.assert_not_called()
+
     def keyboard_descriptor(self, protocol="qhw", input_ids=(0x4D,), output_ids=(0x4D,)):
         self.identities[PATH_A] = (0x3837, 0x1015 if protocol == "qhw" else 0x3033)
         self.products[PATH_A] = "MCHOSE G98 V3 2.4G" if protocol == "qhw" else "MCHOSE G87 V2 2.4G"

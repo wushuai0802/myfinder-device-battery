@@ -1491,6 +1491,103 @@ the exact Pro descriptor/report layout, firmware, live percentage/charging
 comparison, sleep/wake behavior and coexistence with M HUB. Shared receiver PID
 and Ultra+ evidence do not establish successful reads on every Pro variant.
 
+### MCHOSE A5 V2 Ultra (3837:100C)
+
+**C / 只读候选，待本项目实机验证。** Added 2026-11-14 only for
+`3837:100C`, trimmed product exactly `MCHOSE A5 V2 Ultra`. This is separate
+from A7 V2/M7, V3 and first-generation `2023:F013/F015/F019` A5 protocols.
+It adds no vendor routing, DPI, identity/configuration/profile initialization,
+pairing or firmware commands. The compatibility catalog is descriptive, not
+permission to issue I/O.
+
+Static sources (read as text, never executed/imported):
+
+| Source | Fixed evidence / SHA256 |
+| --- | --- |
+| Official historical [M HUB bundle](https://www.mchose.com.cn/assets/main-DCRwBIvm.js), local `.ai/evidence/mhub/main-DCRwBIvm.js` | 9,375,649 bytes; `405102805e2adeb93073ee2186f6d0193ca1317a6b4657d636e4e611bd25a446` |
+| [OpenMouse V2 codec](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/mchose/index.ts) | AGPL-3.0, commit `30d6ad37d0ecc9fff53f86d5058d67a88e07150d`; `d5f309631a878c48c36ab1490323efa44b6e4fc0f67562d99aefc5986afde76b` |
+| [V2 HID client](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/drivers/mchose/hid.ts) | Same commit; `6f7c76674959043d5dec88ea64f805ca3ce63446bf7080a43f38824a8b8eefa7` |
+| Upstream codec / client tests at that commit | `src/mchose/index.test.ts`: `04f6645eaff3cf06aa994699bac2812f30a013dc03b34b55e3c9f8641a3e98a5`; `src/drivers/mchose/hid.test.ts`: `6aac088b0e0070a025d8e9471e709255708a69084b9ec418297e6d84367c8f58` |
+| Local source manifest | `.ai/evidence/a5v2-openmouse-1114n/manifest.json`: `a62c3035b7c04f725b0d9a4b248f1d429278771db8eee4ffbe34c802c812907d`; six pinned files, `executed:false`; source/hash review inherited from research `da7fcc2` |
+
+Official bundle offsets are zero-based UTF-16 code units, not bytes:
+`1759898` links the product to decimal PID `4108`; `1990116` lists
+`14391:4108` on FF01/FF0B. The reviewed old-generation homepage branch
+at `2505710` calls `readCommandEntrance("0x11 0x06",...)`. At `934900`
+the command contains `11 06` plus 19 zero parameters; `938281`, `939124`
+and `940618` bind its status parser, invert the body and send Feature 11.
+This is an exact-target static call chain, not observed 100C traffic.
+The upstream codec at lines 273–300 allocates a 64-byte body but inverts
+only its first 20 logical tokens; lines 349–360 decode the 11 status bytes.
+The HID client's `request` at lines 158–204 independently supplies the
+90 ms / 20-pair polling design. Its full `readStatus` (264–298) also reads
+identity/version/configuration and is deliberately not transplanted.
+
+Runtime permission is narrower than those sources: `topology.discover`
+reopens target metadata with access 0 each call, reads attributes/caps/strings
+only and calls the existing `byte_report_sizes(hid,data,caps,2)` only for the
+exact product and `FF01:0001`. No `allow_fixed_usage`, raw-descriptor fallback,
+Feature query/write or input read participates in discovery. Feature map
+keys are canonical decimal strings; `"17"` must own length
+`L = max(map.values()) = caps.feature` with `L` exactly 21 or 65. Other
+individually proven IDs may coexist but are never sent. Input and Output
+maxima cannot stand in for Feature proof. `L < F`, split/alias/nonbyte or
+incomplete caps, missing 11 and every other length fail closed.
+
+For both full and partial discovery the fresh, uncached `a5v2_topology`
+attestation covers every target path supplied **in that call**. It refuses
+the 512-path truncation, duplicate paths, missing/unopenable target paths,
+failed attrs/caps, unknown usage, path/attrs disagreement, conflicting or
+unresolved parents, multiple physical parents and duplicate/missing FF01
+TLCs. Every target collection must have the exact product and a proven
+`pnp:usb\vid_3837&pid_100c...` parent; `collection:` fallback cannot authorize
+I/O. Failed candidate proof is evicted so the next call retries; unrelated
+brands retain their existing cache/channel policy and native exclusions
+still precede open. The provider checks the complete attested path set
+again after physical grouping. `physical_topology`/the caller supplies the
+snapshot: a partial request cannot detect a target path the caller omitted,
+nor can this attest hotplug after discovery. It does not claim a global
+physical census or carry forward a prior call's uniqueness decision.
+
+The sole request is `11 F9 FF×19` for L21, or
+`11 F9 FF×19 00×44` for L65 (lengths include report ID). Existing
+`make_request(...,length=64)` inverts that tail to FF and is not used.
+Each pair is SET_FEATURE, wait 90 ms, GET_FEATURE(11,L), serially; at most
+20 pairs and an independent monotonic soft deadline of 2.0 seconds per
+candidate read, checked before SET/wait/GET and after the wait (also after
+GET). Insufficient time for the full wait stops the read. The unchanged
+isolated MCHOSE worker budget is 7 seconds; the soft check cannot interrupt
+a blocked native API call. SET failure/negative/short return ends the read
+and releases the handle; GET exceptions invalidate the previous frame.
+
+A reply must actually have length L, ID 11 and command echo F9. Only decoded
+payload bytes 0–10 matter: VID `3837` at 0–1, nonzero mouse PID at 2–3,
+firmware at 4–7, flags at 8, percent 0–100 at 9, charge at 10. The mouse PID
+need not equal receiver `100C`; neither `5253` nor `41E4` is accepted. Empty
+status is refused, but valid 0% is retained. Charge nonzero becomes true as
+in upstream code; target charge enums are unknown. The upstream **A7 V2
+Ultra+ `3837:100B`** fixture is 41%, mouse PID `4021`, flags `09`, charge 0;
+its connected bit is false under that decoder, so no connected-bit gate is
+added. Its test helper allocates a synthetic **66-byte** wrapper; this is
+not a real 100C report length and is rejected here.
+
+Two consecutive valid equal **first 11 decoded payload bytes** are required;
+scratch tails may vary. Invalid frames or GET exceptions reset stability,
+and previous never survives a new read. This guards echo/stability, not
+strict freshness of a device/RF sample or an old same-command buffer. Every
+100C failure is exclusive (no FF0B/CFU, report 12, V3 or legacy fallback) and
+removes its own provider reading; other devices retain their prior policy.
+Public diagnostics use only fixed `A5V2` codes, not raw paths/serials,
+frames/product strings or exception contents; server sanitization is unchanged.
+
+Offline regressions in `engine/tests/test_mchose_a5v2.py` and
+`tests/test_topology_cache.py` use manufactured 100C frames/Windows metadata
+and a fake clock. They are not target hardware evidence. Real descriptor
+shape/GET length and ID semantics, correct percent, charge/0% behavior,
+sleep/reconnect, native blocking, freshness and official-software coexistence
+remain unverified. There is no 100C descriptor or reply capture in this
+evidence set and no hardware acceptance or publication claim.
+
 ### MCHOSE A7 V2 Ultra
 
 **Connection:** 2.4 GHz receiver (3837:100B, RealTek strings)
