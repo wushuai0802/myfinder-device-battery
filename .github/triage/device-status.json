@@ -29,6 +29,12 @@
       "note": "F503接收器只读电量候选；请对照官方软件验证",
       "reports": 0
     },
+    "3837:100C": {
+      "status": "beta",
+      "version": "1.3.11-beta.9",
+      "note": "仅A5 V2 Ultra只读电量候选；不含DPI，待实机验证",
+      "reports": 0
+    },
     "3837:1012": {
       "status": "not-a-device",
       "note": "充电底座，本身没有电量",
