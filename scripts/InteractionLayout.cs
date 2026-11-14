@@ -20,6 +20,7 @@ namespace AtkBatteryTray {
         [ThreadStatic] static RectangleF measured;
         [ThreadStatic] static Dictionary<string,RectangleF> textInk;
         internal static Action<InteractionRegion> Observer=null;
+        internal static Action<Graphics,string,RectangleF,RectangleF,bool> TextBoundsObserver=null;
         internal static bool Measuring {get{return measuring;}}
         internal static void Include(RectangleF rect){if(measuring&&!rect.IsEmpty)measured=measured.IsEmpty?rect:RectangleF.Union(measured,rect);}
         internal static RectangleF LabelBounds(Graphics g,string text,RectangleF rect,float size,bool bold,StringAlignment alignment,StringTrimming trimming,bool wrap=false){
@@ -32,7 +33,7 @@ namespace AtkBatteryTray {
             var hint=g.TextRenderingHint==System.Drawing.Text.TextRenderingHint.SystemDefault?System.Drawing.Text.TextRenderingHint.AntiAliasGridFit:g.TextRenderingHint;
             string key=String.Join("|",new[]{family,size.ToString(CultureInfo.InvariantCulture),bold.ToString(),rect.Width.ToString(CultureInfo.InvariantCulture),rect.Height.ToString(CultureInfo.InvariantCulture),alignment.ToString(),trimming.ToString(),wrap.ToString(),sx.ToString(CultureInfo.InvariantCulture),sy.ToString(CultureInfo.InvariantCulture),px.ToString(CultureInfo.InvariantCulture),py.ToString(CultureInfo.InvariantCulture),hint.ToString(),text});
             if(textInk==null)textInk=new Dictionary<string,RectangleF>();RectangleF result;
-            if(textInk.TryGetValue(key,out result)){if(!result.IsEmpty)result.Offset(rect.Location);return result;}
+            if(textInk.TryGetValue(key,out result)){if(TextBoundsObserver!=null)TextBoundsObserver(g,key,rect,result,true);if(!result.IsEmpty)result.Offset(rect.Location);return result;}
             // GDI+ grid fitting changes actual glyph ink and its baseline relative
             // to AddString/MeasureCharacterRanges. Measure the very same raster
             // drawing, at its monitor scale and subpixel origin, once per label.
@@ -40,12 +41,18 @@ namespace AtkBatteryTray {
             using(var image=new Bitmap(width,height,PixelFormat.Format32bppPArgb))
             using(var font=new Font(family,size,bold?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))
             using(var format=new StringFormat {Alignment=alignment,LineAlignment=StringAlignment.Center,Trimming=trimming,FormatFlags=wrap?0:StringFormatFlags.NoWrap}){
-                using(var drawing=Graphics.FromImage(image))using(var transform=new Matrix(sx,0,0,sy,border+px-rect.X*sx,border+py-rect.Y*sy)){drawing.TextRenderingHint=hint;drawing.PixelOffsetMode=PixelOffsetMode.Default;drawing.Transform=transform;using(var brush=new SolidBrush(Color.White))drawing.DrawString(text,font,brush,rect,format);}
+                using(var drawing=Graphics.FromImage(image))using(var transform=new Matrix(sx,0,0,sy,border+px-rect.X*sx,border+py-rect.Y*sy)){
+                    drawing.TextRenderingHint=hint;drawing.PixelOffsetMode=PixelOffsetMode.Default;drawing.Transform=transform;
+                    using(var brush=new SolidBrush(Color.White)){
+                        if(CompactRenderer.TextRasterObserver!=null)CompactRenderer.TextRasterObserver("measure-raster",drawing,text,rect,font,Color.White,format);
+                        drawing.DrawString(text,font,brush,rect,format);
+                    }
+                }
                 int left=width,top=height,right=-1,bottom=-1;var pixels=image.LockBits(new Rectangle(0,0,width,height),ImageLockMode.ReadOnly,PixelFormat.Format32bppPArgb);
                 try{var row=new byte[width*4];for(int y=0;y<height;y++){Marshal.Copy(IntPtr.Add(pixels.Scan0,y*pixels.Stride),row,0,row.Length);for(int x=0;x<width;x++)if(row[x*4+3]>0){left=Math.Min(left,x);right=Math.Max(right,x);top=Math.Min(top,y);bottom=Math.Max(bottom,y);}}}finally{image.UnlockBits(pixels);}
                 result=right<left?RectangleF.Empty:RectangleF.FromLTRB((left-border-px)/sx,(top-border-py)/sy,(right+1-border-px)/sx,(bottom+1-border-py)/sy);
             }
-            if(textInk.Count>=512)textInk.Clear();textInk[key]=result;if(!result.IsEmpty)result.Offset(rect.Location);return result;
+            if(textInk.Count>=512)textInk.Clear();textInk[key]=result;if(TextBoundsObserver!=null)TextBoundsObserver(g,key,rect,result,false);if(!result.IsEmpty)result.Offset(rect.Location);return result;
         }
         internal static RectangleF SymbolBounds(string name,RectangleF rect){
             // Stroke bounds, including round caps, in DrawSymbol's 20-unit grid.

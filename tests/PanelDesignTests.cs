@@ -4,7 +4,11 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Globalization;
 using System.Reflection;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Windows.Forms;
 using AtkBattery;
@@ -133,17 +137,134 @@ static class PanelDesignTests {
         return state+(layout.All.Count>8?"; objectsOmitted="+(layout.All.Count-8):"");
         }catch(Exception error){return "STATE_CAPTURE_FAILED utc="+DateTime.UtcNow.ToString("o")+" "+GridText(error.Message);}
     }
-    static Bitmap RenderGridObserved(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback,out string state){
-        string before=GridFrameState(owner,layout,feedback);var image=RenderGrid(owner,layout,dark,scale,feedback);string after=GridFrameState(owner,layout,feedback);
-        state="before={"+before+"}"+Environment.NewLine+"after={"+after+"}";return image;
+    [DataContract] sealed class GridFrameCapture {
+        [DataMember] internal string Before,After,GraphicsEntry,GraphicsExit;
+        [DataMember] internal bool DrawingCapture;
+        [DataMember] internal List<string> Events=new List<string>();
+        internal void Record(Func<string> capture){try{Events.Add(Events.Count+" "+capture());}catch(Exception error){Events.Add("CAPTURE_FAILED "+GridText(error.Message));}}
+        public override string ToString(){return "before={"+Before+"}"+Environment.NewLine+"after={"+After+"}";}
     }
-    static void GridDiagnostic(string label,string parameters,string leftState,string rightState,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area){
+    static string GridFloat(float value){return value.ToString("R",CultureInfo.InvariantCulture);}
+    static string GridRect(RectangleF rect){return "["+GridFloat(rect.X)+","+GridFloat(rect.Y)+","+GridFloat(rect.Width)+","+GridFloat(rect.Height)+"]";}
+    static string GridGraphicsInput(Graphics g){
+        using(var transform=g.Transform)using(var clip=g.Clip){
+            return "transform=["+String.Join(",",Array.ConvertAll(transform.Elements,GridFloat))+"] clip="+GridRect(g.ClipBounds)+" clipData="+Convert.ToBase64String(clip.GetRegionData().Data)+" infinite="+clip.IsInfinite(g)+" empty="+g.IsClipEmpty+" visibleClip="+GridRect(g.VisibleClipBounds)+" visibleEmpty="+g.IsVisibleClipEmpty+
+                " dpi="+GridFloat(g.DpiX)+"/"+GridFloat(g.DpiY)+" page="+g.PageUnit+"/"+GridFloat(g.PageScale)+" renderingOrigin="+g.RenderingOrigin+" hint="+g.TextRenderingHint+" contrast="+g.TextContrast+" pixelOffset="+g.PixelOffsetMode+" smoothing="+g.SmoothingMode+" compositing="+g.CompositingMode+"/"+g.CompositingQuality+" interpolation="+g.InterpolationMode;
+        }
+    }
+    static Bitmap RenderGridObserved(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback,out GridFrameCapture state,bool captureDrawing=true){
+        var capture=new GridFrameCapture {Before=GridFrameState(owner,layout,feedback),DrawingCapture=captureDrawing};state=capture;
+        if(!captureDrawing){var unobserved=RenderGrid(owner,layout,dark,scale,feedback);capture.After=GridFrameState(owner,layout,feedback);return unobserved;}
+        var size=UiState.ScaleSize(layout.Size,scale);var image=new Bitmap(size.Width,size.Height,PixelFormat.Format32bppPArgb);
+        var oldRaster=CompactRenderer.TextRasterObserver;var oldBounds=InteractionLayout.TextBoundsObserver;var oldRegion=InteractionLayout.Observer;
+        try{using(var g=Graphics.FromImage(image)){
+            g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);
+            capture.Record(delegate{return "frame-entry "+GridGraphicsInput(g);});capture.GraphicsEntry=capture.Events[capture.Events.Count-1];
+            if(captureDrawing){
+                CompactRenderer.TextRasterObserver=delegate(string stage,Graphics drawing,string text,RectangleF rect,Font font,Color color,StringFormat format){
+                    capture.Record(delegate{return stage+" measuring="+InteractionLayout.Measuring+" text="+text+" rect="+GridRect(rect)+" font="+font.Name+"/family="+font.FontFamily.Name+"/size="+GridFloat(font.Size)+"/unit="+font.Unit+"/style="+font.Style+"/charset="+font.GdiCharSet+"/vertical="+font.GdiVerticalFont+" color=0x"+color.ToArgb().ToString("X8")+" format="+format.Alignment+"/"+format.LineAlignment+"/"+format.Trimming+"/"+format.FormatFlags+"/digit="+format.DigitSubstitutionLanguage+"/"+format.DigitSubstitutionMethod+"/hotkey="+format.HotkeyPrefix+" "+GridGraphicsInput(drawing);});
+                    if(oldRaster!=null)oldRaster(stage,drawing,text,rect,font,color,format);
+                };
+                InteractionLayout.TextBoundsObserver=delegate(Graphics drawing,string key,RectangleF rect,RectangleF ink,bool hit){
+                    capture.Record(delegate{return "measure-result hit="+hit+" key="+key+" rect="+GridRect(rect)+" relativeInk="+GridRect(ink)+" measuring="+InteractionLayout.Measuring+" "+GridGraphicsInput(drawing);});
+                    if(oldBounds!=null)oldBounds(drawing,key,rect,ink,hit);
+                };
+                InteractionLayout.Observer=delegate(InteractionRegion region){
+                    capture.Record(delegate{return "interaction id="+region.Id+" content="+GridRect(region.Content)+" bounds="+GridRect(region.Bounds)+" card="+GridRect(region.Card)+" limit="+GridRect(region.Limit)+" padding="+GridFloat(region.Padding)+" radius="+GridFloat(region.Radius)+" enabled="+region.Enabled+" "+GridGraphicsInput(g);});
+                    if(oldRegion!=null)oldRegion(region);
+                };
+            }
+            CompactRenderer.PaintWireless(g,owner,layout,dark,feedback);
+            capture.Record(delegate{return "frame-exit "+GridGraphicsInput(g);});capture.GraphicsExit=capture.Events[capture.Events.Count-1];
+        }capture.After=GridFrameState(owner,layout,feedback);return image;
+        }catch{image.Dispose();throw;}
+        finally{CompactRenderer.TextRasterObserver=oldRaster;InteractionLayout.TextBoundsObserver=oldBounds;InteractionLayout.Observer=oldRegion;}
+    }
+    [DataContract] sealed class GridPixel {
+        [DataMember] internal int X,Y;
+        [DataMember] internal string Left,Right;
+    }
+    [DataContract] sealed class GridFailureArtifact {
+        [DataMember] internal string Label,Parameters,Hidden,Area,Raw,Summary,PixelBounds;
+        [DataMember] internal GridFrameCapture LeftFrame,RightFrame;
+        [DataMember] internal List<GridPixel> Pixels=new List<GridPixel>();
+        [DataMember] internal List<string> Environment=new List<string>();
+    }
+    static string GridFileEvidence(string path){
+        try{using(var stream=File.OpenRead(path))using(var hash=SHA256.Create())return path+" sha256="+BitConverter.ToString(hash.ComputeHash(stream)).Replace("-","");}
+        catch(Exception error){return path+" UNAVAILABLE "+GridText(error.Message);}
+    }
+    static void GridSaveDiagnostic(string label,string parameters,GridFrameCapture leftState,GridFrameCapture rightState,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area,string raw,string summary){
+        var data=new GridFailureArtifact {Label=label,Parameters=parameters,Hidden=GridControl(hidden),Area=area.ToString(),Raw=raw,Summary=summary,LeftFrame=leftState,RightFrame=rightState};
+        int minX=area.Right,minY=area.Bottom,maxX=-1,maxY=-1;
+        for(int y=area.Top;y<area.Bottom;y++)for(int x=area.Left;x<area.Right;x++){
+            int a=left.GetPixel(x,y).ToArgb(),b=right.GetPixel(x,y).ToArgb();if(a==b)continue;
+            data.Pixels.Add(new GridPixel {X=x,Y=y,Left="0x"+a.ToString("X8"),Right="0x"+b.ToString("X8")});minX=Math.Min(minX,x);minY=Math.Min(minY,y);maxX=Math.Max(maxX,x);maxY=Math.Max(maxY,y);
+        }
+        var bounds=data.Pixels.Count==0?area:Rectangle.FromLTRB(minX,minY,maxX+1,maxY+1);data.PixelBounds=bounds.ToString();
+        data.Environment.Add("utc="+DateTime.UtcNow.ToString("o")+" pid="+System.Diagnostics.Process.GetCurrentProcess().Id+" reportedOS="+System.Environment.OSVersion+" CLR="+System.Environment.Version+" x64="+System.Environment.Is64BitProcess+" culture="+CultureInfo.CurrentCulture.Name+" uiCulture="+CultureInfo.CurrentUICulture.Name+" highContrast="+VisualDesign.HighContrast+" GITHUB_SHA="+System.Environment.GetEnvironmentVariable("GITHUB_SHA"));
+        // An unmanifested .NET Framework test reports Windows 6.2 even on Windows 11. Read the build without changing system configuration.
+        try{using(var os=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))data.Environment.Add("windowsBuild="+os.GetValue("CurrentBuildNumber")+"."+os.GetValue("UBR")+" displayVersion="+os.GetValue("DisplayVersion"));}catch(Exception error){data.Environment.Add("OS_BUILD_CAPTURE_FAILED "+GridText(error.Message));}
+        data.Environment.Add("bitmaps="+left.Size+"/"+left.PixelFormat+"/dpi="+GridFloat(left.HorizontalResolution)+"/"+GridFloat(left.VerticalResolution)+" | "+right.Size+"/"+right.PixelFormat+"/dpi="+GridFloat(right.HorizontalResolution)+"/"+GridFloat(right.VerticalResolution));
+        foreach(string source in new[]{"tests/PanelDesignTests.cs","scripts/CompactRenderer.cs","scripts/InteractionLayout.cs","scripts/VisualDesign.cs","scripts/GridLayout.cs","scripts/WirelessLayout.cs","scripts/ThemePalette.cs"})data.Environment.Add(GridFileEvidence(Path.GetFullPath(source)));
+        data.Environment.Add(GridFileEvidence(typeof(PanelDesignTests).Assembly.Location));
+        foreach(string font in new[]{"segoeui.ttf","msyh.ttc"})data.Environment.Add(GridFileEvidence(Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.Fonts),font)));
+        try{foreach(System.Diagnostics.ProcessModule module in System.Diagnostics.Process.GetCurrentProcess().Modules)if(String.Equals(module.ModuleName,"gdiplus.dll",StringComparison.OrdinalIgnoreCase))data.Environment.Add("gdiplus="+module.FileVersionInfo.FileVersion+" "+GridFileEvidence(module.FileName));}catch(Exception error){data.Environment.Add("MODULE_CAPTURE_FAILED "+GridText(error.Message));}
+        string runnerTemp=System.Environment.GetEnvironmentVariable("RUNNER_TEMP");
+        string root=String.IsNullOrEmpty(runnerTemp)?Path.Combine(Directory.GetCurrentDirectory(),"tmp","grid-pixel-diagnostics"):Path.Combine(runnerTemp,"myfinder-grid-pixel-diagnostics");
+        string directory=Path.Combine(root,System.Diagnostics.Process.GetCurrentProcess().Id+"-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+        left.Save(Path.Combine(directory,"left.png"),ImageFormat.Png);right.Save(Path.Combine(directory,"right.png"),ImageFormat.Png);
+        using(var stream=File.Create(Path.Combine(directory,"difference.json")))new DataContractJsonSerializer(typeof(GridFailureArtifact)).WriteObject(stream,data);
+        // Originals and assertions keep their full areas. This is only an 8x nearest-neighbor view of the difference bounds: left | right | magenta map.
+        const int zoom=8;using(var detail=new Bitmap(bounds.Width*3+2,bounds.Height,PixelFormat.Format32bppPArgb)){
+            for(int y=0;y<bounds.Height;y++)for(int x=0;x<bounds.Width;x++){
+                var a=left.GetPixel(bounds.Left+x,bounds.Top+y);var b=right.GetPixel(bounds.Left+x,bounds.Top+y);
+                detail.SetPixel(x,y,a);detail.SetPixel(bounds.Width+1+x,y,b);detail.SetPixel((bounds.Width+1)*2+x,y,a.ToArgb()==b.ToArgb()?Color.Black:Color.Magenta);
+            }
+            using(var enlarged=new Bitmap(detail.Width*zoom,detail.Height*zoom,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(enlarged)){
+                g.CompositingMode=CompositingMode.SourceCopy;g.InterpolationMode=InterpolationMode.NearestNeighbor;g.PixelOffsetMode=PixelOffsetMode.Half;g.DrawImage(detail,new Rectangle(0,0,enlarged.Width,enlarged.Height),0,0,detail.Width,detail.Height,GraphicsUnit.Pixel);enlarged.Save(Path.Combine(directory,"difference-8x.png"),ImageFormat.Png);
+            }
+        }
+        Console.Error.WriteLine("GRID_DIAGNOSTIC_ARTIFACT "+directory);
+    }
+    static void GridDiagnostic(string label,string parameters,GridFrameCapture leftState,GridFrameCapture rightState,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area){
         // No temporary-file dependency in CI. Diagnostic failures must never replace the caller's Check.
         try{
             string raw,pixels;try{raw=GridRawDifference(left,right,area);}catch(Exception error){raw="RAW_DIFF_FAILED "+GridText(error.Message);}
             try{pixels=GridDifference(left,right,area);}catch(Exception error){pixels="GETPIXEL_DIFF_FAILED "+GridText(error.Message);}
             Console.Error.WriteLine("GRID_DIAGNOSTIC label="+label+Environment.NewLine+"parameters="+parameters+Environment.NewLine+"hidden="+GridControl(hidden)+Environment.NewLine+"left="+leftState+Environment.NewLine+"right="+rightState+Environment.NewLine+"raw="+raw+Environment.NewLine+"diff="+pixels);
+            try{GridSaveDiagnostic(label,parameters,leftState,rightState,hidden,left,right,area,raw,pixels);}catch(Exception error){Console.Error.WriteLine("GRID_DIAGNOSTIC_ARTIFACT_FAILED "+GridText(error.Message));}
         }catch(Exception){/* Preserve the original assertion even if stderr itself is unavailable. */}
+    }
+    static void GridRequireSame(string label,string parameters,GridFrameCapture leftState,GridFrameCapture rightState,Bitmap left,Bitmap right,Rectangle area){
+        bool same=GridSameArea(left,right,area);if(!same)GridDiagnostic(label,parameters,leftState,rightState,null,left,right,area);Check(same,label);
+    }
+    static void GridRepaintIdentity(){
+        Mode("normal","ocean",true,"grid");using(var fixture=new Fixture()){
+            var owner=fixture.Owner;owner.GenericReady=true;owner.NativeMousePresent=true;owner.Headset=null;owner.Audio=null;owner.Dpi=Dpi(8);
+            var devices=new List<WirelessDevice>();for(int i=0;i<4;i++){var device=GridDevice(i,8);device.Id="device-"+i.ToString().PadLeft(24,'0');device.Provider="logitech";device.SourceQuality="verified";device.MeasurementState="measured";device.Dpi.StageSource="onboard";devices.Add(device);}owner.WirelessDevices=devices.ToArray();
+            typeof(TrayContext).GetField("nativeNeedsReconcile",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(owner,false);
+            var layout=WirelessLayout.Build(owner,0,520);GridFrameCapture firstState;
+            // Retain the very first frame. The explicit --grid-repaint entry runs this in a fresh process; no unasserted font warmup.
+            using(var first=RenderGridObserved(owner,layout,false,1.5f,new PanelFeedback(),out firstState)){
+                var full=new Rectangle(Point.Empty,first.Size);
+                foreach(bool captureDrawing in new[]{false,true}){
+                    GridFrameCapture state;using(var next=RenderGridObserved(owner,layout,false,1.5f,new PanelFeedback(),out state,captureDrawing))
+                        GridRequireSame("same layout redraw preserves every pixel, with capture off/on","font=normal,native=True,audio=False,collapsed=True,scale=1.5,dark=False,offset=0,capture="+captureDrawing,firstState,state,first,next,full);
+                }
+                foreach(int offset in new[]{0,31}){
+                    var rebuilt=WirelessLayout.Build(owner,0,520,false,offset);PopupPages.Build(owner,new PopupNavigation(),false,rebuilt);GridFrameCapture state;
+                    using(var next=RenderGridObserved(owner,rebuilt,false,1.5f,new PanelFeedback(),out state)){
+                        string parameters="font=normal,native=True,audio=False,collapsed=True,scale=1.5,dark=False,offset="+offset;
+                        if(offset==0)GridRequireSame("rebuilt same-state layout preserves every pixel",parameters,firstState,state,first,next,full);
+                        else{
+                            GridRequireSame("scrolling preserves the complete device area after same-state redraws",parameters,firstState,state,first,next,new Rectangle(0,0,first.Width,(int)(layout.Grid.Controls.Top*1.5f)));
+                            int fixedTop=(int)Math.Ceiling(layout.VolumeTop*1.5f);GridRequireSame("scrolling preserves the complete fixed volume and footer",parameters,firstState,state,first,next,new Rectangle(0,fixedTop,first.Width,first.Height-fixedTop));
+                        }
+                    }
+                }
+            }
+        }
     }
     static void GridOverflowViewportMatrix(){
         foreach(string font in new[]{"normal","large"})foreach(bool native in new[]{false,true})foreach(bool audio in new[]{false,true})foreach(bool collapsed in new[]{false,true}){
@@ -157,7 +278,7 @@ static class PanelDesignTests {
                 Check(normal.Grid.MaximumScroll==0&&normal.Grid.ScrollOffset==0&&normal.Grid.Viewport.Bottom==normal.VolumeTop,"normal height keeps every group and introduces no scrolling");
                 Check(first.Grid.Groups.Count==(audio?6:5)&&first.Grid.Groups.TrueForAll(delegate(GridControlGroup group){return group.Audio||group.Count==8;}),"all five eight-stage mice and optional audio group remain present");
                 foreach(float scale in new[]{1f,1.25f,1.5f,2f})foreach(bool dark in new[]{false,true}){
-                    string baselineState;using(var baseline=RenderGridObserved(owner,first,dark,scale,new PanelFeedback(),out baselineState))foreach(int offset in new[]{0,31,Int32.MaxValue}){
+                    GridFrameCapture baselineState;using(var baseline=RenderGridObserved(owner,first,dark,scale,new PanelFeedback(),out baselineState))foreach(int offset in new[]{0,31,Int32.MaxValue}){
                         var layout=WirelessLayout.Build(owner,0,520,false,offset);var rows=PopupPages.Build(owner,new PopupNavigation(),audio,layout);var regions=new List<InteractionRegion>();
                         Check(layout.Size.Height==520&&layout.Grid.Controls==first.Grid.Controls&&layout.VolumeRect==first.VolumeRect&&layout.Footer==first.Footer,"scrolling never moves the bounded card, system volume or footer");
                         Check(rows.FindAll(delegate(PopupControl row){return row.DpiValue>0||row.Id>=10&&row.Id<18;}).Count==40,"no DPI stages are discarded by clipping");
@@ -166,7 +287,7 @@ static class PanelDesignTests {
                         Check(rows.FindAll(delegate(PopupControl row){return row.Id>=100&&row.Id<=102;}).Count==(audio?3:0),"audio controls follow audio group presence");
                         Check(rows.Exists(delegate(PopupControl row){return row.Id==240;})!=collapsed,"volume expansion is independent of group scrolling");
                         InteractionLayout.Observer=regions.Add;
-                        string imageState;try{using(var image=RenderGridObserved(owner,layout,dark,scale,new PanelFeedback(),out imageState)){
+                        GridFrameCapture imageState;try{using(var image=RenderGridObserved(owner,layout,dark,scale,new PanelFeedback(),out imageState)){
                             var topArea=new Rectangle(0,0,image.Width,(int)(first.Grid.Controls.Top*scale));bool topSame=GridSameArea(baseline,image,topArea);
                             if(!topSame)GridDiagnostic("scrolling cannot paint into the device tiles","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,baselineState,imageState,null,baseline,image,topArea);
                             Check(topSame,"scrolling cannot paint into the device tiles");
@@ -186,7 +307,7 @@ static class PanelDesignTests {
                         if(offset==31)Check(partial!=null,"the regression exercises a genuinely enabled partially visible stage");
                         if(partial!=null){var point=new PointF(partial.Rect.X+partial.Rect.Width/2,partial.Rect.Top<partial.VisibleRect.Top?partial.Rect.Top+.25f:partial.Rect.Bottom-.25f);Check(PopupPages.Hit(rows,point)!=partial,"the cropped part of a partially visible control cannot be hit");}
                         var hidden=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&!row.Information&&row.VisibleRect.IsEmpty;});
-                        if(hidden!=null){var ordinaryFeedback=new PanelFeedback();var hoveredFeedback=new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id};string ordinaryState,hoveredState;using(var ordinary=RenderGridObserved(owner,layout,dark,scale,ordinaryFeedback,out ordinaryState))using(var hovered=RenderGridObserved(owner,layout,dark,scale,hoveredFeedback,out hoveredState)){
+                        if(hidden!=null){var ordinaryFeedback=new PanelFeedback();var hoveredFeedback=new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id};GridFrameCapture ordinaryState,hoveredState;using(var ordinary=RenderGridObserved(owner,layout,dark,scale,ordinaryFeedback,out ordinaryState))using(var hovered=RenderGridObserved(owner,layout,dark,scale,hoveredFeedback,out hoveredState)){
                             var fullArea=new Rectangle(Point.Empty,ordinary.Size);bool same=GridSameArea(ordinary,hovered,fullArea);
                             if(!same)GridDiagnostic("offscreen hover, press and focus feedback leaves no ink in another region","font="+font+",native="+native+",audio="+audio+",collapsed="+collapsed+",scale="+scale+",dark="+dark+",offset="+offset,ordinaryState,hoveredState,hidden,ordinary,hovered,fullArea);
                             Check(same,"offscreen hover, press and focus feedback leaves no ink in another region");
@@ -614,6 +735,9 @@ static class PanelDesignTests {
         }
     }
     [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{
+        if(args.Length==1&&args[0]=="--grid-repaint"){
+            Run("150% native light first-frame, same-layout redraw and rebuilt offsets",GridRepaintIdentity);return failures==0?0:1;
+        }
         if(args.Length>=2&&args[0]=="--render"){
             VisualDesign.HighContrastOverride=false;bool matrix=Array.IndexOf(args,"--matrix")>=0;var layouts=args.Length>2&&args[2]!="all"&&args[2]!="--matrix"?new[]{args[2]}:PanelLayouts.Keys;
             foreach(string layout in layouts)RenderPreviews(args[1],layout,matrix);RenderLayoutChoices(args[1],matrix);return 0;
@@ -627,6 +751,7 @@ static class PanelDesignTests {
         Run("grid overflow 520px, five mice x eight stages, normal",delegate{GridOverflowHeight("normal");});
         Run("grid overflow 520px, five mice x eight stages, large",delegate{GridOverflowHeight("large");});
         Run("grid overflow viewport, clipping, fixed volume and scale matrix",GridOverflowViewportMatrix);
+        Run("150% native light first-frame, same-layout redraw and rebuilt offsets",GridRepaintIdentity);
         if(args.Length==1&&args[0]=="--grid-overflow")return failures==0?0:1;
         Run("grid dispatch, two-column tiles and fixed quick controls",GridBasics);
         Run("grid 1..5 devices, whole-row paging and fixed controls",GridCountsAndPaging);Run("grid all-device control groups and hidden devices",GridGroupsAndHidden);
@@ -639,5 +764,5 @@ static class PanelDesignTests {
         if(args.Length==1&&args[0]=="--ring")return failures==0?0:1;
         VisualDesign.HighContrastOverride=false;Mode("normal");Run("battery bar proportions and bounds",BarGeometry);Run("battery digits and percent baselines at five DPI scales",BatteryTypography);Run("shared draw and hit geometry",HitGeometry);Run("four themes x light/dark x fonts x headset x high contrast x render paths",RenderMatrix);Run("card shadows and high contrast",ContrastAndShadows);Run("icon-only microphone accessible state",MicrophoneNames);Run("microphone pending and unavailable ink",MicrophonePresentation);Run("floating segmented controls",FloatingSegments);Run("pending hints, press offset and segment focus",PendingSegments);Run("plain footer and single-row volume",PlainFooterAndVolume);Run("bounded device page footer geometry",FooterPaging);
         Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices and audio only");return failures==0?0:1;
-    }finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;InteractionLayout.Observer=null;VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}}
+    }finally{CompactRenderer.LabelObserver=null;CompactRenderer.SymbolObserver=null;CompactRenderer.TextRasterObserver=null;InteractionLayout.Observer=null;InteractionLayout.TextBoundsObserver=null;VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}}
 }

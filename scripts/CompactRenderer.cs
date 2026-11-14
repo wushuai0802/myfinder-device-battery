@@ -17,6 +17,8 @@ namespace AtkBatteryTray {
         internal static Action<RectangleF> InteractionOutlineObserver=null;
         internal static Action<DrawnLabel> LabelObserver=null;
         internal static Action<string,RectangleF> SymbolObserver=null;
+        // Optional offline diagnostics; observe the actual font/format and effective Graphics immediately before DrawString.
+        internal static Action<string,Graphics,string,RectangleF,Font,Color,StringFormat> TextRasterObserver=null;
         static Color Fg(bool dark){return PopupPages.Foreground(dark);}
         static Color Muted(bool dark){return PopupPages.Muted(dark);}
         static Color Track(bool dark){return PopupPages.Track(dark);}
@@ -58,7 +60,10 @@ namespace AtkBatteryTray {
             try {
             using(var font=new Font(family,fontSize,bold?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))
             using(var brush=new SolidBrush(color))
-            using(var format=new StringFormat {Alignment=align,LineAlignment=StringAlignment.Center,Trimming=trimming,FormatFlags=StringFormatFlags.NoWrap})g.DrawString(text??"",font,brush,rect,format);
+            using(var format=new StringFormat {Alignment=align,LineAlignment=StringAlignment.Center,Trimming=trimming,FormatFlags=StringFormatFlags.NoWrap}){
+                if(TextRasterObserver!=null)TextRasterObserver("paint-label",g,text??"",rect,font,color,format);
+                g.DrawString(text??"",font,brush,rect,format);
+            }
             } finally {g.PixelOffsetMode=previousOffset;g.TextRenderingHint=previousHint;}
         }
         internal static void DrawWrappedLabel(Graphics g,string text,RectangleF rect,float fontSize,Color color) {
@@ -74,7 +79,10 @@ namespace AtkBatteryTray {
             try {
                 using(var font=new Font("Microsoft YaHei UI",fontSize,FontStyle.Regular,GraphicsUnit.Pixel))
                 using(var brush=new SolidBrush(color))
-                using(var format=new StringFormat {LineAlignment=StringAlignment.Center})g.DrawString(text??"",font,brush,rect,format);
+                using(var format=new StringFormat {LineAlignment=StringAlignment.Center}){
+                    if(TextRasterObserver!=null)TextRasterObserver("paint-wrapped-label",g,text??"",rect,font,color,format);
+                    g.DrawString(text??"",font,brush,rect,format);
+                }
             } finally {g.PixelOffsetMode=previousOffset;g.TextRenderingHint=previousHint;}
         }
         internal static float BatteryTextSize(Graphics g,string text,float preferredSize,float width){
