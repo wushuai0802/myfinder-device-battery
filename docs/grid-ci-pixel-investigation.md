@@ -1,8 +1,62 @@
 # Grid CI 像素调查
 
-本次交付是**诊断候选，尚未修复**。根因仍未知，没有可宣称的修复前失败／修复后通过路径。工作树基线为 `50e4897a4782e7e6b19faba2dac8ad375bb165d8`。本地未复现不能解释掉 CI 失败；候选需要主管用一次准确提交的 CI 收集原始图像和绘制输入，再继续因果定位。
+当前交付是 **1114t 受控复现实验，尚未修复**，基线为 `b65ec4136115673208531b17e208440b0559c60c`。根因未知，没有修复前失败／修复后通过证明。仅改测试入口、独立诊断脚本、实验分支专用 CI job 和本文；产品代码、原完整 Panel 矩阵与零容差断言保持不变。
 
-当前基线没有跟踪本报告；以下从任务提供的 `audit.md`、`previous-review.md` 和两份失败日志保留此前结论。
+## 1114t：运行与读图
+
+简报记录基线的准确 push run `43572909664` 两平台成功，只有完整包 artifact，没有触发失败取证。这不能消除此前两次六像素失败。新 runner 摘录中，失败 run `43480911417` 的 `run-43480911417-runner.txt:3-6`、失败 run `43569094626` 的 `run-43569094626-runner.txt:7-10`，以及通过 run `43572909664` 的 `run-43572909664-runner.txt:7-10` 都记录 Windows Server 2025 / `windows-2025-vs2026`，同镜像版本 `20261103.298`。这些只读摘录位于 `.ai/evidence/grid-pixel-repro-1114t/`，不能仅凭 OS 名称定因。
+
+```powershell
+# 新建、明确且短的目录；拒绝覆盖已有证据。无需 Build.ps1 或真实设备。
+./tests/Run-GridPixelDiagnostic.ps1 -OutputDirectory ./tmp/gpr-1114t -TimeoutSeconds 180
+# 脚本编译后的单 case 入口（主管调查用；本机批次不额外重复执行）：
+# ./tmp/gpr-1114t/PanelDesignTests.exe --grid-repaint-probe --case cold-off --output ./tmp/another-case --budget-ms 34000
+```
+
+| 冷进程 case | 有界对照 | 完整绘制帧数上限 |
+| --- | --- | --- |
+| `cold-off` / `cold-on` | 1.5×浅色首帧；同 layout 连画；重新 Build offset=0/31；最后切换 capture 与原首帧比较 | 各 32 |
+| `matrix-prefix-off` / `matrix-prefix-on` | 原矩阵连续的 1.25×浅色 → 1.25×深色 → 1.5×浅色；每段保留 baseline → offset=0/31/max → 普通／真实 offscreen 控件反馈的调用顺序 | 各 30 |
+
+这是原序列的有界连续前缀对照，不声称重放完整 Panel 历史；更早的 1×及其他 fixture 组合不在 32 帧预算内。没有自行预热、清缓存或丢弃首帧。所有 baseline 都用于后续比较。offset=0 与同 layout 使用完整图像；offset=31/max 保留原完整设备区和固定 volume/footer 区。全图反馈对照只使用 `VisibleRect.IsEmpty` 的真实隐藏控件，沿用原断言的状态。
+
+`capture=false` 不挂绘制／测量观察器，只在真实帧边界读取核心 Graphics 参数；这项额外只读取证仅新入口启用，旧调用默认不变。矩阵前缀在原本的位置保留 `InteractionLayout.Observer=regions.Add`。`capture=true` 还记录实际文字、字体、测量缓存与绘制事件。两个冷 case 最后八帧切换 capture，其余阶段保持初始开关。
+
+脚本总预算最多 **180 秒**（含编译），编译最多 30 秒；至多 4 个冷测试进程，各至多 35 秒且按剩余预算分配，内部另留 1 秒给退出；总预算留 2 秒写汇总。原生超时只终止 `launched-processes.json` 中本脚本创建的精确 Process 对象，不终止树或其他进程。任意差异立即停止，不运行剩余 case；超时或取证不完整均失败。退出码：未复现 `0`、像素差异 `1`、编译／诊断错误 `2`、超时 `124`。`not_run` 表示提前停止后的未执行 case。
+
+下载新 job 的独立 `grid-repaint-diagnostic` artifact 后：
+
+1. 先看 `summary.json` 的 `status/outcome/exitCode` 和各 `case-summary.json`。`passed + not_reproduced` 仅表示本次无差异，不表示 fixed。
+2. 每 case 的 `result.json` 保存全部帧序号、首帧／baseline 路径、原始 LockBits 行 SHA256、最终帧 hash、逐次比较区域／左右帧号／时间、capture、状态及核心 Graphics 参数。成功也保存 `first.png`，前缀另外保存两段 baseline；不存每张相同 PNG。`frames.jsonl` 与 `comparisons.jsonl` 是逐条落盘记录，强制超时导致最终 JSON 不完整时仍可读取；`execution.json` 是父进程的最终执行／超时判定。
+3. 差异看该 case 的 `differences/<pid-guid>/{left.png,right.png,difference.json,difference-8x.png}`；仍是完整原图和原区域零容差比较，8×图只辅助定位。取证写入错误单列 `ArtifactError`，不会吞掉失败。
+4. `environment.json` 保存实际 Windows build、白名单 runner 变量、全部编译源／脚本／字体／编译器 hash，`executable.json` 保存 EXE hash；各 case 的 `result.json.Environment` 保存实际加载的 GDI+ 路径、版本和 hash。缺失字体标 `unavailable`，不改系统字体或配置。编译和每 case 分别保存 `stdout.txt/stderr.txt`，不 dump 环境。
+
+CI 只追加 `grid-repaint-diagnostic`，条件严格为 push 到 `refs/heads/codex/grid-pixel-repro-1114t`，`windows-latest`、8 分钟 job 上限。沿用既有 checkout/upload 固定 SHA，`always()` 上传独立输出、保留 3 天；差异／超时直接使 job 失败，无 `continue-on-error`。原 windows/protocols、gate、触发器和权限内容未改。main、PR 和 workflow_dispatch 不运行此长诊断。
+
+本机实际运行结果记录在本节下方；原完整 Panel 的历史通过记录见后文，本轮不重复全套、性能或产品构建。后续 owner 为主管：审阅四文件 diff 后，仅在实验分支提交并 push 本次准确提交；核对远端 run 的 head SHA，再读取新 job 的图像／case 摘要。若出现真实差异，依据首个差异安排 renderer 或 fixture 的有范围根因任务；若未复现，保留该事实，不能改称已修复。执行者不提交、推送、触发远端或修改产品。
+
+### 1114t 本机实际验证
+
+唯一绘制批次：`tmp/gpr-1114t-run/summary.json`，编译 exit `0`，总体 exit `0`，`passed / not_reproduced`，**4542.85 ms / 180000 ms**。四个冷进程均保存并比较首帧，共 **124 帧 / 174 次严格比较 / 8 张 baseline PNG**；逐帧及逐比较 JSONL 数量与最终汇总一致，没有丢弃首次绘制或保存每张相同 PNG。已查看 `cold-off/first.png`，为包含 `ATK A9 Air+` 的完整 390×780 图像。成功不等于根因修复。
+
+| case | PID | 帧数 | 比较次数 | 父进程记录耗时 |
+| --- | --- | --- | --- | --- |
+| cold-off | 25568 | 32 | 39 | 985.04 ms |
+| cold-on | 70560 | 32 | 39 | 793.38 ms |
+| matrix-prefix-off | 21880 | 30 | 48 | 690.18 ms |
+| matrix-prefix-on | 54672 | 30 | 48 | 780.83 ms |
+
+每 case 的 `result.json/stdout.txt/stderr.txt` 与根目录 `environment.json/executable.json/launched-processes.json` 均保留。实际 build `26300.9711`，GDI+ `10.0.26100.9711`，五个字体文件均可读取 hash。最终 C# 与该批次记录的源码 hash 一致，EXE SHA256 为 `7EFACB9439F937B2B3B3442012F81BC82020D0F1810492860760255D91659A05`。
+
+启动前曾因 Windows PowerShell `Start-Process` 返回空 ExitCode 而把生成 EXE 的编译误报为失败，记录在 `tmp/gpr-1114t/summary.json`；当时未启动任何诊断冷进程。改为持有 `Process.Start` 的句柄并异步读取输出后才执行上述绘制批次，初次记录没有覆盖。批次后仅完善父汇总的 `running → not_reproduced` 状态，防止未执行 case 时预报成功；从最终脚本 AST 实际执行完整／缺一 case 的汇总分支，分别通过／拒绝，不再绘图。最终脚本 SHA256 为 `374F5821D4720ECA1C93068FB9B4170B9740F7451C9FE1FC5C80C03C0D67CDDB`，批次内的脚本 hash 则如实保留当时版本。
+
+用该批次 EXE 反射检查：入口拒绝 `35001 ms`、进程预算到期抛 `TimeoutException`、第 33 帧在绘制前抛 `InvalidOperationException`；不启动额外冷进程、fixture 或图像，守卫记录为 `tmp/gpr-guard-1114t/result.json`。最终 PowerShell 语法和 `git diff --check` 通过；逐段比对原 `GridSameArea/GridRawDifference/GridRepaintIdentity/GridOverflowViewportMatrix`、原 Main 其余内容以及原 CI 前缀，均未变。变更范围只有四个白名单文件。
+
+本轮未触发真实像素差异或父进程强制终止，失败图路径与远端 `always()` 上传尚待实验分支 CI 实测；没有新增真实六像素图、根因或硬超时执行证据。原完整 Panel／全 Python／性能／产品 Build 不重跑。主管应将这四文件提交并 push 到 **`codex/grid-pixel-repro-1114t`**，核对准确 head SHA 后单独检查新 job 与同名 artifact；无需手动 dispatch 或原样重跑旧提交。
+
+## 1114p 历史记录（以下不是本轮运行）
+
+下文保留此前基线 `50e4897a4782e7e6b19faba2dac8ad375bb165d8` 上诊断候选的调查和验证；历史文件路径属于当时工作树，不能视作本轮新证据。
 
 ## 已有 CI 证据
 

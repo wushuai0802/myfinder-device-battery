@@ -70,3 +70,20 @@ jobs:
           path: ${{ runner.temp }}/myfinder-grid-pixel-diagnostics/**
           retention-days: 3
           if-no-files-found: ignore
+  grid-repaint-diagnostic:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/grid-pixel-repro-1114t'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+      - name: Run bounded fake-only grid repaint diagnostic
+        shell: powershell
+        run: ./tests/Run-GridPixelDiagnostic.ps1 -OutputDirectory "${{ runner.temp }}/gpr" -TimeoutSeconds 180
+      - name: Upload grid repaint diagnostic including successful first frames
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node 24
+        with:
+          name: grid-repaint-diagnostic
+          path: ${{ runner.temp }}/gpr/**
+          retention-days: 3
+          if-no-files-found: error

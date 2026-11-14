@@ -79,9 +79,13 @@ static class PanelDesignTests {
             Check(layout.VolumeRect.Bottom<=520-VisualDesign.FooterHeight&&layout.Footer+VisualDesign.FooterHeight<=520,"system volume and footer stay visible at 520px");
         }
     }
-    static Bitmap RenderGrid(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback){
+    static Bitmap RenderGrid(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback,GridFrameCapture coreCapture=null){
         var size=UiState.ScaleSize(layout.Size,scale);var image=new Bitmap(size.Width,size.Height,PixelFormat.Format32bppPArgb);
-        using(var g=Graphics.FromImage(image)){g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);CompactRenderer.PaintWireless(g,owner,layout,dark,feedback);}return image;
+        using(var g=Graphics.FromImage(image)){g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);
+            if(coreCapture!=null)coreCapture.GraphicsEntry=GridGraphicsInput(g);
+            CompactRenderer.PaintWireless(g,owner,layout,dark,feedback);
+            if(coreCapture!=null)coreCapture.GraphicsExit=GridGraphicsInput(g);
+        }return image;
     }
     static bool GridSameArea(Bitmap left,Bitmap right,Rectangle area){
         if(area.Width<=0||area.Height<=0)return true;
@@ -152,9 +156,9 @@ static class PanelDesignTests {
                 " dpi="+GridFloat(g.DpiX)+"/"+GridFloat(g.DpiY)+" page="+g.PageUnit+"/"+GridFloat(g.PageScale)+" renderingOrigin="+g.RenderingOrigin+" hint="+g.TextRenderingHint+" contrast="+g.TextContrast+" pixelOffset="+g.PixelOffsetMode+" smoothing="+g.SmoothingMode+" compositing="+g.CompositingMode+"/"+g.CompositingQuality+" interpolation="+g.InterpolationMode;
         }
     }
-    static Bitmap RenderGridObserved(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback,out GridFrameCapture state,bool captureDrawing=true){
+    static Bitmap RenderGridObserved(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback,out GridFrameCapture state,bool captureDrawing=true,bool captureCoreGraphics=false){
         var capture=new GridFrameCapture {Before=GridFrameState(owner,layout,feedback),DrawingCapture=captureDrawing};state=capture;
-        if(!captureDrawing){var unobserved=RenderGrid(owner,layout,dark,scale,feedback);capture.After=GridFrameState(owner,layout,feedback);return unobserved;}
+        if(!captureDrawing){var unobserved=RenderGrid(owner,layout,dark,scale,feedback,captureCoreGraphics?capture:null);capture.After=GridFrameState(owner,layout,feedback);return unobserved;}
         var size=UiState.ScaleSize(layout.Size,scale);var image=new Bitmap(size.Width,size.Height,PixelFormat.Format32bppPArgb);
         var oldRaster=CompactRenderer.TextRasterObserver;var oldBounds=InteractionLayout.TextBoundsObserver;var oldRegion=InteractionLayout.Observer;
         try{using(var g=Graphics.FromImage(image)){
@@ -194,7 +198,7 @@ static class PanelDesignTests {
         try{using(var stream=File.OpenRead(path))using(var hash=SHA256.Create())return path+" sha256="+BitConverter.ToString(hash.ComputeHash(stream)).Replace("-","");}
         catch(Exception error){return path+" UNAVAILABLE "+GridText(error.Message);}
     }
-    static void GridSaveDiagnostic(string label,string parameters,GridFrameCapture leftState,GridFrameCapture rightState,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area,string raw,string summary){
+    static void GridSaveDiagnostic(string label,string parameters,GridFrameCapture leftState,GridFrameCapture rightState,PopupControl hidden,Bitmap left,Bitmap right,Rectangle area,string raw,string summary,string outputRoot=null){
         var data=new GridFailureArtifact {Label=label,Parameters=parameters,Hidden=GridControl(hidden),Area=area.ToString(),Raw=raw,Summary=summary,LeftFrame=leftState,RightFrame=rightState};
         int minX=area.Right,minY=area.Bottom,maxX=-1,maxY=-1;
         for(int y=area.Top;y<area.Bottom;y++)for(int x=area.Left;x<area.Right;x++){
@@ -211,7 +215,7 @@ static class PanelDesignTests {
         foreach(string font in new[]{"segoeui.ttf","msyh.ttc"})data.Environment.Add(GridFileEvidence(Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.Fonts),font)));
         try{foreach(System.Diagnostics.ProcessModule module in System.Diagnostics.Process.GetCurrentProcess().Modules)if(String.Equals(module.ModuleName,"gdiplus.dll",StringComparison.OrdinalIgnoreCase))data.Environment.Add("gdiplus="+module.FileVersionInfo.FileVersion+" "+GridFileEvidence(module.FileName));}catch(Exception error){data.Environment.Add("MODULE_CAPTURE_FAILED "+GridText(error.Message));}
         string runnerTemp=System.Environment.GetEnvironmentVariable("RUNNER_TEMP");
-        string root=String.IsNullOrEmpty(runnerTemp)?Path.Combine(Directory.GetCurrentDirectory(),"tmp","grid-pixel-diagnostics"):Path.Combine(runnerTemp,"myfinder-grid-pixel-diagnostics");
+        string root=outputRoot??(String.IsNullOrEmpty(runnerTemp)?Path.Combine(Directory.GetCurrentDirectory(),"tmp","grid-pixel-diagnostics"):Path.Combine(runnerTemp,"myfinder-grid-pixel-diagnostics"));
         string directory=Path.Combine(root,System.Diagnostics.Process.GetCurrentProcess().Id+"-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
         left.Save(Path.Combine(directory,"left.png"),ImageFormat.Png);right.Save(Path.Combine(directory,"right.png"),ImageFormat.Png);
         using(var stream=File.Create(Path.Combine(directory,"difference.json")))new DataContractJsonSerializer(typeof(GridFailureArtifact)).WriteObject(stream,data);
@@ -265,6 +269,161 @@ static class PanelDesignTests {
                 }
             }
         }
+    }
+    // This optional entry is independent of the unchanged full Panel matrix. All bitmaps,
+    // including the first one in each process, remain comparison inputs; there is no warmup.
+    [DataContract] sealed class GridProbeComparison {
+        [DataMember] internal int LeftFrame,RightFrame;
+        [DataMember] internal string Label,Area;
+        [DataMember] internal bool Same;
+        [DataMember] internal double ElapsedMs;
+    }
+    [DataContract] sealed class GridProbeFrame {
+        [DataMember] internal int Number,Offset,Width,Height;
+        [DataMember] internal string Label,Sha256,BaselinePng,PixelFormat;
+        [DataMember] internal float Scale,DpiX,DpiY;
+        [DataMember] internal bool Dark,RegionObserver;
+        [DataMember] internal double DrawMs,ElapsedMs;
+        [DataMember] internal GridFrameCapture State;
+        [DataMember] internal List<GridProbeComparison> Comparisons=new List<GridProbeComparison>();
+    }
+    [DataContract] sealed class GridProbeResult {
+        [DataMember] internal int Schema=1,ProcessId,FrameLimit=32,BudgetMs,DrawsStarted;
+        [DataMember] internal string Case,Status="running",Error,ArtifactError,StartedUtc,Parameters,FinalFrameSha256;
+        [DataMember] internal double ElapsedMs;
+        [DataMember] internal List<GridProbeFrame> Frames=new List<GridProbeFrame>();
+        [DataMember] internal List<string> Environment=new List<string>();
+    }
+    sealed class GridProbeMismatch:Exception {internal GridProbeMismatch(string message):base(message){}}
+    sealed class GridProbeImage:IDisposable {
+        internal Bitmap Image;
+        internal GridProbeFrame Frame;
+        public void Dispose(){Image.Dispose();}
+    }
+    static void GridProbeJson(string path,object value){using(var stream=File.Create(path))new DataContractJsonSerializer(value.GetType()).WriteObject(stream,value);}
+    sealed class GridProbe {
+        internal readonly GridProbeResult Result;
+        internal readonly string DirectoryPath;
+        readonly System.Diagnostics.Stopwatch clock=System.Diagnostics.Stopwatch.StartNew();
+        internal GridProbe(string name,string output,int budget){
+            DirectoryPath=Path.GetFullPath(output);Directory.CreateDirectory(DirectoryPath);
+            Result=new GridProbeResult {Case=name,BudgetMs=budget,ProcessId=System.Diagnostics.Process.GetCurrentProcess().Id,StartedUtc=DateTime.UtcNow.ToString("o"),Parameters="font=normal,native=True,audio=False,collapsed=True,theme=ocean; cold=1.5/light; prefix=1.25/light,1.25/dark,1.5/light"};
+            Save();
+        }
+        internal void Budget(){if(clock.ElapsedMilliseconds>=Result.BudgetMs)throw new TimeoutException("Per-process diagnostic deadline exceeded");}
+        internal void Save(){Result.ElapsedMs=clock.Elapsed.TotalMilliseconds;GridProbeJson(Path.Combine(DirectoryPath,"result.json"),Result);}
+        void Journal(string name,object value){
+            using(var stream=new FileStream(Path.Combine(DirectoryPath,name+".jsonl"),FileMode.Append,FileAccess.Write,FileShare.Read)){
+                new DataContractJsonSerializer(value.GetType()).WriteObject(stream,value);stream.WriteByte(10);
+            }
+        }
+        internal GridProbeImage Draw(TrayContext owner,WirelessLayout layout,bool dark,float scale,PanelFeedback feedback,bool capture,string label,bool baseline=false){
+            Budget();if(Result.DrawsStarted>=Result.FrameLimit)throw new InvalidOperationException("32-frame diagnostic cap exceeded");
+            int number=++Result.DrawsStarted;Console.WriteLine("GRID_PROBE_FRAME_START "+number+" "+label+" capture="+capture);
+            var drawClock=System.Diagnostics.Stopwatch.StartNew();GridFrameCapture state;
+            var image=RenderGridObserved(owner,layout,dark,scale,feedback,out state,capture,true);
+            try{
+                var frame=new GridProbeFrame {Number=number,Label=label,Scale=scale,Dark=dark,Offset=layout.Grid.ScrollOffset,Width=image.Width,Height=image.Height,PixelFormat=image.PixelFormat.ToString(),DpiX=image.HorizontalResolution,DpiY=image.VerticalResolution,DrawMs=drawClock.Elapsed.TotalMilliseconds,ElapsedMs=clock.Elapsed.TotalMilliseconds,State=state,RegionObserver=InteractionLayout.Observer!=null};
+                // Hash the same unpadded LockBits rows used by GridSameArea, not PNG encoder bytes.
+                var bits=image.LockBits(new Rectangle(Point.Empty,image.Size),ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
+                try{using(var hash=SHA256.Create()){
+                    var row=new byte[image.Width*4];for(int y=0;y<image.Height;y++){
+                        System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(bits.Scan0,y*bits.Stride),row,0,row.Length);hash.TransformBlock(row,0,row.Length,row,0);
+                    }
+                    hash.TransformFinalBlock(new byte[0],0,0);frame.Sha256=BitConverter.ToString(hash.Hash).Replace("-","");
+                }}finally{image.UnlockBits(bits);}
+                Result.Frames.Add(frame);Result.FinalFrameSha256=frame.Sha256;
+                if(number==1||baseline){frame.BaselinePng=number==1?"first.png":"baseline-"+number+".png";image.Save(Path.Combine(DirectoryPath,frame.BaselinePng),ImageFormat.Png);}
+                if(number==1){
+                    Result.Environment.Add("reportedOS="+System.Environment.OSVersion+" CLR="+System.Environment.Version+" x64="+System.Environment.Is64BitProcess+" culture="+CultureInfo.CurrentCulture.Name+" uiCulture="+CultureInfo.CurrentUICulture.Name+" highContrast="+VisualDesign.HighContrast);
+                    foreach(System.Diagnostics.ProcessModule module in System.Diagnostics.Process.GetCurrentProcess().Modules)
+                        if(String.Equals(module.ModuleName,"gdiplus.dll",StringComparison.OrdinalIgnoreCase))Result.Environment.Add("gdiplus="+module.FileVersionInfo.FileVersion+" "+GridFileEvidence(module.FileName));
+                }
+                Journal("frames",frame);Budget();return new GridProbeImage {Image=image,Frame=frame};
+            }catch{image.Dispose();throw;}
+        }
+        internal void Compare(GridProbeImage left,GridProbeImage right,Rectangle area,string label,PopupControl hidden=null){
+            Budget();bool same=GridSameArea(left.Image,right.Image,area);
+            var comparison=new GridProbeComparison {LeftFrame=left.Frame.Number,RightFrame=right.Frame.Number,Label=label,Area=area.ToString(),Same=same,ElapsedMs=clock.Elapsed.TotalMilliseconds};
+            right.Frame.Comparisons.Add(comparison);Journal("comparisons",comparison);
+            if(!same){
+                try{GridSaveDiagnostic(label,Result.Parameters+",case="+Result.Case+",scale="+GridFloat(right.Frame.Scale)+",dark="+right.Frame.Dark+",offset="+right.Frame.Offset+",capture="+right.Frame.State.DrawingCapture+",frames="+left.Frame.Number+"/"+right.Frame.Number,left.Frame.State,right.Frame.State,hidden,left.Image,right.Image,area,GridRawDifference(left.Image,right.Image,area),GridDifference(left.Image,right.Image,area),Path.Combine(DirectoryPath,"differences"));}
+                catch(Exception error){Result.ArtifactError=error.ToString();Console.Error.WriteLine("GRID_PROBE_ARTIFACT_FAILED "+GridText(error.Message));}
+                throw new GridProbeMismatch(label+" (frames "+left.Frame.Number+"/"+right.Frame.Number+")");
+            }
+            Budget();
+        }
+        internal void FixedAreas(GridProbeImage left,GridProbeImage right,WirelessLayout baseline){
+            Compare(left,right,new Rectangle(0,0,left.Image.Width,(int)(baseline.Grid.Controls.Top*right.Frame.Scale)),"complete device area");
+            int top=(int)Math.Ceiling(baseline.VolumeTop*right.Frame.Scale);Compare(left,right,new Rectangle(0,top,left.Image.Width,left.Image.Height-top),"complete fixed volume/footer");
+        }
+    }
+    static void GridProbeCold(GridProbe probe,TrayContext owner,WirelessLayout first,bool capture){
+        using(var baseline=probe.Draw(owner,first,false,1.5f,new PanelFeedback(),capture,"cold first")){
+            for(int i=1;i<32;i++){
+                int offset=i>=16&&i<24?31:0;bool rebuild=i>=8&&i<24;bool observed=i>=24?!capture:capture;
+                var layout=rebuild?WirelessLayout.Build(owner,0,520,false,offset):first;
+                if(rebuild)PopupPages.Build(owner,new PopupNavigation(),false,layout);
+                string label=(rebuild?"Build offset="+offset:"same layout")+(i>=24?" capture toggled":"");
+                using(var next=probe.Draw(owner,layout,false,1.5f,new PanelFeedback(),observed,label)){
+                    if(offset==31)probe.FixedAreas(baseline,next,first);
+                    else probe.Compare(baseline,next,new Rectangle(Point.Empty,baseline.Image.Size),"complete same-state frame");
+                }
+            }
+        }
+    }
+    static void GridProbeMatrixPrefix(GridProbe probe,TrayContext owner,WirelessLayout first,bool capture){
+        // A contiguous suffix of the real matrix before 1.5/light. Earlier 1x history
+        // cannot also fit the 32-frame cap; no hand-made label measure or cache clearing.
+        WirelessLayout.Build(owner,0,10000);
+        for(int step=0;step<3;step++){
+            float scale=step==2?1.5f:1.25f;bool dark=step==1;string prefix="matrix scale="+GridFloat(scale)+" dark="+dark;
+            using(var baseline=probe.Draw(owner,first,dark,scale,new PanelFeedback(),capture,prefix+" baseline",true))foreach(int offset in new[]{0,31,Int32.MaxValue}){
+                var layout=WirelessLayout.Build(owner,0,520,false,offset);var rows=PopupPages.Build(owner,new PopupNavigation(),false,layout);var regions=new List<InteractionRegion>();
+                Check(layout.Size.Height==520&&layout.Grid.Controls==first.Grid.Controls&&layout.VolumeRect==first.VolumeRect&&layout.Footer==first.Footer,"probe preserves matrix layout regions");
+                InteractionLayout.Observer=regions.Add;
+                try{using(var image=probe.Draw(owner,layout,dark,scale,new PanelFeedback(),capture,prefix+" offset="+offset)){
+                    probe.FixedAreas(baseline,image,first);
+                    if(offset==0)probe.Compare(baseline,image,new Rectangle(Point.Empty,image.Image.Size),"rebuilt offset0 complete same-state frame");
+                }}finally{InteractionLayout.Observer=null;}
+                // Preserve the original between-paint hit/visibility sequence too.
+                foreach(var row in rows){
+                    var visible=row.VisibleRect;if(row.Information||row.Id<0)continue;
+                    var region=regions.Find(delegate(InteractionRegion item){return item.Id==row.Id;});
+                    Check(visible.IsEmpty?region==null:region!=null&&region.Limit==visible,"probe matrix clipped draw/hit bounds agree");
+                    if(row.Enabled&&!visible.IsEmpty)Check(PopupPages.Hit(rows,new PointF(visible.X+visible.Width/2,visible.Y+visible.Height/2))==row,"probe matrix visible controls remain clickable");
+                }
+                var partial=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&row.Enabled&&!row.Information&&!row.VisibleRect.IsEmpty&&row.VisibleRect!=row.Rect;});
+                if(partial!=null){var point=new PointF(partial.Rect.X+partial.Rect.Width/2,partial.Rect.Top<partial.VisibleRect.Top?partial.Rect.Top+.25f:partial.Rect.Bottom-.25f);Check(PopupPages.Hit(rows,point)!=partial,"probe matrix cropped control cannot be hit");}
+                var hidden=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&!row.Information&&row.VisibleRect.IsEmpty;});
+                Check(hidden!=null,"probe matrix must exercise an actually hidden control");
+                using(var ordinary=probe.Draw(owner,layout,dark,scale,new PanelFeedback(),capture,prefix+" ordinary offset="+offset))
+                using(var hovered=probe.Draw(owner,layout,dark,scale,new PanelFeedback {HoverAction=hidden.Id,PressedAction=hidden.Id,KeyboardFocus=hidden.Id},capture,prefix+" hidden feedback offset="+offset)){
+                    probe.Compare(ordinary,hovered,new Rectangle(Point.Empty,ordinary.Image.Size),"original offscreen-only feedback complete frame",hidden);
+                    probe.FixedAreas(baseline,ordinary,first);
+                }
+            }
+        }
+    }
+    static int GridRepaintProbe(string[] args){
+        if(args.Length!=7||args[1]!="--case"||args[3]!="--output"||args[5]!="--budget-ms")throw new ArgumentException("--grid-repaint-probe --case cold-off|cold-on|matrix-prefix-off|matrix-prefix-on --output DIRECTORY --budget-ms 1..35000");
+        string name=args[2];if(Array.IndexOf(new[]{"cold-off","cold-on","matrix-prefix-off","matrix-prefix-on"},name)<0)throw new ArgumentException("Unknown diagnostic case");
+        int budget;if(!Int32.TryParse(args[6],out budget)||budget<1||budget>35000)throw new ArgumentException("Invalid diagnostic budget");
+        var probe=new GridProbe(name,args[4],budget);int exit=2;
+        try{
+            Mode("normal","ocean",true,"grid");using(var fixture=new Fixture()){
+                probe.Budget();var owner=fixture.Owner;owner.GenericReady=true;owner.NativeMousePresent=true;owner.Headset=null;owner.Audio=null;owner.Dpi=Dpi(8);
+                var devices=new List<WirelessDevice>();for(int i=0;i<4;i++){var device=GridDevice(i,8);device.Id="device-"+i.ToString().PadLeft(24,'0');device.Provider="logitech";device.SourceQuality="verified";device.MeasurementState="measured";device.Dpi.StageSource="onboard";devices.Add(device);}owner.WirelessDevices=devices.ToArray();
+                typeof(TrayContext).GetField("nativeNeedsReconcile",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(owner,false);
+                var layout=WirelessLayout.Build(owner,0,520);bool capture=name.EndsWith("-on",StringComparison.Ordinal);
+                if(name.StartsWith("cold-",StringComparison.Ordinal))GridProbeCold(probe,owner,layout,capture);else GridProbeMatrixPrefix(probe,owner,layout,capture);
+            }
+            probe.Budget();probe.Result.Status="not_reproduced";exit=0;
+        }catch(GridProbeMismatch error){probe.Result.Status="difference";probe.Result.Error=error.Message;exit=1;}
+        catch(TimeoutException error){probe.Result.Status="timeout";probe.Result.Error=error.Message;exit=124;}
+        catch(Exception error){probe.Result.Status="error";probe.Result.Error=error.ToString();exit=2;}
+        finally{probe.Save();Console.WriteLine("GRID_PROBE_RESULT case="+name+" status="+probe.Result.Status+" frames="+probe.Result.Frames.Count+" elapsedMs="+probe.Result.ElapsedMs.ToString("F1",CultureInfo.InvariantCulture));}
+        return exit;
     }
     static void GridOverflowViewportMatrix(){
         foreach(string font in new[]{"normal","large"})foreach(bool native in new[]{false,true})foreach(bool audio in new[]{false,true})foreach(bool collapsed in new[]{false,true}){
@@ -735,6 +894,7 @@ static class PanelDesignTests {
         }
     }
     [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{
+        if(args.Length>0&&args[0]=="--grid-repaint-probe")return GridRepaintProbe(args);
         if(args.Length==1&&args[0]=="--grid-repaint"){
             Run("150% native light first-frame, same-layout redraw and rebuilt offsets",GridRepaintIdentity);return failures==0?0:1;
         }
