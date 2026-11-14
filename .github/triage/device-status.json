@@ -23,7 +23,8 @@
       "rank": 11
     },
     "3554:F503": {
-      "status": "no-evidence",
+      "status": "researching",
+      "note": "用户已提供17字节电量样本；候选读取待发布及实机验证",
       "reports": 7,
       "rank": 8
     },

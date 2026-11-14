@@ -65,6 +65,10 @@ HITSCAN_SHAPE = [
 CRAZYLIGHT_DONGLE = bytes.fromhex("08 04 00 00 00 02 14 00 0d ea 00 00 00 00 00 00 3c")
 CRAZYLIGHT_CABLE = bytes.fromhex("08 04 00 00 00 02 19 01 0e 52 00 00 00 00 00 00 cd")
 
+# User-supplied 95% reply, not a maintainer hardware test. Source: Issue #592,
+# snapshotted in .ai/evidence/vgn-f503-1114i/issue-592-evidence.md.
+ISSUE592_F503_REPLY = bytes.fromhex("08 04 00 00 00 02 5F 00 10 05 00 00 00 00 00 00 D3")
+
 
 def reply(level, power=0, mv=0, command=P.CMD_POWER, header=P.PAYLOAD_HEADER,
           break_checksum=False):
@@ -219,6 +223,92 @@ def diagnostic_hid(infos, script):
             raise AssertionError(f"HID trace changed: {bus.calls!r}")
         if bus.pending:
             raise AssertionError(f"missing HID calls: {bus.pending!r}")
+
+
+class VgnF503EvidenceTests(unittest.TestCase):
+    def setUp(self):
+        # Only the ID, product string, interface and FF02:0002/output=17 are
+        # reported facts; paths and per-report maps in this fake are synthetic.
+        self.info = diagnostic_info(pid=0xF503, product_string="VGN Mouse 2.4G Receiver")
+
+    def test_issue592_f503_capture_reads_only_the_existing_power_query(self):
+        self.assertEqual(len(ISSUE592_F503_REPLY), 17)
+        self.assertEqual(sum(ISSUE592_F503_REPLY) & 0xFF, 0x55)
+        self.assertEqual(P.parse_power(ISSUE592_F503_REPLY), (95, False))
+        self.assertEqual(tuple(P.make_request()), POWER_REQUEST)
+        script = length_calls(self.info, 17, 17) + battery_calls(self.info, [ISSUE592_F503_REPLY], True)
+        with diagnostic_hid([self.info], script):
+            provider = P.PulsarProvider()
+            status, = provider.poll()
+        self.assertEqual((status.key, status.name, status.level, status.charging, status.online, status.kind),
+                         ("pulsar:3554f503", "VGN Mouse 2.4G Receiver", 95, False, True, "mouse"))
+        self.assertEqual((status.dpi, status.dpi_target), (None, None))
+        self.assertEqual(provider.reader_diagnostics(), ["valid battery reply"])
+        self.assertIn("待实机验证", " ".join(provider.diagnostics()))
+
+    def test_issue592_f503_unproven_reports_and_siblings_never_open(self):
+        sibling = dict(self.info, path=b"PRIVATE-SIBLING", usage_page=0xFF04)
+        for length in (None, 0, 16, 18, 64):
+            with self.subTest(length=length), \
+                    diagnostic_hid([sibling, self.info], length_calls(self.info, length)):
+                provider = P.PulsarProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(provider.reader_diagnostics(), ["output=17 unproven; nothing sent"])
+        for page, usage in ((0xFF02, 1), (0xFF04, 2), (0xFF05, 0), (0xFF05, 2), (1, 2)):
+            wrong = dict(self.info, usage_page=page, usage=usage)
+            with self.subTest(collection=(page, usage)), diagnostic_hid([wrong], []):
+                provider = P.PulsarProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(provider.reader_diagnostics(), ["FF02:0002 missing; nothing sent"])
+
+    def test_issue592_f503_invalid_replies_and_sleep_events_give_no_reading(self):
+        damaged = bytearray(ISSUE592_F503_REPLY)
+        damaged[-1] ^= 1
+        # The exact 08 03 event payload is not supplied; full event frames here
+        # are synthetic, including a plausible but unrelated percentage.
+        cases = [[], [ISSUE592_F503_REPLY[:-1]], [bytes(damaged)], [reply(101)], [reply(255)],
+                 [reply(95, header=7)], [b"\x08\x03"], [reply(100, command=0x03)]]
+        for frames in cases:
+            script = length_calls(self.info, 17, 17) + battery_calls(self.info, frames)
+            with self.subTest(frames=frames), diagnostic_hid([self.info], script):
+                provider = P.PulsarProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(provider.reader_diagnostics(), ["no valid battery reply; connection unknown"])
+
+    def test_issue592_f503_existing_percentage_boundaries_remain_valid(self):
+        # Synthetic endpoint values; Issue #592 supplied only the 95% capture.
+        for level in (0, 100):
+            script = length_calls(self.info, 17, 17) + battery_calls(self.info, [reply(level)], True)
+            with self.subTest(level=level), diagnostic_hid([self.info], script):
+                status, = P.PulsarProvider().poll()
+                self.assertEqual((status.level, status.online), (level, True))
+
+    def test_issue592_f503_sleep_keeps_history_and_wake_skips_events(self):
+        provider = P.PulsarProvider()
+        script = length_calls(self.info, 17, 17) + battery_calls(self.info, [ISSUE592_F503_REPLY], True)
+        with diagnostic_hid([self.info], script):
+            fresh, = provider.poll()
+        self.assertTrue(fresh.online)
+        history = dict(provider._last)
+        for frames in ([], [b"\x08\x03"], [reply(100, command=0x03)]):
+            script = length_calls(self.info, 17, 17) + battery_calls(self.info, frames)
+            with self.subTest(frames=frames), diagnostic_hid([self.info], script):
+                stale, = provider.poll()
+                self.assertEqual((stale.level, stale.charging, stale.online, stale.wake_on_input),
+                                 (95, False, False, True))
+                self.assertEqual(provider._last, history)
+        frames = [reply(100, command=0x03), ISSUE592_F503_REPLY]
+        script = length_calls(self.info, 17, 17) + battery_calls(self.info, frames, True)
+        with diagnostic_hid([self.info], script):
+            awake, = provider.poll()
+        self.assertEqual((awake.level, awake.charging, awake.online, awake.wake_on_input),
+                         (95, False, True, False))
+        self.assertEqual(provider.reader_diagnostics(), ["valid battery reply"])
+
+    def test_issue592_f503_does_not_admit_neighboring_3554_pids(self):
+        for pid in (0xF502, 0xF504):
+            with self.subTest(pid=pid), diagnostic_hid([dict(self.info, product_id=pid)], []):
+                self.assertEqual(P.PulsarProvider().poll(), [])
 
 
 class PulsarDiagnosticTests(unittest.TestCase):
@@ -555,7 +645,7 @@ class PulsarTest(unittest.TestCase):
                     # Newly admitted CompX IDs require descriptor evidence; legacy models still
                     # exercise the established unknown-length allowance here.
                     strict = (vid, pid) in ((0x3554, 0xF517), (0x3554, 0xFB56),
-                                            (0x3554, 0xF58E), (0x3554, 0xF505))
+                                            (0x3554, 0xF58E), (0x3554, 0xF505), (0x3554, 0xF503))
                     length = 17 if strict else None
                     P.output_length = lambda path: length
                     P.hidlist = types.SimpleNamespace(enumerate=bus.enumerate)
