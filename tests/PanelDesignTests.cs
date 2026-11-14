@@ -19,7 +19,176 @@ static class PanelDesignTests {
     const BindingFlags Static=BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic;
     static int checks,failures;
     static void Check(bool value,string message){if(!value)throw new Exception(message);checks++;}
-    static void Run(string name,Action test){try{test();Console.WriteLine("PASS "+name);}catch(Exception error){failures++;Console.Error.WriteLine("FAIL "+name+": "+(error.InnerException??error).Message);}}
+    static void Run(string name,Action test){try{test();Console.WriteLine("PASS "+name);}catch(Exception error){failures++;Console.Error.WriteLine("FAIL "+name+": "+(error.InnerException??error));}}
+    static void NativeLabel(Graphics g,string text,RectangleF rect,float size,bool bold,Color color,StringAlignment align,StringTrimming trimming,bool wrap=false){
+        string family=wrap?"Microsoft YaHei UI":"Segoe UI";foreach(char c in text)if(c>=0x2e80&&c<=0x9fff){family="Microsoft YaHei UI";break;}
+        g.PixelOffsetMode=PixelOffsetMode.Default;if(g.TextRenderingHint==System.Drawing.Text.TextRenderingHint.SystemDefault)g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        using(var font=new Font(family,size,bold?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))
+        using(var brush=new SolidBrush(color))using(var format=new StringFormat {Alignment=align,LineAlignment=StringAlignment.Center,Trimming=trimming,FormatFlags=wrap?0:StringFormatFlags.NoWrap})g.DrawString(text,font,brush,rect,format);
+    }
+    static void TextNativeExperiments(string output){
+        Directory.CreateDirectory(output);var clock=System.Diagnostics.Stopwatch.StartNew();var lines=new List<string>();
+        Mode("normal","ocean",true,"grid");VisualDesign.HighContrastOverride=false;
+        // Experiment 1: retain every first frame; GC is a controlled intervention,
+        // not evidence that GC caused the recorded CI transition.
+        using(var fixture=new Fixture()){
+            var owner=fixture.Owner;owner.GenericReady=true;owner.NativeMousePresent=true;owner.Headset=null;owner.Audio=null;owner.Dpi=Dpi(8);
+            var devices=new List<WirelessDevice>();for(int i=0;i<4;i++)devices.Add(GridDevice(i,8));owner.WirelessDevices=devices.ToArray();
+            var layout=WirelessLayout.Build(owner,0,520);int[] gc={GC.CollectionCount(0),GC.CollectionCount(1),GC.CollectionCount(2)};
+            int paints=0;var old=CompactRenderer.TextRasterObserver;
+            CompactRenderer.TextRasterObserver=delegate(string stage,Graphics g,string text,RectangleF rect,Font font,Color color,StringFormat format){if(stage=="paint-label")paints++;};
+            try{using(var first=RenderGrid(owner,layout,false,1.5f,new PanelFeedback())){
+                first.Save(Path.Combine(output,"lifecycle-first.png"));
+                for(int i=0;i<16;i++){
+                    if(i==7){GC.Collect();GC.WaitForPendingFinalizers();GC.Collect();}
+                    using(var next=RenderGrid(owner,WirelessLayout.Build(owner,0,520),false,1.5f,new PanelFeedback())){
+                        next.Save(Path.Combine(output,"lifecycle-"+i.ToString("D2")+".png"));lines.Add("lifecycle "+i+" same="+!Different(first,next));
+                    }
+                }
+            }}finally{CompactRenderer.TextRasterObserver=old;}
+            lines.Add("nativePaints="+paints+" GC delta="+(GC.CollectionCount(0)-gc[0])+"/"+(GC.CollectionCount(1)-gc[1])+"/"+(GC.CollectionCount(2)-gc[2]));
+        }
+        // Experiment 2: transparent local raster -> integer device-space blit,
+        // versus untouched DrawString, including a nonrectangular active clip.
+        int comparisons=0,differences=0;
+        foreach(float scale in new[]{1f,1.25f,1.5f,2f})foreach(Color background in new[]{Color.Transparent,Color.White,Color.FromArgb(255,27,36,48)})foreach(bool clipped in new[]{false,true}){
+            string id="sprite-"+comparisons;var rect=new RectangleF(11,55,104,18);var color=Color.FromArgb(95,107,124);
+            using(var direct=new Bitmap(320,220,PixelFormat.Format32bppPArgb))using(var replay=new Bitmap(320,220,PixelFormat.Format32bppPArgb)){
+                for(int step=0;step<2;step++)using(var g=Graphics.FromImage(step==0?direct:replay)){
+                    g.Clear(background);g.ScaleTransform(scale,scale);g.TranslateTransform(.25f,.5f);g.SmoothingMode=SmoothingMode.AntiAlias;
+                    if(clipped)using(var path=new GraphicsPath()){path.AddEllipse(12,52,95,22);g.SetClip(path);}
+                    if(step==0)NativeLabel(g,"ATK A9 Air+",rect,11,false,color,StringAlignment.Near,StringTrimming.EllipsisCharacter);
+                    else{
+                        float x=rect.X*scale+.25f*scale,y=rect.Y*scale+.5f*scale;int left=(int)Math.Floor(x)-4,top=(int)Math.Floor(y)-4;
+                        using(var sprite=new Bitmap((int)Math.Ceiling(rect.Width*scale)+9,(int)Math.Ceiling(rect.Height*scale)+9,PixelFormat.Format32bppPArgb)){
+                            using(var drawing=Graphics.FromImage(sprite)){drawing.ScaleTransform(scale,scale);drawing.TranslateTransform(.25f-left/scale,.5f-top/scale);NativeLabel(drawing,"ATK A9 Air+",rect,11,false,color,StringAlignment.Near,StringTrimming.EllipsisCharacter);}
+                            g.ResetTransform();g.DrawImageUnscaled(sprite,left,top);
+                        }
+                    }
+                }
+                bool same=!Different(direct,replay);if(!same)differences++;lines.Add(id+" scale="+scale+" background="+background.ToArgb()+" clip="+clipped+" same="+same);
+                direct.Save(Path.Combine(output,id+"-native.png"));replay.Save(Path.Combine(output,id+"-replay.png"));comparisons++;
+            }
+        }
+        lines.Add("sprite comparisons="+comparisons+" differences="+differences+" elapsedMs="+clock.ElapsedMilliseconds);
+        File.WriteAllLines(Path.Combine(output,"native-experiments.txt"),lines.ToArray());foreach(var line in lines)Console.WriteLine(line);
+    }
+    static void TextRasterReuseContract(){
+        LabelRasterCache.Clear();
+        int draws=0;var old=CompactRenderer.TextRasterObserver;
+        CompactRenderer.TextRasterObserver=delegate(string stage,Graphics g,string text,RectangleF rect,Font font,Color color,StringFormat format){draws++;};
+        try{using(var first=new Bitmap(240,100,PixelFormat.Format32bppPArgb))using(var second=new Bitmap(240,100,PixelFormat.Format32bppPArgb)){
+            for(int i=0;i<2;i++)using(var g=Graphics.FromImage(i==0?first:second)){
+                g.ScaleTransform(1.5f,1.5f);CompactRenderer.DrawLabel(g,"reuse-contract-ATK",new RectangleF(11,12,130,20),11,false,Color.FromArgb(95,107,124),StringAlignment.Near);
+                if(i==0)Check(draws==1,"contract first frame performs one native text raster");
+            }
+            Check(draws==1,"same complete text input must reuse its first native raster, not call DrawString again (actual="+draws+")");
+            Check(!Different(first,second),"raster reuse preserves the first frame byte for byte");
+        }}finally{CompactRenderer.TextRasterObserver=old;}
+    }
+    sealed class TextInput {
+        internal string Text="ATK A9 Air+";
+        internal RectangleF Rect=new RectangleF(11,20,140,40);
+        internal float Size=11,Scale=1,DpiX=96,DpiY=96,X,Y;
+        internal bool Bold,Wrap,HighContrast;
+        internal int Clip,Contrast=4;
+        internal Color Color=Color.FromArgb(95,107,124),Background=Color.Transparent;
+        internal StringAlignment Align=StringAlignment.Near;
+        internal StringTrimming Trimming=StringTrimming.EllipsisCharacter;
+        internal System.Drawing.Text.TextRenderingHint Hint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        internal int NativeContext;
+        internal TextInput Copy(){return (TextInput)MemberwiseClone();}
+    }
+    static Bitmap TextImage(TextInput input,bool native){
+        var image=new Bitmap(480,240,PixelFormat.Format32bppPArgb);image.SetResolution(input.DpiX,input.DpiY);
+        try{using(var g=Graphics.FromImage(image)){
+            g.Clear(input.Background);g.ScaleTransform(input.Scale,input.Scale);g.TranslateTransform(input.X,input.Y);
+            g.SmoothingMode=SmoothingMode.AntiAlias;g.TextRenderingHint=input.Hint;g.TextContrast=input.Contrast;
+            if(input.NativeContext==1)g.RotateTransform(12);
+            if(input.NativeContext==2)g.CompositingMode=CompositingMode.SourceCopy;
+            if(input.NativeContext==3)g.CompositingQuality=CompositingQuality.GammaCorrected;
+            if(input.NativeContext==4)g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            if(input.NativeContext==5){g.PageUnit=GraphicsUnit.Point;g.PageScale=1.1f;}
+            if(input.Clip==1)g.SetClip(new RectangleF(17,22,64,22));
+            if(input.Clip==2)using(var path=new GraphicsPath()){path.AddEllipse(12,18,110,36);path.AddRectangle(new RectangleF(35,25,14,8));g.SetClip(path);}
+            VisualDesign.HighContrastOverride=input.HighContrast;
+            string before=GridGraphicsInput(g);
+            if(native)NativeLabel(g,input.Text,input.Rect,input.Size,input.Bold,input.Color,input.Align,input.Trimming,input.Wrap);
+            else if(input.Wrap)CompactRenderer.DrawWrappedLabel(g,input.Text,input.Rect,input.Size,input.Color);
+            else CompactRenderer.DrawLabel(g,input.Text,input.Rect,input.Size,input.Bold,input.Color,input.Align,input.Trimming);
+            if(!native)Check(before==GridGraphicsInput(g),"text replay restores transform, clip and all Graphics settings");
+        }return image;}catch{image.Dispose();throw;}
+    }
+    static void TextRasterInputs(){
+        LabelRasterCache.Clear();var inputs=new List<TextInput>();var basic=new TextInput();inputs.Add(basic);
+        for(int i=0;i<24;i++){
+            var c=basic.Copy();switch(i){
+                case 0:c.Text="ATK A9 Air++";break;case 1:c.Text="设备 ATK A9";break;case 2:c.Bold=true;break;case 3:c.Size=12;break;
+                case 4:c.Color=Color.FromArgb(25,109,230);break;case 5:c.Color=Color.FromArgb(127,95,107,124);break;
+                case 6:c.Scale=1.25f;break;case 7:c.Scale=1.5f;break;case 8:c.Scale=2;break;
+                case 9:c.DpiX=c.DpiY=120;break;case 10:c.DpiX=144;c.DpiY=120;break;
+                case 11:c.X=1;break;case 12:c.X=.25f;break;case 13:c.Y=.5f;break;
+                case 14:c.Clip=1;break;case 15:c.Clip=2;break;case 16:c.Contrast=0;break;
+                case 17:c.Hint=System.Drawing.Text.TextRenderingHint.AntiAlias;break;
+                case 18:c.Align=StringAlignment.Far;break;case 19:c.Trimming=StringTrimming.None;break;
+                case 20:c.Wrap=true;c.Trimming=StringTrimming.None;c.Text="Wrapped ASCII and 中文文字\nsecond line";break;
+                case 21:c.Size=15;break;case 22:c.HighContrast=true;break;
+                case 23:c.Rect=new RectangleF(11,20,45,20);break;
+            }inputs.Add(c);
+        }
+        foreach(float scale in new[]{1.25f,1.5f,2f}){
+            var c=basic.Copy();c.Scale=scale;c.DpiX=c.DpiY=144;c.X=.25f;c.Y=.5f;c.Clip=2;c.Color=Color.FromArgb(170,95,107,124);c.Background=Color.FromArgb(180,27,36,48);
+            c.Text="设备 ATK A9 Air+";c.Bold=true;inputs.Add(c);
+        }
+        int draws=0;var old=CompactRenderer.TextRasterObserver;
+        CompactRenderer.TextRasterObserver=delegate(string stage,Graphics g,string text,RectangleF rect,Font font,Color color,StringFormat format){draws++;};
+        try{
+            for(int i=0;i<inputs.Count;i++){
+                var c=inputs[i];int before=draws;
+                using(var native=TextImage(c,true))using(var first=TextImage(c,false))using(var second=TextImage(c,false)){
+                    Check(draws==before+1,"changed complete input creates exactly one native raster: "+i);
+                    Check(!Different(native,first),"first cached text equals direct native pixels: "+i);
+                    Check(!Different(first,second),"repeat text equals the retained first raster: "+i);
+                }
+            }
+            // Background is not retained in the sprite; the current destination
+            // must still compose correctly without another native text draw.
+            int saved=draws;foreach(Color background in new[]{Color.White,Color.FromArgb(255,27,36,48),Color.FromArgb(128,40,70,100)}){
+                var c=basic.Copy();c.Background=background;
+                using(var native=TextImage(c,true))using(var cached=TextImage(c,false))Check(!Different(native,cached),"text composes with the current background");
+            }Check(draws==saved,"background pixels are never part of or replayed from the text cache");
+            for(int i=1;i<=5;i++){
+                var c=basic.Copy();c.NativeContext=i;int before=draws,count=LabelRasterCache.Count;
+                using(var native=TextImage(c,true))using(var first=TextImage(c,false))using(var second=TextImage(c,false)){
+                    Check(!Different(native,first)&&!Different(first,second),"unsupported context preserves direct native drawing: "+i);
+                    Check(draws==before+2&&LabelRasterCache.Count==count,"unsupported context is not cached: "+i);
+                }
+            }
+        }finally{CompactRenderer.TextRasterObserver=old;VisualDesign.HighContrastOverride=false;LabelRasterCache.Clear();}
+    }
+    static List<Bitmap> CachedTextImages(){
+        var result=new List<Bitmap>();var items=(System.Collections.IEnumerable)typeof(LabelRasterCache).GetField("recent",Static).GetValue(null);
+        foreach(var item in items)result.Add((Bitmap)item.GetType().GetField("Image",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(item));return result;
+    }
+    static bool ImageDisposed(Bitmap image){try{image.GetPixel(0,0);return false;}catch(ArgumentException){return true;}catch(ObjectDisposedException){return true;}}
+    static void TextRasterResources(){
+        LabelRasterCache.Clear();try{
+            using(var image=new Bitmap(100,80,PixelFormat.Format32bppPArgb))using(var g=Graphics.FromImage(image)){
+                var rect=new RectangleF(0,0,80,20);Action<string> draw=delegate(string text){CompactRenderer.DrawLabel(g,text,rect,11,false,Color.Black,StringAlignment.Near);};
+                draw("retained");draw("evicted");Bitmap oldest=CachedTextImages()[0];draw("retained");
+                for(int i=0;i<LabelRasterCache.Capacity-1;i++)draw("entry-"+i);
+                Check(LabelRasterCache.Count==LabelRasterCache.Capacity&&LabelRasterCache.Bytes<=LabelRasterCache.ByteLimit,"LRU enforces its entry and byte limits");
+                Check(ImageDisposed(oldest),"entry eviction disposes its native bitmap immediately");
+                var retained=CachedTextImages();LabelRasterCache.Clear();
+                foreach(var bitmap in retained)Check(ImageDisposed(bitmap),"explicit cache cleanup disposes every retained bitmap");
+                Check(LabelRasterCache.Count==0&&LabelRasterCache.Bytes==0,"cache cleanup releases entries and accounting");
+                rect=new RectangleF(0,0,800,160);for(int i=0;i<24;i++)draw("byte-budget-"+i);
+                Check(LabelRasterCache.Count<24&&LabelRasterCache.Bytes<=LabelRasterCache.ByteLimit,"byte budget evicts before the entry limit");
+                int count=LabelRasterCache.Count;long bytes=LabelRasterCache.Bytes;rect=new RectangleF(0,0,2000,400);draw("uncached oversize text");
+                Check(LabelRasterCache.Count==count&&LabelRasterCache.Bytes==bytes,"oversize labels use the native fallback without a retained allocation");
+            }
+        }finally{LabelRasterCache.Clear();}
+    }
     static object Geometry(string name,params object[] args){var method=typeof(VisualDesign).GetMethod(name,Static);Check(method!=null,"shared geometry exists: "+name);return method.Invoke(null,args);}
     static RectangleF Rect(string name,params object[] args){return (RectangleF)Geometry(name,args);}
     static Color Role(ThemePalette palette,string name){var property=typeof(ThemePalette).GetProperty(name,BindingFlags.Instance|BindingFlags.NonPublic);Check(property!=null,"palette role exists: "+name);return (Color)property.GetValue(palette,null);}
@@ -894,6 +1063,10 @@ static class PanelDesignTests {
         }
     }
     [STAThread] static int Main(string[] args){var previous=DeviceSettings.Current;try{
+        if(args.Length==2&&args[0]=="--text-native-experiments"){TextNativeExperiments(args[1]);return 0;}
+        if(args.Length==1&&args[0]=="--text-raster"){
+            Run("text raster reuse contract",TextRasterReuseContract);Run("text raster complete inputs and native pixel equality",TextRasterInputs);Run("text raster bounded resources and disposal",TextRasterResources);return failures==0?0:1;
+        }
         if(args.Length>0&&args[0]=="--grid-repaint-probe")return GridRepaintProbe(args);
         if(args.Length==1&&args[0]=="--grid-repaint"){
             Run("150% native light first-frame, same-layout redraw and rebuilt offsets",GridRepaintIdentity);return failures==0?0:1;
@@ -912,6 +1085,7 @@ static class PanelDesignTests {
         Run("grid overflow 520px, five mice x eight stages, large",delegate{GridOverflowHeight("large");});
         Run("grid overflow viewport, clipping, fixed volume and scale matrix",GridOverflowViewportMatrix);
         Run("150% native light first-frame, same-layout redraw and rebuilt offsets",GridRepaintIdentity);
+        Run("text raster reuse contract",TextRasterReuseContract);Run("text raster complete inputs and native pixel equality",TextRasterInputs);Run("text raster bounded resources and disposal",TextRasterResources);
         if(args.Length==1&&args[0]=="--grid-overflow")return failures==0?0:1;
         Run("grid dispatch, two-column tiles and fixed quick controls",GridBasics);
         Run("grid 1..5 devices, whole-row paging and fixed controls",GridCountsAndPaging);Run("grid all-device control groups and hidden devices",GridGroupsAndHidden);

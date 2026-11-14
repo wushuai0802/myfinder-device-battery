@@ -71,7 +71,7 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
   grid-repaint-diagnostic:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/grid-glyph-order-1114v'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/grid-glyph-state-fix-1114x'
     runs-on: windows-latest
     timeout-minutes: 8
     steps:

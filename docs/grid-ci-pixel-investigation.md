@@ -1,6 +1,37 @@
 # Grid CI 像素调查
 
-当前交付是 **1114v 进程顺序对照，尚无产品修复**，基线为 `695d36972ebcd5826b0118aff421fa89e11b382a`。仅改独立 PowerShell 诊断脚本、实验 job 和本文；C# 绘制、PanelDesignTests、原矩阵／零容差断言、engine 与版本均未改。下文 1114t／1114p 保留为历史记录，其分支和命令不代表本轮 CI 配置。
+当前交付是 **1114x 有界文字栅格复用候选，远端 CI 待主管验证**，基线 `f40ae27be98a94a40099c83ccf2f79a9ee631d40`。产品修复仅需 `CompactRenderer.cs` 中的局部文字缓存及两个文字入口；新测试、实验 job 分支条件和本文用于验证。原矩阵、首帧、完整像素区域和零容差断言保留。下文 1114v／1114t／1114p 是历史记录，不能将全部诊断改动作为直接发布范围。
+
+## 1114x：同进程真实 red 与应用层防护
+
+真实 CI `43581625733` 在同进程 7192 的第 1/15 帧产生 12 点差异；名称的六点与旧失败相同，另六点属于同名 DPI 标题。原始 `result.json`、完整左右 PNG 与差异位于 `.ai/evidence/grid-ci-43581625733/01-cold-on/`，评审见 `.ai/evidence/grid-glyph-state-fix-1114x/coordinator-review.md`。本轮只读这些证据，未运行其中 EXE。现场对照名称 paint 事件，去序号后完全相同；`relativeInk` 同为 `[1.66666663,5,56,8]`，第 2–14 帧也已通过，故 measurement miss/hit 不能单独定因。
+
+`InteractionLayout.Paint` 在空 clip 下测量，再恢复 Graphics、平移绘制。`LabelBounds` 仅缓存相对 ink 矩形；实际 paint 每次新建并释放 Font、brush、format，再调用 DrawString。测量 Bitmap/Graphics 也在 using 中释放，没有可复用的实际文字栅格。FontFamily 属性属于 Font 所持有的包装对象，不单独释放。没有证据证明 GC、Font.Dispose 或 Windows kernel 缓存是原故障根因。
+
+仅两项 native 实验，共 **4.003 秒**（编译加执行 6.74 秒），原首帧和所有 PNG 保留于 `tmp/x0/native/`：受控 GC 前后 16 次完整重绘均相同，GC 各代增量 2/2/2；24 组局部文字位图回放与直接 DrawString 在 1/1.25/1.5/2、透明/浅色/深色背景及非矩形 clip 下零差异。这支持回放路径的像素兼容性，没有在本地复现 CI 字形 red。
+
+候选只保留透明文字位图，不含卡片或背景；首次实际 native 栅格直接参与显示，命中后整数设备坐标回放，当前 clip、底图及 Graphics 状态仍有效。key 覆盖实际字体/样式/大小/字符集、文字/格式、颜色、DPI、矩阵/分数原点、clip、hint/contrast、合成等 Graphics 状态、文化和高对比度。容量 **256 项**，像素及键开销预算 **8 MiB**、单项 **1 MiB**；LRU 淘汰、清空及进程退出均 Dispose Bitmap，临时 Graphics/brush/font 仍按 using 释放。旋转、ClearType、SourceCopy、特殊 page/compositor 和超额输入走原 native 路径。
+
+修复切断的是“驻留条目的相同完整输入再次调用 native DrawString，重新生成不同覆盖率”这条已观察失稳路径；不改变现有测量/布局、字体选择、字号、hint、颜色、provider 或 DPI 控制。缓存淘汰后的重新生成、跨进程首帧和 fallback 不保证字形统一，不能将它表述为 Windows 内部根因已查清。
+
+回归契约修改前已编译运行，`tmp/x0/contract-red.log` 为 **exit 1 / actual=2**，不是编译失败或注入像素；改后要求相同输入仅一次 native 栅格。另验证 28 组完整输入首次/命中与直接 native 像素相等、背景实时合成、五种 fallback、Graphics 状态恢复，以及容量/内存淘汰和每张 Bitmap 的立即释放。这是机制 red/green，与上面的真实 CI red 分开。
+
+本轮验证命令及结果（原检查顺序不变，新契约在原 grid 首帧检查之后）：
+
+```powershell
+& ./.ai/orchestration/Verify-GridPixel1114p.ps1 -Root . -OutputDirectory ./tmp/xf
+& ./.ai/orchestration/Verify-GridPixel1114p.ps1 -Root . -OutputDirectory ./tmp/xa -FullPanel
+& ./tests/Run-Performance.ps1 -OutputDirectory ./tmp/xp
+& ./tests/Run-GridPixelDiagnostic.ps1 -OutputDirectory ./tmp/xd -TimeoutSeconds 180 -CasePlan order-control
+```
+
+聚焦严格矩阵 **exit 0 / 24.365 秒**；FullPanel **exit 0 / 51.263 秒 / 140251 checks / 0 failed groups**，覆盖 ring/bar/grid、normal/large、light/dark、原五档 DPI/高对比度矩阵。日志 `tmp/x3/focused.log`、`tmp/xf/full-panel.log`。
+
+性能入口仅运行一次，**exit 0 / 3.745 秒 / 563 lifecycle checks**：100 次隐藏开关、20 次拓扑切换、160 次实际绘制，106 个 popup 全部可回收。六次资源采样 GDI=20、USER=20、handles=337；托管存活字节首尾 1879656→1882160，private bytes 33116160→36626432（约 +3.35 MiB），不是零分配或长期无泄漏证明。draw P50/P95=1.918/2.805 ms，未做修改前性能基准，不声称加速。记录 `tmp/xp/interaction-performance.{json,csv}`、`tmp/xf/performance.log`；本次未请求动画。
+
+order-control 仅运行一次，**exit 0 / 5.451 秒**，四进程各 32 帧/39 比较，共 **128 帧/156 比较**；六组跨进程首帧均输入相同、全图零差异。四个原始首帧行 SHA256 均为 `4C0EA413498DDFC163F6B62F8257980059AEF3E7E727329A79BC9D166BC33333`，与真实 CI 左图一致。首个 cold-on 第 1 帧有两个名称 native 栅格事件，第 15 帧为零，像素保持首帧：实际切断了重复 native 绘制路径，没有用后帧替换首帧。记录 `tmp/xd/{summary,first-frame-comparison}.json` 及各 case 的 `first.png/result.json`，原失败证据完整保留。本地结论仍为 **not_reproduced**，不冒充改后真实 CI green。
+
+实验 CI 只将分支条件改为 `refs/heads/codex/grid-glyph-state-fix-1114x`，order-control 的四个新进程、原始首帧与六个跨进程全图比较均保留。没有运行 Build.ps1、全 Python、硬件或可见原生 UI 验收，也未提交/推送/合并/切分支。唯一待接续动作是主管在准确提交运行原 CI：分别审查同进程与跨进程结果；任一真实差异仍保留为 red。
 
 ## 1114v：真实变体与顺序对照
 

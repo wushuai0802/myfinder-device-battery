@@ -3,6 +3,8 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
+using System.Collections.Generic;
+using System.Globalization;
 using AtkBattery;
 
 namespace AtkBatteryTray {
@@ -12,6 +14,86 @@ namespace AtkBatteryTray {
         internal float FontSize;
         internal bool Bold;
         internal StringAlignment Alignment;
+    }
+    // Retain only local, transparent text rasters, never card/frame pixels. Replaying
+    // the first raster removes the repeated native DrawString path observed changing
+    // glyph coverage with identical inputs; it does not identify a Windows cause.
+    internal static class LabelRasterCache {
+        internal const int Capacity=256;
+        internal const long ByteLimit=8*1024*1024,EntryByteLimit=1024*1024;
+        sealed class Entry {
+            internal string Key;
+            internal Bitmap Image;
+            internal long Bytes;
+        }
+        static readonly object gate=new object();
+        static readonly Dictionary<string,LinkedListNode<Entry>> entries=new Dictionary<string,LinkedListNode<Entry>>();
+        static readonly LinkedList<Entry> recent=new LinkedList<Entry>();
+        static long bytes;
+        static LabelRasterCache(){AppDomain.CurrentDomain.ProcessExit+=delegate{Clear();};AppDomain.CurrentDomain.DomainUnload+=delegate{Clear();};}
+        internal static int Count {get{lock(gate)return entries.Count;}}
+        internal static long Bytes {get{lock(gate)return bytes;}}
+        internal static void Clear(){lock(gate){foreach(var item in recent)item.Image.Dispose();recent.Clear();entries.Clear();bytes=0;}}
+        static string Number(float n){return n.ToString("R",CultureInfo.InvariantCulture);}
+        internal static bool Paint(string stage,Graphics g,string text,RectangleF rect,Font font,Color color,StringFormat format){
+            // These are the production panel's axis-aligned pixel contexts. Keep the
+            // original native path for transforms/compositors whose bitmap replay
+            // semantics differ (notably ClearType and SourceCopy).
+            if(String.IsNullOrEmpty(text))return true;
+            if(rect.Width<=0||rect.Height<=0||text.Length>4096||font.Unit!=GraphicsUnit.Pixel||
+                g.PageScale!=1||(g.PageUnit!=GraphicsUnit.Display&&g.PageUnit!=GraphicsUnit.Pixel)||
+                g.CompositingMode!=CompositingMode.SourceOver||g.CompositingQuality!=CompositingQuality.Default||
+                g.TextRenderingHint==TextRenderingHint.ClearTypeGridFit)return false;
+            using(var matrix=g.Transform){
+                var m=matrix.Elements;float sx=m[0],sy=m[3];
+                if(m[1]!=0||m[2]!=0||sx<=0||sy<=0)return false;
+                double x=(double)rect.X*sx+m[4],y=(double)rect.Y*sy+m[5];
+                double w=Math.Ceiling((double)rect.Width*sx)+9,h=Math.Ceiling((double)rect.Height*sy)+9;
+                if(Double.IsNaN(x)||Double.IsNaN(y)||Double.IsInfinity(x)||Double.IsInfinity(y)||
+                    x<Int32.MinValue+8.0||y<Int32.MinValue+8.0||x>Int32.MaxValue-8.0||y>Int32.MaxValue-8.0||w<1||h<1||w*h*4>EntryByteLimit)return false;
+                int left=(int)Math.Floor(x)-4,top=(int)Math.Floor(y)-4,width=(int)w,height=(int)h;
+                // Include all variable font/format/raster inputs. Integral origins
+                // and clip are included too; replay still uses the CURRENT clip.
+                byte[] clip;using(var region=g.Clip)clip=region.GetRegionData().Data;
+                if(clip.Length>4096)return false;
+                float firstTab;var tabs=format.GetTabStops(out firstTab);
+                // Font owns this FontFamily wrapper; disposing the property here
+                // would invalidate font.Name and the diagnostic observer.
+                string family=font.FontFamily.Name;
+                string key=String.Join("|",new[]{font.Name,family,Number(font.Size),font.Style.ToString(),font.Unit.ToString(),font.GdiCharSet.ToString(),font.GdiVerticalFont.ToString(),
+                    Number(rect.X),Number(rect.Y),Number(rect.Width),Number(rect.Height),String.Join(",",Array.ConvertAll(m,Number)),Number((float)(x-Math.Floor(x))),Number((float)(y-Math.Floor(y))),
+                    Number(g.DpiX),Number(g.DpiY),g.PageUnit.ToString(),Number(g.PageScale),g.RenderingOrigin.ToString(),g.TextRenderingHint.ToString(),g.TextContrast.ToString(),g.PixelOffsetMode.ToString(),g.SmoothingMode.ToString(),g.CompositingMode.ToString(),g.CompositingQuality.ToString(),g.InterpolationMode.ToString(),
+                    format.Alignment.ToString(),format.LineAlignment.ToString(),format.Trimming.ToString(),format.FormatFlags.ToString(),format.DigitSubstitutionLanguage.ToString(),format.DigitSubstitutionMethod.ToString(),format.HotkeyPrefix.ToString(),Number(firstTab),String.Join(",",Array.ConvertAll(tabs,Number)),
+                    color.ToArgb().ToString("X8"),VisualDesign.HighContrast.ToString(),CultureInfo.CurrentCulture.Name,CultureInfo.CurrentUICulture.Name,Convert.ToBase64String(clip),text});
+                long cost=(long)width*height*4+key.Length*2L+128;
+                if(cost>EntryByteLimit)return false;
+                lock(gate){
+                    LinkedListNode<Entry> node;
+                    if(entries.TryGetValue(key,out node)){recent.Remove(node);recent.AddFirst(node);}
+                    else{
+                        var image=new Bitmap(width,height,PixelFormat.Format32bppPArgb);
+                        try{
+                            image.SetResolution(g.DpiX,g.DpiY);
+                            using(var drawing=Graphics.FromImage(image))using(var transform=new Matrix(sx,0,0,sy,m[4]-left,m[5]-top))using(var brush=new SolidBrush(color)){
+                                drawing.PageUnit=g.PageUnit;drawing.PageScale=g.PageScale;drawing.RenderingOrigin=g.RenderingOrigin;
+                                drawing.TextRenderingHint=g.TextRenderingHint;drawing.TextContrast=g.TextContrast;drawing.PixelOffsetMode=g.PixelOffsetMode;
+                                drawing.SmoothingMode=g.SmoothingMode;drawing.CompositingMode=g.CompositingMode;drawing.CompositingQuality=g.CompositingQuality;drawing.InterpolationMode=g.InterpolationMode;drawing.Transform=transform;
+                                if(CompactRenderer.TextRasterObserver!=null)CompactRenderer.TextRasterObserver(stage,drawing,text,rect,font,color,format);
+                                drawing.DrawString(text,font,brush,rect,format);
+                            }
+                            while(entries.Count>=Capacity||bytes+cost>ByteLimit){var oldest=recent.Last;recent.RemoveLast();entries.Remove(oldest.Value.Key);bytes-=oldest.Value.Bytes;oldest.Value.Image.Dispose();}
+                            node=recent.AddFirst(new Entry {Key=key,Image=image,Bytes=cost});entries.Add(key,node);bytes+=cost;
+                        }catch{image.Dispose();throw;}
+                    }
+                    var state=g.Save();try{
+                        // ResetTransform leaves GDI+'s device clip in force. An
+                        // integer, unscaled blit does not resample the glyphs.
+                        g.ResetTransform();g.PixelOffsetMode=PixelOffsetMode.Default;g.DrawImageUnscaled(node.Value.Image,left,top);
+                    }finally{g.Restore(state);}
+                }
+                return true;
+            }
+        }
     }
     public static class CompactRenderer {
         internal static Action<RectangleF> InteractionOutlineObserver=null;
@@ -61,8 +143,10 @@ namespace AtkBatteryTray {
             using(var font=new Font(family,fontSize,bold?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))
             using(var brush=new SolidBrush(color))
             using(var format=new StringFormat {Alignment=align,LineAlignment=StringAlignment.Center,Trimming=trimming,FormatFlags=StringFormatFlags.NoWrap}){
-                if(TextRasterObserver!=null)TextRasterObserver("paint-label",g,text??"",rect,font,color,format);
-                g.DrawString(text??"",font,brush,rect,format);
+                if(!LabelRasterCache.Paint("paint-label",g,text??"",rect,font,color,format)){
+                    if(TextRasterObserver!=null)TextRasterObserver("paint-label",g,text??"",rect,font,color,format);
+                    g.DrawString(text??"",font,brush,rect,format);
+                }
             }
             } finally {g.PixelOffsetMode=previousOffset;g.TextRenderingHint=previousHint;}
         }
@@ -80,8 +164,10 @@ namespace AtkBatteryTray {
                 using(var font=new Font("Microsoft YaHei UI",fontSize,FontStyle.Regular,GraphicsUnit.Pixel))
                 using(var brush=new SolidBrush(color))
                 using(var format=new StringFormat {LineAlignment=StringAlignment.Center}){
-                    if(TextRasterObserver!=null)TextRasterObserver("paint-wrapped-label",g,text??"",rect,font,color,format);
-                    g.DrawString(text??"",font,brush,rect,format);
+                    if(!LabelRasterCache.Paint("paint-wrapped-label",g,text??"",rect,font,color,format)){
+                        if(TextRasterObserver!=null)TextRasterObserver("paint-wrapped-label",g,text??"",rect,font,color,format);
+                        g.DrawString(text??"",font,brush,rect,format);
+                    }
                 }
             } finally {g.PixelOffsetMode=previousOffset;g.TextRenderingHint=previousHint;}
         }
