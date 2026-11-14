@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$OutputDirectory,
-    [ValidateRange(1,180)][int]$TimeoutSeconds=180
+    [ValidateRange(1,180)][int]$TimeoutSeconds=180,
+    [ValidateSet('reference','order-control')][string]$CasePlan='reference'
 )
 $ErrorActionPreference='Stop'
 $clock=[Diagnostics.Stopwatch]::StartNew()
@@ -14,12 +15,15 @@ if(Test-Path -LiteralPath $output){
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $utf8=New-Object Text.UTF8Encoding($false)
 $launched=New-Object Collections.ArrayList
-$caseNames=@('cold-off','cold-on','matrix-prefix-off','matrix-prefix-on')
-$cases=@($caseNames | ForEach-Object {[ordered]@{case=$_;status='not_run';execution=$null;frames=0;comparisons=0;firstFrame=$null;finalFrameSha256=$null;evidenceError=$null}})
+$caseNames=if($CasePlan -eq 'order-control'){@('cold-on','cold-off','cold-off','cold-on')}else{@('cold-off','cold-on','matrix-prefix-off','matrix-prefix-on')}
+$cases=@(for($i=0;$i -lt $caseNames.Count;$i++){
+    $role=$caseNames[$i];$id=if($CasePlan -eq 'reference'){$role}else{'{0:d2}-{1}' -f ($i+1),$role}
+    [ordered]@{id=$id;case=$role;order=($i+1);status='not_run';execution=$null;frames=0;comparisons=0;firstFrame=$null;finalFrameSha256=$null;evidenceError=$null}
+})
 $summary=[ordered]@{
     schema=1;status='error';outcome='failed';exitCode=2;startedUtc=[DateTime]::UtcNow.ToString('o');elapsedMs=0
     timeoutSeconds=$TimeoutSeconds;maxColdProcesses=4;maxFramesPerProcess=32;maxProcessMilliseconds=35000
-    compile=$null;cases=$cases;error=$null
+    casePlan=$CasePlan;compile=$null;cases=$cases;crossProcess=[ordered]@{status='not_run';path=$null};error=$null
 }
 function Write-Json([string]$Path,$Value){[IO.File]::WriteAllText($Path,($Value | ConvertTo-Json -Depth 20),$utf8)}
 function Remaining-Milliseconds {
@@ -31,6 +35,123 @@ function File-Evidence([string]$Path){
         return [ordered]@{path=$Path;sha256=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash;status='available'}
     }
     return [ordered]@{path=$Path;sha256=$null;status='unavailable'}
+}
+function Compare-FirstFramePixels([string]$LeftPath,[string]$RightPath,[DateTime]$DeadlineUtc=[DateTime]::MaxValue){
+    # Read existing full PNGs only. No rendering, font initialization, cropping or tolerance.
+    Add-Type -AssemblyName System.Drawing
+    $left=$null;$right=$null;$leftBits=$null;$rightBits=$null;$leftHash=$null;$rightHash=$null
+    try{
+        $left=[Drawing.Bitmap]::new($LeftPath);$right=[Drawing.Bitmap]::new($RightPath)
+        if($left.Width -ne $right.Width -or $left.Height -ne $right.Height){throw 'First-frame PNG dimensions differ.'}
+        if(-not (($left.Width -eq 390 -and $left.Height -eq 780) -or ($left.Width -eq 325 -and $left.Height -eq 650))){throw 'First-frame PNG dimensions are outside the two existing diagnostic scales.'}
+        $area=[Drawing.Rectangle]::new(0,0,$left.Width,$left.Height)
+        $leftBits=$left.LockBits($area,[Drawing.Imaging.ImageLockMode]::ReadOnly,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $rightBits=$right.LockBits($area,[Drawing.Imaging.ImageLockMode]::ReadOnly,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $leftHash=[Security.Cryptography.SHA256]::Create();$rightHash=[Security.Cryptography.SHA256]::Create()
+        $leftRow=New-Object byte[] ($left.Width*4);$rightRow=New-Object byte[] ($right.Width*4)
+        $points=New-Object Collections.ArrayList;$deviceCount=0
+        $minX=$left.Width;$minY=$left.Height;$maxX=-1;$maxY=-1
+        for($y=0;$y -lt $left.Height;$y++){
+            if([DateTime]::UtcNow -ge $DeadlineUtc){throw [TimeoutException]::new('First-frame comparison deadline exhausted.')}
+            [Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($leftBits.Scan0,$y*$leftBits.Stride),$leftRow,0,$leftRow.Length)
+            [Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($rightBits.Scan0,$y*$rightBits.Stride),$rightRow,0,$rightRow.Length)
+            [void]$leftHash.TransformBlock($leftRow,0,$leftRow.Length,$leftRow,0)
+            [void]$rightHash.TransformBlock($rightRow,0,$rightRow.Length,$rightRow,0)
+            # Equality of encoded rows is only a fast path; every differing row is inspected pixel by pixel.
+            if([Convert]::ToBase64String($leftRow) -ceq [Convert]::ToBase64String($rightRow)){continue}
+            for($x=0;$x -lt $left.Width;$x++){
+                $offset=$x*4;$a=[BitConverter]::ToUInt32($leftRow,$offset);$b=[BitConverter]::ToUInt32($rightRow,$offset)
+                if($a -eq $b){continue}
+                [void]$points.Add([ordered]@{x=$x;y=$y;left=$a.ToString('X8');right=$b.ToString('X8')})
+                if($x -lt 390 -and $y -lt 150){$deviceCount++}
+                $minX=[Math]::Min($minX,$x);$minY=[Math]::Min($minY,$y);$maxX=[Math]::Max($maxX,$x);$maxY=[Math]::Max($maxY,$y)
+            }
+        }
+        [void]$leftHash.TransformFinalBlock([byte[]]@(),0,0);[void]$rightHash.TransformFinalBlock([byte[]]@(),0,0)
+        return [ordered]@{
+            width=$left.Width;height=$left.Height;fullFrameDifferences=$points.Count;originalDeviceAreaDifferences=$deviceCount
+            originalDeviceArea=[ordered]@{x=0;y=0;width=390;height=150}
+            originalDeviceAreaFullyCovered=($left.Width -ge 390 -and $left.Height -ge 150)
+            bounds=if($points.Count){[ordered]@{minX=$minX;minY=$minY;maxX=$maxX;maxY=$maxY}}else{$null}
+            points=@($points.ToArray())
+            leftRawHash=[BitConverter]::ToString($leftHash.Hash).Replace('-','');rightRawHash=[BitConverter]::ToString($rightHash.Hash).Replace('-','')
+        }
+    }finally{
+        if($null -ne $leftBits){$left.UnlockBits($leftBits)};if($null -ne $rightBits){$right.UnlockBits($rightBits)}
+        if($null -ne $left){$left.Dispose()};if($null -ne $right){$right.Dispose()}
+        if($null -ne $leftHash){$leftHash.Dispose()};if($null -ne $rightHash){$rightHash.Dispose()}
+    }
+}
+function Get-FirstFrameInput($Report){
+    $frame=$Report.Frames[0]
+    if($frame.Number -ne 1 -or $frame.BaselinePng -ne 'first.png' -or -not $Report.Parameters){throw 'Missing first-frame identity or parameters.'}
+    $state=[ordered]@{}
+    foreach($name in @('Before','After')){
+        $raw=[string]$frame.State.$name
+        if(-not $raw.StartsWith('utc=') -or $raw.Contains('CAPTURE_FAILED')){throw 'Incomplete first-frame business-state capture.'}
+        # Fixtures generate absolute UTCs per process. Keep raw values in result.json;
+        # compare every other character, including all recorded freshness/status flags.
+        $state[$name]=[regex]::Replace($raw,'\b(utc|fixtureBatteryUtc|lastGoodUtc|fixtureDpi|headsetBatteryUtc|audioUtc|confirmedUtc|batteryConfirmedUtc|batteryMeasuredUtc|dpiUtc)=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z','$1=<per-process-utc>')
+    }
+    $businessInput=[ordered]@{parameters=$Report.Parameters}
+    foreach($name in @('Scale','Dark','Offset','Width','Height','PixelFormat','DpiX','DpiY','RegionObserver')){
+        if($null -eq $frame.$name){throw ('Missing first-frame input: '+$name)}
+        $businessInput[$name]=$frame.$name
+    }
+    $businessInput.state=$state
+    # Capture event lists differ by design; the existing core Graphics records must agree.
+    $businessInput.graphicsEntry=[regex]::Replace($frame.State.GraphicsEntry,'^\d+ frame-entry ','')
+    $businessInput.graphicsExit=[regex]::Replace($frame.State.GraphicsExit,'^\d+ frame-exit ','')
+    if(-not $businessInput.graphicsEntry -or -not $businessInput.graphicsExit){throw 'Missing first-frame core Graphics capture.'}
+    return $businessInput
+}
+function Get-CrossProcessOutcome($Pairs){
+    if(@($Pairs).Count -ne 6 -or @($Pairs | Where-Object {$_.status -notin @('same','difference','skipped_incompatible_inputs')}).Count -or -not @($Pairs | Where-Object {$_.status -in @('same','difference')}).Count){throw 'Incomplete first-frame pair comparisons.'}
+    if(@($Pairs | Where-Object {$_.status -eq 'difference'}).Count){
+        return [ordered]@{status='cross_process_difference';outcome='failed';exitCode=1}
+    }
+    return [ordered]@{status='not_reproduced';outcome='passed';exitCode=0}
+}
+function Compare-FirstFrames($CompletedCases,[string]$Directory,[string]$Plan,[DateTime]$DeadlineUtc){
+    if(@($CompletedCases).Count -ne 4 -or @($CompletedCases | Where-Object {$_.status -ne 'not_reproduced'}).Count){throw 'Cross-process comparison requires four valid completed cases.'}
+    $records=@(foreach($item in $CompletedCases){
+        $caseDirectory=Join-Path $Directory $item.id
+        $report=Get-Content -LiteralPath (Join-Path $caseDirectory 'result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if($report.Case -ne $item.case){throw 'Recorded case role does not match its invocation.'}
+        $businessInput=Get-FirstFrameInput $report
+        [ordered]@{id=$item.id;role=$item.case;order=$item.order;processId=$report.ProcessId;png=(File-Evidence (Join-Path $caseDirectory 'first.png'));rawSha256=$report.Frames[0].Sha256;input=$businessInput}
+    })
+    $comparison=[ordered]@{
+        schema=1;casePlan=$Plan;status='running';outcome='running';exitCode=2
+        inputPolicy='Compare all recorded first-frame business fields and core Graphics; exclude capture/events and their numeric frame-entry/exit prefixes, labels/timings and per-process absolute UTC values only. Raw states remain in each result.json.'
+        records=$records;pairs=@();error=$null
+    }
+    $path=Join-Path $Directory 'first-frame-comparison.json'
+    try{
+        # Preflight all inputs before reading pixels. Reference includes different scales;
+        # those pairs are explicitly ineligible, never treated as visual regressions.
+        for($i=0;$i -lt 4;$i++){for($j=$i+1;$j -lt 4;$j++){
+            $same=($records[$i].input | ConvertTo-Json -Depth 10 -Compress) -ceq ($records[$j].input | ConvertTo-Json -Depth 10 -Compress)
+            $comparison.pairs+=,[ordered]@{id=($records[$i].id+'__'+$records[$j].id);left=$records[$i].id;right=$records[$j].id;inputsMatch=$same;status=if($same){'pending'}else{'skipped_incompatible_inputs'};pixels=$null}
+        }}
+        if($Plan -eq 'order-control' -and @($comparison.pairs | Where-Object {-not $_.inputsMatch}).Count){throw 'Order-control first-frame business inputs differ; PNGs are not a same-state regression comparison.'}
+        $pairIndex=0
+        for($i=0;$i -lt 4;$i++){for($j=$i+1;$j -lt 4;$j++){
+            $pair=$comparison.pairs[$pairIndex];$pairIndex++
+            if(-not $pair.inputsMatch){continue}
+            $pair.pixels=Compare-FirstFramePixels $records[$i].png.path $records[$j].png.path $DeadlineUtc
+            if($pair.pixels.leftRawHash -cne $records[$i].rawSha256 -or $pair.pixels.rightRawHash -cne $records[$j].rawSha256){throw 'Decoded first-frame pixels do not match the recorded raw hash.'}
+            $pair.status=if($pair.pixels.fullFrameDifferences){'difference'}else{'same'}
+            Write-Json $path $comparison
+        }}
+        $outcome=Get-CrossProcessOutcome $comparison.pairs
+        foreach($key in @('status','outcome','exitCode')){$comparison[$key]=$outcome[$key]}
+    }catch{
+        $comparison.status=if($_.Exception -is [TimeoutException]){'timeout'}else{'error'}
+        $comparison.outcome='failed';$comparison.exitCode=if($comparison.status -eq 'timeout'){124}else{2};$comparison.error=$_.Exception.Message
+        throw
+    }finally{Write-Json $path $comparison}
+    return $comparison
 }
 function Run-RecordedProcess([string]$FilePath,[string[]]$NativeArguments,[string]$Directory,[int]$BudgetMs,[string]$Kind){
     if($BudgetMs -lt 1){throw [TimeoutException]::new('Overall diagnostic deadline exhausted before process start.')}
@@ -117,17 +238,17 @@ try{
     Write-Json (Join-Path $output 'executable.json') (File-Evidence $binary)
     $summary.status='running';$summary.outcome='running';$summary.exitCode=0
     for($index=0;$index -lt $cases.Count;$index++){
-        $case=$cases[$index];$directory=Join-Path $output $case.case;New-Item -ItemType Directory -Path $directory | Out-Null
+        $case=$cases[$index];$directory=Join-Path $output $case.id;New-Item -ItemType Directory -Path $directory | Out-Null
         # Share remaining time across pending cases; no process receives more than 35 s.
         $budget=[Math]::Min(35000,[Math]::Floor((Remaining-Milliseconds)/($cases.Count-$index)))
         if($budget -le 1000){$case.status='timeout';throw [TimeoutException]::new('Insufficient overall diagnostic budget for next cold process.')}
         $arguments=@('--grid-repaint-probe','--case',$case.case,'--output',$directory,'--budget-ms',([string]($budget-1000)))
-        $execution=Run-RecordedProcess $binary $arguments $directory $budget $case.case
+        $execution=Run-RecordedProcess $binary $arguments $directory $budget $case.id
         $case.execution=$execution
         $resultPath=Join-Path $directory 'result.json'
         $report=$null
         if(Test-Path -LiteralPath $resultPath){
-            try{$report=Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json}
+            try{$report=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json}
             catch{$case.evidenceError=$_.Exception.Message} # A killed writer must still classify as timeout.
         }
         if($null -ne $report){
@@ -158,19 +279,24 @@ try{
     }
     if($summary.exitCode -eq 0){
         if(@($cases | Where-Object {$_.status -ne 'not_reproduced'}).Count){throw 'Not every diagnostic case completed.'}
-        $summary.status='not_reproduced';$summary.outcome='passed'
+        $summary.crossProcess.status='running';$summary.crossProcess.path=Join-Path $output 'first-frame-comparison.json'
+        $cross=Compare-FirstFrames $cases $output $CasePlan ([DateTime]::UtcNow.AddMilliseconds((Remaining-Milliseconds)))
+        $summary.crossProcess.status=$cross.status
+        foreach($key in @('status','outcome','exitCode')){$summary[$key]=$cross[$key]}
     }
     if($clock.Elapsed.TotalSeconds -ge $TimeoutSeconds){throw [TimeoutException]::new('Overall diagnostic deadline exceeded.')}
 }catch [TimeoutException]{
+    if($summary.crossProcess.status -eq 'running'){$summary.crossProcess.status='timeout'}
     $summary.status='timeout';$summary.outcome='failed';$summary.exitCode=124;$summary.error=$_.Exception.Message
 }catch{
+    if($summary.crossProcess.status -eq 'running'){$summary.crossProcess.status='error'}
     $summary.status='error';$summary.outcome='failed';$summary.exitCode=2;$summary.error=$_.Exception.Message
 }finally{
     # All native processes are already waited/killed in their own finally; no process-tree cleanup.
     $summary.elapsedMs=$clock.Elapsed.TotalMilliseconds
     if($summary.elapsedMs -ge $TimeoutSeconds*1000 -and $summary.status -eq 'not_reproduced'){$summary.status='timeout';$summary.outcome='failed';$summary.exitCode=124}
     foreach($case in $cases){
-        $directory=Join-Path $output $case.case
+        $directory=Join-Path $output $case.id
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
         Write-Json (Join-Path $directory 'case-summary.json') $case
     }

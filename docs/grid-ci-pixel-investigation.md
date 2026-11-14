@@ -1,6 +1,34 @@
 # Grid CI 像素调查
 
-当前交付是 **1114t 受控复现实验，尚未修复**，基线为 `b65ec4136115673208531b17e208440b0559c60c`。根因未知，没有修复前失败／修复后通过证明。仅改测试入口、独立诊断脚本、实验分支专用 CI job 和本文；产品代码、原完整 Panel 矩阵与零容差断言保持不变。
+当前交付是 **1114v 进程顺序对照，尚无产品修复**，基线为 `695d36972ebcd5826b0118aff421fa89e11b382a`。仅改独立 PowerShell 诊断脚本、实验 job 和本文；C# 绘制、PanelDesignTests、原矩阵／零容差断言、engine 与版本均未改。下文 1114t／1114p 保留为历史记录，其分支和命令不代表本轮 CI 配置。
+
+## 1114v：真实变体与顺序对照
+
+主管已核对准确 CI `43577351933`（head 为本轮基线）：三 job 均成功，四进程内部 124 帧／174 比较无差异；但真实 `cold-off/first.png` 与 `cold-on/first.png` 全 390×780 图有 **12 点差异**，原 390×150 设备区恰 **6 点**，其余六点在同名 DPI 标题平移 `(+2,+81)`。坐标／颜色见 `.ai/evidence/grid-ci-43577351933/cross-process-differences.json`，主管评审见 `.ai/evidence/grid-glyph-order-1114v/coordinator-review.md`。两变体的原始行 SHA256 分别以 `4C0EA413`、`C5656991` 开头；进程最后八帧切换 capture 后仍各自保持。旧失败发生在同一进程两帧，这次跨进程证据不能冒充完全相同的复现。
+
+相同 CI VM／EXE／字体／GDI+ 的两个进程已有差异，单靠本机与 CI 的字体版本差异不足以解释。初始 capture、进程顺序、首次字形实例化或其他状态仍未分清；会话／kernel 缓存只是未证实猜想，不据此预热或修改产品。
+
+```powershell
+./tests/Run-GridPixelDiagnostic.ps1 -OutputDirectory ./tmp/ggo-1114v-run -TimeoutSeconds 180 -CasePlan order-control
+```
+
+`CasePlan` 默认 `reference` 保留原四角色及顺序；`order-control` 为 `cold-on → cold-off → cold-off → cold-on`，唯一 ID／目录依次 `01-cold-on`、`02-cold-off`、`03-cold-off`、`04-cold-on`。传给现有 C# 的角色仍为合法 `cold-on/off`。每进程 32 帧，总计 **128 帧／156 次进程内比较**；保留全部首帧及原比较逻辑，没有额外预热、丢帧或改字体／缓存。总预算 180 秒（含编译及跨进程比较），单进程最多 35 秒，原截止与精确子进程清理规则不变。
+
+四 case 全部有效完成后，先核对首帧的 Parameters、scale／dark／offset、尺寸／DPI／像素格式、RegionObserver、完整前后业务状态及核心 Graphics；只排除 capture 事件及其 Graphics 记录序号前缀、标签／耗时和每进程即时生成的绝对 UTC，fresh／status／电量／文字等仍逐项一致，原始时间保留在各 `result.json`。order-control 任一业务输入不一致即报错，不硬比；reference 的不同 scale 首帧对明确记 `skipped_incompatible_inputs`，只比较同输入对。
+
+`first-frame-comparison.json` 保存四条源记录（唯一 ID／role／order／PID、完整 PNG 路径及文件 hash、原始行 hash、核对后的输入）和至多六对全图零容差结果（点／左右 ARGB／bounds、原设备区数量）。reference 的 1.25× 图宽 325，固定 390×150 矩形统计为与图像的交集，`originalDeviceAreaFullyCovered=false`；order-control 四图均完整覆盖原设备区。原图保留，不以裁图决定通过。任意真实差异使整体 `cross_process_difference / failed / exit 1`，即使四 case 各自 `not_reproduced`；所有图相同也只记 `not_reproduced`。case 错误／超时保留非零状态，跨进程为 `not_run`，不补跑 case；比较自身失败／超时另记 error／timeout。
+
+新顺序让首个进程从 off 改为 on，并重复两种角色，可观察 A/B 变体是否跟随最早启动位置、capture 角色或两者都不稳定。单次新 CI 仍不能证明首次字形或缓存的因果关系，也不能把“同图”当修复。实验 job 仅在 push 到 `refs/heads/codex/grid-glyph-order-1114v` 时以 order-control 运行，保留 fixed SHA、`always()`、3 天 artifact 和 8 分钟上限；普通 Windows／protocols、触发器及权限均不变。下一步由主管提交并 push 准确版本、核对 run head SHA 后比较四首帧的 A/B 顺序；本机 PS 语法／diff 检查不代表远端图形验收。
+
+### 1114v 本机与离线验证
+
+最终脚本在 Windows PowerShell **5.1.26100.9711** 仅运行一次 order-control 绘制批次：`tmp/ggo-1114v-run/summary.json`，**5273.227 ms**，`not_reproduced / passed / exit 0`。四唯一目录／PID 顺序为 `01-cold-on/63576`、`02-cold-off/34292`、`03-cold-off/42904`、`04-cold-on/33656`，各 **32 帧／39 比较**，共 **128／156**。四张首帧保留，所有 JSONL 与 result 计数、首帧引用、capture 最后八帧切换、35 秒进程预算及最终源码 hash 均核对一致；没有额外绘制批次。
+
+四首帧输入全部一致，六对全图及设备区均 **0 差异**，本批次未出现进程间变体。四个原始行 hash 均为 `4C0EA413498DDFC163F6B62F8257980059AEF3E7E727329A79BC9D166BC33333`，与旧 CI 较深版本相同；此前主管本机批次记录为 `C5656991…`，这项跨批次变化如实保留，不能据此定因或声称本轮进程间复现。
+
+从最终脚本 AST 提取纯读图／输入核对／分类函数，在同一 Windows PowerShell 5.1 中离线读取未修改的 CI `43577351933` 原 PNG：精确 **12／6** 点，全部坐标／左右 ARGB／bounds／原始 hash 与主管 JSON 一致；同图为 0。实际旧 CI 四首帧以 reference 核对后得到 `cross_process_difference / exit 1`，不同 scale 的四对明确跳过；order-control 业务输入不一致、未完成四 case、未完成 pairs 和已到期读图预算均被拒绝。该验证只读旧 PNG，不是新的 native 渲染复现，没有注入像素或运行下载的 EXE。
+
+结果与临时校验脚本在 `tmp/ggo-1114v-checks/{offline-verification.json,native-verification.json,real-ci-copy-final/first-frame-comparison.json,Verify-Offline.ps1,Verify-Run.ps1}`；早期离线尺寸守卫失败记录保留在 `real-ci-copy/`，没有因此重复 native 批次。PS 语法与 `git diff --check` 通过；精确比对 CI 仅两行变化，跟踪变更仅三个白名单文件。新实验分支 CI、其真实失败／超时 artifact 和强制终止路径仍待主管验证，尚无产品修复。
 
 ## 1114t：运行与读图
 
