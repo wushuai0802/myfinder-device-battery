@@ -115,6 +115,52 @@ _descriptor_cache = {}
 _descriptor_paths = None
 
 
+def _a5v2_path_identity(path):
+    match = re.search(r"vid[_&]([0-9a-f]{4,8}).*?pid[_&]([0-9a-f]{4})", path, re.I)
+    return (int(match[1][-4:], 16), int(match[2], 16)) if match else None
+
+
+def _a5v2_snapshot(inventory, present_paths):
+    """Attest only this call's supplied target paths, never a global USB census.
+
+    physical_topology may supply a full inventory or a selected physical
+    device's paths. Neither mode can prove an omitted path exists. Within
+    that input boundary, every target path must have fresh attrs/caps and a
+    consistent USB parent; a returned list alone cannot prove completeness.
+    The attestation is attached after caching and is never itself cached.
+    """
+    expected = [p.lower() for p in present_paths if _a5v2_path_identity(p) == (0x3837, 0x100C)]
+    targets = [d for d in inventory if (d["vendor_id"], d["product_id"]) == (0x3837, 0x100C)]
+    actual = [d["path"].decode("utf-8").lower() for d in targets]
+    valid = (bool(expected) and len(present_paths) <= 512
+             and len(expected) == len(set(expected)) and sorted(actual) == sorted(expected)
+             and all(d.get("a5v2_descriptor_complete") is True
+                     and d["product_string"].strip() == "MCHOSE A5 V2 Ultra"
+                     and re.fullmatch(r"\\\\\?\\hid#vid_3837&pid_100c(?:&[a-z0-9_]+)*#[^\\\s]+",
+                                      d["path"].decode("utf-8"), re.I)
+                     for d in targets))
+    parents = {d["physical_id"] for d in targets}
+    primary = [d for d in targets if (d["usage_page"], d["usage"]) == (0xFF01, 1)]
+    valid = (valid and len(parents) == 1 and len(primary) == 1
+             and re.fullmatch(r"pnp:usb\\vid_3837&pid_100c(?:&rev_[0-9a-f]{4})?\\[^\\\s]+",
+                              next(iter(parents)), re.I) is not None
+             and all((d["vendor_id"], d["product_id"]) == (0x3837, 0x100C)
+                     for d in inventory if d["physical_id"] in parents))
+    if valid:
+        proof = {"paths": sorted(expected), "parent": next(iter(parents)),
+                 "collection": primary[0]["path"].decode("utf-8").lower()}
+        for info in targets:
+            info["a5v2_topology"] = dict(proof, paths=list(proof["paths"]))
+    else:
+        # Failure must be retried. Do not evict another brand's descriptor.
+        for path in present_paths:
+            if path.lower() in expected:
+                _descriptor_cache.pop(path, None)
+        for info in targets:
+            _descriptor_cache.pop(info["path"].decode("utf-8"), None)
+    return inventory
+
+
 def _read_report_descriptor(path):
     """Optional hidapi metadata access; no input, output or feature reports."""
     from battery_hid import hid
@@ -209,6 +255,8 @@ def discover(paths, excluded=(), *, full=False):
     Cache complete descriptors while the full path set is unchanged: product
     strings can encode connection state. Partial discoveries always refresh
     their selected paths. enrich recomputes physical identity on every call.
+    The exact 100C candidate always refreshes attrs/caps and independently
+    attests coverage of the supplied snapshot, even on a full cache hit.
     """
     global _descriptor_paths
     if os.name != "nt":
@@ -218,7 +266,8 @@ def discover(paths, excluded=(), *, full=False):
         # Do not fall back to global hidapi enumeration on Windows: native
         # collections must remain excluded before any descriptor handle opens.
         raise RuntimeError("topology_unavailable")
-    paths = frozenset(paths)
+    present_paths = tuple(paths)  # Preserve duplicates/truncation for the exact 100C proof.
+    paths = frozenset(present_paths)
     selected_paths = sorted(paths)[:512]
     if full:
         if paths != _descriptor_paths:
@@ -249,7 +298,11 @@ def discover(paths, excluded=(), *, full=False):
         if match and (int(match[1][-4:], 16), int(match[2], 16)) in excluded:
             _descriptor_cache.pop(path, None)
             continue
-        if not full:
+        if (not full or _a5v2_path_identity(path) == (0x3837, 0x100C)
+                or (_descriptor_cache.get(path, {}).get("vendor_id"),
+                    _descriptor_cache.get(path, {}).get("product_id")) == (0x3837, 0x100C)):
+            # This candidate needs fresh attrs/caps even on an unchanged full
+            # snapshot. Other providers retain their existing cache policy.
             _descriptor_cache.pop(path, None)
         cached = _descriptor_cache.get(path)
         if cached is not None:
@@ -284,6 +337,17 @@ def discover(paths, excluded=(), *, full=False):
                                   ("serial_number", "HidD_GetSerialNumberString")):
                 value = c.create_unicode_buffer(256)
                 info[field] = value.value if getattr(hid, getter)(handle, value, c.sizeof(value)) else ""
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage)
+                    == (0x3837, 0x100C, 0xFF01, 0x0001)
+                    and info["product_string"].strip() == "MCHOSE A5 V2 Ultra"):
+                # Exact candidate only: strict Feature (type 2) byte arrays,
+                # no fixed-Usage opt-in and no raw-descriptor fallback.
+                from battery_hid import byte_report_sizes
+                sizes = byte_report_sizes(hid, data, caps, 2)
+                info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
+                caps_complete = bool(sizes and sizes.get("17") in (21, 65)
+                                     and sizes["17"] == max(sizes.values()) == caps.feature)
+                info["feature_report_proof"] = "caps" if caps_complete else "failed"
             # The two keyboard protocols require proof of report IDs as well as
             # capacity. Inspect only their exact identity/collection; no I/O.
             if caps_complete and attrs.vendor == 0x3837 and (
@@ -467,11 +531,16 @@ def discover(paths, excluded=(), *, full=False):
                 if (attrs.vendor, attrs.product) == (0x372E, 0x1026):
                     _descriptor_fallback(info, caps, ("feature",))
                 caps_complete = info["feature_report_sizes"] is not None
+            if (attrs.vendor, attrs.product) == (0x3837, 0x100C):
+                info["a5v2_descriptor_complete"] = bool(caps_complete and info["usage_page"] and info["usage"])
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
             inventory.append(info)
+        except (OSError, ValueError):
+            if _a5v2_path_identity(path) != (0x3837, 0x100C):
+                raise
         finally:
             if data.value:
                 hid.HidD_FreePreparsedData(data)
             kernel.CloseHandle(handle)
-    return enrich(inventory, excluded)
+    return _a5v2_snapshot(enrich(inventory, excluded), present_paths)

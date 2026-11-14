@@ -96,6 +96,12 @@ from .base import DeviceStatus, Provider, hexdump, log
 MEASURED_VID = 0x5253
 MCHOSE_VIDS = (MEASURED_VID, 0x3837)
 
+# Exact C-grade candidate. Source: M HUB's 100C -> 11/06 chain and
+# OpenMouse 30d6ad37 V2 codec/transport, not a 100C hardware capture.
+A5V2_VID, A5V2_PID = 0x3837, 0x100C
+A5V2_NAME = "MCHOSE A5 V2 Ultra"
+A5V2_ATTEMPTS, A5V2_TIMEOUT, A5V2_GAP = 20, 2.0, 0.09
+
 # Read-only V3 subset, adapted 2026-11-04 from OpenMouse mouse-protocol
 # 30d6ad37d0ecc9fff53f86d5058d67a88e07150d, src/mchose/v3.ts and
 # src/drivers/mchose/v3-hid.ts (AGPL-3.0; see upstream-protocols.md).
@@ -265,7 +271,7 @@ def device_key(vid: int, pid: int) -> str:
     G7's 0xA8A5, and the newer 0x3837 receivers (the A7 V2 Ultra in issue #4) - which is
     what keeps two MCHOSE devices on one machine off a single shared icon.
     """
-    if vid == V3_VID and pid in V3_PIDS:
+    if (vid, pid) == (A5V2_VID, A5V2_PID) or vid == V3_VID and pid in V3_PIDS:
         return f"mchose:{vid:04x}:{pid:04x}"
     return "mchose" if vid == MEASURED_VID else f"mchose:{vid:04x}"
 
@@ -334,12 +340,55 @@ def parse_v3(resp) -> Optional[Tuple[int, bool]]:
     return data[12], bool(data[11])
 
 
+def _a5v2_path(path):
+    if isinstance(path, bytes):
+        try:
+            path = path.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    if (not isinstance(path, str)
+            or re.fullmatch(r"\\\\\?\\hid#vid_3837&pid_100c(?:&[a-z0-9_]+)*#[^\\\s]+", path, re.I) is None):
+        return None
+    return path.lower()
+
+
+def make_a5v2_request(length):
+    """20 inverted logical body bytes, then untouched zero padding, plus ID."""
+    if type(length) is not int or length not in (21, 65):
+        raise ValueError("A5V2 length unproven")
+    return b"\x11\xf9" + b"\xff" * 19 + b"\x00" * (length - 21)
+
+
+def parse_a5v2(resp, length):
+    """Only the 11 meaningful bytes, retaining firmware/flags for stability.
+
+    The PID is the mouse's own, not necessarily the receiver's. flags=09 is
+    valid in the upstream A7 41% fixture despite its decoded connected bit.
+    Charge nonzero -> bool is upstream design, unverified on the target.
+    """
+    if not isinstance(resp, (bytes, bytearray, list, tuple)) or len(resp) != length:
+        return None
+    try:
+        raw = bytes(resp)
+    except (TypeError, ValueError):
+        return None
+    if raw[:2] != b"\x11\xf9":
+        return None
+    payload = _invert(raw[2:13])
+    if (len(payload) != 11 or not any(payload)
+            or int.from_bytes(payload[:2], "little") != A5V2_VID
+            or int.from_bytes(payload[2:4], "little") == 0 or payload[9] > 100):
+        return None
+    return payload
+
+
 class MchoseProvider(Provider):
     name = "mchose"
 
     def __init__(self):
         self._diag: List[str] = []
         self._v3_diag: List[str] = []
+        self._a5v2_diag: List[str] = []
         self._last: Dict[str, Tuple[int, bool, float]] = {}
         self._names: Dict[str, str] = {}
         self._models: Dict[str, int] = {}
@@ -472,7 +521,100 @@ class MchoseProvider(Provider):
         self._diag.append(message)
 
     def reader_diagnostics(self):
-        return list(self._v3_diag)
+        return list(self._v3_diag) + list(self._a5v2_diag)
+
+    def _note_a5v2(self, code):
+        # Protocol-owned fixed codes only; no paths, names, frames or errors.
+        message = "A5V2 " + code
+        self._a5v2_diag.append(message)
+        self._diag.append(message)
+
+    def _pick_a5v2(self, ifaces):
+        if not ifaces:
+            self._note_a5v2("topology_unproven")
+            return None
+        proof = ifaces[0].get("a5v2_topology")
+        parent = ifaces[0].get("physical_id")
+        paths = [_a5v2_path(d.get("path")) for d in ifaces]
+        if (not isinstance(proof, dict) or not isinstance(parent, str)
+                or re.fullmatch(r"pnp:usb\\vid_3837&pid_100c(?:&rev_[0-9a-f]{4})?\\[^\\\s]+", parent, re.I) is None
+                or any(p is None for p in paths) or len(paths) != len(set(paths))
+                or proof.get("paths") != sorted(paths) or proof.get("parent") != parent
+                or any(type(d.get("vendor_id")) is not int or type(d.get("product_id")) is not int
+                       or (d["vendor_id"], d["product_id"]) != (A5V2_VID, A5V2_PID)
+                       or not isinstance(d.get("product_string"), str)
+                       or d["product_string"].strip() != A5V2_NAME
+                       or d.get("physical_id") != parent or d.get("a5v2_topology") != proof
+                       or d.get("a5v2_descriptor_complete") is not True
+                       or any(type(d.get(f)) is not int or d[f] <= 0 for f in ("usage_page", "usage"))
+                       for d in ifaces)):
+            self._note_a5v2("topology_unproven")
+            return None
+        cols = [d for d in ifaces if (d["usage_page"], d["usage"]) == (0xFF01, 1)]
+        if len(cols) != 1 or proof.get("collection") != _a5v2_path(cols[0]["path"]):
+            self._note_a5v2("collection_ambiguous")
+            return None
+        info = cols[0]
+        maximum, sizes = info.get("feature_report_length"), info.get("feature_report_sizes")
+        if (type(maximum) is not int or maximum not in (21, 65)
+                or not isinstance(sizes, dict) or not sizes
+                or any(not isinstance(k, str) or not k.isascii() or not k.isdecimal()
+                       or len(k) > 3 or str(int(k)) != k or not 0 <= int(k) <= 255
+                       or type(n) is not int or not 2 <= n <= maximum for k, n in sizes.items())
+                or sizes.get("17") != maximum or max(sizes.values()) != maximum
+                or info.get("feature_report_proof") != "caps"):
+            self._note_a5v2("feature_unproven")
+            return None
+        return info
+
+    def _read_a5v2(self, info):
+        # A soft deadline cannot cancel a blocking native call. The existing
+        # isolated worker's 7 s budget remains the hard containment boundary.
+        deadline = time.monotonic() + A5V2_TIMEOUT
+        previous, dev = None, None
+        length = info["feature_report_length"]
+        request = make_a5v2_request(length)
+        try:
+            dev = hid.device()
+            dev.open_path(info["path"])
+            for _ in range(A5V2_ATTEMPTS):
+                if time.monotonic() >= deadline:
+                    break
+                written = dev.send_feature_report(request)
+                if type(written) is not int or written != length:
+                    self._note_a5v2("set_failed")
+                    return None
+                # Do not shorten the sourced 90 ms wait to fit another GET.
+                if deadline - time.monotonic() < A5V2_GAP:
+                    break
+                time.sleep(A5V2_GAP)
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    response = dev.get_feature_report(0x11, length)
+                except Exception:
+                    previous = None
+                    continue
+                if time.monotonic() >= deadline:
+                    break
+                payload = parse_a5v2(response, length)
+                if payload is None:
+                    previous = None
+                    continue
+                if payload == previous:
+                    self._note_a5v2("stable_reply_C_pending_hardware")
+                    return payload[9], bool(payload[10])
+                previous = payload
+            self._note_a5v2("no_stable_reply")
+        except Exception:
+            self._note_a5v2("io_failed")
+        finally:
+            if dev is not None:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+        return None
 
     @staticmethod
     def _v3_report_proven(info, direction, *, alternate=False):
@@ -634,6 +776,10 @@ class MchoseProvider(Provider):
         """One icon per device, whether it is on the dongle, on the cable or on radio."""
         self._diag = []
         self._v3_diag = []
+        self._a5v2_diag = []
+        # Candidate failures/absence never publish an old candidate value.
+        # Other MCHOSE models retain their original sleep/cache policy.
+        self._last.pop(device_key(A5V2_VID, A5V2_PID), None)
         infos: List[dict] = []
         for vid in MCHOSE_VIDS + (G7_VID, A5_VID):
             try:
@@ -647,10 +793,23 @@ class MchoseProvider(Provider):
         # a G7 and an M7 Ultra on one machine are two devices and get two icons
         groups: Dict[Tuple[int, int], List[dict]] = {}
         for d in infos:
-            groups.setdefault((d["vendor_id"], d["product_id"]), []).append(d)
+            identity = (d["vendor_id"], d["product_id"])
+            # A path advertising 100C with inconsistent attrs is quarantined
+            # here too; it must not accidentally reach another legacy group.
+            if _a5v2_path(d.get("path")) is not None:
+                identity = (A5V2_VID, A5V2_PID)
+            groups.setdefault(identity, []).append(d)
 
         found: Dict[str, List[Tuple[int, bool, int, int]]] = {}   # key -> readings
         for (vid, pid), ifaces in groups.items():
+            if (vid, pid) == (A5V2_VID, A5V2_PID):
+                key = device_key(A5V2_VID, A5V2_PID)
+                self._names[key] = A5V2_NAME
+                info = self._pick_a5v2(ifaces)
+                got = self._read_a5v2(info) if info is not None else None
+                if got is not None:
+                    found.setdefault(key, []).append((got[0], got[1], A5V2_PID, 0))
+                continue  # Exclusive, including failure: no legacy/CFU/12.
             if vid == 0x3837 and pid in (0x600A, 0x6008):
                 reason = ("V9 Turbo+ headset reserved for mchose_headset" if pid == 0x600A
                           else "V9 Turbo lighting device; no battery reader")
@@ -736,9 +895,10 @@ class MchoseProvider(Provider):
             # charging, and one icon either way
             readings.sort(key=lambda r: (not r[1],))
             level, charge, pid, model = readings[0]
-            self._diag.append(f"  -> {key} pid={pid:04x}"
-                              + (f" model=0x{model:04x}" if model else "")
-                              + f": {level}%{' (charging)' if charge else ''}")
+            if key != device_key(A5V2_VID, A5V2_PID):
+                self._diag.append(f"  -> {key} pid={pid:04x}"
+                                  + (f" model=0x{model:04x}" if model else "")
+                                  + f": {level}%{' (charging)' if charge else ''}")
             self._last[key] = (level, charge, time.time())
             out.append(DeviceStatus(key, self._display_name(key), level, charge, True,
                                     "mchose", kind="mouse"))
