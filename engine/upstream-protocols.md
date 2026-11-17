@@ -4128,3 +4128,101 @@ remaining hardware acceptance are recorded in `docs/zhuaudio-zg4.md`.
 The provider reads HID++ 2.0 generically from the receiver's `ff00` vendor collections (slots 1-6), so most other HID++ 2.0 mice and keyboards on a Lightspeed, Unifying or Bolt receiver should answer the same `0x1004` unified battery request. The G-series headsets - G533, G535, G633, G635, G733, G933, G935, G PRO, G PRO X - are in the headset pid table and use feature `0x1F20` (the G535 on its consumer collection). Only the models listed in the support table above are confirmed so far.
 
 Devices with no feature table at all (the older HID++ 1.0 generation) are read through the old battery registers instead: a short report `10 <slot> 81 <register>` on the short collection reads register `0x0D` (a percentage with a charging status - `30` discharging, `50` recharging, `90` full) or register `0x07` (a discrete level - 7 full, 5 good, 3 low, 1 critical - beside a charging byte), the same registers and order Solaar uses. This was added for the M710 keyboard of the MK710 wireless desktop ([#159](https://github.com/HeyOkay/HaloBattery/issues/159)), built from Solaar's implementation; **confirmed on hardware** in the reporter's test-build run - the icon shows the keyboard's coarse level.
+
+### VGN ryMs Dragonfly3 Pro Max (391D:1A04)
+
+**Connection:** 2.4 GHz receiver, product string `Dragonfly 3 Pro Max`
+
+Unlike the older `391D:1A01` Dragonfly3 SE (collection `FF01:0010`, command
+`55 30`), the Pro Max generation exposes one vendor collection `FFFF:0002` that
+carries a **single 64-byte feature report with report ID 0** (Windows reports
+the length as 65 with the ID slot). Nothing is available on the input side of
+that collection; `FFFF:0001` on interface 1 is a 4-byte input report used only
+for live DPI notifications.
+
+The vendor web HUB (`drive.vgnlab.com.cn`, driver class `vgn-ry-mouse`,
+`reportId = 0`, `sendFeatureReport` + `receiveFeatureReport`) frames every
+command as
+
+```
+[cmd, arg, 0, 0, 0, 0, 0, checksum] + zero padding to 64 bytes
+checksum = 0xFF - (sum of the first seven bytes & 0xFF)
+```
+
+The read-only receiver status query is `0xF7`:
+
+```
+out  00 F7 00 00 00 00 00 00 08 00 ... (65 bytes with the ID slot)
+in   00 | 00 00 5C 01 00 01 02 00 ...  (payload[2] = 0x5C = 92,
+                                        payload[4] = 0 asleep)
+```
+
+`payload[2]` is the level in percent and `payload[4] == 1` means the mouse is
+asleep, in which case the HUB redraws the cards and polls again rather than
+showing the value. The HUB's own handshake (`0xF6 05` after the first `0xF7`)
+and its trailing `0xFC` were not needed for a reading and are not sent: a
+single `0xF7` per poll returned a fresh value (92 %, then 91 % twenty seconds
+later, against 92 % in the HUB).
+
+The same collection and driver cover `391D:1004` (wired Pro Max), `1A25/1028`
+(Dragonfly3 Ultra), `1A08/1008` (Y2 V2 Pro Max), `1A13/1015` (F1 V2 Pro Max),
+`1A2B/102F` (F1 V5 Ultra) and `1A41/1048` (F2 V2 Ultra). Only `1A04` was
+verified on hardware here; the other rows are accepted because they share the
+collection and the driver, and they carry no separate evidence.
+
+Charging is not exposed by this driver, so the provider reports it unknown.
+No DPI, button, lighting, profile, pairing, firmware or reset command is sent.
+
+### SKN QingLong 4.0 Ultra (362D NAPE battery)
+
+**Connection:** 2.4 GHz `Ultra-Link 8K` receiver (`362D:D028`), wired keyboard
+`362D:132B`
+
+The SKN Launcher is the Keychron Launcher build with an SKN skin (`i18n: skn`,
+`deviceModel: QingLong4.0`, API host `launcher.keychron.cn`), so the keyboard is
+a Keychron-engineered 8K model: its device definition for `362D:132B`
+(`/static/device/908923691/json/v3.json`) is a VIA v3 definition named
+`QingLong 4.0 Ultra 8K ANSI` with Bluetooth and 2.4G-pair keycodes.
+
+The battery is read through the Launcher's NAPE user-command channel: a
+32-byte unnumbered report (report ID 0) on the raw-HID collection
+`FF60:0061`, or on `008C:0001` for models that expose it instead:
+
+```
+out  A7 31 00 00 ... (0xA7 user-command wrapper,
+                     0x31 KC_USER_CMD_NAPE_GET_BAT_REPORT,
+                     0x30 is the asynchronous BAT_REPORT notification)
+in   A7 31 <level> <state> ...   level 0..100, state 1 while charging
+```
+
+What this project's hardware does with it: the `362D:D028` receiver answers
+`0xB2` (receiver state - it reports `362D:132B` as online), `0xAA` (patch
+version) and `0xAB` (device id) on `FF60:0061`, and **echoes every other
+command byte-for-byte**, including `A7 31`. Its `008C:0001` collection accepts
+no host writes at all (every length and report ID is rejected with
+`ERROR_INVALID_PARAMETER`), and its `FFC1:0001` bridge channel accepts output
+reports `0xB3`/`0xB5` but never answers on the input endpoint - neither the
+Keychron `B3 06` status query, nor the 8K frame `01 00 81 01 ...`
+(`checksum = 161 - (sum & 0xFF)`), nor `A7 31`, with `0xB2`, `0xBC`,
+`0xAA 56 03 FC 01 6E 6E` also producing nothing there.
+
+So no reading is produced over 2.4 GHz with this receiver firmware, and the
+provider rejects the echo instead of reporting a fabricated 0 %.
+
+**Connected by cable** (`362D:132B`, collections `FF60:0061` on interface 1 and
+`008C:0001` on interface 2, both with 33-byte input/output caps) the same query
+is echoed byte for byte as well - the payload is returned with the caller's own
+filler (`A7 31 DE AD BE` comes back as `A7 31 DE AD BE`), so it is an echo and
+not a reading. The firmware does implement part of the Keychron user-command
+set: `A7 01` answers `A7 01 00 03 ...` and `A7 05` answers `A7 05 00 01 00 14`,
+while every NAPE code of that enum (32-73, including the battery pair `0x30`
+and `0x31`) is echoed. The VIA raw-HID layer itself works (`0x01` returns
+protocol version 12, `0x02 0x01` returns a real keyboard value).
+
+This model therefore exposes no HID battery level at all - neither over USB nor
+over its 2.4 GHz receiver - which matches SKN Launcher showing no battery for
+it. Bluetooth (the standard HID battery service) is the only remaining path and
+was not tested. The provider stays silent on this model instead of reporting a
+fabricated 0 %; it is kept because the query is the family's read-only command
+and a model that implements it would answer. Only the battery query is sent -
+no keymap, lighting, macro, profile, pairing, firmware or reset command.
