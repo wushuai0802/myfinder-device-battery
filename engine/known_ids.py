@@ -54,6 +54,7 @@ TABLES = {
     "fa6x_passive": ("PIDS",),
     "dareu": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),
+    "vgn_ry_ms": ("PIDS",), "skn_nape_keyboard": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
 }
