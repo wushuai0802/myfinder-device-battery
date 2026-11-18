@@ -3611,6 +3611,112 @@ documentation were intentionally unchanged by that investigation. The
 second-round receive-only decision for FA60/FA65 is recorded below; it does
 not enable this AULA command path or claim brand identification.
 
+### AULA hec.aulacn.com web driver
+
+**Implemented as `aula`, project verification C, no hardware reading yet.**
+Evidence base: the hec.aulacn.com web driver bundle
+`static/js/app.c35ca532.js` (3.5 MB, minified but not obfuscated), analyzed
+offline. The working notes were AI-assisted and are not vendored; the bundle
+snapshot and its hash are not retained in this repository, so the anchors
+below cite surviving function names instead of pinned byte offsets. This is a
+different stack from the `hub265` desktop driver and its HX SDK recorded in
+the SC800 Max investigation above (`0B 81 00` framing, offsets 16/17/18,
+`38A6:28E9`): none of those commands, collections or identities are used here,
+and `38A6:28E9` is not in this driver's filter table.
+
+#### Identities and collections
+
+The driver's `requestDevice` filter list binds 18 exact VID:PID pairs; the
+reader enrolls 17 of them:
+
+| Vendor | Product IDs (declared collection) |
+| --- | --- |
+| `0x0C45` (Sonix) | `8031` (FF08:61), `8032` (FF08:61), `80A2` (FF08:61), `80B2` (FF08:61), `FEFE` (FF60:61), `FEFC` (FF80:01), plus `80A1`, `8801`, `80B1`, `800A`, `8803` without a declared collection |
+| `0x38A6` (AULA) | `2710`, `2711`, `2712`, `2722` (no declared collection) |
+| `0x28A6` | `2722` (no declared collection) |
+| `0x17EF` | `62F0` (no declared collection) |
+
+Filters without a usage page match any interface in WebHID and rely on a human
+picking the right one (`requestDevice` + `collections[0]`). The engine has no
+human in the loop, so those 11 identities require a vendor-defined usage page
+(`0xFF00`-`0xFFFF`) and never probe standard keyboard or mouse collections.
+`0x28A6:2722` and `0x17EF:62F0` are borrowed vendor IDs bound by the driver
+itself; they stay candidate-only identities. The driver's borrowed
+`05AC:024F` entry is deliberately NOT enrolled: the same identity is
+registered by the EPOMAKER HUB for TH108/TH87 keyboards on `FF68:0061` and is
+the maintainer's INFI75 identity (`docs/epomaker-hub-rongyuan.md`), so no
+collection gate can prove the brand before a query is sent.
+
+#### Framing (buildPkt_final / Hy / us)
+
+Output reports are unnumbered (`sendReport(0, ...)`): `AA | CMD | LEN |
+ADDR_L | ADDR_H | EXT | LAST | 0 | DATA...`, no CRC. The driver derives
+`packLen` from `collections[0].outputReports[0].items[0].reportCount`
+(observed values 32 and 64, i.e. hidapi caps lengths 33/65 with the Windows
+report-ID slot) and splits reads into `packLen - 8` chunks that `us()` merges
+by the 16-bit little-endian addr echo. Input replies are `55 | CMD | LEN |
+ADDR_L | ADDR_H | reserved[3] | DATA...`, where `Hy()` requires the 0x55
+marker and echoes cmd and addr; some layouts carry one leading report-ID byte
+and the driver tolerates both.
+
+The reader sends one first-packet-equivalent query per command —
+`AA 10 18 00 00 00 00 00` (keyboard stack) or `AA A0 18 00 00 00 00 00`
+(mouse/receiver stack), zero-padded to the proven output length. The LEN field
+`0x18` is the driver's own first-chunk length at packLen 32 and covers payload
+bytes 0-18, so one exchange yields battery and charging; the LAST flag stays 0
+as in the driver's non-final packets. Replies are accepted only with the cmd
+echo, addr echo `0x0000`, LEN echo `0x18`, and a length of 32 or 64 bytes
+(exact 8+24 echo, or the same frame padded at packLen 64); the async `55 FB`
+push (`DEVICE_NOTIFY`, subtype `02` = chargeStatus/battery, `01` disconnect,
+`04` close, `05` reload, `07` rate/DPI) never satisfies an echo check and is
+ignored. Driver timing: 500 ms per-packet timeout, 3 retries, 5 s battery poll
+cadence; the reader uses one 500 ms read budget per command and never retries.
+
+#### Battery and charging fields
+
+Keyboard stack: `getElectricityInfo` re-sends `sendReportSuper(16, ...)` every
+5 s and reads `deviceArray[17]` as the percentage (firmware version is BCD at
+bytes 8-9; the driver parses nothing else for battery). The keyboard stack
+does not interpret payload[18], so keyboard readings leave charging unknown.
+Mouse/receiver stack (`Ry`, GET_DEVICE_INFO `0xA0`, 64-byte info): `a[16]`
+work mode, `a[17]` battery, `a[18]` charge status — the reader treats non-zero
+as charging without guessing the enum beyond 0/1.
+
+A percentage of 0 is never shown: on the live dongle below the asleep unit
+produces an all-zero payload frame, so 0 (and the all-zero frame as a whole)
+is recorded as "device asleep/offline; no new reading" - the same trade-off
+the VGN/MCHOSE keyboard dongles make. A genuine near-empty battery reappears
+once it reports 1%.
+
+#### Live observations (2026-11-19, contributor dongle)
+
+The enrolled identity `0C45:FEFE` ("MINI 60 HE PRO Dongle") supplied the first
+hardware evidence, read through this project's own gated path (topology caps
+plus one exchange per command):
+
+- MI_03 `FF60:61` proves exactly the audited packLen-32 model: input and
+  output are each a single unnumbered ID-0 byte array of 33 bytes
+  (32 data + Windows slot). The dongle also exposes `FF59:61` (65/65) and
+  standard collections; neither is eligible, and nothing was sent to them.
+- Keyboard awake: `AA 10 18 00 00 00 00 00` → `55 10 18 00 00` + 24-byte
+  payload with battery payload[17] = 76%, payload[18] = 0x02. The byte-18
+  meaning is unverified and is not interpreted (keyboard readings stay
+  charging-unknown).
+- Keyboard asleep: the `0x10` stack is silent and the `0xA0` stack answers
+  the same echo with an all-zero payload; `0xA0` keeps answering all-zero
+  even while the keyboard is awake, so on this firmware the receiver stack
+  carries no battery data and the keyboard stack is the reading path.
+
+#### Limits
+
+Only `0C45:FEFE` has hardware evidence; the other 16 enrolled identities and
+the mouse-stack battery fields remain unverified, along with cold start,
+reconnection and coexistence with the official driver. A combo receiver
+exposing two eligible collections is rejected as ambiguous rather than probed.
+Only the two read commands above are ever sent; configuration, lighting,
+pairing, reset and firmware commands from the driver's command tables
+(`0x21`-`0x50`, `0xB1`-`0xBA`) are not implemented.
+
 ### Shared 1D57:FA60 / FA65 receivers: receive-only battery
 
 **Implemented at grade C (web 2026-11-06; exact legacy IN10 route 2026-11-07; SC650 user prefix 2026-11-10): 只接收，绝不发送。**
