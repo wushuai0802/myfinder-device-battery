@@ -173,6 +173,39 @@ class VgnRyMsTests(unittest.TestCase):
                 self.assertEqual(bus.opened, [])
                 self.assertEqual(bus.writes, [])
 
+    def test_vendor_listed_wireless_receivers_share_the_report_zero_query(self):
+        expected = {
+            0x1A08: "VGN Dragonfly Y2 V2 Pro Max",
+            0x1A13: "VGN Dragonfly F1 V2 Pro Max",
+            0x1A25: "VGN Dragonfly 3 Ultra",
+            0x1A2B: "VGN Dragonfly F1 V5 Ultra",
+            0x1A41: "VGN Dragonfly F2 V2 Ultra",
+        }
+        for pid, name in expected.items():
+            path = (rf"\\?\hid#vid_391d&pid_{pid:04x}&mi_01&col01#synthetic").encode()
+            target = entry(product_id=pid, interface_number=1, path=path)
+            with self.subTest(pid=pid), fixture([reply(62)], [target]) as bus:
+                status, = P().poll()
+                self.assertEqual((status.name, status.level, status.verification_level), (name, 62, "C"))
+                self.assertEqual(bus.writes, [(path, list(V.make_request()))])
+                self.assertEqual(bus.opened, bus.closed)
+
+    def test_new_receivers_refuse_sibling_paths_or_missing_report_proof(self):
+        target = entry(product_id=0x1A25, interface_number=1,
+                       path=br"\\?\hid#vid_391d&pid_1a25&mi_01&col01#synthetic")
+        for changes in (
+            {"interface_number": 2},
+            {"path": target["path"].replace(b"col01", b"col02")},
+            {"path": target["path"].replace(b"col01", b"col010")},
+            {"path": b"not-the-collection#also-not-the-collection#&mi_01&col01"},
+            {"product_id": 0x1028},
+            {"feature_report_sizes": None},
+        ):
+            with self.subTest(changes=changes), fixture([reply()], [dict(target, **changes)]) as bus:
+                self.assertEqual(P().poll(), [])
+                self.assertEqual(bus.opened, [])
+                self.assertEqual(bus.writes, [])
+
     def test_duplicate_and_unresolved_collections_never_open(self):
         inventories = ([entry(), entry(path=b"duplicate")],
                        [entry(physical_id="collection:unknown")],
