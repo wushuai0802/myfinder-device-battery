@@ -2023,6 +2023,42 @@ class Fa09DescriptorFallbackTests(unittest.TestCase):
                 self.backend.device.assert_not_called()
 
 
+class VgnRyMsDescriptorTests(unittest.TestCase):
+    def test_only_exact_receiver_feature_proof_is_published_and_cached(self):
+        case = DescriptorCacheTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.identities[PATH_A] = (0x391D, 0x1A04)
+        case.identities[PATH_B] = (0x391D, 0x1004)
+        length = 64
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = 0xFFFF, 2
+            value.feature, value.fv = length + 1, 1
+            return 0x00110000
+
+        def fields(report_type, fields_, count, data):
+            self.assertEqual(report_type, 2)
+            fields_[0].report, fields_[0].bits, fields_[0].count = 0, 8, length
+            return 0x00110000
+
+        case.hid.HidP_GetCaps.side_effect = caps
+        case.hid.HidP_GetValueCaps.side_effect = fields
+        infos = case.scan([PATH_A, PATH_B])
+        by_path = {row["path"]: row for row in infos}
+        self.assertEqual(by_path[PATH_A.encode()]["feature_report_sizes"], {"0": 65})
+        self.assertNotIn("feature_report_sizes", by_path[PATH_B.encode()])
+        self.assertIn(PATH_A, case.cache)
+        case.cache.clear()
+        length = 63
+        bad, = case.scan([PATH_A])
+        self.assertEqual(bad["feature_report_sizes"], {"0": 64})
+        self.assertNotIn(PATH_A, case.cache)
+        case.hid.HidD_GetFeature.assert_not_called()
+        case.hid.HidD_SetFeature.assert_not_called()
+
+
 class AsusOmniDescriptorTests(unittest.TestCase):
     """Synthetic OMNI caps prove each direction before query-handle access."""
     path = r"\\?\hid#vid_0b05&pid_1ace&mi_02&col03#synthetic-omni"

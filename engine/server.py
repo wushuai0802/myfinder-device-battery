@@ -36,6 +36,7 @@ PROVIDERS = (
     ("lingbao", "LingbaoProvider"),
     ("vgn_beiying", "VgnBeiyingProvider"),
     ("vgn_dragonfly3", "VgnDragonfly3Provider"),
+    ("vgn_ry_ms", "VgnRyMsProvider"),
     ("ninjutso_legacy", "NinjutsoLegacyProvider"),
     ("flydigi", "FlydigiProvider"),
     ("mchose_qhw_keyboard", "MchoseQhwKeyboardProvider"),
@@ -45,6 +46,7 @@ PROVIDERS = (
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
     ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
     ("dareu", "DareuProvider"),
+    ("delux", "DeluxProvider"),
     ("rapoo", "RapooProvider"),
     ("fa6x_passive", "Fa6xPassiveProvider"),
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
@@ -72,12 +74,13 @@ PROVIDER_VIDS = {
     "cherry": (0x046A,),
     "lingbao": (0x088D,),
     "vgn_beiying": (0x258A, 0x391D),
-    "vgn_dragonfly3": (0x391D,), "ninjutso_legacy": (0x1915,),
+    "vgn_dragonfly3": (0x391D,), "vgn_ry_ms": (0x391D,), "ninjutso_legacy": (0x1915,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
     "dareu": (0x260D,),
+    "delux": (0x3554,),
     "rapoo": (0x24AE,),
     "fa6x_passive": (0x1D57,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
@@ -97,8 +100,8 @@ BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
-NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
+READER_DIAGNOSTICS = {"delux", "vgn_ry_ms", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -676,7 +679,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return 0
     module = importlib.import_module("providers." + name)
     inventory = device_pack.select_inventory(name, inventory)
-    if name == "atk_headset":
+    if name in ("atk_headset", "delux", "vgn_ry_ms"):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("moondrop", "asus_omni"):
@@ -1355,6 +1358,8 @@ class BatteryEngine:
                                     continue
                                 vids = {d.get("vendor_id") for d in infos}
                                 if provider_name != "standard_hid" and not vids.intersection(PROVIDER_VIDS.get(provider_name, ())):
+                                    continue
+                                if provider_name in ("delux", "vgn_ry_ms") and not recognized_candidate_count(provider_name, infos):
                                     continue
                                 matches.append((group_id, infos))
                             if not matches and full_round:

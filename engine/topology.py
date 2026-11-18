@@ -348,6 +348,12 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = bool(sizes and sizes.get("17") in (21, 65)
                                      and sizes["17"] == max(sizes.values()) == caps.feature)
                 info["feature_report_proof"] = "caps" if caps_complete else "failed"
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage)
+                    == (0x391D, 0x1A04, 0xFFFF, 0x0002)):
+                from battery_hid import byte_report_sizes
+                sizes = byte_report_sizes(hid, data, caps, 2)
+                info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
+                caps_complete = caps.feature == 65 and sizes == {"0": 65}
             # The two keyboard protocols require proof of report IDs as well as
             # capacity. Inspect only their exact identity/collection; no I/O.
             if caps_complete and attrs.vendor == 0x3837 and (
@@ -414,6 +420,7 @@ def discover(paths, excluded=(), *, full=False):
                     (0x35D8, 0x0133, 0xFF02, 0x0002),
                     (0x35D8, 0x0133, 0x000C, 0x0001),
                     (0x3710, 0x5501, 0xFF02, 0x0002),
+                    (0x3554, 0xFB26, 0xFF02, 0x0002),
                     (0x41E4, 0x2001, 0xFF04, 0x0002),
                     (0x41E4, 0x2001, 0xFF02, 0x0002),
                     (0x3554, 0xFA09, 0xFF02, 0x0002),
@@ -426,7 +433,7 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 if (attrs.vendor, attrs.product) in (
                         (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014),
-                        (0x41E4, 0x2001), (0x3554, 0xFA09)):
+                        (0x41E4, 0x2001), (0x3554, 0xFA09), (0x3554, 0xFB26)):
                     # The alternate 1018 collection is useful only at 4D/64.
                     # Do not repeatedly open a known 41-byte/zero-capacity TLC
                     # for raw metadata. Keep all prior primary/provider gates.
