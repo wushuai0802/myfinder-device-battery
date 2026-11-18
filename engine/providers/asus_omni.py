@@ -1,4 +1,4 @@
-"""Grade-C ROG OMNI mouse battery candidate, pending hardware validation.
+"""Grade-C ROG receiver mouse battery candidates, pending hardware validation.
 
 Protocol facts only: seerge/g-helper 0bda6b55317f (GPL-3.0), documented in
 docs/rog-omni-ghelper.md section 2.2. Independent implementation; no pairing
@@ -15,7 +15,10 @@ from . import hidlist
 from .base import DeviceStatus, Provider
 
 VID = 0x0B05
-PIDS = {0x1ACE: "ROG OMNI 接收器（鼠标）"}
+PIDS = {
+    0x1ACE: "ROG OMNI 接收器（鼠标）",
+    0x1AD0: "ROG SPEEDNOVA 8K 接收器（鼠标）",
+}
 REPORT_ID = 0x03
 REPORT_BYTES = 64
 READ_TIMEOUT_MS = 300
@@ -38,6 +41,11 @@ def parse_reply(reply):
             or not 1 <= reply[5] <= 100):
         return None
     return reply[5], reply[10] > 0, ""
+
+
+def _receiver(info):
+    return (type(info.get("vendor_id")) is int and info["vendor_id"] == VID
+            and type(info.get("product_id")) is int and info["product_id"] in PIDS)
 
 
 def _collection(info):
@@ -83,9 +91,7 @@ class AsusOmniProvider(Provider):
         self._diag = []
 
     def _pick(self, infos):
-        identities = [info for info in infos
-                      if all(type(info.get(field)) is int for field in ("vendor_id", "product_id"))
-                      and (info["vendor_id"], info["product_id"]) == (VID, 0x1ACE)]
+        identities = [info for info in infos if _receiver(info)]
         if not identities:
             self._diag.append("OMNI identity mismatch; not opened")
             return None
@@ -159,8 +165,7 @@ class AsusOmniProvider(Provider):
             return []
         groups = {}
         for info in inventory:
-            if (any(type(info.get(field)) is not int for field in ("vendor_id", "product_id"))
-                    or (info["vendor_id"], info["product_id"]) != (VID, 0x1ACE)):
+            if not _receiver(info):
                 self._diag.append("OMNI identity mismatch; not opened")
                 continue
             physical = info.get("physical_id")
@@ -184,7 +189,7 @@ class AsusOmniProvider(Provider):
                 reading = self._query(dev)
                 if reading is not None:
                     result.append(DeviceStatus(
-                        key=f"{self.name}:{physical}", name=PIDS[0x1ACE], level=reading[0],
+                        key=f"{self.name}:{physical}", name=PIDS[info["product_id"]], level=reading[0],
                         charging=reading[1], source=self.name, kind="mouse", physical_id=physical,
                         connection_known=True, charging_known=True, verification_level="C"))
             finally:

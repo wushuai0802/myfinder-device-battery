@@ -2209,6 +2209,26 @@ class AsusOmniDescriptorTests(unittest.TestCase):
                 self.assertNotIn(self.target, self.case.cache)
                 self.assert_refused(info)
 
+    def test_speednova_uses_the_same_exact_metadata_only_proof(self):
+        path = self.path.replace("pid_1ace", "pid_1ad0")
+        self.configure(identity=(0x0B05, 0x1AD0), path=path)
+        proven = self.scan()
+        for direction in ("input", "output"):
+            self.assertEqual(proven[direction + "_report_sizes"], {"3": 64})
+            self.assertEqual(proven[direction + "_report_proof"], "caps")
+        self.assertIn(self.target, self.case.cache)
+
+        self.configure(identity=(0x0B05, 0x1AD0), path=path, out={3: 65})
+        wrong_size = self.scan()
+        self.assertNotIn(self.target, self.case.cache)
+        self.assert_refused(wrong_size)
+
+        self.configure(identity=(0x0B05, 0x1AD0), path=path.replace("col03", "col02"),
+                       collection=(0xFF00, 1))
+        wrong_collection = self.scan()
+        self.assertNotIn("output_report_sizes", wrong_collection)
+        self.assert_refused(wrong_collection)
+
     def test_proof_does_not_expand_vid_pid_usage_interface_or_collection(self):
         cases = [dict(identity=(0x0B06, 0x1ACE)), dict(identity=(0x0B05, 0x1ACF)),
                  dict(collection=(0xFF01, 2))]

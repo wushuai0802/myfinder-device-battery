@@ -378,8 +378,8 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(feature_report_length=caps.feature,
                             feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True))
                 caps_complete = (caps.feature == 33 and info["feature_report_sizes"] == {"15": 33})
-            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
-                    0x0B05, 0x1ACE, 0xFF01, 0x0001) and info["interface_number"] == 2
+            if (caps_complete and attrs.vendor == 0x0B05 and attrs.product in (0x1ACE, 0x1AD0)
+                    and (caps.page, caps.usage) == (0xFF01, 0x0001) and info["interface_number"] == 2
                     and len(path.split("#")) >= 3
                     and re.search(r"&mi_02&col03(?:&|$)", path.split("#")[1], re.I)):
                 # OMNI mouse candidate: access-0 metadata only, existing strict
