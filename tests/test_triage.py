@@ -60,6 +60,26 @@ def comment(body, bot=False):
 
 
 class TriageTests(unittest.TestCase):
+    def test_explicit_update_failure_with_hid_diagnostics_gets_the_release_page(self):
+        diag = report(unknown='9999:ABCD "Receiver" FF02:0002')
+        base = issue(in_app(diag, category="界面或操作", description="新版本无法更新"),
+                     title="[程序内反馈] 界面或操作：新版本无法更新")
+        result = triage.decide(base, KNOWN)
+        self.assertEqual(result["label"], "triage:bug")
+        self.assertIn(triage.RELEASES, result["reply"])
+        self.assertNotIn("设备目前还读不到", result["reply"])
+        self.assertIsNone(triage.decide(base, KNOWN, [comment(result["reply"], bot=True)])["reply"])
+        base["title"] = "[程序内反馈] 界面或操作：更新后设备不识别"
+        self.assertNotIn("官方发布列表", triage.decide(base, KNOWN)["reply"])
+
+    def test_known_receiver_mentions_its_published_beta_variant(self):
+        body = in_app(report(unknown='046D:0AB5 "Fixture" FF00:0001'))
+        devices = {"046D:0AB5": {"status": "beta", "version": "1.3.11-beta.13", "note": "仅指定变体"}}
+        result = triage.decide(issue(body), KNOWN, device_status=devices)
+        self.assertEqual(result["label"], "triage:supported")
+        self.assertIn("https://github.com/wushuai0802/myfinder-device-battery/releases/tag/v1.3.11-beta.13", result["reply"])
+        self.assertIn("仅指定变体", result["reply"])
+
     def test_issue_353_shared_ids_do_not_claim_support(self):
         body = (ROOT / "tests/fixtures/issue353-body.txt").read_text(encoding="utf-8")
         result = triage.decide(issue(body, labels=("triage:supported",)), known_ids.build_index())
@@ -969,7 +989,8 @@ class DeviceStatusTriageTests(unittest.TestCase):
         for entry, expected in (
                 ({"status": "beta", "version": "1.2.3-beta.4", "note": "仅鼠标"},
                  "ABCD:1234：测试版 1.2.3-beta.4 已加入读取，待实机验证（仅鼠标）。"
-                 "可在程序设置里打开「提醒测试版更新」后升级试用，并对照官方软件的电量。"),
+                 "旧版可开启「提醒测试版更新」，也可从[该版发布页](https://github.com/wushuai0802/myfinder-device-battery/releases/tag/v1.2.3-beta.4)下载完整 ZIP。"
+                 "已使用此版或更高版本，可直接对照官方软件的电量。"),
                 ({"status": "researching"}, "ABCD:1234：已有协议线索，正在研究，有进展会在这里更新。"),
                 ({"status": "no-evidence"}, "ABCD:1234：目前还缺协议资料，暂时无法读取。"),
                 ({"status": "not-a-device", "note": "充电底座，本身没有电量"},
@@ -983,7 +1004,7 @@ class DeviceStatusTriageTests(unittest.TestCase):
 
     def test_optional_notes_have_no_empty_parentheses(self):
         beta = self.reply_for({"ABCD:1234": {"status": "beta", "version": "1.2.3-beta.4"}})
-        self.assertIn("待实机验证。可在程序设置", beta)
+        self.assertIn("待实机验证。旧版可开启", beta)
         self.assertNotIn("（）", beta)
         accessory = self.reply_for({"ABCD:1234": {"status": "not-a-device"}})
         self.assertEqual(accessory, triage.MARKER + "\n自动回复：ABCD:1234：这是没有独立电量的配件，不需要适配。")

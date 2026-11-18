@@ -36,6 +36,8 @@ PAIR = re.compile(r"(?<![\w:])([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})(?![\w:])")
 TYPE = re.compile(r"^[ \t]*(?:\*\*)?类型(?:\*\*)?[ \t]*[：:][ \t]*([^\r\n]+?)[ \t\r]*$", re.MULTILINE)
 DEVICE_TYPES = {"设备不识别", "电量或 DPI 不对"}
 BUG_TYPES = {"界面或操作", "其他"}
+RELEASES = "https://github.com/wushuai0802/myfinder-device-battery/releases"
+UPDATE_FAILURE_TITLE = re.compile(r"(?:新版本|测试版|beta(?:版本)?|软件|程序|内置)?(?:无法(?:自动)?更新|不能更新|更新不了|更新失败|更新超时|无法升级)[。！!]?", re.IGNORECASE)
 HEADINGS = {"有卡片的设备": "card", "未取得电量的设备": "unadapted",
             "已隐藏的重复连接": "ignore", "读取器健康": "ignore"}
 LEGACY_CARD = re.compile(r"^(?:mouse|keyboard|headset|鼠标|键盘|耳机)[ \t]*[：:][ \t]*\S(?:.*\S)?[ \t]+\d{1,3}%",
@@ -101,7 +103,8 @@ def status_sentence(device_id, entry):
     if status == "beta":
         extra = f"（{note}）" if note else ""
         return (f"{device_id}：测试版 {entry['version']} 已加入读取，待实机验证{extra}。"
-                "可在程序设置里打开「提醒测试版更新」后升级试用，并对照官方软件的电量。")
+                f"旧版可开启「提醒测试版更新」，也可从[该版发布页]({RELEASES}/tag/v{entry['version']})下载完整 ZIP。"
+                "已使用此版或更高版本，可直接对照官方软件的电量。")
     if status == "not-a-device":
         return f"{device_id}：{note or '这是没有独立电量的配件'}，不需要适配。"
     text = ("已有协议线索，正在研究，有进展会在这里更新。" if status == "researching"
@@ -260,7 +263,13 @@ def decide(issue, known, comments=None, known_next=None, device_status=None, tri
         rows = [row for row in rows if row not in hit_rows]
     new_vendors = [row for row in rows if row[0] not in vendors]
     reply = None
-    if device_request and not reported:
+    title_subject = (issue.get("title") or "").rsplit("：", 1)[-1].strip()
+    if category in BUG_TYPES and UPDATE_FAILURE_TITLE.fullmatch(title_subject):
+        label, reason = "bug", "反馈标题明确报告程序更新失败。"
+        reply = (f"自动回复：内置更新失败时，可从[官方发布列表]({RELEASES})下载目标版本的完整 ZIP。"
+                 "请将 ZIP 完整解压到新目录，退出旧程序后运行新目录中的启动.bat。"
+                 "如需排查内置更新，请补充失败时的完整提示。")
+    elif device_request and not reported:
         label, reason, reply = "needs-info", "设备类反馈缺少 VID:PID。", NEEDS_INFO
     elif category == "电量或 DPI 不对" and reported and all(row[3] == "card" for row in reported):
         label, reason = "bug", "只有已取得电量的卡片设备，但反馈电量或 DPI 读数不对，需要人工检查。"
@@ -312,6 +321,9 @@ def decide(issue, known, comments=None, known_next=None, device_status=None, tri
     unsupported_reply = reply == UNSUPPORTED
     matched = status_matches(reported, device_status) if (
         unsupported_reply or reply == MODEL_MATCH_REQUIRED or (reply and label == "in-next-release")) else {}
+    if reply and label == "supported":
+        matched = {device_id: entry for device_id, entry in status_matches(reported, device_status).items()
+                   if entry["status"] == "beta"}
     if reply and not any((comment.get("user") or {}).get("login") == "github-actions[bot]"
                          and MARKER in (comment.get("body") or "") for comment in comments):
         if has_reply_credential(body):
