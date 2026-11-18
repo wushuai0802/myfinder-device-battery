@@ -60,7 +60,8 @@ static class UpdateTests {
         internal readonly Queue<UpdateResponse> Responses=new Queue<UpdateResponse>();
         internal readonly List<Uri> Requests=new List<Uri>();
         internal bool Timeout;
-        public UpdateResponse Get(Uri uri,CancellationToken token){token.ThrowIfCancellationRequested();Requests.Add(uri);if(Timeout)throw new WebException("fixture timeout",WebExceptionStatus.Timeout);return Responses.Dequeue();}
+        internal WebExceptionStatus? Failure;
+        public UpdateResponse Get(Uri uri,CancellationToken token){token.ThrowIfCancellationRequested();Requests.Add(uri);if(Timeout||Failure.HasValue)throw new WebException("fixture network failure",Failure??WebExceptionStatus.Timeout);return Responses.Dequeue();}
         internal void Reply(string text,int status=200,string location=null,long length=-1,string retry=null,string remaining=null,string reset=null){Responses.Enqueue(new UpdateResponse(status,new MemoryStream(Encoding.UTF8.GetBytes(text)),length,location,retry,remaining,reset));}
         internal void Bytes(byte[] bytes){Responses.Enqueue(new UpdateResponse(200,new MemoryStream(bytes),bytes.Length,null,null));}
     }
@@ -69,6 +70,50 @@ static class UpdateTests {
         internal string Root,Package;
         public bool IsStable(CancellationToken token){return Stable;}
         public void Start(PreparedUpdate update){Starts++;Root=update.InstallDirectory;Package=update.PackageDirectory;}
+    }
+    static void CatalogConnectionRecovery(string root,DateTime now){
+        string path=Path.Combine(root,"connection-retry.json");
+        var http=new Http {Timeout=true};
+        var checker=new UpdateChecker(http,path,"1.3.11-beta.10",now.AddHours(-1));
+        checker.Check(true,true,now);
+        Check(checker.ErrorCode=="update_timeout"&&http.Requests.Count==1,"failed catalogue attempt is recorded");
+        checker=new UpdateChecker(http,path,"1.3.11-beta.10",now);
+        checker.Check(true,true,now.AddMinutes(15).AddTicks(-1));
+        checker.Check(true,false,now.AddMinutes(15));
+        Check(http.Requests.Count==1,"persisted recovery waits 15 minutes and respects automatic-check setting");
+        checker.Check(true,true,now.AddMinutes(15));
+        Check(http.Requests.Count==2&&checker.ErrorCode=="update_timeout","one early retry after transient failure");
+        checker.Check(true,true,now.AddHours(6).AddMinutes(15).AddTicks(-1));
+        Check(http.Requests.Count==2,"failed early retry returns to six-hour cadence");
+        http.Timeout=false;
+        http.Reply(UpdateJson.Text(new[]{Release("1.3.11-beta.12")}));
+        var release=checker.Check(true,true,now.AddHours(6).AddMinutes(15));
+        Check(release!=null&&release.Version=="1.3.11-beta.12","recovered network finds the next beta");
+        checker.Check(true,true,now.AddHours(6).AddMinutes(30));
+        Check(http.Requests.Count==3,"success restores normal automatic cadence");
+
+        path=Path.Combine(root,"manual-network-recovery.json");
+        http=new Http {Timeout=true};
+        checker=new UpdateChecker(http,path,"1.3.11-beta.10",now.AddHours(-1));
+        checker.Check(true,true,now);
+        http.Timeout=false;http.Reply("limited",429,null,-1,"7200");
+        checker.Check(false,false,now.AddMinutes(1));
+        Check(http.Requests.Count==2,"manual check can retry immediately after transient failure");
+        checker.Check(true,true,now.AddMinutes(16));checker.Check(false,false,now.AddHours(1));
+        Check(http.Requests.Count==2,"server limit wins over transient recovery and manual checks");
+
+        foreach(var failure in new[]{WebExceptionStatus.ConnectFailure,WebExceptionStatus.TrustFailure}){
+            http=new Http {Failure=failure};
+            checker=new UpdateChecker(http,Path.Combine(root,"retry-"+failure+".json"),"1.3.11-beta.10",now.AddHours(-1));
+            checker.Check(true,true,now);
+            http.Failure=null;http.Reply(UpdateJson.Text(new[]{Release("1.3.11-beta.12")}));
+            release=checker.Check(true,true,now.AddMinutes(15));
+            if(failure==WebExceptionStatus.ConnectFailure){
+                Check(release!=null&&release.Version=="1.3.11-beta.12","connection recovery offers the beta on the early retry");
+                checker.Check(true,true,now.AddMinutes(30));
+                Check(http.Requests.Count==2,"successful early discovery clears recovery");
+            }else Check(release==null&&http.Requests.Count==1,"TLS trust failure does not schedule an early request");
+        }
     }
     sealed class Clock {
         internal double Seconds;
@@ -267,7 +312,8 @@ static class UpdateTests {
                 checker.Check(true,true,now.AddHours(6));Check(http.Requests.Count==1,"six hour interval does not bypass Retry-After "+status);
                 Check(checker.DownloadsAllowed(now.AddDays(1))&&checker.DownloadsAllowed(now.AddDays(2)),"catalog Retry-After does not block signed downloads "+status);
             }
-            http=new Http {Timeout=true};var timeout=new UpdateChecker(http,Path.Combine(root,"timeout.json"),"1.3.4",now.AddDays(-1));Check(timeout.Check(true,true,now)==null,"timeout quiet");timeout.Check(true,true,now.AddHours(1));Check(http.Requests.Count==1,"failure throttled");
+            CatalogConnectionRecovery(root,now);
+            http=new Http {Timeout=true};var timeout=new UpdateChecker(http,Path.Combine(root,"timeout.json"),"1.3.4",now.AddDays(-1));Check(timeout.Check(true,true,now)==null,"timeout quiet");timeout.Check(true,true,now.AddMinutes(1));Check(http.Requests.Count==1,"failure throttled");
             http=new Http();var off=new UpdateChecker(http,Path.Combine(root,"off.json"),"1.3.4",now.AddDays(-1));Check(off.Check(true,false,now)==null&&http.Requests.Count==0,"disabled checker has zero HTTP");
             http.Reply(UpdateJson.Text(new[]{Release("1.3.6")}));Check(off.Check(false,false,now).Version=="1.3.6"&&http.Requests.Count==1&&http.Requests[0].AbsoluteUri.StartsWith(UpdateTrust.ApiUrl),"manual discovery requests only API, never assets");
             Check(off.MarkNotified("1.3.6")&&!off.MarkNotified("1.3.6"),"notification at most once");

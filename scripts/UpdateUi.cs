@@ -195,6 +195,8 @@ namespace AtkBatteryTray {
             var wait=checker.Backoff(UpdateBackoffScope.Catalog,now);string code=checker.ErrorCode;
             if(!wait.Waiting(now)){
                 if(CatalogWaitCode(code))return (code=="update_http_403"&&wait.Source!="server"?"上次访问被拒绝，无法确认限流；":"")+"已可手动重试"+(cached==null?"":"；已缓存版本 "+cached.Version);
+                if(code=="update_timeout")return "检查更新超时，可手动重试";
+                if(code=="update_network_failed")return "连接 GitHub 失败，可手动重试";
                 return code==null?"未发现新版本":"检查未完成，详情已记入诊断";
             }
             if(wait.Source=="legacy")return "沿用旧记录等待检查（来源未知），剩余 "+Remaining(wait,now)+(cached==null?"":"；已缓存版本 "+cached.Version);

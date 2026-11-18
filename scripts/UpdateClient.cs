@@ -102,13 +102,16 @@ namespace AtkBattery {
         [DataMember(EmitDefaultValue=false)] public int AssetFailureCount;
         [DataMember(EmitDefaultValue=false)] public string CatalogBackoffSource;
         [DataMember(EmitDefaultValue=false)] public string AssetBackoffSource;
+        [DataMember(EmitDefaultValue=false)] public bool CatalogRetryPending;
         [OnDeserializing] void Defaults(StreamingContext context){LastCheckUtc=NotBeforeUtc=CatalogNotBeforeUtc=AssetNotBeforeUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);CatalogFailureCount=AssetFailureCount=0;CatalogBackoffSource=AssetBackoffSource=null;}
     }
     internal static class UpdateSchedule {
-        const int AutomaticCheckIntervalHours=6;
+        internal static readonly TimeSpan NormalInterval=TimeSpan.FromHours(6);
+        static readonly TimeSpan RecoveryInterval=TimeSpan.FromMinutes(15);
         internal static bool CanCheck(UpdateState state,DateTime now,DateTime started,bool automatic,bool enabled){
             if(now<UpdateChecker.EffectiveNotBefore(state,UpdateBackoffScope.Catalog))return false;if(!automatic)return true;
-            return enabled&&now>=started.AddMinutes(2)&&(state.LastCheckUtc==DateTime.MinValue||now>=state.LastCheckUtc.AddHours(AutomaticCheckIntervalHours));
+            var interval=state.CatalogRetryPending?RecoveryInterval:NormalInterval;
+            return enabled&&now>=started.AddMinutes(2)&&(state.LastCheckUtc==DateTime.MinValue||now-state.LastCheckUtc>=interval);
         }
     }
     internal sealed class UpdateChecker {
@@ -150,7 +153,15 @@ namespace AtkBattery {
             lock(gate){UpdateVersion seen;if(UpdateVersion.TryParse(state.SeenVersion,out seen)&&next.CompareTo(seen)<=0)return;string previous=state.SeenVersion;state.SeenVersion=version;try{Save();}catch{state.SeenVersion=previous;throw;}}
         }
         internal UpdateRelease Check(bool automatic,bool enabled,DateTime now,CancellationToken token=default(CancellationToken)){
-            lock(gate){if(!UpdateSchedule.CanCheck(state,now,started,automatic,enabled)){ErrorCode=now<EffectiveNotBefore(state,UpdateBackoffScope.Catalog)?"update_waiting_catalog":null;return null;}ErrorCode=null;state.LastCheckUtc=now;try{Save();}catch(Exception){ErrorCode="update_state_write_failed";return null;}}
+            bool earlyRetry;
+            lock(gate){
+                if(!UpdateSchedule.CanCheck(state,now,started,automatic,enabled)){ErrorCode=now<EffectiveNotBefore(state,UpdateBackoffScope.Catalog)?"update_waiting_catalog":null;return null;}
+                earlyRetry=automatic&&state.CatalogRetryPending&&now-state.LastCheckUtc<UpdateSchedule.NormalInterval;
+                ErrorCode=null;
+                state.LastCheckUtc=now;
+                state.CatalogRetryPending=false;
+                try{Save();}catch(Exception){ErrorCode="update_state_write_failed";return null;}
+            }
             try {
                 var bytes=UpdateNetwork.Fetch(transport,new Uri(UpdateTrust.ApiUrl+"?per_page=100"),2097152,token,null);
                 var releases=UpdateJson.Read<UpdateRelease[]>(bytes);UpdateRelease candidate;
@@ -164,8 +175,35 @@ namespace AtkBattery {
             }catch(UpdateHttpFailure error){
                 ErrorCode="update_http_"+error.Status;
                 if(error.Status==403||error.Status==429)lock(gate){ApplyBackoff(UpdateBackoffScope.Catalog,error,now);try{Save();}catch(Exception){}}
-            }catch(OperationCanceledException){ErrorCode="update_cancelled";}catch(WebException error){ErrorCode=error.Status==WebExceptionStatus.Timeout?"update_timeout":"update_network_failed";}catch(TimeoutException){ErrorCode="update_timeout";}catch(Exception){ErrorCode="update_check_failed";}
+            }catch(OperationCanceledException){ErrorCode="update_cancelled";}
+            catch(WebException error){
+                ErrorCode=error.Status==WebExceptionStatus.Timeout?"update_timeout":"update_network_failed";
+                if(!earlyRetry&&TransientConnection(error.Status))ScheduleCatalogRetry(now);
+            }catch(TimeoutException){
+                ErrorCode="update_timeout";
+                if(!earlyRetry)ScheduleCatalogRetry(now);
+            }catch(Exception){ErrorCode="update_check_failed";}
             return null;
+        }
+        static bool TransientConnection(WebExceptionStatus status){
+            switch(status){
+                case WebExceptionStatus.Timeout:
+                case WebExceptionStatus.NameResolutionFailure:
+                case WebExceptionStatus.ProxyNameResolutionFailure:
+                case WebExceptionStatus.ConnectFailure:
+                case WebExceptionStatus.SendFailure:
+                case WebExceptionStatus.ReceiveFailure:
+                case WebExceptionStatus.ConnectionClosed:
+                case WebExceptionStatus.KeepAliveFailure:return true;
+                default:return false;
+            }
+        }
+        void ScheduleCatalogRetry(DateTime attempt){
+            lock(gate){
+                if(state.LastCheckUtc!=attempt)return;
+                state.CatalogRetryPending=true;
+                try{Save();}catch(IOException){}catch(UnauthorizedAccessException){}
+            }
         }
         internal void Defer(UpdateHttpFailure error,DateTime now){Defer(error,now,UpdateBackoffScope.Asset);}
         internal void Defer(UpdateHttpFailure error,DateTime now,UpdateBackoffScope scope){if(error==null||error.Status!=403&&error.Status!=429)return;lock(gate){ApplyBackoff(scope,error,now);Save();}}
