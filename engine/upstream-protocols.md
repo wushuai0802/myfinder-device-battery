@@ -4178,3 +4178,17 @@ and output ID `08`, each 17 bytes, with a known USB parent and one candidate.
 The existing bounded exchange sends `08 04` once with checksum `49` after
 the zero arguments. The decoder validates the reply command, status, checksum
 and voltage before accepting the percentage at byte 6. Charging is unknown.
+
+## VGN shared 3554:FB3E 2.4 GHz receiver
+
+Reports from two owners identify the same CompX receiver under two retail mouse names.
+Both describe interface 1, FF02:0002 and the report 08 battery query. The Y2 Pro report
+includes 17-byte input and output reports and two distinct checksum-valid replies at
+40%. The F2 Pro Max report includes a 90% reply and a later reading of 85%.
+Only the 90% and 40% raw frames are available for replay. Keep the receiver name
+generic, treat charging as unknown, and require live per-report proof and one
+resolved USB parent. The wired 3554:FB3D identity is outside this candidate.
+Project verification grade C. Sleep transitions and concurrent use of VGN HUB
+on the released MyFinder reader still require hardware feedback.
+
+[Issue 733](https://github.com/wushuai0802/myfinder-device-battery/issues/733) · [Issue 802](https://github.com/wushuai0802/myfinder-device-battery/issues/802)

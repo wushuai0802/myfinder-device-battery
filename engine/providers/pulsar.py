@@ -112,6 +112,8 @@ VOLTAGE_SLICE = (8, 10)
 CONTROL_INTERFACE = 1           # the tool reads its 17-byte replies on interface 1
 CONTROL_USAGE = (0xFF02, 0x0002)   # the collection the OpenMouse ATK/VXE panel opens
 LINK8K_ID = (0x3710, 0x5501)
+FB3E_ID = (0x3554, 0xFB3E)
+FB3E_KEY_PREFIX = "pulsar:3554fb3e:"
 # Exact N9 identities use serial/Bolutek, never the broad ATK mouse fallback.
 ATK_HEADSET_PIDS = {0x1204, 0x1262, 0x12D6}
 
@@ -192,6 +194,7 @@ PIDS: Dict[int, Dict[int, str]] = {
         0xF58E: "VXE R1 SE 1K 接收器",  # 待实机验证; OpenMouse ATK CompX PID
         0xF505: "VGN Dragonfly 4K Receiver",  # maintainer's VGN F1 Pro, 2026-11-05
         0xF503: "VGN F1 Moba F503",  # #592 user capture; C / 待实机验证
+        0xFB3E: "VGN 2.4G 接收器 (FB3E)",  # Shared by multiple mouse models, #733 / #802.
     },
     0x373B: {
         0x1085: "ATK VXE R1 SE+ (2.4 GHz)",
@@ -574,6 +577,38 @@ def parse_link8k_power(r) -> Optional[Tuple[int, bool]]:
     return (parsed[0], r[POWER_INDEX] == 1) if parsed is not None else None
 
 
+def pick_fb3e(infos):
+    """Select the single observed MI_01 control collection of one USB receiver."""
+    exact = [d for d in infos if (d.get("vendor_id"), d.get("product_id")) == FB3E_ID]
+    controls = [d for d in exact if (d.get("usage_page"), d.get("usage")) == CONTROL_USAGE]
+    if len(controls) != 1:
+        return None
+    info = controls[0]
+    parent = info.get("physical_id")
+    if (not isinstance(parent, str) or not re.fullmatch(
+            r"pnp:usb\\vid_3554&pid_fb3e(?:&rev_[0-9a-f]{4})?\\[^\\\s]+", parent, re.I)
+            or any(d.get("physical_id") != parent for d in exact)
+            or type(info.get("interface_number")) is not int
+            or info["interface_number"] != CONTROL_INTERFACE or not info.get("path")):
+        return None
+    for direction in ("input", "output"):
+        maximum = info.get(direction + "_report_length")
+        sizes = info.get(direction + "_report_sizes")
+        if (type(maximum) is not int or maximum != PAYLOAD_LEN or not isinstance(sizes, dict)
+                or sizes != {"8": PAYLOAD_LEN} or type(sizes["8"]) is not int):
+            return None
+    return info
+
+
+def parse_fb3e_power(raw):
+    if (not isinstance(raw, (list, tuple, bytes, bytearray)) or len(raw) != PAYLOAD_LEN
+            or any(type(v) is not int or not 0 <= v <= 255 for v in raw)
+            or bytes(raw[2:6]) != b"\0\0\0\x02"):
+        return None
+    parsed = parse_link8k_power(raw)
+    return (parsed[0], False) if parsed is not None else None
+
+
 def voltage_mv(r) -> Optional[int]:
     if not r or len(r) < VOLTAGE_SLICE[1]:
         return None
@@ -673,6 +708,11 @@ class PulsarProvider(Provider):
         try:
             dev.open_path(path)
         except (OSError, IOError) as e:
+            if parse_reply is parse_fb3e_power:
+                try:
+                    dev.close()
+                except OSError:
+                    pass
             self._note_reader("battery open failed")
             self._diag.append(f"  open: {e}")
             return None
@@ -680,7 +720,10 @@ class PulsarProvider(Provider):
             operation = "read"
             self._drain(dev)
             operation = "write"
-            dev.write(make_request())
+            written = dev.write(make_request())
+            if parse_reply is parse_fb3e_power and written != PAYLOAD_LEN:
+                self._note_reader("battery query write short/failed")
+                return None
             operation = "read"
             for attempt in range(READ_ATTEMPTS):
                 r = dev.read(PAYLOAD_LEN, READ_TIMEOUT_MS)
@@ -745,8 +788,18 @@ class PulsarProvider(Provider):
                 reader_diag_start = len(self._reader_diag)
                 key = f"pulsar:{vid:04x}{pid:04x}"
                 link8k = (vid, pid) == LINK8K_ID
+                fb3e = (vid, pid) == FB3E_ID
                 parse_reply = parse_link8k_power if link8k else parse_power
-                if link8k:
+                if fb3e:
+                    d = pick_fb3e(mine)
+                    if d is None:
+                        self._note_reader("FB3E receiver or report 08/17 unproven; nothing sent")
+                        continue
+                    key = FB3E_KEY_PREFIX + d["physical_id"]
+                    present.add(key)
+                    name = pids[pid]
+                    parse_reply = parse_fb3e_power
+                elif link8k:
                     d = self._pick_link8k(mine)
                     if d is not None:
                         present.add(key)
@@ -789,7 +842,7 @@ class PulsarProvider(Provider):
                         self._note_reader("output=17 unproven; nothing sent" if has_control
                                           else "FF02:0002 missing; nothing sent")
                     continue
-                out_length = d["output_report_length"] if link8k else output_length(d["path"])
+                out_length = d["output_report_length"] if link8k or fb3e else output_length(d["path"])
                 self._diag.append(f"[Pulsar] pid={vid:04x}:{pid:04x} '{name}' "
                                   f"iface={d.get('interface_number')} "
                                   f"{d.get('usage_page', 0):04x}:{d.get('usage', 0):04x}"
@@ -813,9 +866,11 @@ class PulsarProvider(Provider):
                 pack = self._device_pack
                 pack_model = bool(pack and pack.loaded and any(
                     entry.provider == self.name and entry.match.matches(d) for entry in pack.entries))
-                dpi, target = (None, None) if pack_model or link8k else _capture_dpi(d, self._dpi_cache)
+                dpi, target = (None, None) if pack_model or link8k or fb3e else _capture_dpi(d, self._dpi_cache)
                 out.append(DeviceStatus(key, name, level, on_cable, True, "pulsar",
                                         kind="mouse", dpi=dpi, dpi_target=target,
+                                        physical_id=d["physical_id"] if fb3e else "",
+                                        charging_known=False if fb3e else None,
                                         model_source="pack" if pack_model else "builtin"))
         # A mouse that stopped answering is not necessarily a mouse that went away
         # (idle it stops answering - see the docstring), so its last reading stays
@@ -831,8 +886,11 @@ class PulsarProvider(Provider):
                 self._diag.append(f"[Pulsar] {name} did not answer; keeping {level}%"
                                   f"{' (charging)' if charging else ''} greyed "
                                   f"(its receiver is still plugged in)")
+                fb3e = key.startswith(FB3E_KEY_PREFIX)
                 out.append(DeviceStatus(key, name, level, charging, False, "pulsar",
-                                        kind="mouse", wake_on_input=True))
+                                        kind="mouse", wake_on_input=True,
+                                        physical_id=key[len(FB3E_KEY_PREFIX):] if fb3e else "",
+                                        charging_known=False if fb3e else None))
             else:
                 del self._last[key]
         return out

@@ -127,6 +127,7 @@ class FakeBus:
 
             def write(self, frame):
                 self.c.sent.append(list(frame))
+                return len(frame)
 
             def read(self, length, timeout_ms=0):
                 return self.c.read(length)
@@ -637,11 +638,17 @@ class PulsarTest(unittest.TestCase):
         for vid, pids in P.PIDS.items():
             for pid in pids:
                 with self.subTest(vid=vid, pid=pid):
-                    bus = FakeBus(vid, pid, [reply(33)])
-                    if (vid, pid) == (0x3710, 0x5501):
+                    frame = bytearray(reply(33))
+                    if (vid, pid) == P.FB3E_ID:
+                        frame[5] = 2
+                        frame[-1] = P.checksum(frame[:-1])
+                    bus = FakeBus(vid, pid, [frame])
+                    if (vid, pid) in ((0x3710, 0x5501), P.FB3E_ID):
                         for col in bus.cols:
                             col.info.update(input_report_length=17, output_report_length=17,
                                             input_report_sizes={"8": 17}, output_report_sizes={"8": 17})
+                            if (vid, pid) == P.FB3E_ID:
+                                col.info["physical_id"] = r"pnp:usb\vid_3554&pid_fb3e\fixture"
                     # Newly admitted CompX IDs require descriptor evidence; legacy models still
                     # exercise the established unknown-length allowance here.
                     strict = (vid, pid) in ((0x3554, 0xF517), (0x3554, 0xFB56),
