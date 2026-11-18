@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.3.11-beta.12**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.3.11-beta.13**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.3.11-beta.13 加入达尔优 CM610 Pro（260D:1074）的分离接口电量候选，待实机复测。检查更新时遇到临时网络故障，程序会在 15 分钟后自动补查一次。旧版内置更新失败时可从 Releases 下载完整 ZIP。
 
 1.3.11-beta.12 新增 VGN 蜻蜓 3 Pro Max（391D:1A04）和多彩 M900 Ultra / GH8K（3554:FB26）的 2.4G 接收器电量候选。程序核实目标集合和报告长度后查询。两款均有贡献者实机数据。本版还按 VGN HUB 的设备表加入 Y2 V2 Pro Max、蜻蜓 3 Ultra、F1 V2 Pro Max、F1 V5 Ultra 和 F2 V2 Ultra 的五款 2.4G 接收器候选。各候选均为 C 级，待实机复测。
 
