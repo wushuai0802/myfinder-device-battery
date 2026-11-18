@@ -6,7 +6,7 @@ Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDoc
 
 当前源码版本 **1.3.11-beta.12**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
 
-1.3.11-beta.12 新增 VGN 蜻蜓 3 Pro Max（391D:1A04）和多彩 M900 Ultra / GH8K（3554:FB26）的 2.4G 接收器电量候选。程序核实目标集合和报告长度后查询。两款均有贡献者实机数据，仍为 C 级，待用本次 MyFinder 测试版复测。
+1.3.11-beta.12 新增 VGN 蜻蜓 3 Pro Max（391D:1A04）和多彩 M900 Ultra / GH8K（3554:FB26）的 2.4G 接收器电量候选。程序核实目标集合和报告长度后查询。两款均有贡献者实机数据。本版还按 VGN HUB 的设备表加入 Y2 V2 Pro Max、蜻蜓 3 Ultra、F1 V2 Pro Max、F1 V5 Ultra 和 F2 V2 Ultra 的五款 2.4G 接收器候选。各候选均为 C 级，待实机复测。
 
 1.3.11-beta.11 新增 ROG 龙鳞 2 Ace 使用 SPEEDNOVA 8K 接收器（0B05:1AD0）时的只读鼠标电量与充电候选。程序会核对 USB 父设备、鼠标集合以及输入和输出报告，验证通过后才发出查询。已有上游 Windows 11 回复样本，本项目完成离线回放，仍为 C 级，待使用 MyFinder 实机核对。
 
