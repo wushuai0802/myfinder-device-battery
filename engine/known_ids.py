@@ -52,7 +52,7 @@ TABLES = {
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
     "fa6x_passive": ("PIDS",),
-    "dareu": ("PIDS",),
+    "dareu": ("PIDS",), "delux": ("PIDS",), "vgn_ry_ms": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),

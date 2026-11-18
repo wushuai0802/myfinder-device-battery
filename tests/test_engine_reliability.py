@@ -1025,6 +1025,21 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(all(child.closed == 0 for child in pool.children))
         engine.close()
 
+    def test_exact_receiver_readers_do_not_schedule_vendor_siblings(self):
+        inventory = [
+            dict(receiver("delux"), vendor_id=0x3554, product_id=0xFB26),
+            dict(receiver("other-3554"), vendor_id=0x3554, product_id=0xFB27),
+            dict(receiver("vgn"), vendor_id=0x391D, product_id=0x1A04),
+            dict(receiver("other-391d"), vendor_id=0x391D, product_id=0x1A01),
+        ]
+        pool = FakePool(inventory)
+        engine = poll_fixture(pool, ("delux", "vgn_ry_ms"))
+        self.addCleanup(engine.close)
+        with patch.object(hidlist, "interface_paths", return_value=frozenset()):
+            engine.poll(park_empty_readers=True)
+        queries = [call for call in pool.calls if call[0] in ("delux", "vgn_ry_ms")]
+        self.assertCountEqual(queries, [("delux", "physical-delux"), ("vgn_ry_ms", "physical-vgn")])
+
     def test_background_healthy_empty_round_parks_only_reader_slots(self):
         pool = FakePool([receiver("a")])
         engine = poll_fixture(pool, ("standard_hid",))

@@ -4138,3 +4138,27 @@ remaining hardware acceptance are recorded in `docs/zhuaudio-zg4.md`.
 The provider reads HID++ 2.0 generically from the receiver's `ff00` vendor collections (slots 1-6), so most other HID++ 2.0 mice and keyboards on a Lightspeed, Unifying or Bolt receiver should answer the same `0x1004` unified battery request. The G-series headsets - G533, G535, G633, G635, G733, G933, G935, G PRO, G PRO X - are in the headset pid table and use feature `0x1F20` (the G535 on its consumer collection). Only the models listed in the support table above are confirmed so far.
 
 Devices with no feature table at all (the older HID++ 1.0 generation) are read through the old battery registers instead: a short report `10 <slot> 81 <register>` on the short collection reads register `0x0D` (a percentage with a charging status - `30` discharging, `50` recharging, `90` full) or register `0x07` (a discrete level - 7 full, 5 good, 3 low, 1 critical - beside a charging byte), the same registers and order Solaar uses. This was added for the M710 keyboard of the MK710 wireless desktop ([#159](https://github.com/HeyOkay/HaloBattery/issues/159)), built from Solaar's implementation; **confirmed on hardware** in the reporter's test-build run - the icon shows the keyboard's coarse level.
+
+### VGN ryMs Dragonfly 3 Pro Max (391D:1A04)
+
+The [contributor's PR #717](https://github.com/wushuai0802/myfinder-device-battery/pull/717)
+traces VGN HUB's ryMs receiver battery command and records 92% and 91% on
+the 2.4 GHz receiver against 92% in VGN HUB. The MyFinder candidate is grade C.
+
+The only eligible route is `391D:1A04`, collection `FFFF:0002`, with a proven
+physical parent, one candidate collection and exactly one unnumbered
+65-byte Feature report including the Windows ID slot. Send one 64-byte
+payload that starts with `F7 00 00 00 00 00 00 08`, preceded by the ID slot,
+then read back Feature ID 0. The reply starts with ID 0 and payload byte 0
+equal to zero. Payload byte 2 is battery percent and byte 4 flags sleep.
+All-zero and wrong-length replies yield no reading. Charging is unknown.
+
+### DELUX M900 Ultra GH8K receiver (3554:FB26)
+
+[Contributor PR #453](https://github.com/wushuai0802/myfinder-device-battery/pull/453)
+includes GH8K hardware replies at 90% and a user retest at 85%. MyFinder retains grade C.
+The reading is confined to `3554:FB26`, `FF02:0002` and proven, sole input
+and output ID `08`, each 17 bytes, with a known USB parent and one candidate.
+The existing bounded exchange sends `08 04` once with checksum `49` after
+the zero arguments. The decoder validates the reply command, status, checksum
+and voltage before accepting the percentage at byte 6. Charging is unknown.
