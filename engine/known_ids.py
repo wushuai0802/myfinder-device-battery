@@ -34,6 +34,7 @@ from providers.profiles import profiles, registered_ids
 TABLES = {
     "atk_headset": ("PIDS",),
     "astro": ("PIDS",), "asus": ("KNOWN",), "asus_omni": ("PIDS",), "audeze": ("KNOWN",),
+    "aula": ("PIDS",),
     "corsair": ("PIDS", "BRAGI_PIDS"), "gwolves": ("WIRED", "MODELS"),
     "hyperx": ("PIDS",), "hyperx_cloud3": ("PIDS",),
     "hyperx_cloud3s": ("PIDS",), "jbl": ("PIDS",),
@@ -178,6 +179,13 @@ def build_index(root=None, *, engine_root=None):
                         # Older snapshots used one VID and integer PID keys.
                         vid, pid = identity if isinstance(identity, list) else (source.get("VID"), identity)
                         add(module, vid, pid, source.name(value), default_kind)
+                    continue
+                if module == "aula":
+                    # One filter table spans several VIDs and each identity
+                    # answers either stack at runtime; the offline index stays neutral.
+                    for key, value in source.table(table):
+                        vid, pid = source.literal(key)
+                        add(module, vid, pid, source.name(value), "device")
                     continue
                 if module == "mchose":
                     vid = source.get("A5_VID")
