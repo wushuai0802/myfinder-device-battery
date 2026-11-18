@@ -75,10 +75,13 @@ class AsusOmniBridgeTests(unittest.TestCase):
         for index in (build_index(), build_index(engine_root=ENGINE)):
             self.assertNotIn("asus_omni", index["unparsed"])
             self.assertNotIn("asus_omni", index["partial"])
-            row, = [r for r in index["devices"] if r["provider"] == "asus_omni"]
-            self.assertEqual((row["vendorId"], row["productId"], row["kind"], row["name"]),
-                             (0x0B05, 0x1ACE, "mouse", "ROG OMNI 接收器（鼠标）"))
-            self.assertTrue(row["requiresModelMatch"])
+            rows = [row for row in index["devices"] if row["provider"] == "asus_omni"]
+            self.assertCountEqual(
+                [(row["vendorId"], row["productId"], row["kind"], row["name"]) for row in rows],
+                [(0x0B05, 0x1ACE, "mouse", "ROG OMNI 接收器（鼠标）"),
+                 (0x0B05, 0x1AD0, "mouse", "ROG SPEEDNOVA 8K 接收器（鼠标）")],
+            )
+            self.assertTrue(all(row["requiresModelMatch"] for row in rows))
             self.assertEqual(index["vendors"]["asus_omni"], [0x0B05])
 
     def test_child_scopes_one_parent_and_one_literal_query(self):
@@ -94,6 +97,23 @@ class AsusOmniBridgeTests(unittest.TestCase):
                 self.assertEqual(bus.writes, [(F.entry(physical)["path"], F.REQUEST)])
                 self.assertEqual(bus.reads, [(F.entry(physical)["path"], 64, 300)])
                 self.assertEqual(bus.opened, bus.closed)
+
+    def test_speednova_child_produces_one_exact_mouse_card(self):
+        physical = "receiver-a"
+        info = F.speednova_entry(physical)
+        with F.fixture([F.reply(53)], [info]) as bus:
+            response = self.child(physical, [info])
+            self.assertEqual(response["candidateCount"], 1)
+            self.assertEqual(bus.writes, [(info["path"], F.REQUEST)])
+        engine = self.engine([])
+        engine._inventory_groups = {physical: [info]}
+        self.accept(engine, physical, response)
+        card, = engine._snapshot()["devices"]
+        self.assertEqual(
+            (card["vendorId"], card["productId"], card["percent"], card["kind"], card["verificationLevel"]),
+            (0x0B05, 0x1AD0, 53, "mouse", "C"),
+        )
+        self.assertIsNone(card["dpi"])
 
     def test_child_manager_current_card_charging_and_privacy(self):
         engine = self.engine([])
@@ -241,7 +261,10 @@ class AsusOmniBridgeTests(unittest.TestCase):
             return iter([path / "synthetic.json"]) if path.name == "pack" else original_glob(path, pattern)
 
         with patch.object(Path, "glob", glob), patch("known_ids.load_pack", return_value=pack):
-            self.assertFalse(any(r["provider"] == "asus_omni" for r in build_index()["devices"]))
+            self.assertEqual(
+                [r["productId"] for r in build_index()["devices"] if r["provider"] == "asus_omni"],
+                [0x1AD0],
+            )
         self.assertFalse(any(p.provider == "asus_omni" for p in profiles()))
 
     def test_existing_child_budget_and_failure_backoff_are_unchanged(self):

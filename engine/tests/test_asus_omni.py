@@ -28,6 +28,13 @@ def entry(physical="receiver-a", **changes):
     return info
 
 
+def speednova_entry(physical="receiver-a", **changes):
+    info = entry(physical)
+    info.update(product_id=0x1AD0, path=info["path"].replace(b"pid_1ace", b"pid_1ad0", 1))
+    info.update(changes)
+    return info
+
+
 def reply(level=77, charging=0):
     frame = [0] * 64
     frame[:3] = [3, 0x12, 7]
@@ -131,6 +138,39 @@ class AsusOmniTests(unittest.TestCase):
                     self.assertEqual(bus.writes, [(entry()["path"], REQUEST)])
                     self.assertEqual(bus.reads, [(entry()["path"], 64, 300)])
                     self.assertEqual(bus.calls, ["device", "open_path", "write", "read", "close"])
+
+    def test_speednova_reads_only_the_proven_mouse_path(self):
+        target = speednova_entry()
+        siblings = [
+            speednova_entry(usage_page=page, path=target["path"].replace(b"col03", route))
+            for page, route in ((0xFF00, b"col02"), (0xFF02, b"col01"), (0xFFC0, b"col04"))
+        ]
+        # The prefix is from the upstream Harpe II Ace capture (HaloBattery PR #364).
+        capture_prefix = bytes.fromhex("03 12 07 00 00 35 02 14 FD 0E 00 00")
+        with fixture([capture_prefix + bytes(52)], siblings + [target]) as bus:
+            status, = P().poll()
+            self.assertEqual((status.name, status.kind, status.level, status.charging),
+                             ("ROG SPEEDNOVA 8K 接收器（鼠标）", "mouse", 53, False))
+            self.assertEqual((status.physical_id, status.verification_level), ("receiver-a", "C"))
+            self.assertEqual(bus.opened, [target["path"]])
+            self.assertEqual(bus.closed, [target["path"]])
+            self.assertEqual(bus.writes, [(target["path"], REQUEST)])
+            self.assertEqual(bus.reads, [(target["path"], 64, 300)])
+
+    def test_speednova_requires_proven_reports_and_unique_route(self):
+        target = speednova_entry()
+        cases = [
+            ([speednova_entry(input_report_sizes=None)], "OMNI report 03/64 unproven; not opened"),
+            ([speednova_entry(output_report_sizes={"3": 65}, output_report_length=65)],
+             "OMNI report 03/64 unproven; not opened"),
+            ([speednova_entry(usage_page=0xFF00, path=target["path"].replace(b"col03", b"col02"))],
+             "OMNI collection mismatch; not opened"),
+            ([target, entry()], "OMNI collection ambiguous; not opened"),
+            ([speednova_entry(product_id=0x1C69)], "OMNI identity mismatch; not opened"),
+        ]
+        for inventory, reason in cases:
+            with self.subTest(reason=reason):
+                self.rejected(inventory, reason)
 
     def test_charging_depends_only_on_byte10(self):
         frame = reply(charging=0)

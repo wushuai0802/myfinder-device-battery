@@ -4010,7 +4010,7 @@ parents stay separate; pack disable rules block manager and child queries. No
 downloadable private profile is added. Complete literal frames, synthetic-test
 distinctions and acceptance limits: `docs/lingbao-m1pro.md`.
 
-### ROG OMNI mouse candidate (0B05:1ACE)
+### ROG OMNI and SPEEDNOVA 8K mouse candidates (0B05:1ACE / 0B05:1AD0)
 
 Independent grade-C candidate, pending hardware validation. Protocol facts:
 `seerge/g-helper@0bda6b55317f67c0ad68f3b5366a0e12a9096c53` (GPL-3.0),
@@ -4018,7 +4018,17 @@ Independent grade-C candidate, pending hardware validation. Protocol facts:
 [`docs/rog-omni-ghelper.md`](../docs/rog-omni-ghelper.md), section 2.2.
 No upstream implementation is copied. The existing `asus.py` is unchanged.
 
-Before a query handle opens, require exact VID:PID `0B05:1ACE`, interface 2
+SPEEDNOVA 8K (`0B05:1AD0`) uses the same mouse battery exchange.
+G-Helper's `Mouse/Models/HarpeIIAce.cs` pins interface 2, collection 03,
+report `03`, and the inherited 64-byte report size.
+[HaloBattery PR #364](https://github.com/HeyOkay/HaloBattery/pull/364)
+records a Harpe II Ace receiver reply on Windows 11 with byte 5 equal to
+`0x35` (53%) and byte 10 equal to zero for discharging. The pinned
+HaloBattery implementation `73e229cbee2e97fad659fcd96c78afdfa78488fb`
+corroborates the route. MyFinder reports a receiver mouse card. This
+candidate covers the mouse's battery and charging over 2.4 GHz.
+
+Before a query handle opens, require exact VID:PID `0B05:1ACE` or `0B05:1AD0`, interface 2
 and path `MI_02&Col03`, exact collection `FF01:0001`, a proven USB parent,
 and exactly one target route within that parent (count before report proof).
 Access-0 discovery uses the existing complete byte-array caps mechanism to
