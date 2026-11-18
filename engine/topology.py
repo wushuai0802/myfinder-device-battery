@@ -348,12 +348,13 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = bool(sizes and sizes.get("17") in (21, 65)
                                      and sizes["17"] == max(sizes.values()) == caps.feature)
                 info["feature_report_proof"] = "caps" if caps_complete else "failed"
-            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage)
-                    == (0x391D, 0x1A04, 0xFFFF, 0x0002)):
-                from battery_hid import byte_report_sizes
-                sizes = byte_report_sizes(hid, data, caps, 2)
-                info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
-                caps_complete = caps.feature == 65 and sizes == {"0": 65}
+            if caps_complete and attrs.vendor == 0x391D and (caps.page, caps.usage) == (0xFFFF, 0x0002):
+                from providers.vgn_ry_ms import matches_collection
+                if matches_collection(info):
+                    from battery_hid import byte_report_sizes
+                    sizes = byte_report_sizes(hid, data, caps, 2)
+                    info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
+                    caps_complete = caps.feature == 65 and sizes == {"0": 65}
             # The two keyboard protocols require proof of report IDs as well as
             # capacity. Inspect only their exact identity/collection; no I/O.
             if caps_complete and attrs.vendor == 0x3837 and (

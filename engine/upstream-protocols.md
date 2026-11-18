@@ -4145,9 +4145,14 @@ The [contributor's PR #717](https://github.com/wushuai0802/myfinder-device-batte
 traces VGN HUB's ryMs receiver battery command and records 92% and 91% on
 the 2.4 GHz receiver against 92% in VGN HUB. The MyFinder candidate is grade C.
 
-The only eligible route is `391D:1A04`, collection `FFFF:0002`, with a proven
+The contributor-tested route is `391D:1A04`, collection `FFFF:0002`, with a proven
 physical parent, one candidate collection and exactly one unnumbered
-65-byte Feature report including the Windows ID slot. Send one 64-byte
+65-byte Feature report including the Windows ID slot. The vendor's
+index-ZngoA_qG.js also maps five 2.4 GHz receivers to the same ryMs driver:
+391D:1A08 (Y2 V2 Pro Max), 1A13 (F1 V2 Pro Max), 1A25 (3 Ultra),
+1A2B (F1 V5 Ultra) and 1A41 (F2 V2 Ultra). Those five additionally
+require MI_01&Col01 and remain C based on source and offline evidence.
+The eligible receivers send one 64-byte
 payload that starts with `F7 00 00 00 00 00 00 08`, preceded by the ID slot,
 then read back Feature ID 0. The reply starts with ID 0 and payload byte 0
 equal to zero. Payload byte 2 is battery percent and byte 4 flags sleep.

@@ -2030,6 +2030,9 @@ class VgnRyMsDescriptorTests(unittest.TestCase):
         self.addCleanup(case.doCleanups)
         case.identities[PATH_A] = (0x391D, 0x1A04)
         case.identities[PATH_B] = (0x391D, 0x1004)
+        extra = r"\\?\hid#vid_391d&pid_1a25&mi_01&col01#synthetic"
+        sibling = extra.replace("col01", "col02")
+        case.identities[extra] = case.identities[sibling] = (0x391D, 0x1A25)
         length = 64
 
         def caps(data, pointer):
@@ -2045,10 +2048,12 @@ class VgnRyMsDescriptorTests(unittest.TestCase):
 
         case.hid.HidP_GetCaps.side_effect = caps
         case.hid.HidP_GetValueCaps.side_effect = fields
-        infos = case.scan([PATH_A, PATH_B])
+        infos = case.scan([PATH_A, PATH_B, extra, sibling])
         by_path = {row["path"]: row for row in infos}
         self.assertEqual(by_path[PATH_A.encode()]["feature_report_sizes"], {"0": 65})
+        self.assertEqual(by_path[extra.encode()]["feature_report_sizes"], {"0": 65})
         self.assertNotIn("feature_report_sizes", by_path[PATH_B.encode()])
+        self.assertNotIn("feature_report_sizes", by_path[sibling.encode()])
         self.assertIn(PATH_A, case.cache)
         case.cache.clear()
         length = 63

@@ -1,10 +1,11 @@
-"""VGN Dragonfly 3 Pro Max receiver battery query from VGN HUB's ryMs driver.
+"""VGN receiver battery queries from VGN HUB's ryMs driver.
 
 The contributor tested 391D:1A04 at 92% and 91% against VGN HUB's 92%.
 See engine/upstream-protocols.md for the report and evidence scope.
 """
 from __future__ import annotations
 
+import re
 import time
 
 import hid
@@ -13,11 +14,36 @@ from . import hidlist
 from .base import DeviceStatus, Provider
 
 VID = 0x391D
-PIDS = {0x1A04: "VGN 蜻蜓3 Pro Max"}
+PIDS = {
+    0x1A04: "VGN 蜻蜓3 Pro Max",
+    0x1A08: "VGN Dragonfly Y2 V2 Pro Max",
+    0x1A13: "VGN Dragonfly F1 V2 Pro Max",
+    0x1A25: "VGN Dragonfly 3 Ultra",
+    0x1A2B: "VGN Dragonfly F1 V5 Ultra",
+    0x1A41: "VGN Dragonfly F2 V2 Ultra",
+}
 COLLECTION = (0xFFFF, 0x0002)
 REPORT_ID = 0
 REPORT_BYTES = 65  # 64-byte Feature payload and one Windows report-ID slot.
 REPLY_WAIT = 0.06
+
+
+def matches_collection(info):
+    if (info.get("vendor_id") != VID or info.get("product_id") not in PIDS
+            or (info.get("usage_page"), info.get("usage")) != COLLECTION):
+        return False
+    if info["product_id"] == 0x1A04:
+        return True  # Preserve the same path acceptance as the original candidate.
+    path = info.get("path")
+    if info.get("interface_number") != 1 or not isinstance(path, (str, bytes)):
+        return False
+    try:
+        text = path.decode("utf-8") if isinstance(path, bytes) else path
+    except UnicodeError:
+        return False
+    parts = text.split("#")
+    return (len(parts) >= 3 and "\0" not in text
+            and re.search(r"&mi_01&col01(?:&|$)", parts[1], re.I) is not None)
 
 
 def checksum(prefix):
@@ -58,8 +84,7 @@ class VgnRyMsProvider(Provider):
 
         groups = {}
         for info in inventory:
-            if (info.get("vendor_id") != VID or info.get("product_id") not in PIDS
-                    or (info.get("usage_page"), info.get("usage")) != COLLECTION):
+            if not matches_collection(info):
                 continue
             physical = info.get("physical_id")
             if not isinstance(physical, str) or not physical.strip() or physical.casefold().startswith("collection:"):
