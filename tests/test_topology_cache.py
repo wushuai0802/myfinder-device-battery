@@ -775,6 +775,43 @@ class DescriptorCacheTests(unittest.TestCase):
         self.kernel.ReadFile.assert_not_called()
         self.kernel.WriteFile.assert_not_called()
 
+    def test_cm610_separate_tx_and_rx_proofs_reach_the_reader_from_discovery(self):
+        from providers import dareu
+        paths = (PATH_A, PATH_B)
+        for path in paths:
+            self.identities[path] = (0x260D, 0x1074)
+            self.products[path] = "2.4G Wireless Receiver"
+        self.parent.side_effect = lambda unused: r"pnp:usb\vid_260d&pid_1074\fixture"
+        self.hid.HidD_GetManufacturerString.side_effect = (
+            lambda handle, buf, size: setattr(buf, "value", "Compx") or 1)
+
+        def caps(data, ptr):
+            value = ctypes.cast(ptr, ctypes.POINTER(Caps)).contents
+            if self.handles[data.value] == PATH_A:
+                value.page, value.usage, value.feature, value.fv = 0xFF02, 2, 17, 1
+            else:
+                value.page, value.usage, value.input, value.iv = 0xFF01, 0, 17, 1
+            return 0x00110000
+
+        def values(direction, fields, length, data):
+            self.assertEqual(direction, 2 if self.handles[data.value] == PATH_A else 0)
+            fields[0].report, fields[0].bits, fields[0].count = (8 if direction == 2 else 9), 8, 16
+            return 0x00110000
+
+        self.hid.HidP_GetCaps.side_effect = caps
+        self.hid.HidP_GetValueCaps.side_effect = values
+        first = self.scan(paths)
+        self.assertEqual(first[0]["feature_report_sizes"], {"8": 17})
+        self.assertEqual(first[1].get("input_report_sizes"), {"9": 17})
+        self.assertIsNotNone(dareu.DareuProvider()._pick(first))
+        self.kernel.CreateFileW.reset_mock()
+        self.assertEqual(self.scan(paths), first)
+        self.kernel.CreateFileW.assert_not_called()
+        self.hid.HidD_GetFeature.assert_not_called()
+        self.hid.HidD_SetFeature.assert_not_called()
+        self.kernel.ReadFile.assert_not_called()
+        self.kernel.WriteFile.assert_not_called()
+
     def test_dareu_incomplete_feature_or_input_proof_is_retried_without_query(self):
         from providers import dareu
         for failed_type in (0, 2):

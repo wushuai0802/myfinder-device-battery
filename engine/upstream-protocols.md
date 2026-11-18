@@ -3155,6 +3155,17 @@ reader and removes its D-level observed-only entry.
 
 ### Dareu EM901 260D:1074
 
+The CM610 Pro shares this VID/PID. A contributor reported a hardware-tested
+split route with manufacturer `Compx` and product `2.4G Wireless Receiver`.
+Feature `08` on `FF02:0002` sends the same 17-byte power request. Input `09`
+on `FF01:0000` carries 17 bytes with command `04`, status zero, percentage
+at byte 6, charging at byte 7 and a byte sum of `55` modulo 256. The candidate
+requires a common USB parent and per-report descriptor evidence on both paths.
+It drains stale input before sending once. The existing single-collection
+EM901 route below retains priority and its original response validation.
+MyFinder's split implementation has offline fixture coverage. A device run
+with the stricter descriptor checks is pending. [Contributor attachment, #725](https://github.com/wushuai0802/myfinder-device-battery/issues/725#issuecomment-6969007615)
+
 **2026-11-06: integrated, C / 待实机验证; 260D:1090 remains disabled.** The
 third-round brief supplies #81's `FF02:0002` control collection and authorizes
 the official driver's **17-byte Feature report `08`, command `04`, followed

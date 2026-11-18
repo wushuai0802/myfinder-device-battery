@@ -15,6 +15,7 @@ from providers import dareu as D
 import server
 
 POWER_REQUEST = bytes.fromhex("08 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 49")
+CM610_PARENT = r"pnp:usb\vid_260d&pid_1074\fixture"
 
 
 def entry(**changes):
@@ -31,24 +32,41 @@ def reply(level=73, charging=0, status=0, command=4, report_id=9, length=17):
     return frame + [0] * (length - len(frame))
 
 
+def split_pair():
+    common = dict(physical_id=CM610_PARENT, manufacturer_string="Compx",
+                  product_string="2.4G Wireless Receiver")
+    return [entry(**common, input_report_length=0, input_report_sizes={}),
+            entry(**common, usage_page=0xFF01, usage=0, path=b"dareu-rx",
+                  feature_report_length=0, feature_report_sizes={})]
+
+
+def checked_reply(level, charging=0):
+    frame = reply(level, charging)
+    frame[-1] = (0x55 - sum(frame)) & 255
+    return frame
+
+
 @contextmanager
 def fixture(frames=(), inventory=None, short_send=False, error_at=None):
-    bus = SimpleNamespace(frames=list(frames), opened=[], closed=[], sent=[], reads=[])
+    bus = SimpleNamespace(frames=list(frames), opened=[], closed=[], sent=[], reads=[],
+                          io_paths=[])
 
     class Handle:
         def open_path(self, path):
             self.path = path
             bus.opened.append(path)
-            if error_at == "open":
+            if error_at == "open" or error_at == path:
                 raise OSError("private-path")
 
         def send_feature_report(self, frame):
+            bus.io_paths.append(("send", self.path))
             bus.sent.append(bytes(frame))
             if error_at == "send":
                 raise OSError("private-path")
             return len(frame) - short_send
 
         def read(self, length, timeout_ms):
+            bus.io_paths.append(("read", self.path))
             bus.reads.append((length, timeout_ms))
             if error_at == "read":
                 raise OSError("private-path")
@@ -65,6 +83,67 @@ def fixture(frames=(), inventory=None, short_send=False, error_at=None):
 
 
 class DareuTests(unittest.TestCase):
+    def test_cm610_split_reads_only_sibling_and_displays_checksummed_level(self):
+        corrupt = checked_reply(21)
+        corrupt[-1] ^= 1
+        for level, flag in ((0, 0), (76, 0x80), (100, 0)):
+            frames = [checked_reply(5), [], corrupt, checked_reply(level, flag)]
+            with self.subTest(level=level), fixture(frames, split_pair()) as bus:
+                status, = D.DareuProvider().poll()
+                self.assertEqual((status.level, status.charging, status.verification_level),
+                                 (level, bool(flag), "C"))
+                self.assertIn("CM610 Pro", status.name)
+                self.assertEqual(status.physical_id, CM610_PARENT)
+                self.assertIsNone(status.dpi)
+                self.assertEqual(bus.sent, [POWER_REQUEST])
+                self.assertEqual(bus.io_paths, [("read", b"dareu-rx")] * 2
+                                 + [("send", b"dareu-control")] + [("read", b"dareu-rx")] * 2)
+                self.assertCountEqual(bus.closed, bus.opened)
+
+    def test_cm610_missing_identity_or_descriptor_and_ambiguous_siblings_fail_closed(self):
+        tx, rx = split_pair()
+        inventories = [[tx], [rx], [tx, dict(rx, path=tx["path"])],
+                       [tx, rx, dict(rx, path=b"other", product_string="Other")],
+                       [tx, rx, dict(tx, path=b"other")],
+                       [tx, dict(rx, physical_id=CM610_PARENT + "2")]]
+        for field, value in (("manufacturer_string", ""), ("product_string", "Other"),
+                             ("path", b""), ("product_id", 0x1090)):
+            inventories.extend(([dict(tx, **{field: value}), rx], [tx, dict(rx, **{field: value})]))
+        for physical in ("", "collection:unknown", r"pnp:usb\vid_1234&pid_1074\fixture"):
+            inventories.append([dict(d, physical_id=physical) for d in (tx, rx)])
+        for change in (dict(feature_report_sizes=None), dict(feature_report_sizes={"7": 17}),
+                       dict(input_report_length=17, input_report_sizes=None),
+                       dict(input_report_length=17, input_report_sizes={"09": 17}),
+                       dict(input_report_length=17, input_report_sizes={9: 17}),
+                       dict(input_report_length=0, input_report_sizes={"4": 17})):
+            inventories.append([dict(tx, **change), rx])
+        for sizes in (None, {}, {"8": 17}, {"9": 16}, {"9": True}, {"9": 17, "1": 19}):
+            inventories.append([tx, dict(rx, input_report_sizes=sizes)])
+        for inventory in inventories:
+            with self.subTest(inventory=inventory), fixture([], inventory) as bus:
+                self.assertEqual(D.DareuProvider().poll(), [])
+                self.assertEqual((bus.opened, bus.sent), ([], []))
+
+    def test_cm610_stale_input_open_error_and_short_send_never_retry(self):
+        for frames, error, short, sent in (
+                ([checked_reply(30)] * H.MAX_READS, None, False, []),
+                ([], b"dareu-rx", False, []),
+                ([], None, True, [POWER_REQUEST]),
+                ([[], reply(64)[:-1], reply(status=1), reply(level=101)], None, False, [POWER_REQUEST])):
+            with self.subTest(error=error, short=short, stale=len(frames)), fixture(
+                    frames, split_pair(), short_send=short, error_at=error) as bus:
+                self.assertEqual(D.DareuProvider().poll(), [])
+                self.assertEqual(bus.sent, sent)
+                self.assertCountEqual(bus.opened, bus.closed)
+
+    def test_em901_proven_single_path_keeps_its_original_reply_validation(self):
+        tx, rx = split_pair()
+        tx.update(input_report_length=17, input_report_sizes={"9": 17})
+        with fixture([reply(72)], [tx, rx]) as bus:
+            status, = D.DareuProvider().poll()
+            self.assertEqual((status.name, status.level), ("Dareu EM901", 72))
+            self.assertEqual(bus.opened, [tx["path"]])
+
     def test_request_matches_official_driver_byte_for_byte(self):
         self.assertEqual(bytes(D.make_request()), POWER_REQUEST)
         self.assertEqual(sum(POWER_REQUEST) & 255, 0x55)
