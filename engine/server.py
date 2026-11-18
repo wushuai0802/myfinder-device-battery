@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 from device_pack import EMPTY_PACK, load_pack, parse_pack
 
 PROVIDERS = (
+    ("aula_mouse", "AulaMouseProvider"), ("aula_keyboard", "AulaKeyboardProvider"),
     ("razer", "RazerProvider"), ("audeze", "AudezeProvider"),
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
     ("mchose_headset", "MchoseHeadsetProvider"),
@@ -62,6 +63,7 @@ PROVIDERS = (
     ("xinput", "XInputProvider"),
 )
 PROVIDER_VIDS = {
+    "aula_mouse": (0x320F,), "aula_keyboard": (0x0C45,),
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D, 0x3837),

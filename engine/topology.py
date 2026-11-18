@@ -554,6 +554,13 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = info["feature_report_sizes"] is not None
             if (attrs.vendor, attrs.product) == (0x3837, 0x100C):
                 info["a5v2_descriptor_complete"] = bool(caps_complete and info["usage_page"] and info["usage"])
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x320F, 0x22BA, 0xFF1C, 0x0092),
+                    (0x0C45, 0xFEFE, 0xFF60, 0x0061)):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
             inventory.append(info)
