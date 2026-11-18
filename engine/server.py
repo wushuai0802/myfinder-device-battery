@@ -43,7 +43,7 @@ PROVIDERS = (
     ("mchose_by_keyboard", "MchoseByKeyboardProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
-    ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
+    ("pulsar", "PulsarProvider"), ("delux", "DeluxProvider"), ("jbl", "JblProvider"),
     ("dareu", "DareuProvider"),
     ("rapoo", "RapooProvider"),
     ("fa6x_passive", "Fa6xPassiveProvider"),
@@ -76,7 +76,7 @@ PROVIDER_VIDS = {
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
-    "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
+    "delux": (0x3554,), "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
     "dareu": (0x260D,),
     "rapoo": (0x24AE,),
     "fa6x_passive": (0x1D57,),
@@ -97,8 +97,8 @@ BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
-NO_CHARGING_EVIDENCE = {"bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+NO_CHARGING_EVIDENCE = {"delux", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
+READER_DIAGNOSTICS = {"delux", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -676,7 +676,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return 0
     module = importlib.import_module("providers." + name)
     inventory = device_pack.select_inventory(name, inventory)
-    if name == "atk_headset":
+    if name in ("atk_headset", "delux"):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("moondrop", "asus_omni"):
