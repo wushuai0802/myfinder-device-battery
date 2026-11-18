@@ -33,6 +33,20 @@ ID_LINE = re.compile(r'^\s*([0-9A-F]{4}):([0-9A-F]{4}) "([^"]*)"(.*)$')
 PROTOCOL = re.compile(r"抓包|描述符|descriptor|Report ?ID|协议|报文|帧|官方(?:软件|驱动).{0,40}(?:https?://|版本)|下载地址|\.exe|"
                       r"(?:[0-9A-Fa-f]{2} ){4,}[0-9A-Fa-f]{2}", re.I)
 BUG = re.compile(r"崩溃|闪退|报错|卡死|无响应|打不开|启动不了|更新失败|安装失败|bug|异常|错误", re.I)
+PAST_WORKING = re.compile(
+    r"(?:之前|以前|此前|原来|曾经|[旧老]版本?|上(?:上)?(?:一)?个版本)"
+    r"[^不没无未，,。；;！？!?\n]{0,16}?"
+    r"(?:(?:能|能够|可以)(?:正常)?(?:显示|识别|读[取到出])|正常(?:显示|识别|读取)|是可以的)"
+)
+CURRENT_LOSS = re.compile(
+    r"(?:(?:更新|升级)(?:之?后|以后)|这次更新|新版(?:本)?|"
+    r"最新(?:的这?[一两二三\d]+个)?版本?|这[两二]个版本|现在|目前|突然)"
+    r"[，,]?[^，,。；;！？!?\n]{0,30}?"
+    r"(?:(?:无法|不能|不再?|没有)(?:正常)?(?:显示|识别|读取)|"
+    r"(?:识别|读|看|检测)不到|(?:识别|显示)不了|没有电量|没电量|失效)"
+)
+SPECULATIVE = re.compile(r"如果|假如|假设|要是|万一|请保证|请确保|千万不要|不要不|请别不|会不会")
+
 HOT_THRESHOLD = 3
 # Laptop/motherboard internals (Intel Bluetooth, Lenovo, ASUS keyboard/audio).
 BUILTIN_VENDORS = {"8087", "17EF", "048D", "1462"}
@@ -101,8 +115,21 @@ def parse_body(body):
             "cards": cards, "unknown": unknown}
 
 
+def is_device_regression(text):
+    # Drop quoted feedback. Match one short sentence or two adjacent ones.
+    unquoted = "\n".join(line for line in text.splitlines()
+                         if not line.lstrip().startswith((">", "&gt;")))
+    sentences = [part.strip() for part in re.split(r"[。！？!?\n]+", unquoted) if part.strip()]
+    pairs = [left + "。" + right for left, right in zip(sentences, sentences[1:])]
+    return any(
+        len(window) <= 120 and not SPECULATIVE.search(window)
+        and PAST_WORKING.search(window) and CURRENT_LOSS.search(window)
+        for window in sentences + pairs
+    )
+
+
 def priority_items(new_issues, user_comments, supplements, counts_path):
-    """Protocol contributions, program bugs and unsupported IDs seen in >= 3 issues."""
+    """Device regressions, protocol contributions, bugs and frequently reported unknown IDs."""
     items, seen = [], set()
 
     def add(kind, number, why):
@@ -110,10 +137,15 @@ def priority_items(new_issues, user_comments, supplements, counts_path):
             seen.add((kind, number))
             items.append({"kind": kind, "number": number, "why": why[:160].replace("\n", " / ")})
 
-    texts = [(n["number"], n["title"] + " " + n["description"], "issue") for n in new_issues]
+    texts = [(n["number"], n["title"] + "\n" + n["description"], "issue") for n in new_issues]
     texts += [(c["number"], c["text"], "comment") for c in user_comments]
     texts += [(s["number"], s["text"], "supplement") for s in supplements]
     for number, text, _ in texts:
+        if is_device_regression(text):
+            add("设备回归", number, text)
+    for number, text, source in texts:
+        if source == "issue":
+            text = text.replace("\n", " ", 1)
         if PROTOCOL.search(text):
             add("协议/驱动线索", number, text)
         elif BUG.search(text):

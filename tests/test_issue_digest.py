@@ -100,6 +100,49 @@ class DigestTests(unittest.TestCase):
             self.assertEqual([d["requiresModelMatch"] for d in result["newIssues"][0]["unknown"]],
                              [True, False, False])
 
+    def test_regression_priority_from_each_feedback_channel(self):
+        issues = [
+            {"number": 998, "title": "闪退", "description": "打开面板后程序闪退", "unknown": []},
+            {"number": 153, "title": "音响未显示电量", "unknown": [],
+             "description": ("迈从bs585蓝牙连接的音响，能识别但是没有电量反馈，"
+                             "之前有一个版本能显示电量的，但是不知道为什么最新的这两个版本里就没有显示了")},
+        ]
+        comments = [
+            {"number": 146, "text": "另外更新后我的维咖nut65键盘识别不到设备了，之前是可以的。上上个版本还可以识别"},
+            {"number": 153, "text": "以前可以显示电量。现在不显示了。"},  # Duplicate issue.
+        ]
+        supplements = [
+            {"number": 157, "text": "旧版正常识别，更新后识别不到设备了。官方驱动下载地址：https://example.invalid/driver"},
+            {"number": 997, "text": "附上抓包描述符。"},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            items = digest.priority_items(issues, comments, supplements, Path(folder) / "counts.json")
+        self.assertEqual([(p["kind"], p["number"]) for p in items], [
+            ("设备回归", 153), ("设备回归", 146), ("设备回归", 157),
+            ("程序问题", 998), ("协议/驱动线索", 157), ("协议/驱动线索", 997),
+        ])
+
+    def test_ordinary_requests_recoveries_hypotheticals_and_quotes_stay_out(self):
+        texts = [
+            "版本 1.3.11，新买的键盘没有电量，希望适配",
+            "之前一直无法识别，更新之后终于能正常识别了",
+            "之前不能显示电量，现在可以显示",
+            "之前可以识别，请保证更新后不要不显示",
+            "如果之前能识别，更新后不显示，怎么办？",
+            "> 之前能识别，现在识别不到设备了。\n我的设备是新买的。",
+            "以前可以显示电量。" + "无关细节" * 30 + "现在读不到电量。",
+        ]
+        issues = [
+            {"number": 1000, "title": "新设备", "unknown": [],
+             "description": "&gt; 之前可以显示电量，现在不显示了。\n希望支持这台新鼠标。"},
+        ]
+        comments = [{"number": index, "text": line} for index, line in enumerate(texts, 1001)]
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(
+                digest.priority_items(issues, comments, [], Path(folder) / "counts.json"), [],
+            )
+
+
 
 class IndexGateTests(unittest.TestCase):
     def test_static_metadata_gates_arbitrary_ids_without_executing_providers(self):
