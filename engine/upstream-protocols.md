@@ -320,6 +320,8 @@ percentage and byte 3 for state: `02` accepts only 0-100; `00`/`03` signal exter
 power with `level=None` (charging-compatible flag true, unable to distinguish
 charging from full while plugged in); `1A` explicitly signals offline with no
 percentage. An explicit unknown percentage clears the old value in the engine.
+The official M HUB BLK parser maps status 04 to full. Its createReadBatteryCommand and parseBatteryResponse use the same 55/65 exchange as this reader. For a 291D:385D whose product name is MCHOSE V9 PRO, MyFinder accepts 04 as online and no longer charging. It displays 100% only if the device supplies 100. The existing 00/03 external-power behavior is preserved. An actual 20% discharge reading appears in #546. The absence of a reply on #305 remains open. [M HUB source, BLK parser near offset 459499](https://www.mchose.com.cn/assets/main-DCRwBIvm.js) · [Observed 20% reading](https://github.com/wushuai0802/myfinder-device-battery/issues/546) · [Silent receiver](https://github.com/wushuai0802/myfinder-device-battery/issues/305)
+
 Other states and invalid lengths/percentages are diagnosed and rejected. Silence
 does not prove power-off. No EQ, firmware-update or alternative battery commands
 are sent, and no speculative checksum is added.

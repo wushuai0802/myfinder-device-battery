@@ -161,6 +161,71 @@ class MchoseHeadsetTests(unittest.TestCase):
                 self.assertEqual(self.provider.poll(), [])
                 self.assertIn(expected, " ".join(self.provider.diagnostics()))
 
+    def test_original_full_state_requires_exact_model_name_and_level_100(self):
+        inventory = pro_inventory()
+        inventory[-1]["product_string"] = "  mChOsE V9 PrO  "
+        with fixture([reply(100, 0x04)], inventory=inventory) as bus:
+            status, = self.provider.poll()
+        self.assertEqual((status.level, status.charging, status.online),
+                         (100, False, True))
+        self.assertFalse(status.level_unavailable)
+        self.assertTrue(status.charging_known)
+        self.assertEqual(bus.writes, [(entry()["path"], [0x55, 0x65, 1] + [0] * 61)])
+
+    def test_original_full_state_keeps_stale_level_unavailable(self):
+        for level in (0, 20, 99, 101, 255):
+            inventory = pro_inventory()
+            inventory[-1]["product_string"] = "MCHOSE V9 PRO"
+            provider = M.MchoseHeadsetProvider()
+            with self.subTest(level=level), fixture(
+                    [reply(level, 0x04)], inventory=inventory):
+                status, = provider.poll()
+            self.assertEqual((status.level, status.charging, status.online),
+                             (None, False, True))
+            self.assertTrue(status.level_unavailable)
+            self.assertTrue(status.charging_known)
+
+    def test_original_20_percent_discharge_is_unchanged(self):
+        inventory = pro_inventory()
+        inventory[-1]["product_string"] = "MCHOSE V9 PRO"
+        with fixture([reply(20)], inventory=inventory):
+            status, = self.provider.poll()
+        self.assertEqual((status.level, status.charging, status.online),
+                         (20, False, True))
+
+    def test_same_pid_sibling_and_unnamed_receiver_do_not_inherit_full(self):
+        for product_name in ("MCHOSE G9 Pro", None):
+            inventory = pro_inventory()
+            for info in inventory:
+                info["product_string"] = product_name
+            provider = M.MchoseHeadsetProvider()
+            with self.subTest(product_name=product_name), fixture(
+                    [reply(100, 0x04)], inventory=inventory):
+                self.assertEqual(provider.poll(), [])
+                self.assertIn("state=0x04", " ".join(provider.diagnostics()))
+
+    def test_turbo_does_not_inherit_full_state(self):
+        with fixture([reply(100, 0x04)], inventory=turbo_inventory()):
+            self.assertEqual(self.provider.poll(), [])
+        self.assertIn("state=0x04", " ".join(self.provider.diagnostics()))
+
+    def test_original_unknown_state_is_still_rejected(self):
+        inventory = pro_inventory()
+        inventory[-1]["product_string"] = "MCHOSE V9 PRO"
+        with fixture([reply(90, 0x05)], inventory=inventory):
+            self.assertEqual(self.provider.poll(), [])
+        self.assertIn("state=0x05", " ".join(self.provider.diagnostics()))
+
+    def test_original_missing_ff90_reports_once_without_io(self):
+        with fixture([], inventory=[firmware_entry(
+                product_string="MCHOSE V9 PRO")]) as bus:
+            self.assertEqual(self.provider.poll(), [])
+            diagnostics = self.provider.diagnostics()
+        self.assertEqual(len(diagnostics), 1)
+        self.assertIn("缺少 FF90:0001", diagnostics[0])
+        self.assertEqual(bus.opened, [])
+        self.assertEqual(bus.writes, [])
+
     def test_unrelated_and_malformed_reports_are_skipped_on_same_handle(self):
         for invalid in (reply(command=0x11), [0x65, 90, 2] + [0] * 61,
                         reply()[:4], reply()[:-1], reply() + [0]):
