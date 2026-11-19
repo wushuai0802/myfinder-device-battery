@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 from device_pack import EMPTY_PACK, load_pack, parse_pack
 
 PROVIDERS = (
+    ("weikav_nut75", "Nut75Provider"), ("veekos_shine60", "Shine60Provider"),
     ("aula_mouse", "AulaMouseProvider"), ("aula_keyboard", "AulaKeyboardProvider"),
     ("razer", "RazerProvider"), ("audeze", "AudezeProvider"),
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
@@ -54,7 +55,7 @@ PROVIDERS = (
     ("fa6x_passive", "Fa6xPassiveProvider"),
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
     ("barracuda", "BarracudaProvider"), ("asus", "AsusProvider"),
-    ("asus_omni", "AsusOmniProvider"),
+    ("asus_omni", "AsusOmniProvider"), ("asus_headset", "AsusHeadsetProvider"),
     ("gwolves", "GWolvesProvider"), ("lofree", "LofreeProvider"),
     ("astro", "AstroProvider"), ("corsair", "CorsairProvider"),
     ("lamzu", "LamzuProvider"), ("am_infinity", "AmInfinityProvider"),
@@ -65,6 +66,7 @@ PROVIDERS = (
     ("xinput", "XInputProvider"),
 )
 PROVIDER_VIDS = {
+    "weikav_nut75": (0x0C45,), "veekos_shine60": (0x3151,),
     "aula_mouse": (0x320F,), "aula_keyboard": (0x0C45,),
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
@@ -91,7 +93,7 @@ PROVIDER_VIDS = {
     "fa6x_passive": (0x1D57,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
-    "asus_omni": (0x0B05,),
+    "asus_omni": (0x0B05,), "asus_headset": (0x0B05,),
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
     "am_infinity": (0x3151,), "steelseries_elite": (0x1038,),
     "logitech_centurion": (0x046D,), "hyperx_cloud3s": (0x03F0,), "nzxt": (0x1E71,),
@@ -288,7 +290,8 @@ def suppress_bluetooth_xinput(devices):
 def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
-        if (a.get("provider") in ("cherry", "lingbao", "zhuaudio", "asus_omni")
+        if (a.get("provider") in ("cherry", "lingbao", "zhuaudio", "asus_omni", "asus_headset",
+                                  "weikav_nut75", "veekos_shine60")
                 or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
@@ -691,7 +694,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     if name in ("atk_headset", "delux", "vgn_ry_ms"):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
-    if name in ("moondrop", "asus_omni", "sony_inzone"):
+    if name in ("moondrop", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60", "weikav_nut75"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
@@ -1368,7 +1371,9 @@ class BatteryEngine:
                                 vids = {d.get("vendor_id") for d in infos}
                                 if provider_name != "standard_hid" and not vids.intersection(PROVIDER_VIDS.get(provider_name, ())):
                                     continue
-                                if provider_name in ("delux", "vgn_ry_ms", "sony_inzone") and not recognized_candidate_count(provider_name, infos):
+                                if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset",
+                                                      "weikav_nut75", "veekos_shine60")
+                                        and not recognized_candidate_count(provider_name, infos)):
                                     continue
                                 matches.append((group_id, infos))
                             if not matches and full_round:
