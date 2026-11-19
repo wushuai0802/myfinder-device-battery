@@ -1283,7 +1283,7 @@ links are mutable `main` references, not the supplied pinned ATK snapshot.
 The K99 community source has no confirmed reuse licence in the research and
 is not copied. No vendor driver code, settings writes or DPI commands are added.
 
-### VGN F1 Moba F503 (3554:F503)
+### VGN F1 Moba F503 (3554:F503) and F506 (3554:F506)
 
 **C / 待本项目实机验证; read-only battery candidate.** Issue
 [#592](https://github.com/wushuai0802/myfinder-device-battery/issues/592)
@@ -1325,6 +1325,18 @@ charging transitions, cold start, deep sleep/wake and vendor-driver coexistence
 still require real-device verification. The status remains `researching`
 until a release containing this candidate is published; no release version is
 claimed here.
+
+Issue [#644](https://github.com/wushuai0802/myfinder-device-battery/issues/644)
+reports the wired `3554:F506` identity with product string `VGN F1 MOBA`.
+The pinned [official VGN HUB bundle](https://drive.vgnlab.com.cn/assets/index-ZngoA_qG.js),
+`.ai/evidence/vgnhub/index-ZngoA_qG.js` (2,960,070 bytes), maps this exact product ID to its
+`vgn-f1-pm` driver with `FF02:0002` and report ID 8. Its battery query uses
+command `04`; WebHID bytes 5 and 6 are the percentage and charging flag.
+Because WebHID excludes the report ID, those are bytes 6 and 7 of this
+project's 17-byte receive frame. The existing header, checksum, length and
+percentage validation remain unchanged. There is no supplied F506 reply,
+vendor-display comparison or hardware test, so it is a strict C-grade
+battery-only candidate and DPI remains disabled.
 
 ### Windows XInput gamepad battery
 

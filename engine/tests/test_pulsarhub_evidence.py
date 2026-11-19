@@ -206,6 +206,21 @@ class PulsarHubEvidenceTests(unittest.TestCase):
         self.assertIn("3554:F503", reader["matchScope"])
         self.assertIn("#592", reader["matchScope"])
 
+    def test_issue644_f506_registered_in_server_and_index_as_level_c_battery_only(self):
+        self.assertIn(0x3554, server.PROVIDER_VIDS["pulsar"])
+        self.assertIn((0x3554, 0xF506), P.STRICT_COMPX_IDS)
+        self.assertNotIn((0x3554, 0xF506), P.DPI_MODELS)
+        bus = FakeBus(0x3554, 0xF506, shape=[(1, 0xFF02, 2)])
+        self.assertEqual(server.recognized_candidate_count("pulsar", bus.enumerate(0x3554)), 1)
+        entry, = [d for d in build_index()["devices"]
+                  if (d["vendorId"], d["productId"]) == (0x3554, 0xF506)]
+        self.assertEqual((entry["provider"], entry["kind"], entry["name"]),
+                         ("pulsar", "mouse", "VGN F1 MOBA"))
+        reader, = [d for d in load_catalog()["readers"] if d["provider"] == "pulsar"]
+        self.assertEqual(reader["verificationLevel"], "C")
+        self.assertIn("3554:F506", reader["matchScope"])
+        self.assertIn("#644", reader["matchScope"])
+
     def test_link8k_registered_in_server_and_index_as_level_c_battery_only(self):
         self.assertIn(0x3710, server.PROVIDER_VIDS["pulsar"])
         self.assertNotIn(0x3710, server.DPI_PROVIDERS["pulsar"])

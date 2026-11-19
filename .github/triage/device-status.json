@@ -83,6 +83,11 @@
       "note": "F503接收器只读电量候选；请对照官方软件验证",
       "reports": 0
     },
+    "3554:F506": {
+      "status": "researching",
+      "note": "VGN F1 MOBA 有线接口只读电量候选；请对照官方软件验证",
+      "reports": 0
+    },
     "3554:FB26": {
       "status": "beta",
       "version": "1.3.11-beta.12",
