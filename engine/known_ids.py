@@ -64,7 +64,8 @@ TABLES = {
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
-HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles", "razer_v4"}
+HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles", "razer_v4",
+           "aula_f99max"}
 
 
 class StaticSource:
@@ -188,9 +189,12 @@ def build_index(root=None, *, engine_root=None):
                 if module == "mchose":
                     vid = source.get("A5_VID")
                 elif module != "pulsar":
-                    if len(vendors[module]) != 1:
+                    if module == "aula_keyboard":
+                        vid = source.get("VID")
+                    elif len(vendors[module]) != 1:
                         raise ValueError("ambiguous vendor")
-                    vid = next(iter(vendors[module]))
+                    else:
+                        vid = next(iter(vendors[module]))
                 for key, value in source.table(table):
                     if module == "pulsar":
                         vid = word(source.literal(key))
@@ -215,6 +219,10 @@ def build_index(root=None, *, engine_root=None):
                         kind = ("keyboard" if pid in keyboard_ids or pid in (0x025A, 0x025C)
                                 else "headset" if pid in (0x0528, 0x0555, 0x0556, 0x0557) else "mouse")
                     add(module, vid, pid, name, kind)
+            # F99 MAX is a runtime product-name and firmware-identity gated
+            # branch of aula_keyboard. Its shared 05AC:024F identity stays out
+            # of the generic triage index so other keyboards with that PID are
+            # never presented as supported by static enumeration.
             if module in SINGLE:
                 vid = next(iter(vendors[module]))
                 name = (readers[module]["name"] if module == "barracuda" else source.get("NAME"))

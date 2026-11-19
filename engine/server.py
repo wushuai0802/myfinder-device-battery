@@ -71,7 +71,7 @@ PROVIDER_VIDS = {
     "asus_azoth": (0x0B05,), "mchose_g3v2": (0x3837,),
     "eweadn_x23": (0x04F3,), "eweadn_x87": (0x0C45,),
     "weikav_nut75": (0x0C45,), "veekos_shine60": (0x3151,),
-    "aula_mouse": (0x320F,), "aula_keyboard": (0x0C45,),
+    "aula_mouse": (0x320F,), "aula_keyboard": (0x0C45, 0x05AC),
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D, 0x3837),
