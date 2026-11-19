@@ -96,6 +96,8 @@ KNOWN = {
     0x00D4: ("Razer Basilisk Mobile", 0x1F),
     0x00D6: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
     0x00D7: ("Razer Basilisk V3 Pro 35K Phantom Green", 0x1F),
+    0x00E5: ("Razer Viper V4 Pro", 0x1F),
+    0x00E6: ("Razer Viper V4 Pro", 0x1F),
     0x00DE: ("Razer Viper V3 Pro SE", 0x1F),
     0x00DF: ("Razer Viper V3 Pro SE", 0x1F),
 

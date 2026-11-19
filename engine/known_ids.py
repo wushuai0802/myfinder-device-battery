@@ -40,7 +40,7 @@ TABLES = {
     "keychron": ("PIDS",), "lamzu": ("PIDS",), "lofree": ("DONGLES",),
     "logitech": ("HEADSETS",), "logitech_centurion": ("PIDS",),
     "mchose": ("A5_PIDS",), "mchose_headset": ("PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS", "NANO_PIDS"),
-    "mchose_qhw_keyboard": ("PIDS",), "mchose_glw_keyboard": ("PIDS",),
+    "mchose_qhw_keyboard": ("PIDS",), "mchose_glw_keyboard": ("PIDS",), "mchose_k99v3": ("PIDS",),
     "mchose_by_keyboard": ("PIDS",),
     "moondrop": ("PIDS",),
     "sony_inzone": ("PIDS",),
@@ -60,7 +60,7 @@ TABLES = {
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
-HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles"}
+HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles", "razer_v4"}
 
 
 class StaticSource:

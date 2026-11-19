@@ -143,7 +143,10 @@ class CompXBatchTests(unittest.TestCase):
                 self.assertEqual((entry["provider"], entry["kind"]), ("pulsar", "mouse"))
                 self.assertEqual(verification_for(entry["provider"])[0], "C")
         self.assertEqual(entries[(0x3554, 0xF505)]["name"], "VGN Dragonfly 4K Receiver")
-        self.assertEqual(entries[(0x3837, 0x3033)]["name"], "MCHOSE G87 V2")
+        keyboards = [d for d in build_index()["devices"]
+                     if (d["vendorId"], d["productId"]) == (0x3837, 0x3033)]
+        self.assertEqual({d["name"] for d in keyboards}, {"MCHOSE G87 V2", "MCHOSE K99 V3 2.4G"})
+        self.assertTrue(all(d["requiresModelMatch"] for d in keyboards))
 
 
 if __name__ == "__main__":

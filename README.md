@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.3.11-beta.15**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.3.11-beta.16**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.3.11-beta.16 新增雷蛇毒蝰 V4 Pro、迈从 K99 V3 2.4G，以及狼蛛 V9 Pro+ 和 F87 Pro V2 D 版接收器的电量候选。四款已做离线验证，待本版实机反馈。
 
 1.3.11-beta.15 新增索尼 INZONE H5、H9 II 和 Buds 使用原装 USB 接收器时的电量读取。Buds 分别显示左耳、右耳和充电盒的读数。已用公开设备报文验证，等待用户在测试版中与 INZONE Hub 对照。
 
