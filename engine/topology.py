@@ -577,6 +577,43 @@ def discover(paths, excluded=(), *, full=False):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
+                    (0x0B05, 0x1AFA, 0xFF00, 1)):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = all(info[k] is not None for k in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete and (attrs.vendor, attrs.product) == (0x0C45, 0xFEFE)
+                    and caps.input == caps.output and caps.input in (33, 65)):
+                from providers.eweadn_x87 import matches_collection
+                if matches_collection(info):
+                    from battery_hid import battery_caps
+                    info.update(battery_caps(hid, data, caps))
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                    caps_complete = all(info[k] is not None for k in ("input_report_sizes", "output_report_sizes"))
+            if caps_complete and (attrs.vendor, attrs.product, caps.input) == (0x04F3, 0x026F, 32):
+                from providers.eweadn_x23 import matches_collection, report_id
+                if matches_collection(info):
+                    from battery_hid import byte_report_sizes
+                    info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0)
+                    _descriptor_fallback(info, caps, ("input",))
+                    caps_complete = report_id(info) is not None
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
+                    (0x0C45, 0xFEF9, 0xFF60, 0x0061) and info["product_string"] == "NUT75 2.4G"
+                    and caps.input == caps.output == 65):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
+                    (0x3151, 0x5026, 0xFFFF, 2) and info["interface_number"] == 2
+                    and info["product_string"] == "Veekos 2.4G Wireless Keyboard"
+                    and caps.input == caps.output == 0 and caps.feature == 65):
+                from battery_hid import byte_report_sizes
+                sizes = byte_report_sizes(hid, data, caps, 2)
+                info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
+                _descriptor_fallback(info, caps, ("feature",))
+                caps_complete = info["feature_report_sizes"] is not None
             if (attrs.vendor, attrs.product) == (0x3837, 0x100C):
                 info["a5v2_descriptor_complete"] = bool(caps_complete and info["usage_page"] and info["usage"])
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
