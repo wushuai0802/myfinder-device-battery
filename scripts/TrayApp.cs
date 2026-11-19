@@ -798,6 +798,7 @@ namespace AtkBatteryTray {
         readonly SnapshotWriter fileWriter=new SnapshotWriter();
         readonly LowBatteryPolicy lowBattery=new LowBatteryPolicy();
         readonly bool persistStatus;
+        readonly Action<string,string> dispatchWirelessDiagnostic;
         GenericBatteryWorker genericWorker;
         int genericBusy;
         bool genericQueued;string genericQueuedTarget,genericTarget;
@@ -918,8 +919,9 @@ namespace AtkBatteryTray {
             try {string path=Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt");if(File.Exists(path)&&new FileInfo(path).Length<65536){string text=File.ReadAllText(path);lowBattery.Restore("mouse",text.Contains("mouse=1"));lowBattery.Restore("headset",text.Contains("headset=1"));foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text,@"(?m)^(device-[a-f0-9]{24})=1\r?$"))lowBattery.Restore(match.Groups[1].Value,true);}}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select) : this(showPanel,read,select,null,null) {}
-        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null,Func<NativeDpiRequest,DpiConfig> nativeDpiWriter=null,Action<AudioBindings> configurationWriter=null,bool enableDevicePacks=false) {
+        internal TrayContext(bool showPanel,Func<bool,MouseSnapshot> read,Func<int,DpiConfig> select,Func<HeadsetReading> headsetReader,Func<AudioReading> audioReader,bool diagnostics=false,Func<string,AudioReading> outputWriter=null,Func<bool,AudioReading> muteWriter=null,Func<string,int,AudioReading> volumeWriter=null,Func<bool> leftButtonReader=null,Func<AudioCommand,AudioReading> audioCommandRunner=null,GenericBatteryWorker wirelessReader=null,Func<DateTime> activityTime=null,Func<NativeDpiRequest,DpiConfig> nativeDpiWriter=null,Action<AudioBindings> configurationWriter=null,bool enableDevicePacks=false,Action<string,string> wirelessDiagnosticDispatcher=null) {
             persistStatus=diagnostics;
+            dispatchWirelessDiagnostic=wirelessDiagnosticDispatcher??new Action<string,string>(delegate(string category,string state){ThreadPool.QueueUserWorkItem(delegate{SafeDiagnostic.Transition(category,state);});});
             readSnapshot=read;selectStage=select;readHeadset=headsetReader;readAudio=audioReader;writeOutput=outputWriter;writeMute=muteWriter;writeVolume=volumeWriter;
             writeAudioCommand=audioCommandRunner;
             writeNativeDpi=nativeDpiWriter;
@@ -1343,7 +1345,7 @@ namespace AtkBatteryTray {
                 if(complete&&!clearingHistory&&pref.RememberReadings)fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json"),ReadingCache.EncodeWireless(wirelessCache.Values));
                 if(!applyingPhysicalSnapshot){bool previous=NativeMousePresent;if(snapshot.NativeMousePresent.HasValue)NativeMousePresent=snapshot.NativeMousePresent.Value;if(NativeMousePresent&&!previous)RequestRead(true,false);}
             }else{GenericError=snapshot.Error;GenericHealthSummary="读取组件暂不可用";GenericIdleSummary=null;GenericIdleCount=0;BlockWirelessDpi();foreach(var device in WirelessDevices){device.Fresh=false;device.Charging=null;}}
-            if(complete){string state=GenericError??GenericHealthSummary??"ready";ThreadPool.QueueUserWorkItem(delegate{SafeDiagnostic.Transition("device_readers",state);});}
+            if(complete&&persistStatus){string state=GenericError??GenericHealthSummary??"ready";dispatchWirelessDiagnostic("device_readers",state);}
             UpdateIcon();
         }
         public bool IsDeviceRefreshing(string id){if(genericBusy==0)return false;if(genericPhysicalTarget!=null){var device=FindWirelessDpiDevice(id);return device!=null&&device.PhysicalId==genericPhysicalTarget;}return genericTarget==null||genericTarget==id;}
