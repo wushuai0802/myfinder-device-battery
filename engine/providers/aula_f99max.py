@@ -114,4 +114,3 @@ class AulaF99MaxProvider(BatteryHidProvider):
             else:
                 second = packet
         return parse_reply(first, second)
-
