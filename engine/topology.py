@@ -348,6 +348,13 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = bool(sizes and sizes.get("17") in (21, 65)
                                      and sizes["17"] == max(sizes.values()) == caps.feature)
                 info["feature_report_proof"] = "caps" if caps_complete else "failed"
+            if caps_complete and attrs.vendor == 0x054C and caps.page == 0xFF04:
+                from providers.sony_inzone import matches_collection, reports_proven
+                if matches_collection(info):
+                    from battery_hid import battery_caps
+                    info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                    caps_complete = reports_proven(info)
             if caps_complete and attrs.vendor == 0x391D and (caps.page, caps.usage) == (0xFFFF, 0x0002):
                 from providers.vgn_ry_ms import matches_collection
                 if matches_collection(info):
