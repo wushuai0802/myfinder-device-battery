@@ -17,10 +17,14 @@ string, interface number and report sizes are required before any write.
 Battery only: no configuration, RGB or key-mapping command, and no charging
 field is claimed.
 """
-from battery_hid import BatteryHidProvider
+from battery_hid import BatteryHidProvider, hidlist
+from providers.aula_f99max import AulaF99MaxProvider
 
 VID = 0x0C45
 PIDS = {0xFEFE: "AULA F87ProV2"}
+# Static offline ID index data for the isolated F99 MAX branch below.
+F99_VID = 0x05AC
+F99_PIDS = {0x024F: "AULA F99 MAX"}
 PRODUCT = "AULA F87ProV2D Dongle"
 INTERFACE = 3
 
@@ -49,6 +53,22 @@ class AulaKeyboardProvider(BatteryHidProvider):
     kind = "keyboard"
     make_request = staticmethod(make_request)
     parse_reply = staticmethod(parse_reply)
+
+    def poll(self):
+        """Run the F87 reader and the isolated F99 branch under one owner."""
+        result = super().poll()
+        try:
+            f99_inventory = hidlist.enumerate(F99_VID)
+        except OSError:
+            return result
+        # Avoid emitting an F99-specific diagnostic during ordinary F87 polls.
+        # The F99 branch performs its own complete enumeration/proof before I/O.
+        if not any(info.get("vendor_id") == F99_VID for info in f99_inventory):
+            return result
+        f99 = AulaF99MaxProvider()
+        result.extend(f99.poll())
+        self._diag.extend(f99.diagnostics())
+        return result
 
     def _pick(self, infos):
         info = super()._pick(infos)

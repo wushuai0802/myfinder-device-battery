@@ -1952,6 +1952,34 @@ moved), page `18`, `AA 13 10 00 00 00 01` and `AA 10 08 30 00 00 01`. Every byte
 stayed identical across all three states, so `[24] = 02` is not a charging bit and the reader keeps
 `charging_known = False`.
 
+### AULA F99 MAX (05AC:024F, 2.4 GHz receiver)
+
+**C - official-driver static extract and one read-only local capture; pending this project's hardware
+validation.** `providers/aula_f99max.py` is a separate reader, not an F87ProV2 fallback. Its target
+is the shared USB identity `05AC:024F`, product string `F99 MAX Dongle`, one physical parent and its
+only `FF60:0061` collection. Before opening it requires a proven, unnumbered report `0` with exactly
+33 Windows bytes in both directions (32 hidapi payload bytes). Unknown report maps, an unresolved
+parent, or a duplicate collection produce zero I/O.
+
+The only requests are the two `GET_DEVICE_INFO` packets below, each report ID 0 plus a 32-byte
+payload. They are sent in this order and no retry, configuration, lighting, mapping, reset, pairing
+or firmware command is a fallback.
+
+```text
+00 AA 10 18 00 00 00 00 + 24 zero bytes
+00 AA 10 18 18 00 00 01 + 24 zero bytes
+```
+
+Both 32-byte replies must be complete. The first must begin with 55 10 18 00; the second must begin
+with 55 10 18 18 and echo the final page/address marker at frame bytes [3..6] as 18 00 00 01.
+After the eight-byte report-0 header, the first reply payload bytes [4..7] at frame bytes [12..15]
+must self-identify firmware 0C45:800A. Payload bytes [17] and [18] at frame bytes [25] and [26]
+are respectively an integer 1..100 percent and chargeStatus limited to 0 or 1. All-zero payloads,
+short frames, bad echoes, a foreign
+firmware identity, invalid levels, invalid charge values and silence produce no card. `chargeStatus`
+is preserved as the official semantic, but no cross-state physical capture is available, so charging
+remains unverified (`charging_known = False`).
+
 ## Controllers
 
 ### Flydigi APEX5 (37D7:2501)
