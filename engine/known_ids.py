@@ -41,6 +41,7 @@ TABLES = {
     "logitech": ("HEADSETS",), "logitech_centurion": ("PIDS",),
     "mchose": ("A5_PIDS",), "mchose_headset": ("PIDS",), "nzxt": ("PIDS",), "pulsar": ("PIDS", "NANO_PIDS"),
     "mchose_qhw_keyboard": ("PIDS",), "mchose_glw_keyboard": ("PIDS",), "mchose_k99v3": ("PIDS",),
+    "mchose_v9pro2": ("PIDS",),
     "mchose_by_keyboard": ("PIDS",),
     "moondrop": ("PIDS",),
     "sony_inzone": ("PIDS",),

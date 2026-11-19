@@ -571,6 +571,12 @@ def discover(paths, excluded=(), *, full=False):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete and (attrs.vendor, attrs.product) == (0x3837, 0x6011)
+                    and info["product_string"].casefold() == "mchose v9 pro 2"
+                    and (info["interface_number"], caps.page, caps.usage) == (3, 0xFF07, 0x0222)):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
             if (attrs.vendor, attrs.product) == (0x3837, 0x100C):
                 info["a5v2_descriptor_complete"] = bool(caps_complete and info["usage_page"] and info["usage"])
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (

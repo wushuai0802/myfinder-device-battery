@@ -25,7 +25,7 @@ BRAND_PROVIDERS = frozenset((
     "mchose_qhw_keyboard", "mchose_glw_keyboard",
     "mchose_by_keyboard",
     "moondrop",
-    "sony_inzone", "mchose_k99v3",
+    "sony_inzone", "mchose_k99v3", "mchose_v9pro2",
     "zhuaudio",
     "cherry",
     "aula_mouse", "aula_keyboard",
