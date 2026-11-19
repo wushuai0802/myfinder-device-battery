@@ -811,6 +811,9 @@ class MchoseProvider(Provider):
                 if got is not None:
                     found.setdefault(key, []).append((got[0], got[1], A5V2_PID, 0))
                 continue  # Exclusive, including failure: no legacy/CFU/12.
+            if (vid, pid) == (0x3837, 0x4245):
+                # The G-series receiver has its own reader, including when its report proof fails.
+                continue
             if vid == 0x3837 and pid in (0x600A, 0x6008):
                 reason = ("V9 Turbo+ headset reserved for mchose_headset" if pid == 0x600A
                           else "V9 Turbo lighting device; no battery reader")

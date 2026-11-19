@@ -50,6 +50,7 @@ TABLES = {
     "eweadn_s9pro": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
     "cherry": ("PIDS",),
+    "mchose_g3v2": ("PIDS",),
     "eweadn_x23": ("PIDS",), "eweadn_x87": ("PIDS",),
     "weikav_nut75": ("PIDS",), "veekos_shine60": ("PIDS",),
     "aula_mouse": ("PIDS",), "aula_keyboard": ("PIDS",),

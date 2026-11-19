@@ -583,6 +583,13 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info[k] is not None for k in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
+                    (0x3837, 0x4245, 0xFF01, 0x0010) and info["product_string"] == "MCHOSE G3 V2"
+                    and caps.input == caps.output == 65):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = all(info[k] is not None for k in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete and (attrs.vendor, attrs.product) == (0x0C45, 0xFEFE)
                     and caps.input == caps.output and caps.input in (33, 65)):
                 from providers.eweadn_x87 import matches_collection
