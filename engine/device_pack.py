@@ -36,7 +36,7 @@ BRAND_PROVIDERS = frozenset((
     "dareu", "delux", "vgn_ry_ms",
     "fa6x_passive",
     "hyperx", "keychron", "pulsar", "rapoo", "jbl", "logitech", "steelseries", "barracuda",
-    "asus", "asus_omni", "asus_headset", "gwolves", "lofree", "astro", "corsair", "lamzu", "am_infinity",
+    "asus", "asus_omni", "asus_azoth", "asus_headset", "gwolves", "lofree", "astro", "corsair", "lamzu", "am_infinity",
     "steelseries_elite", "logitech_centurion", "hyperx_cloud3s", "nzxt",
 ))
 

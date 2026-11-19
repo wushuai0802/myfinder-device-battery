@@ -50,7 +50,7 @@ TABLES = {
     "eweadn_s9pro": ("PIDS",),
     "vgn_keyboard": ("PIDS",),
     "cherry": ("PIDS",),
-    "mchose_g3v2": ("PIDS",),
+    "asus_azoth": ("PIDS",), "mchose_g3v2": ("PIDS",),
     "eweadn_x23": ("PIDS",), "eweadn_x87": ("PIDS",),
     "weikav_nut75": ("PIDS",), "veekos_shine60": ("PIDS",),
     "aula_mouse": ("PIDS",), "aula_keyboard": ("PIDS",),
@@ -276,7 +276,8 @@ def build_index(root=None, *, engine_root=None):
         scope = readers.get(entry["provider"], {}).get("matchScope", "")
         if (entry["name"].casefold().endswith("(model identification required)")
                 or "产品全名" in scope or "产品名" in scope
-                or entry["provider"] in ("fa6x_passive", "asus_omni")):
+                or entry["provider"] in ("fa6x_passive", "asus_omni")
+                or (entry["provider"] == "asus_azoth" and entry["productId"] == 0x1ACE)):
             entry["requiresModelMatch"] = True
         indexed.append(entry)
     return {"vendors": {key: sorted(value) for key, value in sorted(vendors.items())},

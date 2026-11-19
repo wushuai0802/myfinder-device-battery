@@ -392,6 +392,14 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(feature_report_length=caps.feature,
                             feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True))
                 caps_complete = (caps.feature == 33 and info["feature_report_sizes"] == {"15": 33})
+            if (caps_complete and attrs.vendor == 0x0B05 and
+                    (attrs.product, caps.input, caps.output) in ((0x1A85, 65, 65), (0x1ACE, 64, 64))):
+                from providers.asus_azoth import collection_role
+                if collection_role(info) is not None:
+                    from battery_hid import battery_caps
+                    info.update(battery_caps(hid, data, caps))
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                    caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete and attrs.vendor == 0x0B05 and attrs.product in (0x1ACE, 0x1AD0)
                     and (caps.page, caps.usage) == (0xFF01, 0x0001) and info["interface_number"] == 2
                     and len(path.split("#")) >= 3
