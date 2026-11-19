@@ -53,7 +53,7 @@ read on the *short* 0x11 report, so both report ids are tried before a poll give
 Exception: A7 V3's 3837:1018 and 3837:1014 receivers share the collection but use
 output report 0x4D and a different command set (OpenMouse's V3 codec). Its separate
 read-only path below prefers FF01:0001 with confirmed 64-byte Windows buffers
-for input/output report 4D, including the Ultra+ descriptor recovery below.
+for input/output report 4D, including the model-specific Windows descriptor check below.
 Only 1018 may use a uniquely proven FF0B:00C4 on the same USB parent when FF01 is
 absent or definitively excludes 4D/64. It never falls back to a legacy exchange.
 See the V3 source/license notes in upstream-protocols.md.
@@ -282,11 +282,12 @@ def make_v3_request() -> bytes:
 
 
 def v3_ultra_windows_report_candidate(info):
-    """Match the Ultra+ layout whose reconstructed descriptor repeats Input 4D."""
+    """Match the supported Ultra+/Pro layout whose reconstructed descriptor repeats Input 4D."""
     if ((info.get("vendor_id"), info.get("product_id")) != (V3_VID, V3_PID)
             or (info.get("usage_page"), info.get("usage")) != V3_USAGE
             or info.get("interface_number") != 2
-            or (info.get("product_string") or "").strip() != V3_PIDS[0x1014]
+            or (info.get("product_string") or "").strip()
+            not in (V3_PIDS[0x1014], "MCHOSE A7 V3 Pro")
             or (info.get("input_report_length"), info.get("output_report_length"))
             != (V3_REPORT_LEN, V3_REPORT_LEN)
             or info.get("report_descriptor_error") != "collection maximum mismatch"):
@@ -810,6 +811,9 @@ class MchoseProvider(Provider):
                 if got is not None:
                     found.setdefault(key, []).append((got[0], got[1], A5V2_PID, 0))
                 continue  # Exclusive, including failure: no legacy/CFU/12.
+            if (vid, pid) == (0x3837, 0x4245):
+                # The G-series receiver has its own reader, including when its report proof fails.
+                continue
             if vid == 0x3837 and pid in (0x600A, 0x6008):
                 reason = ("V9 Turbo+ headset reserved for mchose_headset" if pid == 0x600A
                           else "V9 Turbo lighting device; no battery reader")

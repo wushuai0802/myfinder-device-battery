@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 from device_pack import EMPTY_PACK, load_pack, parse_pack
 
 PROVIDERS = (
+    ("asus_azoth", "AsusAzothProvider"), ("mchose_g3v2", "MchoseG3V2Provider"),
     ("eweadn_x23", "EweadnX23Provider"), ("eweadn_x87", "EweadnX87Provider"),
     ("weikav_nut75", "Nut75Provider"), ("veekos_shine60", "Shine60Provider"),
     ("aula_mouse", "AulaMouseProvider"), ("aula_keyboard", "AulaKeyboardProvider"),
@@ -67,6 +68,7 @@ PROVIDERS = (
     ("xinput", "XInputProvider"),
 )
 PROVIDER_VIDS = {
+    "asus_azoth": (0x0B05,), "mchose_g3v2": (0x3837,),
     "eweadn_x23": (0x04F3,), "eweadn_x87": (0x0C45,),
     "weikav_nut75": (0x0C45,), "veekos_shine60": (0x3151,),
     "aula_mouse": (0x320F,), "aula_keyboard": (0x0C45,),
@@ -293,7 +295,7 @@ def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
         if (a.get("provider") in ("cherry", "lingbao", "zhuaudio", "asus_omni", "asus_headset",
-                                  "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87")
+                                  "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth")
                 or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
@@ -697,7 +699,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("moondrop", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
-                "weikav_nut75", "eweadn_x23", "eweadn_x87"):
+                "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
@@ -1375,7 +1377,7 @@ class BatteryEngine:
                                 if provider_name != "standard_hid" and not vids.intersection(PROVIDER_VIDS.get(provider_name, ())):
                                     continue
                                 if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset",
-                                                      "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87")
+                                                      "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth")
                                         and not recognized_candidate_count(provider_name, infos)):
                                     continue
                                 matches.append((group_id, infos))

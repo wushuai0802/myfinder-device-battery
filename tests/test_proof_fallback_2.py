@@ -115,22 +115,32 @@ class ProofFallback2Tests(unittest.TestCase):
                     diagnostic = self.assert_reader([decoded], accepted=True)
                     self.assertIn("proof=descriptor" if failed else "proof=caps", diagnostic)
 
-    def test_ultra_1018_recovers_reconstructed_input_after_windows_confirms_both_directions(self):
+    def _ultra_windows_case(self, product, *, denied_direction=None,
+                            report_lengths=(64, 64)):
+        """Configure the shared 1018 Windows collection for one probe."""
         path = r"\\?\hid#vid_3837&pid_1018&mi_02&col02#ultra-test"
         self.configure(pid=0x1018)
         self.case.identities[path] = (0x3837, 0x1018)
-        self.case.products[path] = "MCHOSE A7 V3 Ultra+"
+        self.case.products[path] = product
         self.dev.get_report_descriptor.return_value = ULTRA_1018_DESCRIPTOR
 
         def caps(data, pointer):
             value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
             value.page, value.usage = 0xFF01, 1
-            value.input = value.output = value.feature = 64
+            value.input, value.output = report_lengths
+            value.feature = 64
             value.ib, value.ob, value.ov, value.fv = 5, 2, 1, 3
             return 0x00110000
 
         self.case.hid.HidP_GetCaps.side_effect = caps
         initialize = self.case.hid.HidP_InitializeReportForID
+        initialize.reset_mock()
+        initialize.side_effect = lambda direction, *_: (
+            0xC0110010 if direction == denied_direction else 0x00110000)
+        return path, initialize
+
+    def test_ultra_1018_recovers_reconstructed_input_after_windows_confirms_both_directions(self):
+        path, initialize = self._ultra_windows_case("MCHOSE A7 V3 Ultra+")
         for denied_direction in (0, 1, None):
             with self.subTest(denied_direction=denied_direction):
                 initialize.reset_mock()
@@ -157,6 +167,48 @@ class ProofFallback2Tests(unittest.TestCase):
         info = self.scan(path)
         initialize.assert_not_called()
         self.assert_reader([info])
+
+    def test_pro_1018_recovers_reconstructed_input_after_windows_confirms_both_directions(self):
+        path, initialize = self._ultra_windows_case("MCHOSE A7 V3 Pro")
+        info = self.scan(path)
+        self.assertEqual(info["declared_report_sizes"]["input"]["77"], 127)
+        self.assertEqual(info["declared_report_sizes"]["output"]["77"], 64)
+        self.assertTrue(info.get("v3_windows_report_confirmed", False))
+        self.assertEqual([(args[0], args[1], len(args[3]), args[4])
+                          for args, _ in initialize.call_args_list],
+                         [(0, 0x4D, 64, 64), (1, 0x4D, 64, 64)])
+        decoded = json.loads(json.dumps(info, default=wire_encode), object_hook=wire_decode)
+        diagnostic = self.assert_reader([decoded], accepted=True)
+        self.assertIn("Windows input/output report 4D/64 confirmed", diagnostic)
+
+        for denied_direction in (0, 1):
+            with self.subTest(denied_direction=denied_direction):
+                path, initialize = self._ultra_windows_case(
+                    "MCHOSE A7 V3 Pro", denied_direction=denied_direction)
+                info = self.scan(path)
+                self.assertEqual(info["declared_report_sizes"]["input"]["77"], 127)
+                self.assertEqual(info["declared_report_sizes"]["output"]["77"], 64)
+                self.assertFalse(info.get("v3_windows_report_confirmed", False))
+                self.assertNotIn(path, self.case.cache)
+                self.assertEqual([(args[0], args[1], len(args[3]), args[4])
+                                  for args, _ in initialize.call_args_list],
+                                 [(0, 0x4D, 64, 64)] if denied_direction == 0
+                                 else [(0, 0x4D, 64, 64), (1, 0x4D, 64, 64)])
+                diagnostic = self.assert_reader([info])
+                self.assertIn("length unproven", diagnostic)
+
+    def test_pro_1018_rejects_unproven_report_lengths(self):
+        for report_lengths in ((64, 41), (41, 64), (41, 41)):
+            with self.subTest(report_lengths=report_lengths):
+                path, initialize = self._ultra_windows_case(
+                    "MCHOSE A7 V3 Pro", report_lengths=report_lengths)
+                info = self.scan(path)
+                initialize.assert_not_called()
+                self.assertEqual((info.get("input_report_length"),
+                                  info.get("output_report_length")), report_lengths)
+                self.assertFalse(info.get("v3_windows_report_confirmed", False))
+                self.assertNotIn(path, self.case.cache)
+                self.assert_reader([info])
 
     def test_s9_both_pages_fallback_requires_one_proven_feature_collection(self):
         for page in (0xFF00, 0xFF06):

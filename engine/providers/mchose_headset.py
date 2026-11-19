@@ -11,6 +11,13 @@ No EQ, configuration or firmware-update commands are sent.
 Turbo+ 3837:600A: 用户实机抓包，#61 confirms 80% discharge twice. Its
 charging/off states remain untested; 3837:6008 is lighting, never a target.
 
+M HUB's official BLK parser also maps state 04 to full. For the original
+291D:385D receiver, this code trusts 04 only when the trimmed USB product
+string casefolds to "mchose v9 pro". Only a reported level of exactly 100
+is current; anything else is stale evidence, so the level stays unavailable
+while the headset remains online and not actively charging. Turbo+, the
+same-PID G9 Pro and unnamed receivers do not inherit state 04.
+
 00/03 mean external power, including fully charged while plugged in. Their
 percentage is frozen and must not be displayed. 1A explicitly means off;
 silence is not evidence of power-off. Topology supplies the HID caps and
@@ -42,13 +49,23 @@ PRO_ID = (0x291D, 0x385D)
 FIRMWARE_COLLECTION = (0xFF22, 0x0001)
 FIRMWARE_REQUEST = [0xAA, 0x01, 0x01] + [0] * 61
 FIRMWARE_READ_DELAY_SECONDS = 0.3
+ORIGINAL_PRODUCT_NAME = "mchose v9 pro"
 
 
 def make_request():
     return [0x55, 0x65, 0x01] + [0] * 61
 
 
-def parse_reply(reply):
+def _is_original_v9_pro(info):
+    product_name = info.get("product_string")
+    return (
+        (info.get("vendor_id"), info.get("product_id")) == PRO_ID
+        and isinstance(product_name, str)
+        and product_name.strip().casefold() == ORIGINAL_PRODUCT_NAME
+    )
+
+
+def parse_reply(reply, *, allow_full=False):
     """Return (level, external power, online), or reject malformed evidence."""
     if len(reply) != REPORT_LEN or list(reply[:2]) != [0x55, 0x65]:
         return None
@@ -57,6 +74,10 @@ def parse_reply(reply):
         return level, False, True
     if state in (0x00, 0x03):
         return None, True, True
+    if state == 0x04 and allow_full:
+        if level == 100:
+            return level, False, True
+        return None, False, True
     if state == 0x1A:
         return None, False, False
     return None
@@ -81,16 +102,21 @@ class MchoseHeadsetProvider(Provider):
         self._seen = set()
 
     def _pick(self, infos):
+        saw_battery_collection = False
         for info in infos:
             if ((info.get("vendor_id"), info.get("product_id")) not in PIDS
                     or (info.get("usage_page"), info.get("usage")) != (USAGE_PAGE, USAGE)):
                 continue
+            saw_battery_collection = True
             lengths = (info.get("input_report_length"), info.get("output_report_length"))
             if lengths != (REPORT_LEN, REPORT_LEN):
                 self._diag.append(f"  input/output lengths {lengths}; require 64/64: nothing sent")
                 continue
             return info
-        self._diag.append("  no eligible V9 PRO/Turbo+ ff90:0001 collection: nothing sent")
+        if not saw_battery_collection and any(_is_original_v9_pro(item) for item in infos):
+            self._diag.append("  MCHOSE V9 PRO 接收器缺少 FF90:0001 电量接口，未发送查询")
+        else:
+            self._diag.append("  no eligible V9 PRO/Turbo+ ff90:0001 collection: nothing sent")
         return None
 
     def _pick_firmware(self, infos):
@@ -134,7 +160,7 @@ class MchoseHeadsetProvider(Provider):
                 pass
         return None
 
-    def _query(self, path):
+    def _query(self, path, *, allow_full=False):
         dev = hid.device()
         try:
             dev.open_path(path)
@@ -155,7 +181,7 @@ class MchoseHeadsetProvider(Provider):
                 if len(reply) != REPORT_LEN:
                     self._diag.append(f"  rejected battery frame length {len(reply)} (expected 64)")
                     continue
-                parsed = parse_reply(reply)
+                parsed = parse_reply(reply, allow_full=allow_full)
                 if parsed is None:
                     self._diag.append(f"  rejected battery state=0x{reply[3]:02x} level={reply[2]}")
                     continue
@@ -205,7 +231,7 @@ class MchoseHeadsetProvider(Provider):
                 elif version < 8:
                     self._diag.append("  接收器固件低于 0008，官方驱动也不支持电量")
                     continue
-            reading = self._query(info["path"])
+            reading = self._query(info["path"], allow_full=_is_original_v9_pro(info))
             if reading is None:
                 continue
             level, charging, online = reading

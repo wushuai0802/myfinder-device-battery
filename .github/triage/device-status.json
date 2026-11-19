@@ -34,8 +34,8 @@
     "0C45:FEFE": {
       "reports": 0,
       "status": "beta",
-      "version": "1.3.11-beta.16",
-      "note": "此共享编号仅覆盖 AULA F87ProV2D Dongle，其他型号另查"
+      "version": "1.3.11-beta.17",
+      "note": "狼蛛 F87ProV2D 接收器自 beta.16，前行者 X87 原版自 beta.17，均须核对型号"
     },
     "1532:00E5": {
       "reports": 0,
@@ -152,6 +152,30 @@
       "version": "1.3.11-beta.12",
       "note": "限 F2 V2 Ultra 的 MI_01 指定集合，仅电量",
       "reports": 0
+    },
+    "0C45:FEF9": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.17",
+      "note": "维咖 NUT75 2.4G，限 NUT75 2.4G 接收器；充电状态未知"
+    },
+    "3151:5026": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.17",
+      "note": "Veekos Shine 60 2.4G 键盘，指定接收器；充电状态未知"
+    },
+    "0B05:1AFA": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.17",
+      "note": "ROG 棱镜 2（Delta II）2.4G 耳机电量及充电状态"
+    },
+    "04F3:026F": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.17",
+      "note": "前行者 X23 Pro 2.4G 鼠标，监听指定接口的电量上报；充电状态未知"
     }
   }
 }

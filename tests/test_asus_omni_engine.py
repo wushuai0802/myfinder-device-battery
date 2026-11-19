@@ -70,7 +70,7 @@ class AsusOmniBridgeTests(unittest.TestCase):
         row, = [r for r in load_catalog()["readers"] if r["provider"] == "asus_omni"]
         self.assertEqual((row["name"], row["verificationLevel"], row["kinds"]),
                          ("ROG OMNI 接收器（鼠标）", "C", ["mouse"]))
-        for boundary in ("仅鼠标", "经 OMNI 连接的键盘暂不支持", "型号名不区分", "待实机验证"):
+        for boundary in ("仅鼠标", "键盘由独立的 asus_azoth 读取器处理", "型号名不区分", "待实机验证"):
             self.assertIn(boundary, row["matchScope"])
         for index in (build_index(), build_index(engine_root=ENGINE)):
             self.assertNotIn("asus_omni", index["unparsed"])
