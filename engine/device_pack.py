@@ -28,6 +28,7 @@ BRAND_PROVIDERS = frozenset((
     "sony_inzone",
     "zhuaudio",
     "cherry",
+    "aula_mouse", "aula_keyboard",
     "lingbao",
     "g3m", "eweadn", "eweadn_s9pro", "flydigi",
     "vgn_keyboard", "vgn_beiying",

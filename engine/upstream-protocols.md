@@ -1877,6 +1877,65 @@ The standard Razer commands (class `0x07` id `0x80` for the level, 0-255 shown a
 
 The same exchange as the DeathStalker V2 Pro TKL above, with the ids and interfaces from OpenRazer's keyboard driver: DeathStalker V2 Pro 1532:0290 (receiver, `0x9F`, interface 2) and 1532:0292 (cable, `0x1F`, interface 3); BlackWidow V3 Mini HyperSpeed 1532:0271 / 0258 and BlackWidow V4 Mini HyperSpeed 1532:02BA / 02B9 (`0x9F` / `0x1F`, both on interface 3); BlackWidow V4 Tenkeyless HyperSpeed 1532:02D5 (receiver, `0x9F`, interface 2) and 1532:02D7 (cable, `0x1F`, interface 3). **Unverified** - only the DeathStalker V2 Pro TKL has been tested on hardware so far
 
+### AULA V9Pro+ (320F:22BA, 2.4 GHz receiver)
+
+**C - contributor hardware readings, 80 % and 48 % on 2026-11-18; pending this project's own
+verification.** `providers/aula_mouse.py` sends one output report on collection `FF1C:0092` (report
+id `04`, 64 bytes in and out) and reads the percentage from the reply. Battery only; no charging
+state is claimed.
+
+```
+request  04 00 00 1A 00 00 00 00 00 00 00 00 00 00 00 00  (then 48 zero bytes)
+reply    04 00 00 1A 00 00 00 00 50 00 00 00 00 00 00 00  (then 48 zero bytes)
+```
+
+`[8] = 0x50 = 80 %` in the captured reply. The echo covers `[1..7]` but not the parameter byte,
+which stays `00`, so only `[3]` is compared - comparing `[4]` rejects every real reply. `320F` is a
+shared vendor id (HECATE `706E`, VGN `5088`), so the reader also requires product string
+`AULA-V9Pro+`, interface 1 and a single proven `04/64` report in each direction before it writes.
+The vendor app reaches the same answer with `00 00 1A 00`; no handshake, checksum or `SetFeature`
+is involved.
+
+`[9]` is the charging state, measured on 2026-11-18 with the cable unplugged, plugged and unplugged
+again, nine samples at each state:
+
+```
+reply    04 00 00 1A 00 00 00 00 50 00 ...   unplugged, 80 %, [9] = 00
+reply    04 00 00 1A 00 00 00 00 52 01 ...   charging,  82 %, [9] = 01
+reply    04 00 00 1A 00 00 00 00 52 00 ...   unplugged again, 82 %, [9] = 00
+```
+
+`[9]` read the same value for all nine samples of each state, and the percentage stayed at 82 after
+unplugging, so `[9]` tracks the cable rather than the level estimate. Only 0 and 1 are accepted; any
+other value drops the reply instead of guessing.
+
+### AULA F87ProV2 (0C45:FEFE, 2.4 GHz receiver)
+
+**C - contributor hardware readings, 48 % on 2026-11-18; pending this project's own verification.**
+`providers/aula_keyboard.py` sends the status page on collection `FF60:0061`: unnumbered 32-byte
+reports, so the Windows buffer is 33 bytes and hidapi returns 32. The level sits in `[25]`.
+
+```
+request  00 AA 10 18 00 00 00 00 00 00 00 00 00 00 00 00  (then 17 zero bytes)
+reply    55 10 18 00 00 00 00 00 00 00 00 12 A6 38 11 27 66 01 00 00 66 01 00 00 02 30 00 00 00 00 00 00
+```
+
+`[25] = 0x30 = 48 %` in the captured reply; the percentage bounced 58/64 inside one unplugged phase,
+so a rising level is not evidence of charging. The reply echoes request `[2..4]` into `[1..3]`; the
+vendor app polls page `18` with the same group and sub-command and that reply differs only in the
+echoed byte, so all three are compared before the level is trusted. `0C45` and `FEFE` also appear on
+other brands' receivers, so the reader requires product string `AULA F87ProV2D Dongle`, interface 3
+and a single proven `0/33` report in each direction.
+
+One bring-up note, not proven to be a device rule: an idle keyboard sometimes accepts the output
+report without answering, so one silent attempt is repeated (a rejected reply is not).
+
+Charging is not exposed by this receiver. Four queries the vendor app also polls were captured with
+the cable unplugged, plugged and unplugged again, eight samples each: page `00` (only the percentage
+moved), page `18`, `AA 13 10 00 00 00 01` and `AA 10 08 30 00 00 01`. Every byte of the last three
+stayed identical across all three states, so `[24] = 02` is not a charging bit and the reader keeps
+`charging_known = False`.
+
 ## Controllers
 
 ### Flydigi APEX5 (37D7:2501)
