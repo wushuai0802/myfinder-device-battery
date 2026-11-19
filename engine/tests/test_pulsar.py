@@ -311,6 +311,21 @@ class VgnF503EvidenceTests(unittest.TestCase):
             with self.subTest(pid=pid), diagnostic_hid([dict(self.info, product_id=pid)], []):
                 self.assertEqual(P.PulsarProvider().poll(), [])
 
+    def test_issue644_f506_uses_the_official_vgn_f1_moba_power_route(self):
+        info = diagnostic_info(pid=0xF506, product_string="VGN F1 MOBA")
+        script = length_calls(info, 17, 17) + battery_calls(info, [reply(73)], True)
+        with diagnostic_hid([info], script):
+            provider = P.PulsarProvider()
+            status, = provider.poll()
+        self.assertIn((0x3554, 0xF506), P.STRICT_COMPX_IDS)
+        self.assertNotIn((0x3554, 0xF506), P.DPI_MODELS)
+        self.assertEqual(
+            (status.key, status.name, status.level, status.charging, status.online, status.kind),
+            ("pulsar:3554f506", "VGN F1 MOBA", 73, False, True, "mouse"),
+        )
+        self.assertEqual((status.dpi, status.dpi_target), (None, None))
+        self.assertEqual(provider.reader_diagnostics(), ["valid battery reply"])
+
 
 class PulsarDiagnosticTests(unittest.TestCase):
     def test_issue323_unproven_length_has_safe_reason_without_opening(self):
@@ -652,7 +667,8 @@ class PulsarTest(unittest.TestCase):
                     # Newly admitted CompX IDs require descriptor evidence; legacy models still
                     # exercise the established unknown-length allowance here.
                     strict = (vid, pid) in ((0x3554, 0xF517), (0x3554, 0xFB56),
-                                            (0x3554, 0xF58E), (0x3554, 0xF505), (0x3554, 0xF503))
+                                            (0x3554, 0xF58E), (0x3554, 0xF505),
+                                            (0x3554, 0xF503), (0x3554, 0xF506))
                     length = 17 if strict else None
                     P.output_length = lambda path: length
                     P.hidlist = types.SimpleNamespace(enumerate=bus.enumerate)

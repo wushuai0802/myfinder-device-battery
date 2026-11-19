@@ -11,7 +11,9 @@ native 373B:1278 excluded. Scyrox 3554:F517, VGN F2 Master+ 3554:FB56 and
 VXE R1 SE 1K 3554:F58E also require FF02:0002 and exactly 17 output bytes;
 they are pending hardware verification in this project. VGN F1 Moba F503
 3554:F503 uses those same strict guards, based on Issue #592's user-supplied
-95% reply; it remains C / pending maintainer hardware verification. VGN Dragonfly 4K
+95% reply. VGN F1 Moba 3554:F506 uses the same guarded route, mapped by the
+official VGN HUB web driver consulted in Issue #644. Both remain C / pending
+maintainer hardware verification. VGN Dragonfly 4K
 3554:F505 uses the same strict collection/length guards; the project maintainer
 read 35%, not charging, 3766 mV on a VGN F1 Pro (VGN HUB: 36%) on 2026-11-05.
 Charging transitions and sleep/wake remain untested. Other listed models retain
@@ -194,6 +196,7 @@ PIDS: Dict[int, Dict[int, str]] = {
         0xF58E: "VXE R1 SE 1K 接收器",  # 待实机验证; OpenMouse ATK CompX PID
         0xF505: "VGN Dragonfly 4K Receiver",  # maintainer's VGN F1 Pro, 2026-11-05
         0xF503: "VGN F1 Moba F503",  # #592 user capture; C / 待实机验证
+        0xF506: "VGN F1 MOBA",  # #644; official VGN HUB FF02/report-8 route
         0xFB3E: "VGN 2.4G 接收器 (FB3E)",  # Shared by multiple mouse models, #733 / #802.
     },
     0x373B: {
@@ -302,7 +305,7 @@ class AtkNanoProvider(BatteryHidProvider):
 # Exact IDs with strict descriptor guards, including the maintainer-tested F505.
 # Unlike legacy entries, never fall back to a sibling or unknown-length path.
 STRICT_COMPX_IDS = frozenset({(0x3554, 0xF517), (0x3554, 0xFB56), (0x3554, 0xF58E),
-                             (0x3554, 0xF505), (0x3554, 0xF503)})
+                             (0x3554, 0xF505), (0x3554, 0xF503), (0x3554, 0xF506)})
 
 # Exact USB + live CID/MID gates, never the broad battery protocol-family gate.
 # OpenMouse 30d6ad37d0ecc9fff53f86d5058d67a88e07150d; see upstream-protocols.md.
