@@ -583,6 +583,13 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info[k] is not None for k in ("input_report_sizes", "output_report_sizes"))
+            if caps_complete and (attrs.vendor, attrs.product, caps.input) == (0x04F3, 0x026F, 32):
+                from providers.eweadn_x23 import matches_collection, report_id
+                if matches_collection(info):
+                    from battery_hid import byte_report_sizes
+                    info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0)
+                    _descriptor_fallback(info, caps, ("input",))
+                    caps_complete = report_id(info) is not None
             if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
                     (0x0C45, 0xFEF9, 0xFF60, 0x0061) and info["product_string"] == "NUT75 2.4G"
                     and caps.input == caps.output == 65):
