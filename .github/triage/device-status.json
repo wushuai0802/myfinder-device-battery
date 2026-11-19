@@ -4,7 +4,7 @@
     "05AC:024F": {
       "status": "beta",
       "version": "1.3.11-beta.20",
-      "note": "仅 AULA F99 MAX 2.4G 接收器，运行时须核对 F99 MAX Dongle、FF60:0061 和固件身份 0C45:800A",
+      "note": "仅 F99 MAX，需产品名、FF60 和固件身份核对",
       "reports": 0
     },
     "054C:0EBF": {
