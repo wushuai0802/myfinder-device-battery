@@ -1394,6 +1394,8 @@ directions. After both checks pass, the reader sends the existing 0900
 query on the unique FF01 collection. The patched Windows engine returned 84%
 with charging false on this receiver.
 
+The exact USB name MCHOSE A7 V3 Pro on 3837:1018 can also use the MI_02 Windows check above. The M HUB model table lists 4120 (1018) for this Pro, and #906 reports the Pro name and FF01:0001 collection. Runtime confirmation of both 4D/64 buffers is required before the usual 0900 query. #595 also reports 41-byte reports on this receiver family. Those sizes alone cannot enable the query. The Pro tests replay a synthetic layout based on the Ultra+ descriptor. Hardware confirmation on the Pro is pending. [Official M HUB bundle](https://www.mchose.com.cn/assets/main-DCRwBIvm.js) · [Pro report](https://github.com/wushuai0802/myfinder-device-battery/issues/906) · [Other reported layout](https://github.com/wushuai0802/myfinder-device-battery/issues/595)
+
 **A7 V3 Ultra+ `3837:1014`: C / 用户实机验证，#276.** The supplied
 `.ai/evidence/issue-274.md` records five collections (`1:2`, `1:6`, `12:1`,
 `FF0B:00C4`, `FF01:0001`); `.ai/evidence/issue-276.md` reports that traditional
