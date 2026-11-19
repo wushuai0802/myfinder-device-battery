@@ -1877,6 +1877,65 @@ The standard Razer commands (class `0x07` id `0x80` for the level, 0-255 shown a
 
 The same exchange as the DeathStalker V2 Pro TKL above, with the ids and interfaces from OpenRazer's keyboard driver: DeathStalker V2 Pro 1532:0290 (receiver, `0x9F`, interface 2) and 1532:0292 (cable, `0x1F`, interface 3); BlackWidow V3 Mini HyperSpeed 1532:0271 / 0258 and BlackWidow V4 Mini HyperSpeed 1532:02BA / 02B9 (`0x9F` / `0x1F`, both on interface 3); BlackWidow V4 Tenkeyless HyperSpeed 1532:02D5 (receiver, `0x9F`, interface 2) and 1532:02D7 (cable, `0x1F`, interface 3). **Unverified** - only the DeathStalker V2 Pro TKL has been tested on hardware so far
 
+### AULA V9Pro+ (320F:22BA, 2.4 GHz receiver)
+
+**C - contributor hardware readings, 80 % and 48 % on 2026-11-18; pending this project's own
+verification.** `providers/aula_mouse.py` sends one output report on collection `FF1C:0092` (report
+id `04`, 64 bytes in and out) and reads the percentage from the reply. Battery only; no charging
+state is claimed.
+
+```
+request  04 00 00 1A 00 00 00 00 00 00 00 00 00 00 00 00  (then 48 zero bytes)
+reply    04 00 00 1A 00 00 00 00 50 00 00 00 00 00 00 00  (then 48 zero bytes)
+```
+
+`[8] = 0x50 = 80 %` in the captured reply. The echo covers `[1..7]` but not the parameter byte,
+which stays `00`, so only `[3]` is compared - comparing `[4]` rejects every real reply. `320F` is a
+shared vendor id (HECATE `706E`, VGN `5088`), so the reader also requires product string
+`AULA-V9Pro+`, interface 1 and a single proven `04/64` report in each direction before it writes.
+The vendor app reaches the same answer with `00 00 1A 00`; no handshake, checksum or `SetFeature`
+is involved.
+
+`[9]` is the charging state, measured on 2026-11-18 with the cable unplugged, plugged and unplugged
+again, nine samples at each state:
+
+```
+reply    04 00 00 1A 00 00 00 00 50 00 ...   unplugged, 80 %, [9] = 00
+reply    04 00 00 1A 00 00 00 00 52 01 ...   charging,  82 %, [9] = 01
+reply    04 00 00 1A 00 00 00 00 52 00 ...   unplugged again, 82 %, [9] = 00
+```
+
+`[9]` read the same value for all nine samples of each state, and the percentage stayed at 82 after
+unplugging, so `[9]` tracks the cable rather than the level estimate. Only 0 and 1 are accepted; any
+other value drops the reply instead of guessing.
+
+### AULA F87ProV2 (0C45:FEFE, 2.4 GHz receiver)
+
+**C - contributor hardware readings, 48 % on 2026-11-18; pending this project's own verification.**
+`providers/aula_keyboard.py` sends the status page on collection `FF60:0061`: unnumbered 32-byte
+reports, so the Windows buffer is 33 bytes and hidapi returns 32. The level sits in `[25]`.
+
+```
+request  00 AA 10 18 00 00 00 00 00 00 00 00 00 00 00 00  (then 17 zero bytes)
+reply    55 10 18 00 00 00 00 00 00 00 00 12 A6 38 11 27 66 01 00 00 66 01 00 00 02 30 00 00 00 00 00 00
+```
+
+`[25] = 0x30 = 48 %` in the captured reply; the percentage bounced 58/64 inside one unplugged phase,
+so a rising level is not evidence of charging. The reply echoes request `[2..4]` into `[1..3]`; the
+vendor app polls page `18` with the same group and sub-command and that reply differs only in the
+echoed byte, so all three are compared before the level is trusted. `0C45` and `FEFE` also appear on
+other brands' receivers, so the reader requires product string `AULA F87ProV2D Dongle`, interface 3
+and a single proven `0/33` report in each direction.
+
+One bring-up note, not proven to be a device rule: an idle keyboard sometimes accepts the output
+report without answering, so one silent attempt is repeated (a rejected reply is not).
+
+Charging is not exposed by this receiver. Four queries the vendor app also polls were captured with
+the cable unplugged, plugged and unplugged again, eight samples each: page `00` (only the percentage
+moved), page `18`, `AA 13 10 00 00 00 01` and `AA 10 08 30 00 00 01`. Every byte of the last three
+stayed identical across all three states, so `[24] = 02` is not a charging bit and the reader keeps
+`charging_known = False`.
+
 ## Controllers
 
 ### Flydigi APEX5 (37D7:2501)
@@ -4211,3 +4270,17 @@ its own identity. Case charging state is unknown. All three are grade C in
 MyFinder pending feedback on the shipped build.
 
 [HeadsetControl H5](https://github.com/Sapd/HeadsetControl/blob/163c6edf744c28804d95e3653e5ea7bc9486b46c/lib/devices/sony_inzone_h5.hpp) · [H9 II](https://github.com/Sapd/HeadsetControl/blob/163c6edf744c28804d95e3653e5ea7bc9486b46c/lib/devices/sony_inzone_h9_ii.hpp) · [Sony HCI](https://github.com/Sapd/HeadsetControl/blob/163c6edf744c28804d95e3653e5ea7bc9486b46c/lib/devices/protocols/sony_inzone_protocol.hpp) · [Windows H5 reader](https://github.com/Timor778/DeviceViewer/blob/d8150a26c219791875687c3811d5ac0810923b2c/deviceviewer/devices.py) · [Buds Windows captures](https://github.com/kinako19/inzone-buds-battery-tray/blob/4ebabd26a93acd0901e2806195f7595efe794b03/docs/protocol-notes.md) · [Buds descriptor](https://github.com/orkun-soylu/inzone-buds-gnome/blob/04c580af7bca12351efe55248535b9ab15b02340/docs/protocol.md)
+
+### Razer Viper V4 Pro battery
+
+The independent Windows reader records the battery GET on 1532:00E6 (receiver) and 1532:00E5 (cable). Issue #646 isolated MI_03, usage 000C:0001, on the receiver and read raw 184. The other collection recorded in #910 advertises a short, numbered Feature and is excluded. The reader requires a matching USB parent, one MI_03 collection and a 91-byte unnumbered Feature report, including the report-ID slot. It sends only the class 07 command 80 with TID 1F and converts nonzero raw values on a 255 scale. The capture yields about 72% against a separate Synapse log of 74%. Charging remains unknown. MyFinder hardware comparison is pending. [Windows reader at b045ad42](https://github.com/Riqqqque/RazerBatteryDisplay/blob/b045ad42a27d537af62d30fbcdf4ed98c88f1db9/src/battery.rs) · [Receiver report](https://github.com/wushuai0802/myfinder-device-battery/issues/646)
+
+### MCHOSE K99 V3 wireless
+
+The 3837:3033 receiver with the complete product name MCHOSE K99 V3 2.4G uses MI_01, Generic Desktop usage zero, and unnumbered 64-byte payloads. Windows adds the report-ID slot on writes. The captured battery query starts with 55 03 00 38 38. Both captured AA 03 replies have the percentage at offset 8, with 40% and 100% represented in the upstream fixture and README respectively. Charge-state semantics remain unknown. The G87 V2 and K87S sharing this PID have different product names. Protocol facts were independently implemented here. [Descriptor and 40% fixture](https://github.com/arutkowski00/mchose-hid-bridge/tree/ad74f3e75fd5ae099b2ea4af039678c54dea73ac/tests/fixtures) · [Upstream protocol description](https://github.com/arutkowski00/mchose-hid-bridge/blob/ad74f3e75fd5ae099b2ea4af039678c54dea73ac/README.md#wire-protocol-k99-v3-confirmed)
+
+### MCHOSE V9 Pro 2 wireless
+
+The official M HUB bundle maps VID 3837 PID 6011 explicitly to V9 PRO 2, wireless MC profile and headset report ID 55. The MC battery GET is subcommand 0B, message type 00 01, with no body. Its 63-byte payload begins AA 01 00 01 00 01 0B 00. The validated response body starts with the awake flag. In the next byte the low seven bits give the percentage and the high bit indicates charging. An asleep response or silence produces no new measurement. The reader requires the exact USB parent and product, the MI_03 FF07:0222 collection from #595 and per-ID 64-byte input and output reports. Wireless USB only. Offline fixtures exercise the published layout, including optional checksum. User hardware validation of the query is pending.
+
+Source file SHA256 `405102805e2adeb93073ee2186f6d0193ca1317a6b4657d636e4e611bd25a446`, particularly `createAudioHidProduct`, `createReadBatteryCommand$1`, `buildMCFrame` and `parseBatteryResponse`. [Official M HUB bundle](https://www.mchose.com.cn/assets/main-DCRwBIvm.js) · [Receiver identification from the reporter](https://github.com/wushuai0802/myfinder-device-battery/issues/595)

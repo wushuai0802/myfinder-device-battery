@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 from device_pack import EMPTY_PACK, load_pack, parse_pack
 
 PROVIDERS = (
+    ("aula_mouse", "AulaMouseProvider"), ("aula_keyboard", "AulaKeyboardProvider"),
     ("razer", "RazerProvider"), ("audeze", "AudezeProvider"),
     ("wlmouse", "WLmouseProvider"), ("mchose", "MchoseProvider"),
     ("mchose_headset", "MchoseHeadsetProvider"),
@@ -42,6 +43,7 @@ PROVIDERS = (
     ("flydigi", "FlydigiProvider"),
     ("mchose_qhw_keyboard", "MchoseQhwKeyboardProvider"),
     ("mchose_glw_keyboard", "MchoseGlwKeyboardProvider"),
+    ("mchose_k99v3", "MchoseK99V3Provider"), ("mchose_v9pro2", "MchoseV9Pro2Provider"),
     ("mchose_by_keyboard", "MchoseByKeyboardProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
@@ -63,6 +65,7 @@ PROVIDERS = (
     ("xinput", "XInputProvider"),
 )
 PROVIDER_VIDS = {
+    "aula_mouse": (0x320F,), "aula_keyboard": (0x0C45,),
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
     "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D, 0x3837),
@@ -77,7 +80,8 @@ PROVIDER_VIDS = {
     "lingbao": (0x088D,),
     "vgn_beiying": (0x258A, 0x391D),
     "vgn_dragonfly3": (0x391D,), "vgn_ry_ms": (0x391D,), "ninjutso_legacy": (0x1915,),
-    "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,),
+    "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,), "mchose_k99v3": (0x3837,),
+    "mchose_v9pro2": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),

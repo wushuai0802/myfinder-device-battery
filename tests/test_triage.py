@@ -740,12 +740,14 @@ class KnownIdsTests(unittest.TestCase):
     def test_razer_registry_preserves_builtin_ids_and_adds_viper_v3_pro_se(self):
         result = known_ids.build_index()
         rows = {d["productId"]: d for d in result["devices"] if d["provider"] == "razer"}
-        self.assertEqual(len(rows), 82)
+        self.assertEqual(len(rows), 84)
         for pid, name, kind in (
             (0x001F, "Razer Naga Epic", "mouse"),
             (0x00D7, "Razer Basilisk V3 Pro 35K Phantom Green", "mouse"),
             (0x00DE, "Razer Viper V3 Pro SE", "mouse"),
             (0x00DF, "Razer Viper V3 Pro SE", "mouse"),
+            (0x00E5, "Razer Viper V4 Pro", "mouse"),
+            (0x00E6, "Razer Viper V4 Pro", "mouse"),
             (0x025A, "Razer BlackWidow V3 Pro", "keyboard"),
             (0x025C, "Razer BlackWidow V3 Pro", "keyboard"),
             (0x0528, "Razer BlackShark V2 Pro (2020)", "headset"),

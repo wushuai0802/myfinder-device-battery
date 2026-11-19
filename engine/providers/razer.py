@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 import hid
 
-from . import blackshark, blackshark2020, hidlist
+from . import blackshark, blackshark2020, hidlist, razer_v4
 from .base import DeviceStatus, Provider, hexdump, log
 
 from .razer_profiles import RAZER_VID, KNOWN, KEYBOARD_INTERFACE
@@ -275,10 +275,14 @@ class RazerProvider(Provider):
 
         # group interfaces by device (PID + serial / location)
         groups: Dict[Tuple[int, str], List[dict]] = {}
+        viper_infos = []
         for d in infos:
             pid = d["product_id"]
             if self.device_pack.is_disabled(self.name, RAZER_VID, pid):
                 self._diag.append(f"  disabled: razer {RAZER_VID:04x}:{pid:04x}")
+                continue
+            if pid in razer_v4.PIDS:
+                viper_infos.append(d)
                 continue
             pack_entry = self._pack_entries.get(pid)
             if pack_entry and not pack_entry.match.matches(dict(d, vendor_id=RAZER_VID)):
@@ -305,7 +309,7 @@ class RazerProvider(Provider):
             if gkey not in groups:
                 self._clear_foreign(gkey)
 
-        out: List[DeviceStatus] = []
+        out = razer_v4.poll_devices(viper_infos, build_request)
         for (pid, serial), ifaces in groups.items():
             pack_entry = self._pack_entries.get(pid)
             name, pref_tid = self._known.get(pid, (None, None))
