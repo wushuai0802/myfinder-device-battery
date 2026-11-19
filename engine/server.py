@@ -28,6 +28,7 @@ PROVIDERS = (
     ("mchose_headset", "MchoseHeadsetProvider"),
     ("atk_headset", "AtkHeadsetProvider"),
     ("moondrop", "MoondropProvider"),
+    ("sony_inzone", "SonyInzoneProvider"),
     ("zhuaudio", "ZhuAudioProvider"),
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
     ("eweadn_s9pro", "EweadnS9ProProvider"),
@@ -67,6 +68,7 @@ PROVIDER_VIDS = {
     "mchose_headset": (0x291D, 0x3837),
     "atk_headset": (0x373B,),
     "moondrop": (0x35D8,),
+    "sony_inzone": (0x054C,),
     "zhuaudio": (0x3654,),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "eweadn_s9pro": (0x372E,),
@@ -101,7 +103,7 @@ BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"delux", "vgn_ry_ms", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+READER_DIAGNOSTICS = {"sony_inzone", "delux", "vgn_ry_ms", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -463,7 +465,10 @@ def normalise(status, previous, now, cached=False):
     connection_known = online if status.connection_known is None else bool(status.connection_known)
     # A current explicit state (e.g. plugged-in V9 with a frozen percentage)
     # invalidates history without pretending to have measured a new level.
-    unavailable = (status.level_unavailable and not cached and status.connection_known is True
+    # A Buds reply can explicitly mark one component's percentage unknown (FF)
+    # while the receiver and the other components still report current values.
+    part_unavailable = status.source == "sony_inzone" and status.unit_id in ("left", "right", "case")
+    unavailable = (status.level_unavailable and not cached and (status.connection_known is True or part_unavailable)
                    and ((status.source_quality == "device_reply" and not system)
                         or (status.source == "xinput" and system)))
     if unavailable:
@@ -682,7 +687,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
     if name in ("atk_headset", "delux", "vgn_ry_ms"):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
-    if name in ("moondrop", "asus_omni"):
+    if name in ("moondrop", "asus_omni", "sony_inzone"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
@@ -1359,7 +1364,7 @@ class BatteryEngine:
                                 vids = {d.get("vendor_id") for d in infos}
                                 if provider_name != "standard_hid" and not vids.intersection(PROVIDER_VIDS.get(provider_name, ())):
                                     continue
-                                if provider_name in ("delux", "vgn_ry_ms") and not recognized_candidate_count(provider_name, infos):
+                                if provider_name in ("delux", "vgn_ry_ms", "sony_inzone") and not recognized_candidate_count(provider_name, infos):
                                     continue
                                 matches.append((group_id, infos))
                             if not matches and full_round:

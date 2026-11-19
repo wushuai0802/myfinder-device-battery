@@ -4192,3 +4192,22 @@ Project verification grade C. Sleep transitions and concurrent use of VGN HUB
 on the released MyFinder reader still require hardware feedback.
 
 [Issue 733](https://github.com/wushuai0802/myfinder-device-battery/issues/733) · [Issue 802](https://github.com/wushuai0802/myfinder-device-battery/issues/802)
+
+## Sony INZONE H5, H9 II and Buds USB receivers
+
+The three receivers support Sony HCI battery GET on report 02, with 64-byte
+input and output reports including the ID. Windows issue #813 reports the H5
+(054C:0EBF) on FF04:0001. HeadsetControl also lists FF04:0002 for H5.
+H9 II (054C:0FA8) uses MI_05 FF04:0001. Buds (054C:0EC2) use FF04:0001.
+Select one such collection on a resolved USB receiver and prove report 02 in
+both directions. An unanswered request yields no new reading.
+
+The request addresses the receiver from the PC and carries only BATTERY_INFO
+GET. Match its transaction, sender, destination, event, lengths and checksum.
+H5 and H9 II report a charge flag and percentage. Buds return three pairs for
+left, right and case. Windows capture examples show 100%, 100%, 97% and also
+an unavailable left ear (FF) alongside a right ear at 100%. Each part retains
+its own identity. Case charging state is unknown. All three are grade C in
+MyFinder pending feedback on the shipped build.
+
+[HeadsetControl H5](https://github.com/Sapd/HeadsetControl/blob/163c6edf744c28804d95e3653e5ea7bc9486b46c/lib/devices/sony_inzone_h5.hpp) · [H9 II](https://github.com/Sapd/HeadsetControl/blob/163c6edf744c28804d95e3653e5ea7bc9486b46c/lib/devices/sony_inzone_h9_ii.hpp) · [Sony HCI](https://github.com/Sapd/HeadsetControl/blob/163c6edf744c28804d95e3653e5ea7bc9486b46c/lib/devices/protocols/sony_inzone_protocol.hpp) · [Windows H5 reader](https://github.com/Timor778/DeviceViewer/blob/d8150a26c219791875687c3811d5ac0810923b2c/deviceviewer/devices.py) · [Buds Windows captures](https://github.com/kinako19/inzone-buds-battery-tray/blob/4ebabd26a93acd0901e2806195f7595efe794b03/docs/protocol-notes.md) · [Buds descriptor](https://github.com/orkun-soylu/inzone-buds-gnome/blob/04c580af7bca12351efe55248535b9ab15b02340/docs/protocol.md)

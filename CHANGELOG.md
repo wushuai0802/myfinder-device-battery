@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.11-beta.15
+
+- 新增索尼 INZONE H5（054C:0EBF）、H9 II（054C:0FA8）和 Buds（054C:0EC2）的 USB 接收器电量读取。耳机休眠且没有回应时等待下次轮询，Buds 的左右耳和充电盒各自显示电量，盒子充电状态未知。
+- 这三款共用 Sony HCI 电量查询。测试覆盖公开的电量报文、单耳入盒及其他索尼设备的排除，验证等级为 C，待用户用测试版实机对照。[协议来源](engine/upstream-protocols.md#sony-inzone-h5-h9-ii-and-buds-usb-receivers)
+
 ## 1.3.11-beta.14
 
 - 新增 VGN 共享 2.4G 接收器（`3554:FB3E`）的电量候选。确认唯一 USB 接收器、MI_01 的 FF02:0002 集合以及双向 17 字节的 08 报告后查询。蜻蜓 F2 Pro Max（#733）和 Y2 Pro（#802）的电量回包分别解析为 90% 和 40%。充电状态未知，C 级，待本版实机验证。
