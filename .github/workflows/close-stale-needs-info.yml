@@ -44,3 +44,16 @@ jobs:
             gh issue close "$n" --repo "$GH_REPO" --reason "not planned" --comment "$body"
             echo "closed #$n"
           done
+          gh issue list --repo "$GH_REPO" --state open --label triage:awaiting-confirm --limit 500 --json number -q '.[].number' |
+          while read -r n; do
+            last=$(gh api --paginate --slurp "repos/$GH_REPO/issues/$n/comments?per_page=100" \
+              | jq -r 'add // [] | last // empty
+                  | select((.body // "") | contains("myfinder-supplement:v1") | not)
+                  | "\(.user.login) \(.created_at)"')
+            [ -n "$last" ] || continue
+            who=${last% *}; when=${last#* }
+            case "$who" in "$OWNER"|github-actions\[bot\]) ;; *) continue ;; esac
+            [ "$(date -u -d "$when" +%s)" -lt "$cutoff" ] || continue
+            gh issue close "$n" --repo "$GH_REPO" --reason "not planned" --comment "$body"
+            echo "closed #$n"
+          done
