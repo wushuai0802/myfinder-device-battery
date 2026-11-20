@@ -96,6 +96,19 @@ from .base import DeviceStatus, Provider, hexdump, log
 MEASURED_VID = 0x5253
 MCHOSE_VIDS = (MEASURED_VID, 0x3837)
 
+# OpenMouse mouse-protocol, 30d6ad37d0ecc9fff53f86d5058d67a88e07150d, src/mchose/index.ts.
+LEGACY_3837_PIDS = frozenset({
+    0x100A,  # OpenMouse MCHOSE_LINK_PRODUCT_IDS: Bluetooth.
+    0x100B,  # OpenMouse MCHOSE_LINK_PRODUCT_IDS: 2.4 GHz receiver.
+    0x1020,  # OpenMouse MCHOSE_LINK_PRODUCT_IDS: 8K receiver.
+    0x4015,  # OpenMouse MCHOSE_PRODUCTS: L7 Pro+.
+    0x4018,  # OpenMouse MCHOSE_PRODUCTS: A7 V2 Pro.
+    0x4019,  # OpenMouse MCHOSE_PRODUCTS: A7 V2 Ultra.
+    0x4021,  # OpenMouse MCHOSE_PRODUCTS: A7 V2 Ultra+.
+    0x4022,  # #537 旧路径电量读数。仅一条用户记录，待复审。
+    0x4023,  # OpenMouse MCHOSE_PRODUCTS: A7 V2 Pro+.
+})
+
 # Exact C-grade candidate. Source: M HUB's 100C -> 11/06 chain and
 # OpenMouse 30d6ad37 V2 codec/transport, not a 100C hardware capture.
 A5V2_VID, A5V2_PID = 0x3837, 0x100C
@@ -390,6 +403,7 @@ class MchoseProvider(Provider):
         self._diag: List[str] = []
         self._v3_diag: List[str] = []
         self._a5v2_diag: List[str] = []
+        self._legacy_diag: List[str] = []
         self._last: Dict[str, Tuple[int, bool, float]] = {}
         self._names: Dict[str, str] = {}
         self._models: Dict[str, int] = {}
@@ -522,7 +536,7 @@ class MchoseProvider(Provider):
         self._diag.append(message)
 
     def reader_diagnostics(self):
-        return list(self._v3_diag) + list(self._a5v2_diag)
+        return list(self._v3_diag) + list(self._a5v2_diag) + list(self._legacy_diag)
 
     def _note_a5v2(self, code):
         # Protocol-owned fixed codes only; no paths, names, frames or errors.
@@ -778,6 +792,7 @@ class MchoseProvider(Provider):
         self._diag = []
         self._v3_diag = []
         self._a5v2_diag = []
+        self._legacy_diag = []
         # Candidate failures/absence never publish an old candidate value.
         # Other MCHOSE models retain their original sleep/cache policy.
         self._last.pop(device_key(A5V2_VID, A5V2_PID), None)
@@ -838,6 +853,11 @@ class MchoseProvider(Provider):
                 if got_v3 is not None:
                     found.setdefault(key, []).append((got_v3[0], got_v3[1], pid, 0))
                 continue  # V3 never scans siblings or calls any legacy protocol.
+            if vid == 0x3837 and pid not in LEGACY_3837_PIDS:
+                message = f"[MCHOSE] 3837:{pid:04x} 未列入旧协议白名单，未发送任何命令"
+                self._diag.append(message)
+                self._legacy_diag.append(message)
+                continue
             product = (ifaces[0].get("product_string") or "").strip()
             if product:
                 self._names[key] = product
