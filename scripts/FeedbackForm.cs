@@ -145,9 +145,13 @@ namespace AtkBattery {
 
 namespace AtkBatteryTray {
     internal static class FeedbackDraft {
-        internal static string Category,Description;
+        internal static string Category,Description,EntryCategory;
         internal static bool Diagnostics;
-        internal static void Clear(){Category=null;Description=null;Diagnostics=true;}
+        internal static void Clear(){Category=null;Description=null;EntryCategory=null;Diagnostics=true;}
+        internal static void SaveIfChanged(string category,string description,bool diagnostics,string initialCategory){
+            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics)return;
+            Category=category;Description=description;Diagnostics=diagnostics;EntryCategory=initialCategory;
+        }
     }
 
     internal sealed class FeedbackForm:ThemedDialog {
@@ -157,7 +161,7 @@ namespace AtkBatteryTray {
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,view,mine;
-        CancellationTokenSource pending;FeedbackResult receipt;bool busy,browserSubmission;
+        CancellationTokenSource pending;FeedbackResult receipt;bool busy;
         internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
         internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null,Action<long> openMyFeedback=null):base(dark){
             report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;
@@ -179,7 +183,8 @@ namespace AtkBatteryTray {
                 string category=FeedbackInput.CategoryAt(i);categories.AddOption("Category-"+category,FeedbackInput.CategoryLabel(category),category);
                 if(category==FeedbackInput.DefaultCategory(deviceMissing))categories.SelectedIndex=i;
             }
-            if(FeedbackDraft.Description!=null){
+            bool restoreDraft=FeedbackDraft.Description!=null&&FeedbackDraft.EntryCategory==FeedbackInput.DefaultCategory(deviceMissing);
+            if(restoreDraft){
                 for(int i=0;i<categories.OptionCount;i++)if(FeedbackInput.CategoryAt(i)==FeedbackDraft.Category){categories.SelectedIndex=i;break;}
             }
             Action sizeTypeCard=delegate{typeCard.Height=typeCard.Padding.Vertical+typeTitle.PreferredHeight+4+categories.Height;};
@@ -198,7 +203,7 @@ namespace AtkBatteryTray {
             var diagnosticCard=new ThemedSection(Theme) {Name="FeedbackDiagnosticsCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
             var diagnosticRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Top,Margin=Padding.Empty,WrapContents=true};
             diagnostics.Name="IncludeDiagnostics";diagnostics.Text="附带诊断信息（推荐）";diagnostics.AccessibleName=diagnostics.Text;diagnostics.Checked=true;diagnostics.Margin=new Padding(0,0,12,0);
-            if(FeedbackDraft.Description!=null){description.Text=FeedbackDraft.Description;diagnostics.Checked=FeedbackDraft.Diagnostics;}
+            if(restoreDraft){description.Text=FeedbackDraft.Description;diagnostics.Checked=FeedbackDraft.Diagnostics;}
             preview.Name="ViewDiagnostics";preview.Text="查看内容";preview.AutoSize=true;preview.BackColor=Theme.Card;preview.LinkColor=Theme.Accent;preview.ActiveLinkColor=preview.LinkColor;preview.VisitedLinkColor=preview.LinkColor;preview.DisabledLinkColor=Theme.Muted;preview.Margin=new Padding(0,4,0,3);preview.LinkClicked+=delegate{ShowDiagnostics();};
             diagnosticRow.Controls.Add(diagnostics);diagnosticRow.Controls.Add(preview);diagnosticCard.Controls.Add(diagnosticRow);layout.Controls.Add(diagnosticCard,0,2);
             var noticeCard=new ThemedSection(Theme) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
@@ -226,7 +231,8 @@ namespace AtkBatteryTray {
                     +diagnosticCard.GetPreferredSize(new Size(width,0)).Height+diagnosticCard.Margin.Vertical
                     +noticeCard.GetPreferredSize(new Size(width,0)).Height+noticeCard.Margin.Vertical;
             });
-            FormClosing+=delegate{AbortSubmission();if(receipt==null&&!browserSubmission){FeedbackDraft.Category=SelectedCategory;FeedbackDraft.Description=description.Text;FeedbackDraft.Diagnostics=diagnostics.Checked;}else FeedbackDraft.Clear();};UpdateValidation();
+            string initialCategory=FeedbackInput.DefaultCategory(deviceMissing);
+            FormClosing+=delegate{AbortSubmission();if(receipt==null)FeedbackDraft.SaveIfChanged(SelectedCategory,description.Text,diagnostics.Checked,initialCategory);else FeedbackDraft.Clear();};UpdateValidation();
         }
         void UpdateValidation(){
             int length=description.Text.Trim().Length;
@@ -256,7 +262,7 @@ namespace AtkBatteryTray {
             else{EnableInputs(true);status.Text=result.Kind==FeedbackResultKind.RateLimited?"提交太频繁，请稍后再试":"暂时无法提交";fallback.Visible=result.Kind!=FeedbackResultKind.RateLimited;}
             UpdateValidation();
         }
-        void OpenBrowser(){if(busy||!FeedbackInput.Valid(SelectedCategory,description.Text))return;browserSubmission=true;status.Text=report.BrowserSubmission(SelectedCategory,description.Text,diagnostics.Checked).Open(copy,open);}
+        void OpenBrowser(){if(busy||!FeedbackInput.Valid(SelectedCategory,description.Text))return;status.Text=report.BrowserSubmission(SelectedCategory,description.Text,diagnostics.Checked).Open(copy,open);}
         internal ThemedDialog CreateDiagnosticsDialog(){return CreateDiagnosticsDialog(Theme.Dark,report.FullText);}
         internal static ThemedDialog CreateDiagnosticsDialog(bool dark,string contents){
             var dialog=new ThemedDialog(dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};

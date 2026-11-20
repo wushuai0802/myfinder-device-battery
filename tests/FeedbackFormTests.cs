@@ -199,6 +199,10 @@ static class FeedbackFormTests {
                 Find<Button>(restored,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(restored,"FeedbackStatus").Text==Submitted;});restored.Close();
             }
             using(var cleared=Form(new FakeHttp())){Show(cleared);Check(Find<TextBox>(cleared,"Description").Text=="设备连接后没有显示电量","successful submission clears the process draft");cleared.Close();}
+            FeedbackDraft.Clear();using(var untouched=Form(new FakeHttp())){Show(untouched);untouched.Close();}
+            using(var defaults=Form(new FakeHttp())){Check(defaults.SelectedCategory=="other","untouched feedback does not retain an empty draft");defaults.Close();}
+            FeedbackDraft.Clear();using(var browser=Form(new FakeHttp(),"")){Show(browser);Find<TextBox>(browser,"Description").Text="browser draft";Find<Button>(browser,"SubmitFeedback").PerformClick();browser.Close();}
+            using(var reopened=Form(new FakeHttp())){reopened.Opacity=0;reopened.Show();Application.DoEvents();Check(Find<TextBox>(reopened,"Description").Text=="browser draft","browser prefill does not discard an unsent draft");reopened.Close();}
         }finally{FeedbackDraft.Clear();}
     }
     static void SmallWorkAreaStates(){
