@@ -89,6 +89,7 @@ namespace AtkBatteryTray {
         int presentationDepth;
         bool ignoreDeactivate;
         bool feedbackModal;
+        FeedbackForm feedbackDialog;
         readonly System.Windows.Forms.Timer deactivateRelease=new System.Windows.Forms.Timer();
         bool deferredDeactivation;
         int deactivationEpoch;
@@ -392,9 +393,14 @@ namespace AtkBatteryTray {
         internal void NoticeUpdated(){updatedNotice="已更新到 "+AppRuntime.Version;updatedNoticeTimer.Stop();updatedNoticeTimer.Start();Invalidate();}
         void ShowFeedback(){
             using(var dialog=new FeedbackForm(owner.CreateFeedbackReport(),navigation.Page==PopupPage.DeviceMissing,Style.Dark,copyText,openLink,feedbackReplies:owner.FeedbackReplies,openMyFeedback:owner.OpenMyFeedback)){
-                feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
+                feedbackDialog=dialog;feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
                 try{dialog.ShowDialog(this);}finally{feedbackModal=false;ignoreDeactivate=false;}
+                feedbackDialog=null;
             }
+        }
+        internal bool ActivateFeedback(){
+            if(!feedbackModal||feedbackDialog==null||feedbackDialog.IsDisposed)return false;
+            feedbackDialog.Activate();feedbackDialog.BringToFront();return true;
         }
         void ShowMyFeedback(){
             owner.OpenMyFeedback();
@@ -991,12 +997,16 @@ namespace AtkBatteryTray {
         internal bool OwnsDetails(Details popup){return !disposed&&details==popup;}
         internal void HandleTrayMouseDown(MouseButtons button) {
             if(button!=MouseButtons.Left||disposed)return;
+            if(details!=null&&!details.IsDisposed&&details.ActivateFeedback()){trayPressPending=true;trayPressTarget=null;trayPressCloses=false;return;}
             trayPressPending=true;trayPressTarget=details!=null&&!details.IsDisposed?details:null;
             trayPressCloses=trayPressTarget!=null&&!trayPressTarget.IsClosing;
             if(!trayPressCloses&&trayPressTarget!=null)trayPressTarget.CancelDeferredDeactivation();
         }
         internal void HandleTrayMouseUp(MouseButtons button) {
             if(button!=MouseButtons.Left||disposed)return;
+            if(details!=null&&!details.IsDisposed&&details.ActivateFeedback()){
+                trayPressPending=false;trayPressCloses=false;trayPressTarget=null;return;
+            }
             var target=trayPressPending?trayPressTarget:details;
             // Up-only tray mirrors should also close a surviving popup, never reverse
             // a dismissal. With paired notifications the down-time intent wins.

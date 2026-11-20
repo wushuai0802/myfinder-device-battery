@@ -1,0 +1,4 @@
+{
+  "title": "[设备反馈] 联想无线鼠标 17EF:60FF",
+  "body": "### 品牌与完整型号\n\n联想无线鼠标 Lenovo Wireless Mouse（VID 17EF / PID 60FF）\n\n### 反馈报告\n\n```text\n【设备】VID 17EF / PID 60FF，产品串 \"Lenovo Wireless Mouse\"。\n【接口】FF02:0002 feature=8；0001:0002 是鼠标集合。\n```"
+}

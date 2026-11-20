@@ -186,6 +186,35 @@ static class FeedbackFormTests {
             Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="暂时无法提交";});Check(!Find<Button>(form,"ViewIssue").Visible&&opens==0,"untrusted success URL never exposed as a browser action");form.Close();
         }
     }
+    static void DraftAndDeactivation(){
+        FeedbackDraft.Clear();try{
+            var http=new FakeHttp();using(var form=Form(http)){
+                Show(form);var input=Find<TextBox>(form,"Description");input.Text="abcde";
+                Find<ThemedSegments>(form,"Categories").GetOption("Category-battery").DoDefaultAction();Find<CheckBox>(form,"IncludeDiagnostics").Checked=false;
+                typeof(Form).GetMethod("OnDeactivate",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,new object[]{EventArgs.Empty});
+                Check(form.Visible&&input.Text=="abcde"&&form.SelectedCategory=="battery"&&!Find<CheckBox>(form,"IncludeDiagnostics").Checked,"deactivation preserves the visible feedback dialog and values");form.Close();
+            }
+            using(var restored=Form(new FakeHttp())){
+                restored.Opacity=0;restored.Show();Application.DoEvents();Check(Find<TextBox>(restored,"Description").Text=="abcde"&&restored.SelectedCategory=="battery"&&!Find<CheckBox>(restored,"IncludeDiagnostics").Checked,"closing and reopening restores the process draft");
+                Find<TextBox>(restored,"Description").Text="";Find<ThemedSegments>(restored,"Categories").GetOption("Category-other").DoDefaultAction();Find<CheckBox>(restored,"IncludeDiagnostics").Checked=true;restored.Close();
+            }
+            using(var emptied=Form(new FakeHttp())){
+                emptied.Opacity=0;emptied.Show();Application.DoEvents();Check(Find<TextBox>(emptied,"Description").Text==""&&emptied.SelectedCategory=="other"&&Find<CheckBox>(emptied,"IncludeDiagnostics").Checked,"clearing a restored draft clears it for the next open");emptied.Close();
+            }
+            FeedbackDraft.Clear();using(var restored=Form(new FakeHttp())){
+                Show(restored);Find<TextBox>(restored,"Description").Text="abcde";Find<ThemedSegments>(restored,"Categories").GetOption("Category-battery").DoDefaultAction();Find<CheckBox>(restored,"IncludeDiagnostics").Checked=false;restored.Close();
+            }
+            using(var restored=Form(new FakeHttp())){
+                restored.Opacity=0;restored.Show();Application.DoEvents();Check(Find<TextBox>(restored,"Description").Text=="abcde","restored draft remains available before successful submission");
+                Find<Button>(restored,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(restored,"FeedbackStatus").Text==Submitted;});restored.Close();
+            }
+            using(var cleared=Form(new FakeHttp())){Show(cleared);Check(Find<TextBox>(cleared,"Description").Text=="设备连接后没有显示电量","successful submission clears the process draft");cleared.Close();}
+            FeedbackDraft.Clear();using(var untouched=Form(new FakeHttp())){Show(untouched);untouched.Close();}
+            using(var defaults=Form(new FakeHttp())){Check(defaults.SelectedCategory=="other","untouched feedback does not retain an empty draft");defaults.Close();}
+            FeedbackDraft.Clear();using(var browser=Form(new FakeHttp(),"")){Show(browser);Find<TextBox>(browser,"Description").Text="browser draft";Find<Button>(browser,"SubmitFeedback").PerformClick();browser.Close();}
+            using(var reopened=Form(new FakeHttp())){reopened.Opacity=0;reopened.Show();Application.DoEvents();Check(Find<TextBox>(reopened,"Description").Text=="browser draft","browser prefill does not discard an unsent draft");reopened.Close();}
+        }finally{FeedbackDraft.Clear();}
+    }
     static void SmallWorkAreaStates(){
         var previous=ThemedDialog.WorkingAreaProvider;var area=new Rectangle(0,0,1024,768);
         ThemedDialog.WorkingAreaProvider=delegate{return area;};
@@ -273,7 +302,7 @@ static class FeedbackFormTests {
             Run("native bounds after submission",NativeBoundsAfterSubmission);
             Console.WriteLine(checks+" feedback fit checks, "+failures+" failed groups");return failures==0?0:1;
         }
-        Run("shipped relay configuration",RelayConfiguration);Run("validation and defaults",Validation);Run("exact payload and HTTP policy",PayloadAndPolicy);Run("HTTP failure boundaries",Failures);Run("cancellation during send and read",Cancellation);Run("browser fallback",BrowserFallback);Run("success and repeat confirmation",SuccessAndRepeat);Run("diagnostic preview and DPI bounds",delegate{PreviewAndLayout(args.Length>0?args[0]:null);});
+        Run("shipped relay configuration",RelayConfiguration);Run("validation and defaults",Validation);Run("exact payload and HTTP policy",PayloadAndPolicy);Run("HTTP failure boundaries",Failures);Run("cancellation during send and read",Cancellation);Run("browser fallback",BrowserFallback);Run("success and repeat confirmation",SuccessAndRepeat);Run("draft and deactivation",DraftAndDeactivation);Run("diagnostic preview and DPI bounds",delegate{PreviewAndLayout(args.Length>0?args[0]:null);});
         Run("small work area feedback states",SmallWorkAreaStates);
         Run("native bounds after submission",NativeBoundsAfterSubmission);
         Console.WriteLine(checks+" feedback checks, "+failures+" failed groups; no network or real clipboard/browser/configuration");return failures==0?0:1;
