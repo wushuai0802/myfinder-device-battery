@@ -1513,6 +1513,21 @@ the exact Pro descriptor/report layout, firmware, live percentage/charging
 comparison, sleep/wake behavior and coexistence with M HUB. Shared receiver PID
 and Ultra+ evidence do not establish successful reads on every Pro variant.
 
+### MCHOSE V7 / G3 V3 shared 1K receiver (3837:1016)
+
+C / 待实机验证. The V7 and G3 V3 use the shared 1K receiver. OpenMouse
+`src/mchose/v3.ts` lists it as `receiver1k`, and the M HUB device table
+identifies `3837:1016` for V7. The two diagnostics show why collection
+selection matters: a receiver exposing only `FF60:0061` cannot be queried.
+[OpenMouse receiver table](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/mchose/v3.ts#L485) · [M HUB table evidence](research/mchose-2026-11.md) · [#443](https://github.com/wushuai0802/myfinder-device-battery/issues/443) · [#508](https://github.com/wushuai0802/myfinder-device-battery/issues/508)
+
+The same gate as `1014` requires a unique `FF01:0001` collection and proof
+of 64 bytes in each direction for report `0x4D` before the existing
+`0x0900` battery query. Display uses the actual USB product string or
+`MCHOSE V3 1K 接收器` when it is blank. Offline fixtures cover the accepted
+path and refusal cases. Battery readings and reconnect behavior still
+need hardware verification.
+
 ### MCHOSE A5 V2 Ultra (3837:100C)
 
 **C / 只读候选，待本项目实机验证。** Added 2026-11-14 only for
@@ -2386,7 +2401,7 @@ with a fixed short diagnostic reason, never raw bytes or a device path.
 `topology` tries caps first, retaining the existing fixed-usage Rapoo proof.
 Only a `None` result triggers raw-descriptor retrieval, and only inside the
 existing Rapoo PID + `FF00:0002` gate, the exact MOONDROP
-`35D8:0133 / FF02:0002 or 000C:0001` gate, MCHOSE V3 `3837:1018/1014 / FF01:0001`, or
+`35D8:0133 / FF02:0002 or 000C:0001` gate, MCHOSE V3 `3837:1018/1014/1016 / FF01:0001`, or
 S9 PRO `372E:1026 / FF00:0001 or FF06:0001`. A successful caps proof with an unsuitable ID
 does not trigger this fallback. If the current hidapi device has no callable
 `get_report_descriptor`, it skips opening. Otherwise one temporary handle

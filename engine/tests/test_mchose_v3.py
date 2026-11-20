@@ -313,6 +313,48 @@ class V3ProtocolTests(unittest.TestCase):
                 else:
                     self.assertEqual(result, [])
 
+    def test_1016_reads_proven_ff01_and_uses_usb_name_or_1k_fallback(self):
+        primary = dict(next(d for d in inventory(0x1016) if d["usage_page"] == 0xFF01),
+                       path=b"1k-ff01")
+        for product, expected in (("  MCHOSE V7  ", "MCHOSE V7"),
+                                  ("MCHOSE G3 V3", "MCHOSE G3 V3"),
+                                  ("   ", "MCHOSE V3 1K 接收器")):
+            with self.subTest(product=product):
+                info = dict(primary, product_string=product)
+                alternate = dict(info, path=b"1k-ff0b", usage_page=0xFF0B, usage=0x00C4)
+                with fixture([DISCHARGING], [info, alternate]) as bus:
+                    device, = M.MchoseProvider().poll()
+                    self.assertEqual((device.name, device.level, device.charging),
+                                     (expected, 87, False))
+                    self.assertEqual((bus.opened, bus.sent), ([b"1k-ff01"], [REQUEST]))
+
+    def test_1016_rejects_missing_or_duplicate_ff01_without_opening(self):
+        primary = dict(next(d for d in inventory(0x1016) if d["usage_page"] == 0xFF01),
+                       path=b"1k-ff01")
+        ff0b = dict(primary, path=b"1k-ff0b", usage_page=0xFF0B, usage=0x00C4)
+        ff60 = dict(primary, path=b"1k-ff60", usage_page=0xFF60, usage=0x0061)
+        duplicate = dict(primary, path=b"1k-ff01-duplicate")
+        for infos in ([ff0b], [ff60], [primary, duplicate, ff0b]):
+            with self.subTest(paths=[d["path"] for d in infos]), fixture([], infos) as bus:
+                provider = M.MchoseProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.sent), ([], []))
+                self.assertTrue(any("missing or ambiguous FF01:0001" in line
+                                    for line in provider.reader_diagnostics()))
+
+    def test_1016_requires_4d64_proof_in_both_directions(self):
+        primary = dict(next(d for d in inventory(0x1016) if d["usage_page"] == 0xFF01),
+                       path=b"1k-ff01")
+        alternate = dict(primary, path=b"1k-ff0b", usage_page=0xFF0B, usage=0x00C4)
+        for direction in ("input", "output"):
+            info = dict(primary, **{direction + "_report_sizes": None})
+            with self.subTest(direction=direction), fixture([], [info, alternate]) as bus:
+                provider = M.MchoseProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual((bus.opened, bus.sent), ([], []))
+                self.assertTrue(any(direction + " report 4D/64 length unproven" in line
+                                    for line in provider.reader_diagnostics()))
+
     def test_both_v3_ids_require_report_proof_and_explain_refusals(self):
         for pid in (0x1018, 0x1014):
             for direction in ("input", "output"):

@@ -430,6 +430,7 @@ def discover(paths, excluded=(), *, full=False):
                     (0x3837, 0x1018, 0xFF01, 0x0001),
                     (0x3837, 0x1018, 0xFF0B, 0x00C4),
                     (0x3837, 0x1014, 0xFF01, 0x0001),
+                    (0x3837, 0x1016, 0xFF01, 0x0001),
                     (0x373B, 0x1262, 0xFF90, 0x0001),
                     (0x373B, 0x12D6, 0xFF90, 0x0001),
                     (0x373B, 0x1216, 0xFF05, 0x0001),
@@ -450,6 +451,7 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 if (attrs.vendor, attrs.product) in (
                         (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014),
+                        (0x3837, 0x1016),
                         (0x41E4, 0x2001), (0x3554, 0xFA09), (0x3554, 0xFB26),
                         (0x3554, 0xFB3E)):
                     # The alternate 1018 collection is useful only at 4D/64.

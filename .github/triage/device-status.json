@@ -117,6 +117,11 @@
       "note": "充电底座，本身没有电量",
       "reports": 0
     },
+    "3837:1016": {
+      "status": "researching",
+      "note": "V7 与 G3 V3 共用 1K 接收器，待实机验证",
+      "reports": 0
+    },
     "3837:3033": {
       "reports": 0,
       "status": "beta",
