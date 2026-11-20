@@ -72,7 +72,7 @@ def diagnostic_devices(body):
     rows, inside = [], False
     for raw in text.splitlines():
         line = raw.strip()
-        if line == UNADAPTED:
+        if line.startswith(UNADAPTED):
             inside = True
             continue
         if inside and line in {"有卡片的设备", "已隐藏的重复连接", "读取器健康"}:
@@ -86,10 +86,31 @@ def diagnostic_devices(body):
     return rows
 
 
-def target_ids(body):
+def target_ids(body, title=""):
     _version, _category, description = parse_body(body)
     described = pairs(description)
-    return described or [(vid, pid) for vid, pid, _name in diagnostic_devices(body)]
+    if described:
+        return described
+    values = []
+    for pair in pairs(title):
+        if pair not in values:
+            values.append(pair)
+    diagnostic = diagnostic_devices(body)
+    if diagnostic:
+        for pair in [(vid, pid) for vid, pid, _name in diagnostic]:
+            if pair not in values:
+                values.append(pair)
+    elif TEMPLATE_REPORT.search(body or ""):
+        report = TEMPLATE_REPORT.search(body).group(1)
+        report_pairs = []
+        for line in report.splitlines():
+            if re.search(r"VID\s*/\s*PID", line, re.I):
+                report_pairs.extend(pairs(line))
+        report_pairs = report_pairs or pairs(report)
+        for pair in report_pairs:
+            if pair not in values:
+                values.append(pair)
+    return values
 
 
 def is_template_issue(body):
@@ -147,7 +168,7 @@ def rows_for(issues, comments, released, main, gated):
         if issue.get("state", "").lower() != "open" or not isinstance(issue.get("number"), int):
             continue
         version, category, _description = parse_body(issue.get("body"))
-        ids = target_ids(issue.get("body"))
+        ids = target_ids(issue.get("body"), issue.get("title", ""))
         speaker, at = last_speaker(issue, comments_by_issue[issue["number"]])
         diagnostic_names = defaultdict(list)
         for vid, pid, name in diagnostic_devices(issue.get("body")):
