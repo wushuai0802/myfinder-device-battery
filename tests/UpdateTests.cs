@@ -254,6 +254,67 @@ static class UpdateTests {
         var checking=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));typeof(UpdateController).GetField("available",flags).SetValue(checking,Release("1.3.6"));typeof(UpdateController).GetField("availableCached",flags).SetValue(checking,true);typeof(UpdateController).GetField("checking",flags).SetValue(checking,1);Check(checking.Status=="正在检查更新…","UI keeps checking visible when a cached release exists");
         var cached=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));typeof(UpdateController).GetField("available",flags).SetValue(cached,Release("1.3.6"));typeof(UpdateController).GetField("availableCached",flags).SetValue(cached,true);Check(cached.Status=="已缓存版本 1.3.6","UI labels a cached release instead of claiming a fresh check");
     }
+    static void ManualCatalogFailureCopy(string root){
+        var settings=DeviceSettings.Current;
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {AutoCheckUpdates=false});
+        try{
+            var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+            var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);
+            foreach(var failure in new[]{WebExceptionStatus.NameResolutionFailure,WebExceptionStatus.Timeout}){
+                var http=new Http {Failure=failure};
+                var checker=new UpdateChecker(http,Path.Combine(root,"manual-"+failure+".json"),"1.3.4",now.AddDays(-1));
+                checker.Check(false,false,now);
+                var controller=(UpdateController)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(UpdateController));
+                var cached=Release("1.3.6");
+                typeof(UpdateController).GetField("checker",flags).SetValue(controller,checker);
+                typeof(UpdateController).GetField("available",flags).SetValue(controller,cached);
+                typeof(UpdateController).GetField("availableCached",flags).SetValue(controller,true);
+                string message=failure==WebExceptionStatus.Timeout?"检查更新超时，可手动重试":"连接 GitHub 失败，可手动重试";
+                Check(controller.StatusAt(now)==message+"；已缓存版本 1.3.6","manual failure stays visible with a cached release: "+failure);
+                typeof(UpdateController).GetField("available",flags).SetValue(controller,null);
+                Check(controller.StatusAt(now)==message,"manual failure remains visible without a cached release: "+failure);
+                typeof(UpdateController).GetField("available",flags).SetValue(controller,cached);
+                typeof(UpdateController).GetField("automaticInFlight",flags).SetValue(controller,true);
+                Check(controller.StatusAt(now)=="已缓存版本 1.3.6","automatic failure preserves cached status: "+failure);
+            }
+        }finally{DeviceSettings.UseTransientConfiguration(settings);}
+    }
+    static void UpdateFailureCopy(){
+        const string connection="无法连接 GitHub 下载更新附件。请检查网络后重试。";
+        const string timeout="下载更新附件超时。请检查网络后重试。";
+        const string incomplete="更新附件下载不完整。请重新下载。";
+        const string occupied="更新文件正被占用。请退出 MyFinder，关闭占用该文件的程序后重试。";
+        const string denied="Windows 拒绝访问更新文件。请检查相关目录权限和安全软件的拦截记录后重试。";
+        const string preflight="An installed payload file is in use or not writable. Close the application before updating. File: C:\\fake\\reader.exe. Windows error: 0x";
+        var flags=System.Reflection.BindingFlags.Static|System.Reflection.BindingFlags.NonPublic;
+        var type=typeof(UpdateController);
+        var attachment=(Func<Exception,string>)Delegate.CreateDelegate(typeof(Func<Exception,string>),type.GetMethod("AttachmentFailure",flags));
+        var install=(Func<string,string>)Delegate.CreateDelegate(typeof(Func<string,string>),type.GetMethod("InstallFailure",flags));
+
+        Check(attachment(new WebException("fixture network",WebExceptionStatus.NameResolutionFailure))==connection,"download DNS failure gets the confirmed connection message");
+        Check(attachment(new IOException("fixture interrupted response",new WebException("fixture connection",WebExceptionStatus.ReceiveFailure)))==connection,"wrapped network interruption gets a connection message");
+        Check(attachment(new WebException("fixture timeout",WebExceptionStatus.Timeout))==timeout,"transport timeout gets the confirmed download message");
+        Check(attachment(new TimeoutException("Update download stalled."))==timeout,"stalled download gets the timeout message");
+        Check(attachment(new IOException("fixture read",new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.TimedOut)))==timeout,"wrapped socket timeout gets the download timeout message");
+        Check(attachment(new InvalidDataException("Truncated update download."))==incomplete,"short download gets the confirmed incomplete message");
+        Check(attachment(new InvalidDataException("Truncated archive entry."))=="Truncated archive entry.","ZIP entry failure retains its validation reason");
+        Check(attachment(new InvalidDataException("Signed package SHA256 mismatch."))=="Signed package SHA256 mismatch.","signature and hash failures retain validation details");
+
+        foreach(uint code in new uint[]{0x80070020,0x80070021}){
+            Check(attachment(new IOException("fixture lock",unchecked((int)code)))==occupied,"sharing or lock violation gets the confirmed occupied message "+code);
+            Check(install(preflight+code.ToString("X8")+". fixture lock")==occupied,"next start identifies the recorded sharing or lock code "+code);
+        }
+        Check(attachment(new UnauthorizedAccessException("fixture denied"))==denied,"access exception gets the confirmed permissions message");
+        Check(attachment(new IOException("fixture write",unchecked((int)0x80070005)))==denied,"explicit Windows error code identifies an access denial");
+        Check(install(preflight+"80070005. fixture denied")==denied,"next start identifies a recorded access denial");
+        Check(install(preflight+"80070005. fixture denied Recovery restart failed: fixture restart")==denied+" Recovery restart failed: fixture restart",
+              "next-start failure keeps the additional recovery error");
+        string ambiguous=preflight+"80070050. fixture other error";
+        Check(install(ambiguous)==ambiguous,"unknown installer error code retains its original reason");
+        Check(install("fixture generic reason with Windows error: 0x80070005. only")=="fixture generic reason with Windows error: 0x80070005. only",
+              "arbitrary persisted text is not treated as an installer preflight reason");
+        Check(attachment(new IOException("fixture error at C:\\fake\\reader.exe"))=="fixture error at [path]","unknown exception uses the existing cleaned diagnostic");
+    }
     static void Signed(Http http,RSACryptoServiceProvider key,byte[] zip,string version,string sumName=null,bool corruptSums=false,bool corruptZip=false,bool absentSignature=false){
         byte[] sums=Encoding.UTF8.GetBytes(Hash(zip)+"  "+(sumName??UpdateTrust.ZipName(version))+"\n");
         byte[] sig=key.SignData(sums,CryptoConfig.MapNameToOID("SHA256"));
@@ -292,6 +353,8 @@ static class UpdateTests {
             var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);
             UpdateBackoffPolicy(root);
             UpdateUiExpiry(root);UpdateUiStatusPolicy(root);
+            ManualCatalogFailureCopy(root);
+            UpdateFailureCopy();
             var state=new UpdateState();Check(!UpdateSchedule.CanCheck(state,now,now.AddMinutes(-5),true,false),"disabled sends no request");
             Check(!UpdateSchedule.CanCheck(state,now,now.AddSeconds(-119),true,true),"two minute startup delay");
             Check(UpdateSchedule.CanCheck(state,now,now.AddMinutes(-2),true,true),"startup delay expires");
