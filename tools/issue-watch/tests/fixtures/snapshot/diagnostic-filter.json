@@ -1,0 +1,6 @@
+{
+  "number": 2,
+  "state": "open",
+  "title": "测试",
+  "body": "**描述**\n\u0060\u0060\u0060\n没有 ID\n\u0060\u0060\u0060\n\n<details><summary>诊断信息</summary>\n\n\u0060\u0060\u0060\n未取得电量的设备\n04F3:1234 \"HIDI2C Device\" 0001:0002\n1A2C:7FFF \"Keyboard Receiver\" FF01:0001\n\u0060\u0060\u0060\n\n</details>"
+}
