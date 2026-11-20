@@ -60,6 +60,20 @@ def comment(body, bot=False):
 
 
 class TriageTests(unittest.TestCase):
+    def test_app_issues_with_diagnostics_get_bug_ack(self):
+        diag = report(unknown='1532:00E6 "Razer Viper V4 Pro" FF00:0001')
+        for category, description in (
+                ("电量或 DPI 不对", "毒蝰终极版使用这个耗电异常"),
+                ("电量或 DPI 不对", "是火绒默认拦截了"),
+                ("界面或操作", "反馈界面输入了一部分点了其他窗口就消失了")):
+            with self.subTest(description=description):
+                self.classify(in_app(diag, category=category, description=description), "bug")
+        with_id = triage.decide(issue(in_app(diag, category="电量或 DPI 不对",
+                                                 description="耗电很快，设备 1532:00E6")), KNOWN)
+        self.assertEqual(with_id["label"], "triage:new-vendor")
+        device_request = triage.decide(issue(in_app(diag, description="希望支持这个鼠标")), KNOWN)
+        self.assertEqual(device_request["label"], "triage:new-vendor")
+
     def test_explicit_update_failure_with_hid_diagnostics_gets_the_release_page(self):
         diag = report(unknown='9999:ABCD "Receiver" FF02:0002')
         base = issue(in_app(diag, category="界面或操作", description="新版本无法更新"),

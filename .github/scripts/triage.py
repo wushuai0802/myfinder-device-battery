@@ -38,6 +38,10 @@ DEVICE_TYPES = {"设备不识别", "电量或 DPI 不对"}
 BUG_TYPES = {"界面或操作", "其他"}
 RELEASES = "https://github.com/wushuai0802/myfinder-device-battery/releases"
 UPDATE_FAILURE_TITLE = re.compile(r"(?:新版本|测试版|beta(?:版本)?|软件|程序|内置)?(?:无法(?:自动)?更新|不能更新|更新不了|更新失败|更新超时|无法升级)[。！!]?", re.IGNORECASE)
+APP_ISSUE = re.compile(
+    r"耗电|掉电快|拦截|报毒|木马|杀毒|火绒|卡巴斯基|Defender|闪退|崩溃|卡死|无响应|"
+    r"反馈窗|反馈界面|无法输入|无法提交|显示不全|遮挡|任务栏|托盘图标|自启|开机启动",
+    re.IGNORECASE)
 HEADINGS = {"有卡片的设备": "card", "未取得电量的设备": "unadapted",
             "已隐藏的重复连接": "ignore", "读取器健康": "ignore"}
 LEGACY_CARD = re.compile(r"^(?:mouse|keyboard|headset|鼠标|键盘|耳机)[ \t]*[：:][ \t]*\S(?:.*\S)?[ \t]+\d{1,3}%",
@@ -197,6 +201,13 @@ def report_devices(text):
     return rows
 
 
+def description_text(body):
+    match = re.search(r"(?:^|\n)\*\*描述\*\*\s*\n```[^\n]*\n(.*?)\n```", body or "", re.DOTALL)
+    if match:
+        return match[1]
+    return (body or "").split("### 反馈报告", 1)[0]
+
+
 def decide(issue, known, comments=None, known_next=None, device_status=None, trigger_comment_id=None):
     labels = labels_of(issue)
     result = {"label": None, "reply": None, "reason": "未命中设备或问题类型规则。", "remove_labels": []}
@@ -269,6 +280,8 @@ def decide(issue, known, comments=None, known_next=None, device_status=None, tri
         reply = (f"自动回复：内置更新失败时，可从[官方发布列表]({RELEASES})下载目标版本的完整 ZIP。"
                  "请将 ZIP 完整解压到新目录，退出旧程序后运行新目录中的启动.bat。"
                  "如需排查内置更新，请补充失败时的完整提示。")
+    elif APP_ISSUE.search((issue.get("title") or "") + "\n" + description_text(body)) and not PAIR.search(description_text(body)):
+        label, reason = "bug", "标题或描述报告的是程序本身的问题（耗电、拦截、崩溃、界面等），不按设备分类。"
     elif device_request and not reported:
         label, reason, reply = "needs-info", "设备类反馈缺少 VID:PID。", NEEDS_INFO
     elif category == "电量或 DPI 不对" and reported and all(row[3] == "card" for row in reported):
