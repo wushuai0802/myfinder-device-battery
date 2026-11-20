@@ -157,7 +157,7 @@ namespace AtkBatteryTray {
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,view,mine;
-        CancellationTokenSource pending;FeedbackResult receipt;bool busy;
+        CancellationTokenSource pending;FeedbackResult receipt;bool busy,browserSubmission;
         internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
         internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null,Action<long> openMyFeedback=null):base(dark){
             report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;
@@ -226,7 +226,7 @@ namespace AtkBatteryTray {
                     +diagnosticCard.GetPreferredSize(new Size(width,0)).Height+diagnosticCard.Margin.Vertical
                     +noticeCard.GetPreferredSize(new Size(width,0)).Height+noticeCard.Margin.Vertical;
             });
-            FormClosing+=delegate{AbortSubmission();if(receipt==null){FeedbackDraft.Category=SelectedCategory;FeedbackDraft.Description=description.Text;FeedbackDraft.Diagnostics=diagnostics.Checked;}else FeedbackDraft.Clear();};UpdateValidation();
+            FormClosing+=delegate{AbortSubmission();if(receipt==null&&!browserSubmission){FeedbackDraft.Category=SelectedCategory;FeedbackDraft.Description=description.Text;FeedbackDraft.Diagnostics=diagnostics.Checked;}else FeedbackDraft.Clear();};UpdateValidation();
         }
         void UpdateValidation(){
             int length=description.Text.Trim().Length;
@@ -256,7 +256,7 @@ namespace AtkBatteryTray {
             else{EnableInputs(true);status.Text=result.Kind==FeedbackResultKind.RateLimited?"提交太频繁，请稍后再试":"暂时无法提交";fallback.Visible=result.Kind!=FeedbackResultKind.RateLimited;}
             UpdateValidation();
         }
-        void OpenBrowser(){if(busy||!FeedbackInput.Valid(SelectedCategory,description.Text))return;status.Text=report.BrowserSubmission(SelectedCategory,description.Text,diagnostics.Checked).Open(copy,open);}
+        void OpenBrowser(){if(busy||!FeedbackInput.Valid(SelectedCategory,description.Text))return;browserSubmission=true;status.Text=report.BrowserSubmission(SelectedCategory,description.Text,diagnostics.Checked).Open(copy,open);}
         internal ThemedDialog CreateDiagnosticsDialog(){return CreateDiagnosticsDialog(Theme.Dark,report.FullText);}
         internal static ThemedDialog CreateDiagnosticsDialog(bool dark,string contents){
             var dialog=new ThemedDialog(dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};
