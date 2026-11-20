@@ -1,9 +1,12 @@
-"""M HUB MC battery GET for the V9 Pro 2 2.4 GHz headset. See upstream-protocols."""
+"""M HUB MC battery GET for the V9 Pro 2 and R9 2.4 GHz headsets."""
 from battery_hid import BatteryHidProvider
 
 VID = 0x3837
-PIDS = {0x6011: "MCHOSE V9 Pro 2"}
-_PARENT = "pnp:usb\\vid_3837&pid_6011\\"
+PIDS = {0x6011: "MCHOSE V9 Pro 2", 0x6013: "MCHOSE R9"}
+_PARENTS = {
+    0x6011: "pnp:usb\\vid_3837&pid_6011\\",
+    0x6013: "pnp:usb\\vid_3837&pid_6013\\",
+}
 
 
 def make_request() -> bytes:
@@ -66,10 +69,16 @@ class MchoseV9Pro2Provider(BatteryHidProvider):
         info = super()._pick(infos)
         if info is None:
             return None
+        pid = info["product_id"]
         parent = info.get("physical_id") or ""
-        if (info.get("interface_number") != 3 or (info.get("product_string") or "").casefold() != "mchose v9 pro 2"
-                or not parent.lower().startswith(_PARENT)
-                or not parent[len(_PARENT):] or "\\" in parent[len(_PARENT):]):
+        prefix = _PARENTS[pid]
+        if ((pid == 0x6011 and info.get("interface_number") != 3)
+                or (info.get("product_string") or "").casefold() != PIDS[pid].casefold()
+                or not parent.lower().startswith(prefix)
+                or not parent[len(prefix):] or "\\" in parent[len(prefix):]):
+            return None
+        if pid == 0x6013 and sum((item.get("usage_page"), item.get("usage")) == self.collection
+                                 for item in infos) != 1:
             return None
         return info
 

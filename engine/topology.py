@@ -585,6 +585,12 @@ def discover(paths, excluded=(), *, full=False):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete and (attrs.vendor, attrs.product) == (0x3837, 0x6013)
+                    and info["product_string"].casefold() == "mchose r9"
+                    and (caps.page, caps.usage) == (0xFF07, 0x0222)):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
                     (0x0B05, 0x1AFA, 0xFF00, 1)):
                 from battery_hid import battery_caps
