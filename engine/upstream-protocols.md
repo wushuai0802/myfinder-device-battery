@@ -4337,6 +4337,12 @@ The official M HUB bundle maps VID 3837 PID 6011 explicitly to V9 PRO 2, wireles
 
 Source file SHA256 `405102805e2adeb93073ee2186f6d0193ca1317a6b4657d636e4e611bd25a446`, particularly `createAudioHidProduct`, `createReadBatteryCommand$1`, `buildMCFrame` and `parseBatteryResponse`. [Official M HUB bundle](https://www.mchose.com.cn/assets/main-DCRwBIvm.js) · [Receiver identification from the reporter](https://github.com/wushuai0802/myfinder-device-battery/issues/595)
 
+### MCHOSE R9 wireless (3837:6013)
+
+**Project verification: C.** The official M HUB bundle assigns R9 to the same MC profile and report `55` as V9 Pro 2. Diagnostics identify the `FF07:0222` collection. The R9 receiver interface number is unknown. The reader requires the exact `MCHOSE R9` product string and `pnp:usb\vid_3837&pid_6013\` parent, one `FF07:0222` collection per parent, and descriptor proof that report `55` is 64 bytes in each direction. The existing MC battery request and reply parser apply.
+
+R9 has no hardware capture of the reply. Battery percentage, charging and sleep behavior await hardware confirmation. [Official M HUB bundle](https://www.mchose.com.cn/assets/main-DIt5vAcV.js) · [Research and diagnostic sources](research/mchose-2026-11.md#mchose-r938376013) · [#373](https://github.com/wushuai0802/myfinder-device-battery/issues/373) · [#495](https://github.com/wushuai0802/myfinder-device-battery/issues/495) · [#496](https://github.com/wushuai0802/myfinder-device-battery/issues/496) · [#497](https://github.com/wushuai0802/myfinder-device-battery/issues/497)
+
 ### WEIKAV NUT75 2.4G
 
 The exact NUT75 2.4G product on 0C45:FEF9 exposes FF60:0061 according to user diagnostics. A public battery reader specifies an unnumbered 64-byte payload starting AA 10 30 00 00 00 01. A 55 10 response stores the level at payload offset 25 (1..100 in that reader). Unlike the upstream program, MyFinder opens just the proven battery collection and does not open or retain standard keyboard and mouse handles. A receiver requiring other handles may remain silent. Charging is unknown. Initial MyFinder testing used synthetic frames; real results from this version are pending. [Public Windows implementation](https://github.com/Dhhh2026/duo/blob/418136431c6b5809c17f7d200efcbeae035e0af8/Drivers.cs) · [Receiver diagnosis](https://github.com/wushuai0802/myfinder-device-battery/issues/258)
