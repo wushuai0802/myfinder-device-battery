@@ -196,6 +196,16 @@ static class FeedbackFormTests {
             }
             using(var restored=Form(new FakeHttp())){
                 restored.Opacity=0;restored.Show();Application.DoEvents();Check(Find<TextBox>(restored,"Description").Text=="abcde"&&restored.SelectedCategory=="battery"&&!Find<CheckBox>(restored,"IncludeDiagnostics").Checked,"closing and reopening restores the process draft");
+                Find<TextBox>(restored,"Description").Text="";Find<ThemedSegments>(restored,"Categories").GetOption("Category-other").DoDefaultAction();Find<CheckBox>(restored,"IncludeDiagnostics").Checked=true;restored.Close();
+            }
+            using(var emptied=Form(new FakeHttp())){
+                emptied.Opacity=0;emptied.Show();Application.DoEvents();Check(Find<TextBox>(emptied,"Description").Text==""&&emptied.SelectedCategory=="other"&&Find<CheckBox>(emptied,"IncludeDiagnostics").Checked,"clearing a restored draft clears it for the next open");emptied.Close();
+            }
+            FeedbackDraft.Clear();using(var restored=Form(new FakeHttp())){
+                Show(restored);Find<TextBox>(restored,"Description").Text="abcde";Find<ThemedSegments>(restored,"Categories").GetOption("Category-battery").DoDefaultAction();Find<CheckBox>(restored,"IncludeDiagnostics").Checked=false;restored.Close();
+            }
+            using(var restored=Form(new FakeHttp())){
+                restored.Opacity=0;restored.Show();Application.DoEvents();Check(Find<TextBox>(restored,"Description").Text=="abcde","restored draft remains available before successful submission");
                 Find<Button>(restored,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(restored,"FeedbackStatus").Text==Submitted;});restored.Close();
             }
             using(var cleared=Form(new FakeHttp())){Show(cleared);Check(Find<TextBox>(cleared,"Description").Text=="设备连接后没有显示电量","successful submission clears the process draft");cleared.Close();}

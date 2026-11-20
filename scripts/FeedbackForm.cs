@@ -149,7 +149,7 @@ namespace AtkBatteryTray {
         internal static bool Diagnostics;
         internal static void Clear(){Category=null;Description=null;EntryCategory=null;Diagnostics=true;}
         internal static void SaveIfChanged(string category,string description,bool diagnostics,string initialCategory){
-            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics)return;
+            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics){Clear();return;}
             Category=category;Description=description;Diagnostics=diagnostics;EntryCategory=initialCategory;
         }
     }
