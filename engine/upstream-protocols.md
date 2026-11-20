@@ -408,6 +408,12 @@ report lengths, with the reason recorded in diagnostics. No mouse feature,
 lighting, EQ or firmware commands are sent. The implementation reuses the
 existing local reader from protocol facts; no code is copied from the issue.
 
+### MCHOSE X9 (3837:6045)
+
+**Project verification: C.** M HUB 官方 bundle（BLK profile）+ #103/#308/#468/#777 诊断。无实机回复，充电、休眠、满电未验证。[M HUB 分包](https://www.mchose.com.cn/assets/main-DIt5vAcV.js) · [调查记录](research/mchose-2026-11.md) · [#103](https://github.com/wushuai0802/myfinder-device-battery/issues/103) · [#308](https://github.com/wushuai0802/myfinder-device-battery/issues/308) · [#468](https://github.com/wushuai0802/myfinder-device-battery/issues/468) · [#777](https://github.com/wushuai0802/myfinder-device-battery/issues/777)
+
+Only the original 2.4 GHz receiver with product name `MCHOSE X9` after trimming and case folding is eligible. Each physical receiver must have one `FF90:0001` collection with input and output lengths of 64 bytes. The reader uses the existing BLK battery query. M HUB lists firmware floor `0000` in `p8VersionConfig` and `enableBatteryConfig`, so X9 skips the FF22 firmware exchange. Status `04` does not display a percentage.
+
 ### Astro A50 Gen 5 (Logitech 046D:0B1C)
 
 **Connection:** Base station

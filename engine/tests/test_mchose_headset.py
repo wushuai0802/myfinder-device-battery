@@ -524,5 +524,64 @@ class MchoseHeadsetTests(unittest.TestCase):
             self.assertEqual(bus.writes, [(entry(physical)["path"], M.make_request()) for physical in ("one", "two")])
 
 
+class MchoseX9Tests(unittest.TestCase):
+    def setUp(self):
+        self.provider = M.MchoseHeadsetProvider()
+        self.battery = entry("x9", vendor_id=0x3837, product_id=0x6045,
+                             product_string="MCHOSE X9")
+
+    def test_x9_reads_exact_normalised_name_with_no_firmware_exchange(self):
+        battery = dict(self.battery, product_string=" \tMcHoSe x9 ")
+        firmware = firmware_entry("x9", vendor_id=0x3837, product_id=0x6045,
+                                  product_string="MCHOSE X9")
+        with fixture([reply(57)], [firmware, battery],
+                     firmware_frames=[firmware_reply((0, 0, 0, 1))]) as bus:
+            status, = self.provider.poll()
+            self.assertEqual((status.name, status.level, status.charging, status.online, status.kind),
+                             ("MCHOSE X9", 57, False, True, "headset"))
+            self.assertEqual(bus.opened, [battery["path"]])
+            self.assertEqual(bus.writes, [(battery["path"], [0x55, 0x65, 1] + [0] * 61)])
+            self.assertEqual(bus.reads[0][:2], (battery["path"], 64))
+            self.assertEqual(bus.feature_writes, [])
+            self.assertEqual(bus.feature_reads, [])
+            self.assertEqual(bus.closed, bus.opened)
+
+    def test_x9_pro_and_empty_product_name_do_not_open_or_send(self):
+        for name in ("MCHOSE X9 Pro", "", None):
+            with self.subTest(name=name), fixture([reply()], [dict(self.battery, product_string=name)]) as bus:
+                self.assertEqual(self.provider.poll(), [])
+                self.assertEqual(bus.opened, [])
+                self.assertEqual(bus.writes, [])
+                self.assertEqual(bus.feature_writes, [])
+                self.assertIn("  MCHOSE X9 产品串不符，未发送查询", self.provider.diagnostics())
+
+    def test_x9_wrong_collection_or_lengths_do_not_open_or_send(self):
+        for changes in (dict(usage_page=0xFF82), dict(usage=2),
+                        dict(input_report_length=63), dict(output_report_length=65),
+                        dict(input_report_length=None), dict(output_report_length=None)):
+            with self.subTest(changes=changes), fixture([reply()], [self.battery | changes]) as bus:
+                self.assertEqual(self.provider.poll(), [])
+                self.assertEqual(bus.opened, [])
+                self.assertEqual(bus.writes, [])
+                self.assertEqual(bus.feature_writes, [])
+
+    def test_x9_ambiguous_battery_collection_does_not_open_or_send(self):
+        sibling = dict(self.battery, path=b"x9-duplicate-ff90")
+        with fixture([reply()], [self.battery, sibling]) as bus:
+            self.assertEqual(self.provider.poll(), [])
+            self.assertEqual(bus.opened, [])
+            self.assertEqual(bus.writes, [])
+            self.assertEqual(bus.feature_writes, [])
+            self.assertIn("  MCHOSE X9 电量集合不唯一，未发送查询", self.provider.diagnostics())
+
+    def test_x9_does_not_display_full_state_04(self):
+        with fixture([reply(100, 0x04)], [self.battery]) as bus:
+            self.assertEqual(self.provider.poll(), [])
+            self.assertEqual(bus.writes, [(self.battery["path"], [0x55, 0x65, 1] + [0] * 61)])
+            self.assertEqual(bus.feature_writes, [])
+            self.assertEqual(bus.feature_reads, [])
+            self.assertIn("  rejected battery state=0x04 level=100", self.provider.diagnostics())
+
+
 if __name__ == "__main__":
     unittest.main()

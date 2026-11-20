@@ -129,6 +129,11 @@
       "version": "1.3.11-beta.16",
       "note": "限迈从 V9 Pro 2 原装 2.4G 接收器"
     },
+    "3837:6045": {
+      "status": "researching",
+      "note": "仅 MCHOSE X9 原装 2.4G 接收器，待实机验证",
+      "reports": 0
+    },
     "391D:1A04": {
       "status": "beta",
       "version": "1.3.11-beta.12",
