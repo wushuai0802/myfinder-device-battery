@@ -3,7 +3,10 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using AtkBattery;
@@ -115,6 +118,8 @@ namespace AtkBatteryTray {
             if(checker!=null){
                 var wait=checker.Backoff(UpdateBackoffScope.Catalog,now);string code=checker.ErrorCode;
                 if(CatalogWaitCode(code)||wait.Waiting(now))return CheckStatus(available,now);
+                if(!automaticInFlight&&(code=="update_timeout"||code=="update_network_failed"))
+                    return CheckStatus(available,now)+(available==null?"":"；已缓存版本 "+available.Version);
             }
             return available!=null?(availableCached?"已缓存版本 ":"有新版本 ")+available.Version:!DeviceSettings.Current.AutoCheckUpdates?"自动检查已关闭":status;
         }
@@ -136,7 +141,7 @@ namespace AtkBatteryTray {
             try{
                 if(!File.Exists(path))return;var result=UpdateJson.ReadFile<UpdateResult>(path,16384);
                 if(result.Schema!=1||result.Status!="failed")return;
-                string failure=UpdateText.Notes(result.Reason);if(failure.Length>1500)failure=failure.Substring(0,1500);
+                string failure=InstallFailure(UpdateText.Notes(result.Reason));if(failure.Length>1500)failure=failure.Substring(0,1500);
                 bool notify=!result.Notified;result.Notified=true;AtomicText.Write(path,UpdateJson.Text(result));
                 Post(delegate{LastFailure=failure;changed();if(notify)balloon("上次更新失败",failure,false);});
             }catch(Exception){SafeDiagnostic.Transition("updates","update_result_read_failed");}
@@ -214,6 +219,35 @@ namespace AtkBatteryTray {
             if(error.Status==429)return "服务端限制下载，已本地等待 "+Remaining(wait,now)+"。";
             return SafeDiagnostic.Clean(error.Message);
         }
+        static string FileFailure(uint code){
+            switch(code){
+                case 0x80070020:
+                case 0x80070021: return "更新文件正被占用。请退出 MyFinder，关闭占用该文件的程序后重试。";
+                case 0x80070005: return "Windows 拒绝访问更新文件。请检查相关目录权限和安全软件的拦截记录后重试。";
+                default: return null;
+            }
+        }
+        static string InstallFailure(string reason){
+            var code=Regex.Match(reason,@"\AAn installed payload file is in use or not writable\. Close the application before updating\. File: [^\r\n]*?\. Windows error: 0x([0-9A-Fa-f]{8})\.");
+            if(!code.Success)return reason;
+            string message=FileFailure(UInt32.Parse(code.Groups[1].Value,NumberStyles.HexNumber,CultureInfo.InvariantCulture));
+            if(message==null)return reason;
+            int recovery=reason.IndexOf(" Recovery restart failed:",code.Index+code.Length,StringComparison.Ordinal);
+            return recovery<0?message:message+reason.Substring(recovery);
+        }
+        static string AttachmentFailure(Exception error){
+            var cause=error.GetBaseException();
+            var network=error as WebException??cause as WebException;
+            var socket=cause as SocketException;
+            if(error is TimeoutException||cause is TimeoutException||(network!=null&&network.Status==WebExceptionStatus.Timeout)
+                ||(socket!=null&&socket.SocketErrorCode==SocketError.TimedOut))
+                return "下载更新附件超时。请检查网络后重试。";
+            if((network!=null&&network.Response==null&&network.Status!=WebExceptionStatus.RequestCanceled)||socket!=null)
+                return "无法连接 GitHub 下载更新附件。请检查网络后重试。";
+            if(error is InvalidDataException&&error.Message=="Truncated update download.")return "更新附件下载不完整。请重新下载。";
+            if(error is UnauthorizedAccessException||cause is UnauthorizedAccessException)return FileFailure(0x80070005);
+            return FileFailure(unchecked((uint)error.HResult))??FileFailure(unchecked((uint)cause.HResult))??SafeDiagnostic.Clean(error.Message);
+        }
         void BeginInstall(UpdateRelease release,UpdateDialog form){
             if(Interlocked.CompareExchange(ref installing,1,0)!=0)return;
             var cancellation=new CancellationTokenSource();lock(gate){downloadCancel=cancellation;downloadCommitted=false;}form.Downloading();
@@ -232,7 +266,8 @@ namespace AtkBatteryTray {
                 }catch(OperationCanceledException){Post(delegate{if(!form.IsDisposed)form.Finished("已取消更新。");});}
                 catch(Exception error){
                     if(cancellation.IsCancellationRequested){Post(delegate{if(!form.IsDisposed)form.Finished("已取消更新。");});return;}
-                    var rate=error as UpdateHttpFailure;string message;if(rate!=null){try{checker.Defer(rate,DateTime.UtcNow,UpdateBackoffScope.Asset);}catch(Exception){}message=DownloadFailure(rate,checker.Backoff(UpdateBackoffScope.Asset,DateTime.UtcNow),DateTime.UtcNow);}else message=SafeDiagnostic.Clean(error.Message);SafeDiagnostic.Transition("updates","update_install_failed: "+message);
+                    var rate=error as UpdateHttpFailure;string message;if(rate!=null){try{checker.Defer(rate,DateTime.UtcNow,UpdateBackoffScope.Asset);}catch(Exception){}message=DownloadFailure(rate,checker.Backoff(UpdateBackoffScope.Asset,DateTime.UtcNow),DateTime.UtcNow);}else message=AttachmentFailure(error);
+                    SafeDiagnostic.Transition("updates","update_install_failed: "+(rate==null?error.Message:message));
                     Post(delegate{if(!form.IsDisposed)form.Finished("更新未完成："+message);});
                 }finally{lock(gate){if(downloadCancel==cancellation)downloadCancel=null;}cancellation.Dispose();Interlocked.Exchange(ref installing,0);}
             });
