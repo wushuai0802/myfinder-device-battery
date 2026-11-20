@@ -15,6 +15,8 @@ VERSION = re.compile(r"来自程序内反馈 · 版本 (\S+)")
 CATEGORY = re.compile(r"\*\*类型\*\*：([^\r\n]+)")
 DESCRIPTION = re.compile(r"\*\*描述\*\*\s*\n```[^\n]*\n(.*?)\n```", re.DOTALL)
 DIAGNOSTICS = re.compile(r"<summary>诊断信息</summary>.*?```+\n(.*?)\n```+", re.DOTALL)
+TEMPLATE_DESCRIPTION = re.compile(r"^### 品牌与完整型号\s*\n(.*?)(?=^### 反馈报告\s*$)", re.DOTALL | re.MULTILINE)
+TEMPLATE_REPORT = re.compile(r"^### 反馈报告\s*\n```text\n(.*?)\n```", re.DOTALL | re.MULTILINE)
 UNADAPTED = "未取得电量的设备"
 SYSTEM_NAME = re.compile(r"HIDI2C|ITE Device|GIGABYTE|HID VHF|N-KEY|MYSTIC LIGHT|extscreen|HUB|Touch", re.I)
 SYSTEM_VIDS = {"8087", "06CB", "04F3", "27C6", "2808", "093A", "048D", "0DB0", "5E2A", "345F", "C019"}
@@ -52,7 +54,7 @@ def parse_body(body):
     body = body or ""
     version = VERSION.search(body)
     category = CATEGORY.search(body)
-    description = DESCRIPTION.search(body)
+    description = DESCRIPTION.search(body) or TEMPLATE_DESCRIPTION.search(body)
     return (version.group(1) if version else "", category.group(1).strip() if category else "",
             description.group(1) if description else "")
 
@@ -62,11 +64,13 @@ def system_device(vid, name):
 
 
 def diagnostic_devices(body):
-    match = DIAGNOSTICS.search(body or "")
-    if not match:
+    details = DIAGNOSTICS.search(body or "")
+    template = TEMPLATE_REPORT.search(body or "")
+    text = details.group(1) if details else template.group(1) if template else ""
+    if not text:
         return []
     rows, inside = [], False
-    for raw in match.group(1).splitlines():
+    for raw in text.splitlines():
         line = raw.strip()
         if line == UNADAPTED:
             inside = True
@@ -86,6 +90,10 @@ def target_ids(body):
     _version, _category, description = parse_body(body)
     described = pairs(description)
     return described or [(vid, pid) for vid, pid, _name in diagnostic_devices(body)]
+
+
+def is_template_issue(body):
+    return bool(TEMPLATE_REPORT.search(body or ""))
 
 
 def load_known(engine_root=None):
@@ -115,9 +123,9 @@ def comment_kind(comment):
 def last_speaker(issue, comments):
     comments = [row for row in comments if comment_kind(row) != "机器人"]
     if not comments:
-        return "用户", issue.get("updated_at") or issue.get("created_at") or ""
-    latest = max(comments, key=lambda row: row.get("updated_at") or row.get("created_at") or "")
-    return comment_kind(latest), latest.get("updated_at") or latest.get("created_at") or ""
+        return "用户", issue.get("created_at") or ""
+    latest = max(comments, key=lambda row: row.get("created_at") or "")
+    return comment_kind(latest), latest.get("created_at") or ""
 
 
 def group_for(ids, released, main):
@@ -141,10 +149,15 @@ def rows_for(issues, comments, released, main, gated):
         version, category, _description = parse_body(issue.get("body"))
         ids = target_ids(issue.get("body"))
         speaker, at = last_speaker(issue, comments_by_issue[issue["number"]])
+        diagnostic_names = defaultdict(list)
+        for vid, pid, name in diagnostic_devices(issue.get("body")):
+            if name and name != "[redacted]":
+                diagnostic_names[(vid, pid)].append(name)
         rows.append({"编号": issue["number"], "日期": issue.get("created_at", ""), "版本": version, "类型": category,
                      "分组": group_for(ids, released, main), "目标ID": ";".join(map(id_text, ids)),
                      "含型号门禁ID": "是" if any(pair in gated for pair in ids) else "否",
-                     "最后发言": speaker, "最后发言时间": at, "标题": issue.get("title", "")})
+                     "最后发言": speaker, "最后发言时间": at, "标题": issue.get("title", ""),
+                     "模板格式": is_template_issue(issue.get("body")), "诊断名称": diagnostic_names})
     return sorted(rows, key=lambda row: row["编号"])
 
 
@@ -156,23 +169,26 @@ def write_outputs(out, issues, comments, rows, names):
     with (out / "issues.csv").open("w", newline="", encoding="utf-8-sig") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows({field: row[field] for field in fields} for row in rows)
     groups = Counter(row["分组"] for row in rows)
     speakers = Counter(row["最后发言"] for row in rows)
-    unknown = defaultdict(list)
+    unknown, unknown_names = defaultdict(list), defaultdict(Counter)
     for row in rows:
         if row["分组"] == "C":
             for value in filter(None, row["目标ID"].split(";")):
                 unknown[value].append(row["编号"])
+                pair = tuple(int(part, 16) for part in value.split(":"))
+                unknown_names[value].update(row["诊断名称"].get(pair, []))
     ranked = sorted(unknown.items(), key=lambda item: (-len(set(item[1])), item[0]))[:50]
     lines = ["# Issue 快照汇总", "", "## 分组", "", "| 组 | 数量 |", "| --- | ---: |"]
     lines += [f"| {key} | {groups[key]} |" for key in "ABCD"]
     lines += ["", "## 最后发言", "", "| 类型 | 数量 |", "| --- | ---: |"]
     lines += [f"| {key} | {speakers[key]} |" for key in ("用户", "维护者", "机器人")]
-    lines += ["", "## 未知 ID 前 50", "", "| ID | 涉及 issue 数 | 常见名称 | issue |", "| --- | ---: | --- | --- |"]
+    template_d = sum(row["分组"] == "D" and row["模板格式"] for row in rows)
+    lines += [f"", f"D 组中模板格式 issue：{template_d}", "", "## 未知 ID 前 50", "", "| ID | 涉及 issue 数 | 常见名称 | issue |", "| --- | ---: | --- | --- |"]
     for identity, numbers in ranked:
-        pair = tuple(int(part, 16) for part in identity.split(":"))
-        lines.append(f"| {identity} | {len(set(numbers))} | {names.get(pair, '')} | {', '.join(map(str, sorted(set(numbers))))} |")
+        common = "、".join(name for name, _count in unknown_names[identity].most_common(2))
+        lines.append(f"| {identity} | {len(set(numbers))} | {common} | {', '.join(map(str, sorted(set(numbers))))} |")
     (out / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
