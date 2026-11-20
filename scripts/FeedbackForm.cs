@@ -144,6 +144,16 @@ namespace AtkBattery {
 }
 
 namespace AtkBatteryTray {
+    internal static class FeedbackDraft {
+        internal static string Category,Description,EntryCategory;
+        internal static bool Diagnostics;
+        internal static void Clear(){Category=null;Description=null;EntryCategory=null;Diagnostics=true;}
+        internal static void SaveIfChanged(string category,string description,bool diagnostics,string initialCategory){
+            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics){Clear();return;}
+            Category=category;Description=description;Diagnostics=diagnostics;EntryCategory=initialCategory;
+        }
+    }
+
     internal sealed class FeedbackForm:ThemedDialog {
         readonly FeedbackReport report;readonly FeedbackClient client;readonly FeedbackSession session;readonly string relay;readonly FeedbackReplies replies;
         readonly Action<string> copy,open;readonly Func<string,bool> confirm;
@@ -173,6 +183,10 @@ namespace AtkBatteryTray {
                 string category=FeedbackInput.CategoryAt(i);categories.AddOption("Category-"+category,FeedbackInput.CategoryLabel(category),category);
                 if(category==FeedbackInput.DefaultCategory(deviceMissing))categories.SelectedIndex=i;
             }
+            bool restoreDraft=FeedbackDraft.Description!=null&&FeedbackDraft.EntryCategory==FeedbackInput.DefaultCategory(deviceMissing);
+            if(restoreDraft){
+                for(int i=0;i<categories.OptionCount;i++)if(FeedbackInput.CategoryAt(i)==FeedbackDraft.Category){categories.SelectedIndex=i;break;}
+            }
             Action sizeTypeCard=delegate{typeCard.Height=typeCard.Padding.Vertical+typeTitle.PreferredHeight+4+categories.Height;};
             categories.SizeChanged+=delegate{sizeTypeCard();};typeTitle.SizeChanged+=delegate{sizeTypeCard();};
             typeCard.Controls.Add(categories);typeCard.Controls.Add(typeTitle);layout.Controls.Add(typeCard,0,0);
@@ -189,6 +203,7 @@ namespace AtkBatteryTray {
             var diagnosticCard=new ThemedSection(Theme) {Name="FeedbackDiagnosticsCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
             var diagnosticRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Top,Margin=Padding.Empty,WrapContents=true};
             diagnostics.Name="IncludeDiagnostics";diagnostics.Text="附带诊断信息（推荐）";diagnostics.AccessibleName=diagnostics.Text;diagnostics.Checked=true;diagnostics.Margin=new Padding(0,0,12,0);
+            if(restoreDraft){description.Text=FeedbackDraft.Description;diagnostics.Checked=FeedbackDraft.Diagnostics;}
             preview.Name="ViewDiagnostics";preview.Text="查看内容";preview.AutoSize=true;preview.BackColor=Theme.Card;preview.LinkColor=Theme.Accent;preview.ActiveLinkColor=preview.LinkColor;preview.VisitedLinkColor=preview.LinkColor;preview.DisabledLinkColor=Theme.Muted;preview.Margin=new Padding(0,4,0,3);preview.LinkClicked+=delegate{ShowDiagnostics();};
             diagnosticRow.Controls.Add(diagnostics);diagnosticRow.Controls.Add(preview);diagnosticCard.Controls.Add(diagnosticRow);layout.Controls.Add(diagnosticCard,0,2);
             var noticeCard=new ThemedSection(Theme) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
@@ -216,7 +231,8 @@ namespace AtkBatteryTray {
                     +diagnosticCard.GetPreferredSize(new Size(width,0)).Height+diagnosticCard.Margin.Vertical
                     +noticeCard.GetPreferredSize(new Size(width,0)).Height+noticeCard.Margin.Vertical;
             });
-            FormClosing+=delegate{AbortSubmission();};UpdateValidation();
+            string initialCategory=FeedbackInput.DefaultCategory(deviceMissing);
+            FormClosing+=delegate{AbortSubmission();if(receipt==null)FeedbackDraft.SaveIfChanged(SelectedCategory,description.Text,diagnostics.Checked,initialCategory);else FeedbackDraft.Clear();};UpdateValidation();
         }
         void UpdateValidation(){
             int length=description.Text.Trim().Length;
@@ -242,7 +258,7 @@ namespace AtkBatteryTray {
         }
         void Complete(FeedbackResult result){
             pending=null;busy=false;
-            if(result.Kind==FeedbackResultKind.Success){receipt=result;status.Text="已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。");submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;}
+            if(result.Kind==FeedbackResultKind.Success){FeedbackDraft.Clear();receipt=result;status.Text="已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。");submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;}
             else{EnableInputs(true);status.Text=result.Kind==FeedbackResultKind.RateLimited?"提交太频繁，请稍后再试":"暂时无法提交";fallback.Visible=result.Kind!=FeedbackResultKind.RateLimited;}
             UpdateValidation();
         }
