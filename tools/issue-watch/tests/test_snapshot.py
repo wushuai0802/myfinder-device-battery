@@ -68,6 +68,21 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.target_ids(issue["body"]), [(0x1D57, 0xFA60)])
         self.assertTrue(snapshot.is_template_issue(issue["body"]))
 
+    def test_template_report_without_unadapted_section_uses_report_ids(self):
+        issue = self.fixture("template-no-section.json")
+        self.assertEqual(snapshot.target_ids(issue["body"], issue["title"]), [(0x391D, 0x1A23)])
+
+    def test_parenthesized_unadapted_header_is_accepted(self):
+        issue = self.fixture("template-parenthesized-section.json")
+        self.assertEqual(snapshot.target_ids(issue["body"], issue["title"]), [(0x046D, 0xC547)])
+
+    def test_template_inline_report_id_is_not_usage_page(self):
+        issue = self.fixture("template-inline-id.json")
+        self.assertEqual(snapshot.target_ids(issue["body"], issue["title"]), [(0x17EF, 0x60FF)])
+
+    def test_title_ids_are_a_target_source(self):
+        self.assertEqual(snapshot.target_ids("没有诊断", "[设备适配] 391D:1A23"), [(0x391D, 0x1A23)])
+
     def test_csv_omits_snapshot_internal_fields(self):
         row = {"编号": 1, "日期": "", "版本": "", "类型": "", "分组": "C", "目标ID": "ABCD:1234",
                "含型号门禁ID": "否", "最后发言": "用户", "最后发言时间": "", "标题": "测试",

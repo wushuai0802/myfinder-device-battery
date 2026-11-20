@@ -1,0 +1,4 @@
+{
+  "title": "[设备适配] 品牌与型号",
+  "body": "### 品牌与完整型号\n\nVGN Dragonfly F1 V5 Turbo+\n\n### 反馈报告\n\n```text\nVID/PID：391D:1A23\n接口信息：FFC1:0001（64 字节 IN/OUT）、008C:0001（33 字节 IN/OUT）\n为什么现有读取器匹配不上\n```"
+}
