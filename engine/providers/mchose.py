@@ -123,6 +123,7 @@ V3_VID, V3_PID = 0x3837, 0x1018
 V3_PIDS = {
     0x1018: "MCHOSE A7 V3 Pro (V3 8K 接收器)",
     0x1014: "MCHOSE A7 V3 Ultra+",  # Fallback; #276 verified this model, not every 1014.
+    0x1016: "MCHOSE V3 1K 接收器",
 }
 V3_USAGE = (0xFF01, 0x0001)
 V3_ALTERNATE_USAGE = (0xFF0B, 0x00C4)  # 1018 only; actual #493 placement unknown.
@@ -844,7 +845,7 @@ class MchoseProvider(Provider):
                 self._note_v3(f"[MCHOSE] 3837:{pid:04x} V3 power reader (C / 待实机验证)")
                 self._names[key] = next(((d.get("product_string") or "").strip()
                                          for d in ifaces if (d.get("product_string") or "").strip()),
-                                       V3_PIDS[pid] if pid == 0x1014 else "MCHOSE V3 8K 接收器")
+                                       V3_PIDS[pid] if pid in (0x1014, 0x1016) else "MCHOSE V3 8K 接收器")
                 info = self._pick_v3(ifaces)
                 if info is None:
                     self._last.pop(key, None)
