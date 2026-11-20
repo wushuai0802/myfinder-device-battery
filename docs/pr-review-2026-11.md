@@ -16,7 +16,7 @@
 | [#570](https://github.com/wushuai0802/myfinder-device-battery/pull/570) | 桌面悬浮窗、Sony/ROG 支持 | 留待 T50 设计说明时参考 |
 | [#484](https://github.com/wushuai0802/myfinder-device-battery/pull/484) | CHERRY MX 2.0S WL Pro | 已被取代，建议关闭 |
 | [#453](https://github.com/wushuai0802/myfinder-device-battery/pull/453) | DELUX M900 Ultra / GH8K | 已被取代，建议关闭 |
-| [#319](https://github.com/wushuai0802/myfinder-device-battery/pull/319) | AULA 05AC:024F 与 Lingbao M1 Pro | 已被取代，建议关闭 |
+| [#319](https://github.com/wushuai0802/myfinder-device-battery/pull/319) | AULA 05AC:024F 与 Lingbao M1 Pro | 部分已被取代，建议关闭；088D:052E 如需保留请另提 PR |
 | [#123](https://github.com/wushuai0802/myfinder-device-battery/pull/123) | ROG Strix Scope II 96 Wireless / OMNI | 需作者补证据 |
 | [#91](https://github.com/wushuai0802/myfinder-device-battery/pull/91) | Xiaomi 无线鼠标 4 Pro | 需作者补证据 |
 | [#67](https://github.com/wushuai0802/myfinder-device-battery/pull/67) | 固定到桌面并拖动面板 | 留待 T50 设计说明时参考 |
@@ -116,12 +116,12 @@
 
 | INFI75 情形 | #319 是否发送 | 依据 |
 | --- | --- |
-| 产品串 `INFI75-1.1` | 不会 | PR AULA `_pick()` 只接受 `FF60:0061` 且输入/输出均证明为无编号 33 字节；INFI75 有线集合是 `FF68:0061`。#319 diff 的 `aula_keyboard.py` 约 142--150 行为集合/长度门禁。 |
+| 产品串 `INFI75-1.1` | 不会 | INFI75 有线已记录 `MI_03 / FF13:0001`（Feature 65 字节主候选）和 `MI_02 / FF68:0061`；二者都不是 PR AULA `_pick()` 所要求的 `FF60:0061`，且不满足无编号双向 33 字节门禁。#319 diff 的 `aula_keyboard.py` 约 142--150 行为集合/长度门禁。 |
 | `FFB5:0001` | 不会 | 不匹配 PR 所需 `FF60:0061`。 |
 | `FF13:0001` | 不会 | 不匹配 PR 所需 `FF60:0061`。 |
 | `FF68:0061` | 不会 | 不匹配 PR 所需集合；#319 的测试还将 `0C45:800A / FF68` 作为不证明/静默路径，约 diff 721--723、835--841 行。 |
 
-当前主线进一步确认 INFI75 `FF68:0061` 是 4096 字节 Output 内容下发通道，`FFB5:0001` 是 7/7/0 路径；两者在 `docs/compatibility.md`/`docs/epomaker-hub-rongyuan.md` 均为 D 级、零发送。
+当前主线将 INFI75 记为 D 级、未兼容；`FFB5:0001` 是已记录的 2.4G 路径，且不发送未经验证的私有命令。`FF13`、`FF68` 的有线接口语义与安全读取可行性留待 T20、T21 以只读导出/实测资料澄清。
 
 ## #123：ROG Strix Scope II 96 Wireless / OMNI
 
