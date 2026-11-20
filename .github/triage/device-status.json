@@ -118,7 +118,8 @@
       "reports": 0
     },
     "3837:1016": {
-      "status": "researching",
+      "status": "beta",
+      "version": "1.3.11-beta.21",
       "note": "V7 与 G3 V3 共用 1K 接收器，待实机验证",
       "reports": 0
     },
@@ -135,12 +136,14 @@
       "note": "限迈从 V9 Pro 2 原装 2.4G 接收器"
     },
     "3837:6013": {
-      "status": "researching",
+      "status": "beta",
+      "version": "1.3.11-beta.21",
       "note": "仅 MCHOSE R9 原装 2.4G 接收器，待实机验证",
       "reports": 0
     },
     "3837:6045": {
-      "status": "researching",
+      "status": "beta",
+      "version": "1.3.11-beta.21",
       "note": "仅 MCHOSE X9 原装 2.4G 接收器，待实机验证",
       "reports": 0
     },
