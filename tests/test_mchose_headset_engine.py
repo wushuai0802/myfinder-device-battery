@@ -35,7 +35,8 @@ class MchoseBridgeTests(unittest.TestCase):
                 rows = [d for d in index["devices"] if d["provider"] == "mchose_headset"]
                 self.assertEqual([(d["vendorId"], d["productId"], d["name"], d["kind"]) for d in rows],
                                  [(0x291D, 0x385D, "MCHOSE V9 PRO", "headset"),
-                                  (0x3837, 0x600A, "MCHOSE V9 Turbo+", "headset")])
+                                  (0x3837, 0x600A, "MCHOSE V9 Turbo+", "headset"),
+                                  (0x3837, 0x6045, "MCHOSE X9", "headset")])
                 self.assertEqual(index["vendors"]["mchose_headset"], [0x291D, 0x3837])
                 self.assertNotIn("mchose_headset", index["unparsed"])
                 self.assertNotIn("mchose_headset", index["partial"])

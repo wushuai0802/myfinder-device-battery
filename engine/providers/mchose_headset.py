@@ -1,4 +1,4 @@
-"""MCHOSE V9 PRO / V9 Turbo+, exact identities and FF90:0001 (level C).
+"""MCHOSE V9 PRO / V9 Turbo+ / X9, exact identities and FF90:0001 (level C).
 
 Protocol facts: research/p2-protocols.md section 4, sources S8-S10 (MIT
 projects and upstream hardware reports); S14 is corroboration only, no code
@@ -40,12 +40,14 @@ from .base import DeviceStatus, Provider, hexdump, log
 PIDS = {
     (0x291D, 0x385D): "MCHOSE V9 PRO",
     (0x3837, 0x600A): "MCHOSE V9 Turbo+",
+    (0x3837, 0x6045): "MCHOSE X9",
 }
 USAGE_PAGE, USAGE = 0xFF90, 0x0001
 REPORT_LEN = 64
 READ_TIMEOUT_MS = 1000
 MAX_READS = 32
 PRO_ID = (0x291D, 0x385D)
+X9_ID = (0x3837, 0x6045)
 FIRMWARE_COLLECTION = (0xFF22, 0x0001)
 FIRMWARE_REQUEST = [0xAA, 0x01, 0x01] + [0] * 61
 FIRMWARE_READ_DELAY_SECONDS = 0.3
@@ -104,10 +106,22 @@ class MchoseHeadsetProvider(Provider):
     def _pick(self, infos):
         saw_battery_collection = False
         for info in infos:
-            if ((info.get("vendor_id"), info.get("product_id")) not in PIDS
+            device_id = (info.get("vendor_id"), info.get("product_id"))
+            if (device_id not in PIDS
                     or (info.get("usage_page"), info.get("usage")) != (USAGE_PAGE, USAGE)):
                 continue
             saw_battery_collection = True
+            if device_id == X9_ID:
+                product_name = info.get("product_string")
+                if (not isinstance(product_name, str)
+                        or product_name.strip().casefold() != "mchose x9"):
+                    self._diag.append("  MCHOSE X9 产品串不符，未发送查询")
+                    continue
+                if sum((item.get("vendor_id"), item.get("product_id"),
+                        item.get("usage_page"), item.get("usage"))
+                       == (*X9_ID, USAGE_PAGE, USAGE) for item in infos) != 1:
+                    self._diag.append("  MCHOSE X9 电量集合不唯一，未发送查询")
+                    continue
             lengths = (info.get("input_report_length"), info.get("output_report_length"))
             if lengths != (REPORT_LEN, REPORT_LEN):
                 self._diag.append(f"  input/output lengths {lengths}; require 64/64: nothing sent")
@@ -219,6 +233,8 @@ class MchoseHeadsetProvider(Provider):
             info = self._pick(group)
             if info is None:
                 continue
+            # X9 has a 0000 firmware floor in M HUB p8VersionConfig and
+            # enableBatteryConfig, so only the original V9 PRO checks FF22.
             if (info["vendor_id"], info["product_id"]) == PRO_ID:
                 key = (physical, info["path"])
                 if key not in self._firmware_versions:
