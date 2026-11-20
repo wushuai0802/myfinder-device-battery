@@ -166,6 +166,44 @@ class PollTest(unittest.TestCase):
         self.assertNotIn(FFA0, {p for p, _ in fake.sent})
         self.assertTrue(any("no A1 answer" in line for line in diag))
 
+    def test_legacy_3837_unlisted_pids_do_not_open_or_send(self):
+        for pid in (0x6011, 0x6013, 0x6045, 0x1012, 0x201B):
+            with self.subTest(pid=f"{pid:04x}"):
+                fake = FakeMchose()
+                entry = {"vendor_id": 0x3837, "product_id": pid, "path": b"legacy",
+                         "interface_number": 1, "usage_page": 0xFF01, "usage": 1}
+                M.hid = types.SimpleNamespace(device=lambda: fake)
+                M.hidlist = types.SimpleNamespace(
+                    enumerate=lambda vid=0: [entry] if vid == 0x3837 else [])
+                provider = M.MchoseProvider()
+
+                self.assertEqual(provider.poll(), [])
+                self.assertIsNone(fake.path)
+                self.assertEqual(fake.sent, [])
+                self.assertEqual(fake.reads, 0)
+                message = f"[MCHOSE] 3837:{pid:04x} 未列入旧协议白名单，未发送任何命令"
+                self.assertIn(message, provider.diagnostics())
+                self.assertEqual(provider.reader_diagnostics(), [message])
+
+    def test_legacy_3837_allowlisted_receiver_keeps_feature_exchange(self):
+        from unittest.mock import Mock
+
+        path = b"legacy-100b"
+        entry = {"vendor_id": 0x3837, "product_id": 0x100B, "path": path,
+                 "interface_number": 2, "usage_page": 0xFF01, "usage": 1,
+                 "product_string": "MCHOSE A7 V2 Ultra+"}
+        fake = FakeMchose()
+        # Inverted V2 status reply: 3837:4021, 41%, not charging.
+        reply = bytes.fromhex("11 F9 C8 C7 DE BF FD FA F8 FF F6 D6 FF") + bytes(8)
+        fake.get_feature_report = Mock(return_value=reply)
+
+        out, _ = self.poll(fake, [entry])
+
+        self.assertEqual(fake.sent, [(path, b"\x11\xf9" + b"\xff" * 19)])
+        fake.get_feature_report.assert_called_once_with(0x11, 21)
+        self.assertEqual([(s.level, s.charging, s.source) for s in out],
+                         [(41, False, "mchose")])
+
 
 if __name__ == "__main__":
     unittest.main()

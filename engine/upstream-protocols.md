@@ -1610,6 +1610,8 @@ evidence set and no hardware acceptance or publication claim.
 
 The same protocol as the M7 Ultra on MCHOSE's newer vendor id, which the reference driver treats identically: the diagnostics in [#4](https://github.com/HeyOkay/HaloBattery/issues/4) show the same interface shape (collections 0xFF0B:0x104 and 0xFF01:0x01 on interface 2). The status read is documented on the shorter 0x11 report, so both report ids are tried, and the mouse is named from the receiver's own product string. Icon of its own, so it and an M7 Ultra stay two devices. **Unverified** — no A7 V2 Ultra was on hand, so a level out of range is refused rather than shown
 
+On VID `0x3837`, the legacy mouse battery path is limited to PIDs `100A`, `100B`, `1020`, `4015`, `4018`, `4019`, `4021`, `4023`, and `4022`. The first eight come from the [pinned OpenMouse V2 link and model tables](https://github.com/OpenMouse-Project/mouse-protocol/blob/30d6ad37d0ecc9fff53f86d5058d67a88e07150d/src/mchose/index.ts#L485). `4022` has one [user-reported legacy reading](https://github.com/wushuai0802/myfinder-device-battery/issues/537) and is pending review.
+
 ### MCHOSE G7
 
 **Connection:** USB (A8A5:2255, chip 'YJX-CHIP')

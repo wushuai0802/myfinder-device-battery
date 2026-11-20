@@ -33,6 +33,8 @@ CHERRY MX 2.0S WL Pro 只适配精确 `046A:01E0` / `01DE` USB / 2.4G 身份及�
 | Xbox / XInput | 手柄 | Windows系统XInput接口，四档约略电量5/30/65/100%；有线/未知类型不显示百分比，充电未知；蓝牙Xbox优先，按slot升序跳过相同数量的无线档位，此去重为启发式 |
 | 标准HID电量字段 | 鼠标、键盘及其他HID设备 | HID描述符明确声明电量字段；只用GetFeature读取，不写入或抢占键鼠输入 |
 
+迈从鼠标的旧电量查询在 VID `0x3837` 上仅限白名单 PID `100A`、`100B`、`1020`、`4015`、`4018`、`4019`、`4021`、`4023`、`4022`。
+
 更细的上游型号与“上游实机验证/未经实机验证”区分见[上游清单](https://github.com/HeyOkay/HaloBattery/blob/2251f0534a8e886c9692ead42056059b4f69d8c0/docs/devices.md)。本项目使用独立的 APEX5 GET_INFO 只读读取器（C，分档电量）及Windows蓝牙/XInput系统电量，不启用上游手柄模式切换；不要直接把上游整张表视为本项目承诺。
 
 本机INFI75的有线与2.4G接口已分别检查，但均未取得可用电量，仍不宣称兼容。2.4G接收器为`2.4G Wireless Keyboard / FFB5:0001`，Input/Output各8字节，Feature为0；本地官方驱动的`INFI75-1.1 / 65字节Feature`路径不能直接套用。即使其他HFD键盘共享VID/PID，也不向INFI75发送未经该型号证实的命令。用户无需刷固件、改键位或修改接收器设置。
