@@ -112,7 +112,10 @@ function Assert-SmokeChildrenExited($Children) {
         if($live) {
             if(-not $live.WaitForExit(5000)) {
                 # Only clean up this fixture's exact portable reader path.
-                if($live.Path -ieq $child.ExecutablePath -and $live.Path.StartsWith($target+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){$live.Kill();$null=$live.WaitForExit(5000)}
+                $livePath = $live.Path
+                $childPath = $child.ExecutablePath
+                if (-not $livePath -or -not $childPath) { $live.Dispose(); continue }
+                if($livePath -ieq $childPath -and $livePath.StartsWith($target+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){$live.Kill();$null=$live.WaitForExit(5000)}
                 throw 'An installed smoke child survived its parent.'
             }
             $live.Dispose()
