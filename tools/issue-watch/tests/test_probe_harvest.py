@@ -15,7 +15,18 @@ ROW = "自动识别（实验） | 093a:522c | Incott 8K wireless mouse | incott_
 
 
 def issue(number=5, answer="一致", rows=ROW):
-    return {"number": number, "body": f"{AGREEMENT}{answer}\n\n### 反馈报告\n\n```text\n{rows}\n```"}
+    return {"number": number, "body": (
+        f"**描述**\n```\n接收器电量读数\n{AGREEMENT}{answer}\n```\n\n"
+        f"<details><summary>诊断信息</summary>\n\n```\n{rows}\n```\n</details>"
+    )}
+
+
+def browser_issue(answer="一致", rows=ROW):
+    return {"number": 6, "body": (
+        "### 品牌与完整型号\n\nIncott 8K\n\n### 反馈报告\n\n```text\n"
+        f"类型：设备不识别\n描述：\n接收器电量读数\n{AGREEMENT}{answer}\n\n"
+        f"MyFinder Device Battery 1.4.0-beta.1\nWindows 11\n\n有卡片的设备\n{rows}\n```"
+    )}
 
 
 class ProbeHarvestTests(unittest.TestCase):
@@ -47,9 +58,26 @@ class ProbeHarvestTests(unittest.TestCase):
         self.assertEqual(PROBE.harvest([dict(issue(), pull_request={}), issue(number="7")]), [])
 
     def test_conflicting_answers_in_one_report_are_ignored(self):
-        issue_with_conflict = issue()
-        issue_with_conflict["body"] += f"\n{AGREEMENT}官方读不到"
+        issue_with_conflict = issue(answer=f"一致\n{AGREEMENT}官方读不到")
         self.assertEqual(PROBE.harvest([issue_with_conflict]), [])
+
+    def test_only_last_nonempty_description_line_can_confirm(self):
+        expected = PROBE.harvest([issue()])
+        outside = issue(rows=ROW + f"\n{AGREEMENT}官方读不到")
+        outside["body"] += f"\n{AGREEMENT}不一致"
+        self.assertEqual(PROBE.harvest([outside]), expected)
+        self.assertEqual(PROBE.harvest([issue(answer="一致\n其他描述")]), [])
+        self.assertEqual(PROBE.harvest([issue(answer="", rows=f"{ROW}\n{AGREEMENT}一致")]), [])
+        self.assertEqual(PROBE.harvest([issue(answer=f"一致\n{ROW}", rows="无记录")]), [])
+        self.assertEqual(PROBE.harvest([issue(answer="一致\n\n")]), expected)
+
+    def test_browser_submission_uses_description_before_diagnostic_header(self):
+        self.assertEqual(PROBE.harvest([browser_issue()]), [{
+            "issue": 6, "vidPid": "093A:522C", "productString": "Incott 8K wireless mouse",
+            "family": "incott_8k_passive",
+        }])
+        self.assertEqual(PROBE.harvest([browser_issue(answer="一致\n其他描述")]), [])
+        self.assertEqual(PROBE.harvest([browser_issue(answer="", rows=f"{ROW}\n{AGREEMENT}一致")]), [])
 
     def test_conflicting_snapshots_of_the_same_issue_are_ignored(self):
         another = issue(rows=ROW.replace("093a:522c", "36b0:3002"))
