@@ -18,7 +18,9 @@ from typing import Dict, List, Optional, Tuple
 from .spec import Family, SpecError, parse_family
 
 BUILTIN = Path(__file__).with_name("builtin")
-_families: Optional[Dict[str, Family]] = None
+_families: Optional[Dict[str, Family]] = None   # merged view: builtin + pack
+_builtin: Optional[Dict[str, Family]] = None
+_pack: Tuple[Family, ...] = ()
 _probe_enabled = False
 
 
@@ -44,11 +46,34 @@ def load(directory: Path = BUILTIN) -> Dict[str, Family]:
     return result
 
 
+def builtin_families() -> Dict[str, Family]:
+    global _builtin
+    if _builtin is None:
+        _builtin = load()
+    return _builtin
+
+
 def families() -> Dict[str, Family]:
     global _families
     if _families is None:
-        _families = load()
+        merged = dict(builtin_families())
+        for family in _pack:
+            merged.setdefault(family.id, family)   # a pack never overrides a builtin
+        _families = merged
     return _families
+
+
+def set_pack_families(pack_families) -> None:
+    """Install the families of the current signed device pack (already validated
+    by device_pack.parse_pack); an empty tuple removes them again."""
+    global _pack, _families
+    _pack = tuple(pack_families or ())
+    _families = None
+
+
+def builtin_listed_ids():
+    return sorted((d.vendor_id, d.product_id, d.name, f.kind, f.id)
+                  for f in builtin_families().values() for d in f.devices)
 
 
 def memory_key(physical: str) -> str:

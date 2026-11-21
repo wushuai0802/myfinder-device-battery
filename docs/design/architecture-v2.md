@@ -80,7 +80,7 @@
 - **空闲退避（T15，#588）**：`server.py` 的 `_idle_backoff` 规则：设备级读取器连续两轮找到设备却没有读数，之后的自动轮询依次间隔 60、120、300 秒；有读数、强制同步、定向刷新、拓扑变化时立即恢复。被动和系统读取器不参与退避。
 
 后续：
-1. 型号数据包扩展：允许签名数据包携带方案族 JSON（只能新增族或设备行，解析规则与内置相同）。
+1. ~~型号数据包扩展~~：已完成（第 9 节，C2）。
 2. ~~读法记忆持久化~~：引擎侧已完成（第 5 节，C1），宿主侧由 Codex 接入（B5 第 3.1 节）。
 3. 按 B2-9 的盘点结果，批量把 BrimDeck、OpenMouse 等项目的协议转换为方案族。
 4. 通用连接去重（A9 充电双卡，T61）和统一轮询退避（T15）。
@@ -112,3 +112,26 @@
 | `rongyuan_mouse` | 4 个鼠标接收器 | 同上，读取鼠标字段 |
 
 所有与现有读取器重叠的 ID 都已排除。05AC:024F 被很多键盘共用，因此不进入分诊索引（`known_ids.SHARED_UNINDEXED`）。
+
+## 9. 型号数据包携带方案族（C2，loader 2）
+
+**为什么要升 loader：** 已安装的客户端只认 `loader: 1`，数据包遇到未知字段就整包拒绝。如果直接在 v1 数据包里加 `families`，所有旧客户端都会丢掉整个数据包。所以带方案族的数据包使用 **loader 2**，单独发布：
+
+| 文件 | 内容 | 读取方 |
+|---|---|---|
+| `device-pack-v1-latest.json`、`device-pack-v1-<版本>.json` | `entries` 和 `disabled`，与现在相同 | 旧客户端；新客户端在 v2 不可用时回退到这里 |
+| `device-pack-v2-latest.json`、`device-pack-v2-<版本>.json` | 同一来源、同一 `packVersion`，`loader: 2`，额外带 `families` | 新客户端 |
+
+**校验分工：**
+
+- **结构（schema）：** `loader` 只能是 1 或 2；`families` 最多 64 项，每项必须是对象（`x-family-spec`）；loader 1 带 `families` 会被整包拒绝。C# 宿主和引擎用同一份 schema，共用契约语料 `tests/fixtures/device-pack-contract.json`。
+- **语义（引擎，逐行拒绝）：** 每一行先过 `spec.parse_family`，安全规则与内置方案族完全相同。以下任一情况会拒绝该行：
+  - 与内置方案族 ID 相同；
+  - 包内 ID 重复；
+  - 设备已被内置读取器或内置方案族占用（`known_ids` 索引加 `builtin_ids`）；
+  - 设备与本包的 `entries` 冲突；
+  - 设备与包内其他方案族冲突；
+  - `probeVendorIds` 覆盖了已有读取器的品牌（`probe_vendor_claimed`）——远程数据包不能对已有品牌开启整品牌试读，这类方案族必须作为内置方案族走审查。
+- **生效：** 子进程收到新的数据包快照后，调用 `families.set_pack_families`。内置方案族始终优先，不会被覆盖。管理进程的厂商预筛由 `_provider_vids("families")` 合并数据包方案族的厂商。`disabled` 也可以指向 `families` 读取器的具体 VID/PID。
+- **诊断：** `devicePack.families` 列出已生效的方案族 ID，被拒绝的行写在 `rejected` 里，例如 `families[3]: builtin_id_conflict`。
+

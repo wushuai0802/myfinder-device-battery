@@ -85,11 +85,12 @@ class ValidationTests(unittest.TestCase):
 
     def test_bad_top_level_fields_reject_all(self):
         for field, values in {
-            "format": ["wrong", 1, None], "loader": [2, True, 1.0, "1"],
+            "format": ["wrong", 1, None], "loader": [0, 3, True, 1.0, "1"],  # 2 is valid since C2
             "packVersion": [0, -1, 10**10, True, 1.0, "1", None],
             "keyId": ["", "has spaces", "a" * 65, 123],
             "createdAt": ["now", "2026-02-30T10:00:00Z", "2026-11-04T10:00:00+00:00", None],
             "entries": [{}, None, ""], "disabled": [{}, None, ""],
+            "families": [[], [{}], None],  # loader 1 never carries families
         }.items():
             for value in values:
                 with self.subTest(field=field, value=value):

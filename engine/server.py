@@ -616,6 +616,7 @@ def reader_child():
                 if document and not candidate_pack.loaded:
                     raise ValueError("invalid child pack")
                 device_pack = candidate_pack
+                family_registry.set_pack_families(device_pack.families)
                 instances.clear()
             if action == "smoke":
                 from catalog import validate_catalog
@@ -801,6 +802,13 @@ class BatteryEngine:
         self._bluetooth_slot = None
         for child in self.children:
             child.close()
+
+    def _provider_vids(self, name):
+        vids = PROVIDER_VIDS.get(name, ())
+        if name == "families" and self.device_pack.families:
+            # Loader-2 pack families may add vendors; builtin vids stay included.
+            vids = tuple(set(vids).union(*(f.vendor_ids for f in self.device_pack.families)))
+        return vids
 
     def _reader_command(self, command):
         # Carry the immutable startup snapshot, including after child restarts.
@@ -1483,7 +1491,7 @@ class BatteryEngine:
                                 if not infos:
                                     continue
                                 vids = {d.get("vendor_id") for d in infos}
-                                if provider_name != "standard_hid" and not vids.intersection(PROVIDER_VIDS.get(provider_name, ())):
+                                if provider_name != "standard_hid" and not vids.intersection(self._provider_vids(provider_name)):
                                     continue
                                 if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset",
                                                       "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth")

@@ -67,6 +67,7 @@ namespace AtkBattery {
             var data=PackJson.Object(PackJson.Parse(raw));ValidateValue(data,Schema.Value,Schema.Value);
             var entries=PackJson.Array(data["entries"]);var disabled=PackJson.Array(data["disabled"]);
             if(entries.Count+disabled.Count>2000)throw new InvalidDataException("pack_entry_limit");
+            if(data.ContainsKey("families")&&PackJson.Integer(data["loader"])<2)throw new InvalidDataException("pack_families_loader");
             foreach(var item in entries){var row=PackJson.Object(item);if((string)row["provider"]=="razer"&&RazerProfiles.Contains((string)row["profile"])&&PackJson.Integer(row["profileRev"])!=1)throw new InvalidDataException("pack_profile_revision");}
             return new DevicePackDocument {Version=PackJson.Integer(data["packVersion"]),KeyId=(string)data["keyId"],Disabled=disabled.Count};
         }
@@ -76,6 +77,9 @@ namespace AtkBattery {
             string type=(string)rule["type"];
             if(rule.TryGetValue("const",out field)&&!Equal(value,field))throw new InvalidDataException("pack_const");
             if(rule.TryGetValue("enum",out field)&&!PackJson.Array(field).Exists(delegate(object item){return Equal(value,item);}))throw new InvalidDataException("pack_enum");
+            // Loader-2 family rows: the host only proves they are objects; the engine
+            // validates each one with families.spec.parse_family and rejects rows.
+            if(type=="object"&&rule.TryGetValue("x-family-spec",out field)&&field is bool&&(bool)field){PackJson.Object(value);return;}
             if(type=="object"){
                 var obj=PackJson.Object(value);var properties=PackJson.Object(rule["properties"]);
                 if(rule.TryGetValue("required",out field))foreach(string key in PackJson.Array(field))if(!obj.ContainsKey(key))throw new InvalidDataException("pack_missing_field");
