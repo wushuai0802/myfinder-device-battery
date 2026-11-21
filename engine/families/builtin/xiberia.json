@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "id": "xiberia",
+  "name": "XIBERIA 2.4G 耳机",
+  "kind": "headset",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d0/src/BrimDeck.Core/Brands/Xiberia.cs",
+    "revision": "f1510d0",
+    "license": "Apache-2.0 (BrimDeck); protocol origin MIT (Voltide)",
+    "origin": "Voltide XiberiaT7Provider.cs (MIT), derived from XIBERIA HUB ActHID.dll",
+    "evidence": "Upstream hardware check on XIBERIA T7 (36F9:F008). XIBERIA HUB binds any 36F9 receiver declaring reports 0x55 and 0x41. MyFinder issues list F016 (#56 #259), F002 (#846 #852), F001 (#225 #271) with FF82:0001 and FF90:0001 collections; no MyFinder hardware reply yet."
+  },
+  "devices": [
+    {"vendorId": "36F9", "productId": "F008", "name": "XIBERIA T7"},
+    {"vendorId": "36F9", "productId": "F016", "name": "XIBERIA K03S", "productString": "XIBERIA K03S"},
+    {"vendorId": "36F9", "productId": "F002", "name": "XIBERIA K06S", "productString": "XIBERIA K06S Wireless"},
+    {"vendorId": "36F9", "productId": "F001", "name": "XIBERIA T10", "productString": "XIBERIA T10 Wireless"}
+  ],
+  "collections": [
+    {"usagePage": "FF90", "usage": "0001"},
+    {"usagePage": "FF82", "usage": "0001"}
+  ],
+  "reports": {
+    "input": {"id": "55", "length": 64},
+    "output": {"id": "55", "length": 64}
+  },
+  "reads": [
+    {
+      "name": "battery",
+      "transport": "output",
+      "request": "55 65 00 00",
+      "timeoutMs": 800,
+      "maxReads": 32,
+      "reply": {
+        "length": 64,
+        "match": [
+          {"at": 0, "eq": "55"},
+          {"at": 1, "eq": "65"},
+          {"at": 2, "eq": "00"}
+        ],
+        "percent": {"at": 3, "min": 1, "max": 100}
+      }
+    }
+  ],
+  "standAsideFor": ["xiberia hub.exe"]
+}

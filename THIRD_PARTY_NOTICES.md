@@ -77,3 +77,14 @@ its BSD-style option in
 all of its license files. These terms permit distribution alongside this
 AGPL-3.0-only application; no incompatible component was identified in this
 bundled-license review. No upstream license text has been changed.
+
+Declarative device families (`engine/families/builtin/*.json`) record protocol
+facts with their source in each file. The XIBERIA family's request and reply
+layout comes from [MoFeng2223/BrimDeck](https://github.com/MoFeng2223/BrimDeck/blob/f1510d0/src/BrimDeck.Core/Brands/Xiberia.cs)
+(Apache-2.0, revision `f1510d0`), which in turn cites Voltide's
+`XiberiaT7Provider.cs` (MIT) derived from XIBERIA HUB. Only protocol facts are
+used; the interpreter in `engine/families/` is an independent implementation.
+The per-device read policy in `engine/families/memory.py` (bounded trial rounds,
+remembered working read, retirement after anomalies, vendor-software
+stand-aside) follows the behaviour BrimDeck documents in
+`docs/zh-CN/devices.md`, reimplemented without copying code.
