@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "id": "fifine_ht6",
+  "name": "FIFINE HT6 Wireless",
+  "kind": "headset",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d09677492a13a31d26bc37c3509da1b818f/src/BrimDeck.Core/Brands/Fifine.cs",
+    "revision": "f1510d09677492a13a31d26bc37c3509da1b818f",
+    "license": "Apache-2.0 (BrimDeck); GPL-3.0 (HeadsetControl, protocol evidence and replay data)",
+    "origin": "Sapd/HeadsetControl 163c6edf744c28804d95e3653e5ea7bc9486b46c lib/devices/fifine_ht6.hpp and tests/test_fifine.cpp",
+    "evidence": "HeadsetControl documents a SoundLink capture and checks on HT6 dongle firmware 1.8 and headset firmware 4.2. Its 55 65 50 02 state fixture reports 80%. Configuration is limited to HT6 3142:00C3 and proved 64-byte reports."
+  },
+  "devices": [
+    {"vendorId": "3142", "productId": "00C3", "name": "FIFINE HT6 Wireless"}
+  ],
+  "collections": [
+    {"usagePage": "FF90", "usage": "0001"}
+  ],
+  "reports": {
+    "input": {"id": "55", "length": 64},
+    "output": {"id": "55", "length": 64}
+  },
+  "reads": [
+    {
+      "name": "battery",
+      "transport": "output",
+      "request": "55 65 01 00",
+      "timeoutMs": 1000,
+      "reply": {
+        "length": 64,
+        "match": [
+          {"at": 0, "eq": "55"},
+          {"at": 1, "eq": "65"},
+          {"at": 3, "mask": "FE", "eq": "02"}
+        ],
+        "percent": {"at": 2, "min": 1, "max": 100},
+        "charging": {"at": 3, "eq": "03"}
+      }
+    }
+  ]
+}
