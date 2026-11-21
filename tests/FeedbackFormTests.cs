@@ -40,8 +40,8 @@ static class FeedbackFormTests {
     static void RelayConfiguration(){
         var uri=new Uri(FeedbackRelay.Url,UriKind.Absolute);
         Check(uri.Scheme==Uri.UriSchemeHttps,"shipped relay uses HTTPS");
-        Check(uri.Host=="myfinder-feedback-relay.wushuai0802.deno.net","shipped relay uses the deployed host");
-        Check(FeedbackRelay.Url=="https://myfinder-feedback-relay.wushuai0802.deno.net","shipped relay is the exact base URL without a trailing slash");
+        Check(uri.Host=="myfinder-feedback-relay.wushuai591459380.workers.dev","shipped relay uses the deployed host");
+        Check(FeedbackRelay.Url=="https://myfinder-feedback-relay.wushuai591459380.workers.dev","shipped relay is the exact base URL without a trailing slash");
         Check(FeedbackRelay.Endpoint(FeedbackRelay.Url).AbsoluteUri==FeedbackRelay.Url+"/feedback","shipped relay builds the feedback endpoint");
         var http=new FakeHttp();using(var form=Form(http,null)){
             Show(form);var submit=Find<Button>(form,"SubmitFeedback");

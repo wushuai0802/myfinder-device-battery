@@ -6,7 +6,7 @@ namespace AtkBattery {
     internal static class DevicePackNetwork {
         internal static void Validate(Uri uri,string source,string file,bool redirect){
             if(uri==null||!uri.IsAbsoluteUri||uri.Scheme!="https"||uri.Port!=443||uri.UserInfo.Length!=0||uri.Fragment.Length!=0)throw new InvalidDataException("pack_url");
-            if(source!=DevicePackTrust.Mirror&&source!=DevicePackTrust.GitHub)throw new InvalidDataException("pack_source");
+            if(source!=DevicePackTrust.CloudflareMirror&&source!=DevicePackTrust.Mirror&&source!=DevicePackTrust.GitHub)throw new InvalidDataException("pack_source");
             if(uri.AbsoluteUri==source+file)return;
             // A mirror cannot redirect into arbitrary paths or into GitHub.
             // GitHub asset redirects use the updater's existing download hosts,

@@ -12,7 +12,17 @@ using AtkBattery;
 
 namespace AtkBattery {
     internal static class FeedbackRelay {
-        internal const string Url="https://myfinder-feedback-relay.wushuai0802.deno.net";
+        internal const string Url="https://myfinder-feedback-relay.wushuai591459380.workers.dev";
+        internal const string DenoUrl="https://myfinder-feedback-relay.wushuai0802.deno.net";
+        internal static string[] Addresses(string address) {
+            return address==Url?new[]{Url,DenoUrl}:new[]{address};
+        }
+        internal static int Deadline(string address,int timeout) {
+            return address==Url?Math.Min(5000,timeout):timeout;
+        }
+        internal static bool RejectedBeforeWrite(int status,string error) {
+            return (status==429&&error=="rate_limited")||(status==503&&error=="disabled");
+        }
         internal static void ValidateUri(Uri uri){
             if(uri==null||!uri.IsAbsoluteUri||uri.Scheme!=Uri.UriSchemeHttps||uri.UserInfo.Length!=0||uri.Query.Length!=0||uri.Fragment.Length!=0)throw new ArgumentException("Invalid feedback relay URL.");
         }
@@ -102,32 +112,57 @@ namespace AtkBattery {
             if(String.IsNullOrEmpty(relay))return new FeedbackResult(FeedbackResultKind.Browser);
             string creation=null;bool mayHaveCreated=false;
             try{
-                var endpoint=FeedbackRelay.Endpoint(relay);string key=FeedbackProtocol.NewKey();
+                string key=FeedbackProtocol.NewKey();
                 creation=store.BeginCreation(category,description,key,clock());
-                using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
-                    timeout.CancelAfter(timeoutMilliseconds);var cancel=timeout.Token;
-                    for(int attempt=0;attempt<2;attempt++){
-                        var payload=FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null);cancel.ThrowIfCancellationRequested();mayHaveCreated=true;
-                        using(var response=http.Post(endpoint,payload,cancel)){
-                            if(response.Status==400||response.Status==413||response.Status==429||response.Status==503)mayHaveCreated=false;
-                            cancel.ThrowIfCancellationRequested();
-                            if(response.Status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
-                            if(response.Status==400&&attempt==0){
-                                var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
-                                if(error!=null&&error.Error=="invalid")continue;
+                foreach(string address in FeedbackRelay.Addresses(relay)) {
+                    bool canSwitch=address==FeedbackRelay.Url;
+                    bool production=canSwitch||address==FeedbackRelay.DenoUrl;
+                    var endpoint=FeedbackRelay.Endpoint(address);
+                    token.ThrowIfCancellationRequested();
+                    try {
+                        using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
+                            timeout.CancelAfter(FeedbackRelay.Deadline(address,timeoutMilliseconds));
+                            var cancel=timeout.Token;
+                            for(int attempt=0;attempt<2;attempt++){
+                                var payload=FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null);
+                                cancel.ThrowIfCancellationRequested();
+                                mayHaveCreated=true;
+                                using(var response=http.Post(endpoint,payload,cancel)){
+                                    if(response.Status==400||response.Status==413||
+                                        !production&&(response.Status==429||response.Status==503))mayHaveCreated=false;
+                                    cancel.ThrowIfCancellationRequested();
+                                    if(production&&(response.Status==429||response.Status==503)){
+                                        var rejection=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
+                                        // The relay returns these codes before it calls GitHub to create an issue.
+                                        // A generic upstream failure is ambiguous, even with a 503 status.
+                                        if(FeedbackRelay.RejectedBeforeWrite(response.Status,rejection==null?null:rejection.Error)){
+                                            mayHaveCreated=false;
+                                            if(canSwitch)break;
+                                        }
+                                    }
+                                    if(response.Status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
+                                    if(response.Status==400&&attempt==0){
+                                        var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
+                                        if(error!=null&&error.Error=="invalid")continue;
+                                    }
+                                    if(response.Status!=201)return new FeedbackResult(FeedbackResultKind.Unavailable);
+                                    var receipt=readReceipt(FeedbackProtocol.Read(response,16384,cancel));
+                                    if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
+                                    session.MarkSuccess();
+                                    var result=new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,attempt==0&&receipt.ReplyAccess);
+                                    try{store.CompleteCreation(creation,result,clock());}catch(Exception){return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,result.ReplyAccess,false);}
+                                    return result;
+                                }
                             }
-                            if(response.Status!=201)return new FeedbackResult(FeedbackResultKind.Unavailable);
-                            var receipt=readReceipt(FeedbackProtocol.Read(response,16384,cancel));
-                            if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
-                            session.MarkSuccess();
-                            var result=new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,attempt==0&&receipt.ReplyAccess);
-                            try{store.CompleteCreation(creation,result,clock());}catch(Exception){return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,result.ReplyAccess,false);}
-                            return result;
                         }
+                    }catch(FeedbackNotSentException){
+                        mayHaveCreated=false;
+                        token.ThrowIfCancellationRequested();
+                        if(!canSwitch)throw;
                     }
                 }
                 return new FeedbackResult(FeedbackResultKind.Unavailable);
-            }catch(Exception error){if(error is FeedbackNotSentException)mayHaveCreated=false;token.ThrowIfCancellationRequested();return new FeedbackResult(FeedbackResultKind.Unavailable);}
+            }catch(Exception){token.ThrowIfCancellationRequested();return new FeedbackResult(FeedbackResultKind.Unavailable);}
             finally{if(creation!=null&&!mayHaveCreated)try{store.CancelCreation(creation);}catch(Exception){}}
         }
     }

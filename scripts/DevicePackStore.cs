@@ -21,6 +21,8 @@ namespace AtkBattery {
     [DataContract] internal sealed class DevicePackRecord {
         [DataMember] public long Version;
         [DataMember] public string Sha256,Source,Reason;
+        // Keep the existing source values readable by earlier clients.
+        [DataMember(EmitDefaultValue=false)] public string MirrorSource;
         [DataMember] public int Disabled;
         internal string FileName {get{return "device-pack-v1-"+Version.ToString(CultureInfo.InvariantCulture)+".json";}}
     }
@@ -65,12 +67,12 @@ namespace AtkBattery {
             "pack_startup_failed pack_startup_rollback pack_state pack_state_active pack_state_duplicate pack_state_field pack_state_floor pack_state_full pack_state_invalid pack_state_missing "+
             "pack_state_quarantine pack_state_record pack_status_write_failed pack_storage_failed pack_timeout pack_trial_stop_failed pack_unchanged").Split(' '),StringComparer.Ordinal);
         readonly object gate=new object();readonly string root;readonly IUpdateTransport http;readonly IDictionary<string,string> keys;
-        readonly Func<string,long,Func<string>,CancellationToken,bool> activate;readonly DateTime started;
-        DevicePackState state=new DevicePackState();bool valid=true,checkedThisSession;static int checking;
+        readonly Func<string,long,Func<string>,CancellationToken,bool> activate;readonly DateTime started;readonly int checkJitterMinutes;
+        DevicePackState state=new DevicePackState();bool valid=true;static int checking;
         internal DevicePackManager(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start)
-            :this(directory,transport,activation,start,DevicePackTrust.Keys()){}
-        DevicePackManager(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust){
-            root=Path.GetFullPath(directory);http=transport;activate=activation;started=start;keys=trust;
+            :this(directory,transport,activation,start,DevicePackTrust.Keys(),new Random().Next(61)){}
+        DevicePackManager(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust,int jitterMinutes){
+            root=Path.GetFullPath(directory);http=transport;activate=activation;started=start;keys=trust;checkJitterMinutes=jitterMinutes;
             try{
                 DevicePackFiles.NoLinks(root);foreach(string slot in new[]{"current","previous","staging"})DevicePackFiles.NoLinks(Path.Combine(root,slot));
                 string path=Path.Combine(root,"state.json");DevicePackFiles.NoLinks(path);
@@ -88,10 +90,14 @@ namespace AtkBattery {
             }catch(Exception){state=new DevicePackState {Result="pack_state_invalid"};valid=false;}
         }
 #if DEVICE_PACK_TESTS
-        internal static DevicePackManager ForTests(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust){return new DevicePackManager(directory,transport,activation,start,trust);}
+        internal static DevicePackManager ForTests(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust,int jitterMinutes=0){return new DevicePackManager(directory,transport,activation,start,trust,jitterMinutes);}
         internal DevicePackState StateForTests {get{lock(gate)return UpdateJson.Read<DevicePackState>(Encoding.UTF8.GetBytes(UpdateJson.Text(state)));}}
 #endif
-        void ValidateRecord(DevicePackRecord record){if(record==null||record.Version<1||record.Version>9999999999L||!Regex.IsMatch(record.Sha256??"",@"\A[a-f0-9]{64}\z")||(record.Source!="mirror"&&record.Source!="github")||record.Disabled<0||record.Disabled>2000)throw new InvalidDataException("pack_state_record");}
+        void ValidateRecord(DevicePackRecord record){
+            if(record==null||record.Version<1||record.Version>9999999999L||!Regex.IsMatch(record.Sha256??"",@"\A[a-f0-9]{64}\z")||
+                (record.Source!="mirror"&&record.Source!="github")||record.Disabled<0||record.Disabled>2000||
+                record.MirrorSource!=null&&(record.Source!="mirror"||record.MirrorSource!="cloudflare"))throw new InvalidDataException("pack_state_record");
+        }
         void ValidateState(){
             if(state==null||state.Schema!=1||state.HighestAcceptedVersion<0||state.HighestAcceptedVersion>9999999999L||state.Versions==null||state.Quarantine==null||state.Failures<0||state.Failures>3)throw new InvalidDataException("pack_state");
             var seen=new HashSet<long>();foreach(var record in state.Versions){ValidateRecord(record);if(!seen.Add(record.Version))throw new InvalidDataException("pack_state_duplicate");}
@@ -121,7 +127,7 @@ namespace AtkBattery {
             lease.Record=record;return lease;
         }
         void Quarantine(DevicePackRecord record,string reason){
-            if(record!=null&&!Quarantined(record))state.Quarantine.Add(new DevicePackRecord {Version=record.Version,Sha256=record.Sha256,Source=record.Source,Disabled=record.Disabled,Reason=reason});
+            if(record!=null&&!Quarantined(record))state.Quarantine.Add(new DevicePackRecord {Version=record.Version,Sha256=record.Sha256,Source=record.Source,MirrorSource=record.MirrorSource,Disabled=record.Disabled,Reason=reason});
         }
         void Rollback(string reason){
             Quarantine(state.Current,reason);DevicePackRecord next=null;
@@ -145,8 +151,16 @@ namespace AtkBattery {
             try{state.Failures++;if(state.Failures>=3){Rollback("pack_crash_rollback");return true;}Save();}catch(Exception){valid=false;state.Result="pack_storage_failed";}return false;
         }}
         internal void SetLoaded(long version,int disabled){lock(gate){if(state.Current!=null&&state.Current.Version==version)state.Current.Disabled=Math.Max(0,Math.Min(2000,disabled));}}
+        static string SourceName(string source){
+            if(source=="cloudflare")return "Cloudflare 镜像";
+            if(source=="mirror")return "Deno 镜像";
+            if(source=="github")return "GitHub";
+            return null;
+        }
         internal string Diagnostic {get{lock(gate){
-            var text=new StringBuilder(state.Current==null||!valid?NotUsedDiagnostic:"型号数据包："+state.Current.Version+" | 来源："+(state.Current.Source=="mirror"?"镜像":"GitHub")+" | 禁用条目："+state.Current.Disabled);
+            var text=new StringBuilder(state.Current==null||!valid?NotUsedDiagnostic:"型号数据包："+state.Current.Version+" | 来源："+SourceName(state.Current.MirrorSource??state.Current.Source)+" | 禁用条目："+state.Current.Disabled);
+            string lastSource=SourceName(state.LastSource);
+            if(lastSource!=null)text.Append(" | 最近检查来源：").Append(lastSource);
             text.Append(" | 上次成功检查：").Append(state.LastSuccessUtc==DateTime.MinValue?"未成功":state.LastSuccessUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss 'UTC'",CultureInfo.InvariantCulture));
             text.Append(" | 隔离版本：");if(state.Quarantine.Count==0)text.Append("无");else{int count=0;foreach(var item in state.Quarantine){if(count++==6){text.Append(" 等").Append(state.Quarantine.Count).Append("版");break;}if(count>1)text.Append(",");text.Append(item.Version);}}
             if(!String.IsNullOrEmpty(state.Result))text.Append(" | 结果：").Append(state.Result=="pack_not_found"?"远端暂无数据包":SafeResult(state.Result));
@@ -172,27 +186,42 @@ namespace AtkBattery {
             if(pointer.Version==state.HighestAcceptedVersion){try{using(var usable=Open("current",state.Current)){if(usable!=null)return false;}}catch(Exception){}}
             return true;
         }
+        bool AutomaticCheckDue(DateTime now){
+            if(state.LastCheckUtc==DateTime.MinValue&&state.LastSuccessUtc==DateTime.MinValue)
+                return (now-started).TotalSeconds>=20;
+            return (now-state.LastCheckUtc).TotalHours>=12
+                &&(now-state.LastSuccessUtc).TotalMinutes>=720+checkJitterMinutes;
+        }
         internal void Check(bool automatic,DateTime now,CancellationToken token){
             if(Interlocked.CompareExchange(ref checking,1,0)!=0)return;
             DevicePackRecord candidate=null;bool promoted=false;string stage=null;
             try{
-                lock(gate){if(!valid||automatic&&(!checkedThisSession?now<started.AddSeconds(20):now<state.LastCheckUtc.AddHours(12)))return;
-                    checkedThisSession=true;state.LastCheckUtc=now;state.Result="pack_checking";Save();}
+                lock(gate){if(!valid||automatic&&!AutomaticCheckDue(now))return;
+                    state.LastCheckUtc=now;state.Result="pack_checking";Save();}
                 byte[] raw=null,sig=null;string lastError="pack_check_failed";
-                foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub}){
+                foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub}){
                     token.ThrowIfCancellationRequested();
                     bool pointerFetched=false;
                     try{
-                        lock(gate)state.LastSource=source==DevicePackTrust.Mirror?"mirror":"github";
-                        var pointer=DevicePackPointer.Parse(DevicePackNetwork.Fetch(http,source,"device-pack-v1-latest.json",4096,token));
-                        pointerFetched=true;
-                        lock(gate){state.LastSource=source==DevicePackTrust.Mirror?"mirror":"github";if(!Candidate(pointer)){state.LastSuccessUtc=now;state.Result="pack_unchanged";Save();return;}}
-                        raw=DevicePackNetwork.Fetch(http,source,pointer.FileName,DevicePackTrust.MaxPackBytes,token);
-                        sig=DevicePackNetwork.Fetch(http,source,pointer.FileName+".sig",4096,token);
-                        if(raw.Length!=pointer.Size||DevicePackTrust.Hash(raw)!=pointer.Hash)throw new InvalidDataException("pack_digest_mismatch");
-                        DevicePackTrust.Verify(raw,sig,keys);var document=DevicePackValidation.Validate(raw);
-                        if(document.Version!=pointer.Version)throw new InvalidDataException("pack_version_mismatch");
-                        candidate=new DevicePackRecord {Version=document.Version,Sha256=pointer.Hash,Source=source==DevicePackTrust.Mirror?"mirror":"github",Disabled=document.Disabled};break;
+                        bool cloudflare=source==DevicePackTrust.CloudflareMirror,github=source==DevicePackTrust.GitHub;
+                        lock(gate)state.LastSource=cloudflare?"cloudflare":github?"github":"mirror";
+                        using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)){
+                            if(cloudflare)deadline.CancelAfter(5000);
+                            var sourceToken=deadline.Token;
+                            var pointer=DevicePackPointer.Parse(DevicePackNetwork.Fetch(http,source,"device-pack-v1-latest.json",4096,sourceToken));
+                            pointerFetched=true;
+                            sourceToken.ThrowIfCancellationRequested();
+                            lock(gate){if(!Candidate(pointer)){state.LastSuccessUtc=now;state.Result="pack_unchanged";Save();return;}}
+                            raw=DevicePackNetwork.Fetch(http,source,pointer.FileName,DevicePackTrust.MaxPackBytes,sourceToken);
+                            sig=DevicePackNetwork.Fetch(http,source,pointer.FileName+".sig",4096,sourceToken);
+                            if(raw.Length!=pointer.Size||DevicePackTrust.Hash(raw)!=pointer.Hash)throw new InvalidDataException("pack_digest_mismatch");
+                            DevicePackTrust.Verify(raw,sig,keys);
+                            var document=DevicePackValidation.Validate(raw);
+                            if(document.Version!=pointer.Version)throw new InvalidDataException("pack_version_mismatch");
+                            sourceToken.ThrowIfCancellationRequested();
+                            candidate=new DevicePackRecord {Version=document.Version,Sha256=pointer.Hash,Source=github?"github":"mirror",MirrorSource=cloudflare?"cloudflare":null,Disabled=document.Disabled};
+                        }
+                        break;
                     }catch(OperationCanceledException){token.ThrowIfCancellationRequested();lastError="pack_timeout";lock(gate)RememberFailure(lastError);}
                     catch(Exception error){lastError=FailureCode(error);if(!pointerFetched&&lastError=="pack_http_404")lastError="pack_not_found";lock(gate)RememberFailure(lastError);}
                 }
