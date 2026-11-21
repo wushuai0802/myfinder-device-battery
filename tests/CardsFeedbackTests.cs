@@ -37,14 +37,14 @@ static class CardsFeedbackTests {
     }
     static void CheckHealthPresentation(TrayContext owner,int failures,int idle){
         string failed=failures>0?"部分读取暂不可用（"+failures+"项）":null;
-        string sleeping=idle>0&&failures==0?idle+" 台设备休眠中，动一下即可刷新":null;
+        string sleeping=idle>0&&failures==0?idle+" 台设备暂未取得读数":null;
         Check(owner.GenericFailureCount==failures&&owner.GenericIdleCount==idle,"idle and failed readers are counted separately");
         Check(owner.GenericHealthSummary==failed&&owner.GenericIdleSummary==sleeping,"only failures populate reader health and take precedence over idle");
         var rows=PopupPages.Build(owner,new PopupNavigation {Page=PopupPage.Diagnostics,VisibleChoices=100},false);
         Check(rows.Exists(delegate(PopupControl row){return row.Text=="读取器健康"&&row.Value==(failed??sleeping);})==(failed!=null||sleeping!=null),"status page shows failure first, otherwise idle");
         Check(owner.DiagnosticSummary().Contains("\r\n读取健康："+(failed??sleeping??"正常")+"\r\n"),"diagnostic health text distinguishes idle from failure");
         Check(owner.BuildStatusJson().Contains("\"readerHealth\":\""+(failed??"")+"\",\"readerFailures\":"+failures+",\"readerIdle\":"+idle+","),"status JSON keeps reader health/failures separate from idle");
-        string reason=failed!=null?"部分读取器暂不可用":sleeping!=null?"设备休眠中，动一下鼠标或按一下键盘即可刷新":"尚未连接兼容设备";
+        string reason=failed!=null?"部分读取器暂不可用":sleeping!=null?"设备暂未取得读数":"尚未连接兼容设备";
         Check(WirelessLayout.EmptyReason(owner,false)==reason,"missing-device explanation distinguishes idle from failure");
         CheckFooter(owner,failed??sleeping??"暂无可读取电量的设备",failures>0);
     }
@@ -70,6 +70,58 @@ static class CardsFeedbackTests {
         Check(owner.GenericIdleSummary==null&&owner.GenericIdleCount==0&&!String.IsNullOrEmpty(owner.GenericError),"worker failure clears stale idle state");
         CheckFooter(owner,"读取组件暂不可用",true);
         Apply(owner,HealthSnapshot("{\"state\":\"ok\"},{\"state\":\"unsupported\"},{\"state\":\"no_devices\"},{\"state\":\"deferred\",\"reason\":\"round_budget\"}"));CheckHealthPresentation(owner,0,0);
+    }
+    static void ReaderFooterActions(TrayContext owner){
+        var original=DeviceSettings.Current;
+        try {
+            var failure=HealthSnapshot("{\"provider\":\"reader-a\",\"state\":\"error\",\"errorCode\":\"read_failed\"}");
+            foreach(string layoutName in new[]{"ring","bar","grid"}){
+                var pref=DeviceSettings.Current;
+                pref.PanelLayout=layoutName;
+                pref.ReducedMotion=true;
+                DeviceSettings.UseTransientConfiguration(pref);
+                Apply(owner,failure);
+                using(var window=new Details(owner,delegate(string text){},delegate(string url){})){
+                    var navigation=(PopupNavigation)typeof(Details).GetField("navigation",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+                    var controls=(List<PopupControl>)Call(window,"ControlsForPage");
+                    var banner=controls.Find(delegate(PopupControl control){return control.Text==owner.GenericHealthSummary;});
+                    Check(banner!=null&&banner.Enabled&&!banner.Information,layoutName+" exposes the health text as an action");
+                    var clicked=PopupPages.Hit(controls,new PointF(banner.Rect.X+2,banner.Rect.Y+2));
+                    Call(window,"PerformAction",clicked);
+                    Check(navigation.Page==PopupPage.Diagnostics,layoutName+" health text opens diagnostics on click");
+                    Call(window,"Back");
+                    controls=(List<PopupControl>)Call(window,"ControlsForPage");
+                    banner=controls.Find(delegate(PopupControl control){return control.Text==owner.GenericHealthSummary;});
+                    Call(window,"FocusControl",banner);
+                    Call(window,"ProcessCmdKey",new System.Windows.Forms.Message(),System.Windows.Forms.Keys.Enter);
+                    Check(navigation.Page==PopupPage.Diagnostics,layoutName+" keyboard action opens diagnostics");
+                    Call(window,"Back");
+                    controls=(List<PopupControl>)Call(window,"ControlsForPage");
+                    Check(controls.Exists(delegate(PopupControl control){return control.Id==0&&control.Text=="立即同步全部设备";}),layoutName+" retains refresh action 0");
+                }
+            }
+            using(var window=new Details(owner,delegate(string text){},delegate(string url){})){
+                var controls=(List<PopupControl>)Call(window,"ControlsForPage");
+                var dismiss=controls.Find(delegate(PopupControl control){return control.Text=="知道了";});
+                Check(dismiss!=null&&dismiss.Enabled&&!dismiss.Information,"dismiss is an available action");
+                Call(window,"PerformAction",dismiss);
+                Check(owner.DiagnosticSummary().Contains("read_failed"),"dismiss preserves reader diagnostics");
+                Apply(owner,failure);
+                controls=(List<PopupControl>)Call(window,"ControlsForPage");
+                Check(!controls.Exists(delegate(PopupControl control){return control.Text=="知道了";}),"the same failure group remains dismissed");
+                var other=HealthSnapshot("{\"provider\":\"reader-b\",\"state\":\"error\",\"errorCode\":\"read_failed\"}");
+                Apply(owner,other);
+                controls=(List<PopupControl>)Call(window,"ControlsForPage");
+                dismiss=controls.Find(delegate(PopupControl control){return control.Text=="知道了";});
+                Check(dismiss!=null,"changed reader identity shows a same-count failure again");
+                Call(window,"PerformAction",dismiss);
+                Call(owner,"ApplyWireless",HealthSnapshot("{\"provider\":\"reader-b\",\"state\":\"ok\"}"),true);
+                Apply(owner,other);
+                controls=(List<PopupControl>)Call(window,"ControlsForPage");
+                Check(controls.Exists(delegate(PopupControl control){return control.Text=="知道了";}),"a failure following recovery is visible");
+            }
+            Apply(owner,new WirelessSnapshot());
+        }finally{DeviceSettings.UseTransientConfiguration(original);}
     }
     [STAThread] static int Main(string[] args){
         TrayContext owner=null;
@@ -145,6 +197,7 @@ static class CardsFeedbackTests {
             Apply(owner,new WirelessSnapshot {Devices=new[]{a}});Check(owner.DiagnosticSummary().Contains("Old Mouse"),"omitted optional suppression preserves diagnostics");
             Apply(owner,new WirelessSnapshot {Devices=new[]{a},Suppressed=new SuppressedDevice[0]});Check(!owner.DiagnosticSummary().Contains("Old Mouse"),"explicit empty suppression clears diagnostics");
             ReaderHealthStates(owner);
+            ReaderFooterActions(owner);
             Console.WriteLine("PASS "+checks+" cards/feedback checks; no HID or browser");return 0;
         }catch(Exception e){Console.Error.WriteLine(e);return 1;}finally{if(owner!=null)owner.ExitThread();}
     }

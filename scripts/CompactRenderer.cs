@@ -602,11 +602,21 @@ namespace AtkBatteryTray {
             WirelessFooter(g,owner,layout,dark,feedback);
         }
         static void WirelessFooter(Graphics g,TrayContext owner,WirelessLayout layout,bool dark,PanelFeedback feedback) {
-            int panelWidth=VisualDesign.PanelWidth;
-            float top=layout.Footer;int footerHeight=VisualDesign.FooterHeight;float width=layout.Paged?(panelWidth-114):(panelWidth-52);
+            float top=layout.Footer;float width=PopupPages.WirelessFooterWidth(layout);
             string status=feedback.ManualRefreshing?"正在同步…":layout.All[0].Id=="empty"?owner.GenericScanning?"正在识别设备…":"暂无可读取电量的设备":layout.Paged?(layout.Start+1)+"–"+layout.End+" / "+layout.All.Count+" 台设备":"已识别 "+layout.All.Count+" 台设备";
-            var failure=feedback.DpiFailure??feedback.AudioFailure??(!String.IsNullOrEmpty(owner.GenericHealthSummary)?owner.GenericHealthSummary:!String.IsNullOrEmpty(owner.GenericError)?"读取器暂不可用":null);
-            DrawSync(g,failure??owner.GenericIdleSummary??status,top,width,dark,!String.IsNullOrEmpty(failure),feedback);
+            var failure=feedback.DpiFailure??feedback.AudioFailure??(!String.IsNullOrEmpty(owner.GenericError)?(owner.GenericHealthSummary??"读取器暂不可用"):null);
+            if(layout.ReaderNotice){
+                Highlight(g,PopupPages.ReaderNoticeLink(layout),202,feedback,dark);
+                var noticeFeedback=new PanelFeedback {HoverAction=feedback.HoverAction,PressedAction=feedback.PressedAction,KeyboardFocus=feedback.KeyboardFocus};
+                DrawSync(g,owner.GenericHealthSummary,top,width,dark,true,noticeFeedback);
+                var dismiss=PopupPages.ReaderNoticeButton(layout);
+                Highlight(g,dismiss,PopupPages.DismissReaderNotice,feedback,dark);
+                DrawLabel(g,"知道了",dismiss,VisualDesign.SubtitleFontSize,false,Fg(dark),StringAlignment.Center);
+                if(!String.IsNullOrEmpty(failure))
+                    DrawLabel(g,failure,new RectangleF(39,dismiss.Top,dismiss.Left-44,dismiss.Height),VisualDesign.SubtitleFontSize,false,ThemePalette.LevelColor(10,dark),StringAlignment.Near);
+            }else{
+                DrawSync(g,failure??owner.GenericIdleSummary??status,top,width,dark,!String.IsNullOrEmpty(failure),feedback);
+            }
             if(layout.Paged) {
                 FooterButton(g,VisualDesign.FooterPageRect(top,false),top,"back",902,layout.Start>0?feedback:null,dark,layout.Start>0?Fg(dark):Muted(dark));
                 FooterButton(g,VisualDesign.FooterPageRect(top,true),top,"chevron",903,layout.End<layout.All.Count?feedback:null,dark,layout.End<layout.All.Count?Fg(dark):Muted(dark));
