@@ -32,6 +32,14 @@ static class FeedbackRepliesTests {
     static FeedbackReplyItem Item(long number=42,params FeedbackComment[] comments){return new FeedbackReplyItem {Number=number,Status="ok",State="open",Locked=false,CanSupplement=true,Comments=comments};}
     static UpdateResponse Replies(params FeedbackReplyItem[] items){return Response(200,UpdateJson.Text(new FeedbackRepliesResponse {Schema=1,Items=items}));}
     static FeedbackReplies Service(FeedbackStore store,Http http,Func<DateTime> clock=null,Func<bool> enabled=null,int timeout=20000){return new FeedbackReplies(store,http,Relay,clock??delegate{return Start;},delegate{return 0.5;},enabled??delegate{return true;},timeout);}
+    static FeedbackReplies ShippedService(FeedbackStore store,Http http,int timeout=20000){
+        return new FeedbackReplies(store,http,null,delegate{return Start;},delegate{return 0.5;},delegate{return true;},timeout);
+    }
+    static void CheckDirectEndpoints(Http http,string path){
+        Check(http.Uris.Count==2&&http.Uris[0].AbsoluteUri==FeedbackRelay.Url+path&&
+            http.Uris[1].AbsoluteUri==FeedbackRelay.DenoUrl+path,"exact Cloudflare then Deno endpoints for "+path);
+        Check(Convert.ToBase64String(http.Bodies[0])==Convert.ToBase64String(http.Bodies[1]),"same payload sent to the backup");
+    }
     static FeedbackReport Report(){return new FeedbackReport("fixture-version","fixture-windows",new[]{new WirelessDevice {Name="fixture-mouse",Kind="mouse",Percent=62}},new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0]);}
     static Dictionary<string,object> Fields(byte[] bytes){return UpdateJson.Read<Dictionary<string,object>>(bytes,true);}
     static void Creation(){
@@ -100,6 +108,96 @@ static class FeedbackRepliesTests {
         bool notSent=false;using(var cancellation=new CancellationTokenSource()){
             cancellation.Cancel();try{new FeedbackHttp().Post(new Uri(Relay+"/feedback"),new byte[0],cancellation.Token);}catch(FeedbackNotSentException){notSent=true;}
         }Check(notSent,"concrete transport identifies cancellation before any network I/O");
+    }
+    static void ShippedCreationFailover(){
+        Check(FeedbackRelay.Deadline(FeedbackRelay.Url,20000)==5000&&FeedbackRelay.Deadline(FeedbackRelay.DenoUrl,20000)==20000,
+            "Cloudflare has a five-second deadline while Deno retains the original timeout");
+        foreach(string failure in new[]{"connect","before-send-timeout","429","disabled"}){
+            var store=Store();
+            var http=new Http();
+            http.Reply=delegate(Uri uri,byte[] body,CancellationToken token){
+                if(http.Bodies.Count>1)return Created();
+                if(failure=="connect")throw new FeedbackNotSentException(new WebException("offline fixture",WebExceptionStatus.ConnectFailure));
+                if(failure=="before-send-timeout"){
+                    if(!token.WaitHandle.WaitOne(3000))throw new Exception("expected the attempt deadline");
+                    throw new FeedbackNotSentException(new OperationCanceledException());
+                }
+                return failure=="429"?Response(429,"{\"error\":\"rate_limited\"}"):Response(503,"{\"error\":\"disabled\"}");
+            };
+            var result=new FeedbackClient(FeedbackRelay.Url,http,new FeedbackSession(),35,store).Submit("other","valid description",null,CancellationToken.None);
+            CheckDirectEndpoints(http,"/feedback");
+            Check(result.Kind==FeedbackResultKind.Success&&store.Snapshot().Records.Count==1&&
+                store.Find(42).ReplyKey==(string)Fields(http.Bodies[0])["replyKey"],"known unsent "+failure+" keeps one creation and one reply key");
+        }
+        foreach(string failure in new[]{"500","503","sent-timeout","invalid-receipt"}){
+            var store=Store();
+            var http=new Http {Reply=delegate{
+                if(failure=="sent-timeout")throw new WebException("ambiguous timeout",WebExceptionStatus.Timeout);
+                if(failure=="invalid-receipt")return Response(201,"{}");
+                return Response(Int32.Parse(failure),"{\"error\":\"unavailable\"}");
+            }};
+            var result=new FeedbackClient(FeedbackRelay.Url,http,new FeedbackSession(),20000,store).Submit("other","valid description",null,CancellationToken.None);
+            var records=store.Snapshot().Records;
+            Check(result.Kind==FeedbackResultKind.Unavailable&&http.Uris.Count==1&&records.Count==1&&
+                records[0].Number==0&&records[0].CreationId!=null,"ambiguous "+failure+" keeps the pending creation without a second POST");
+        }
+        using(var cancel=new CancellationTokenSource()){
+            var store=Store();
+            var http=new Http {Reply=delegate{
+                cancel.Cancel();
+                throw new FeedbackNotSentException(new OperationCanceledException());
+            }};
+            bool cancelled=false;
+            try{new FeedbackClient(FeedbackRelay.Url,http,new FeedbackSession(),20000,store).Submit("other","valid description",null,cancel.Token);}
+            catch(OperationCanceledException){cancelled=true;}
+            Check(cancelled&&http.Uris.Count==1&&store.Snapshot().Records.Count==0,"user cancellation prevents backup and clears known unsent pending");
+        }
+    }
+    static void ShippedReadAndSupplementFailover(){
+        foreach(string failure in new[]{"429","500","503","connect","timeout"}){
+            var store=Store(Record());
+            var http=new Http();
+            http.Reply=delegate(Uri uri,byte[] body,CancellationToken token){
+                if(http.Bodies.Count>1)return Replies(Item(42,Comment("9")));
+                if(failure=="connect")throw new FeedbackNotSentException(new WebException("offline fixture",WebExceptionStatus.ConnectFailure));
+                if(failure=="timeout"){
+                    if(!token.WaitHandle.WaitOne(3000))throw new Exception("expected the attempt deadline");
+                    token.ThrowIfCancellationRequested();
+                }
+                return Response(Int32.Parse(failure),"{\"error\":\"unavailable\"}","3600");
+            };
+            ShippedService(store,http,35).Poll(false,null,CancellationToken.None);
+            CheckDirectEndpoints(http,"/feedback/replies");
+            Check(store.Snapshot().PollNotBefore==null&&store.Find(42).Failures==0&&
+                store.Find(42).Comments.Count==1,"read fallback succeeds after "+failure);
+        }
+        {
+            var store=Store(Record());
+            var http=new Http {Reply=delegate(Uri uri,byte[] body,CancellationToken token){
+                return uri.Host==new Uri(FeedbackRelay.Url).Host?Response(429,"{}","1800"):Response(503,"{}","3600");
+            }};
+            var service=ShippedService(store,http);
+            service.Poll(false,null,CancellationToken.None);
+            service.Poll(false,null,CancellationToken.None);
+            CheckDirectEndpoints(http,"/feedback/replies");
+            Check(store.Snapshot().PollNotBefore==Start.AddHours(1)&&store.Find(42).Failures==1,"terminal response sets backoff once");
+        }
+        foreach(bool safe in new[]{true,false}){
+            var store=Store(Record());
+            var http=new Http();
+            http.Reply=delegate{
+                if(http.Bodies.Count>1)return Response(201,"{\"number\":42,\"commentId\":\"123\",\"duplicate\":false}");
+                if(safe)return Response(503,"{\"error\":\"disabled\"}");
+                throw new WebException("ambiguous supplement",WebExceptionStatus.Timeout);
+            };
+            var result=ShippedService(store,http).Supplement(42,"valid supplement",null,CancellationToken.None);
+            if(safe){
+                CheckDirectEndpoints(http,"/feedback/supplement");
+                Check(result.Kind==SupplementKind.Success&&store.Find(42).Pending==null,"confirmed rejection safely moves the same request ID");
+            }else{
+                Check(result.Kind==SupplementKind.Unknown&&http.Uris.Count==1&&store.Find(42).Pending!=null,"uncertain supplement keeps its pending request ID");
+            }
+        }
     }
     static void ConfirmedReceiptCancellation(){
         foreach(bool fallback in new[]{false,true})using(var cancellation=new CancellationTokenSource()){
@@ -492,6 +590,8 @@ static class FeedbackRepliesTests {
     [STAThread] static int Main(string[] args){
         output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
         Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history themes, adaptive rows and DPI",HistoryAppearance);Run("history and supplement layout",Layouts);Run("history with long real replies settles",HistoryLongReplies);Run("native balloon and unread routing",NativeBalloonRouting);
+        Run("shipped relay safe creation failover",ShippedCreationFailover);
+        Run("shipped relay read and supplement failover",ShippedReadAndSupplementFailover);
         Console.WriteLine(checks+" feedback reply checks, "+failures+" failed groups; fake transport only");return failures==0?0:1;
     }
 }

@@ -33,12 +33,12 @@ internal static class DevicePackTests {
         internal int Trials,Commits;internal bool Fail,Timeout;internal Action BeforeCommit;
         internal bool Run(string path,long version,Func<string> commit,CancellationToken token){Trials++;Check(File.Exists(path)&&File.Exists(path+".sig"),"trial sees staged signed pair");if(Timeout)throw new TimeoutException("pack_trial_timeout");if(Fail)return false;if(BeforeCommit!=null)BeforeCommit();string current=commit();Commits++;Check(current.Contains(Path.DirectorySeparatorChar+"current"+Path.DirectorySeparatorChar)&&File.Exists(current+".sig"),"commit publishes signed current pair");return true;}
     }
-    static void Feed(Http http,RSACryptoServiceProvider key,long version,string source=DevicePackTrust.Mirror,byte[] raw=null,byte[] sig=null,string hash=null){
+    static void Feed(Http http,RSACryptoServiceProvider key,long version,string source=DevicePackTrust.CloudflareMirror,byte[] raw=null,byte[] sig=null,string hash=null){
         raw=raw??Bytes(Pack(version));string name="device-pack-v1-"+version+".json";
         http.Add(source+"device-pack-v1-latest.json",Bytes(Pointer(version,raw,hash)));http.Add(source+name,raw);http.Add(source+name+".sig",sig??Sign(raw,key));
     }
     static DevicePackManager Manager(string root,Http http,Activation activation,IDictionary<string,string> keys){return DevicePackManager.ForTests(root,http,activation.Run,Now,keys);}
-    static void BothPointers(Http http,long version,byte[] raw){foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",Bytes(Pointer(version,raw)));}
+    static void BothPointers(Http http,long version,byte[] raw){foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",Bytes(Pointer(version,raw)));}
     [DataContract] sealed class Corpus {[DataMember(Name="cases")] public Case[] Cases {get;set;}}
     [DataContract] sealed class Case {[DataMember(Name="name")] public string Name {get;set;}[DataMember(Name="json")] public string Json {get;set;}[DataMember(Name="loaded")] public bool Loaded {get;set;}}
     static void Contract(string source){
@@ -70,9 +70,9 @@ internal static class DevicePackTests {
     static void Diagnostics(string root,RSACryptoServiceProvider key,IDictionary<string,string> keys){
         foreach(int status in new[]{404,403,429,500}){
             var http=new Http();var activation=new Activation();string directory=Path.Combine(root,"diagnostic-http-"+status);var manager=Manager(directory,http,activation,keys);
-            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",Bytes("private server response"),status);
+            foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",Bytes("private server response"),status);
             manager.Check(false,Now,CancellationToken.None);var state=manager.StateForTests;
-            Check(http.Requests.Count==2&&activation.Trials==0&&state.LastRejection==null&&!manager.Diagnostic.Contains("上次拒绝"),"HTTP "+status+" is not a validation rejection");
+            Check(http.Requests.Count==3&&activation.Trials==0&&state.LastRejection==null&&!manager.Diagnostic.Contains("上次拒绝"),"HTTP "+status+" is not a validation rejection");
             if(status==404)Check(state.Result=="pack_not_found"&&state.LastFailure==null&&state.LastSuccessUtc==DateTime.MinValue&&manager.Diagnostic.Contains("结果：远端暂无数据包")&&!manager.Diagnostic.Contains("pack_http_404")&&!manager.Diagnostic.Contains("上次失败"),"missing pointer is an unpublished pack, without claiming a successful check");
             else Check(state.LastFailure=="pack_http_"+status&&manager.Diagnostic.Contains("上次失败：pack_http_"+status),"other HTTP failures retain their safe code and failure label");
             var reload=Manager(directory,new Http(),new Activation(),keys);Check(reload.Diagnostic==manager.Diagnostic,"diagnostic classification survives restart for "+status);
@@ -81,7 +81,7 @@ internal static class DevicePackTests {
         }
         {
             var http=new Http();var manager=Manager(Path.Combine(root,"diagnostic-asset-404"),http,new Activation(),keys);
-            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub}){
+            foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub}){
                 http.Add(source+"device-pack-v1-latest.json",Bytes(Pointer(1,Bytes(Pack(1)))));http.Add(source+"device-pack-v1-1.json",new byte[0],404);
             }
             manager.Check(false,Now,CancellationToken.None);
@@ -89,7 +89,7 @@ internal static class DevicePackTests {
         }
         foreach(string raw in new[]{"private_exception_text",@"C:\private\pack.json","https://private.invalid/secret"}){
             var http=new Http();var manager=Manager(Path.Combine(root,"diagnostic-private-"+Guid.NewGuid().ToString("N")),http,new Activation(),keys);
-            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",delegate{throw new IOException(raw);});
+            foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",delegate{throw new IOException(raw);});
             manager.Check(false,Now,CancellationToken.None);
             Check(manager.StateForTests.LastFailure=="pack_check_failed"&&!manager.Diagnostic.Contains(raw),"exception text is reduced to a fixed safe code");
         }
@@ -102,11 +102,11 @@ internal static class DevicePackTests {
         {
             var http=new Http();var manager=Manager(Path.Combine(root,"diagnostic-signature"),http,new Activation(),keys);
             using(var wrong=new RSACryptoServiceProvider(2048)){
-                wrong.PersistKeyInCsp=false;foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})Feed(http,key,1,source,sig:Sign(Bytes(Pack(1)),wrong));
+                wrong.PersistKeyInCsp=false;foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub})Feed(http,key,1,source,sig:Sign(Bytes(Pack(1)),wrong));
                 manager.Check(false,Now,CancellationToken.None);
             }
             Check(manager.StateForTests.LastRejection=="pack_signature_invalid"&&manager.Diagnostic.Contains("上次拒绝：pack_signature_invalid"),"invalid signature still records a real rejection");
-            foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",new byte[0],404);
+            foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub})http.Add(source+"device-pack-v1-latest.json",new byte[0],404);
             manager.Check(false,Now.AddMinutes(1),CancellationToken.None);
             Check(manager.StateForTests.LastRejection=="pack_signature_invalid"&&manager.Diagnostic.Contains("远端暂无数据包"),"later missing pointer does not erase a historical validation rejection");
         }
@@ -122,7 +122,7 @@ internal static class DevicePackTests {
         manager.Check(true,Now.AddHours(11),CancellationToken.None);Check(http.Requests.Count==3,"12 hour throttle");
         Feed(http,key,2);manager.Check(true,Now.AddHours(12).AddSeconds(21),CancellationToken.None);state=manager.StateForTests;
         Check(state.HighestAcceptedVersion==2&&state.Previous.Version==1&&state.Current.Version==2,"upgrade retains previous");
-        int before=http.Requests.Count;http.Add(DevicePackTrust.Mirror+"device-pack-v1-latest.json",Bytes(Pointer(2,Bytes(Pack(2)))));manager.Check(false,Now.AddHours(13),CancellationToken.None);
+        int before=http.Requests.Count;http.Add(DevicePackTrust.CloudflareMirror+"device-pack-v1-latest.json",Bytes(Pointer(2,Bytes(Pack(2)))));manager.Check(false,Now.AddHours(13),CancellationToken.None);
         Check(http.Requests.Count==before+1&&activation.Trials==2&&manager.StateForTests.Result=="pack_unchanged","equal version skips assets");
         BothPointers(http,1,Bytes(Pack(1)));manager.Check(false,Now.AddHours(14),CancellationToken.None);Check(manager.StateForTests.Result=="pack_rollback_refused"&&activation.Trials==2,"old pointer rejected");
         BothPointers(http,2,Bytes(Pack(2)+" "));manager.Check(false,Now.AddHours(15),CancellationToken.None);Check(manager.StateForTests.Result=="pack_version_digest_conflict","same version different content is diagnosed");
@@ -139,7 +139,7 @@ internal static class DevicePackTests {
             if(failure=="size")raw=new byte[262145];if(failure=="sig_size")sig=new byte[4097];if(failure=="digest")hash=new string('0',64);
             if(failure=="revision")raw=Bytes(Pack(1).Replace("\"entries\":[]","\"entries\":[{\"provider\":\"razer\",\"profile\":\"hyperspeed-mouse-1f\",\"profileRev\":2,\"match\":{\"vendorId\":\"1532\",\"productId\":\"FE01\"},\"name\":\"Mouse\",\"kind\":\"mouse\"}]"));
             using(var wrong=new RSACryptoServiceProvider(2048)){wrong.PersistKeyInCsp=false;if(failure=="signature")sig=Sign(raw,wrong);
-                foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub})Feed(http,key,1,source,raw,sig??(raw.Length>262144?new byte[1]:Sign(raw,key)),hash);
+                foreach(string source in new[]{DevicePackTrust.CloudflareMirror,DevicePackTrust.Mirror,DevicePackTrust.GitHub})Feed(http,key,1,source,raw,sig??(raw.Length>262144?new byte[1]:Sign(raw,key)),hash);
                 manager.Check(false,Now,CancellationToken.None);
             }
             Check(activation.Trials==0&&manager.StateForTests.HighestAcceptedVersion==0&&manager.StateForTests.Current==null,"reject before engine: "+failure);
@@ -151,7 +151,9 @@ internal static class DevicePackTests {
             Check(Directory.GetFiles(Path.Combine(root,timeout?"trial-timeout":"trial-false","staging")).Length==0,"failed staging discarded");
         }
         http=new Http();activation=new Activation();manager=Manager(Path.Combine(root,"fallback"),http,activation,keys);Feed(http,key,1,DevicePackTrust.GitHub);manager.Check(false,Now,CancellationToken.None);
-        Check(manager.StateForTests.Current.Source=="github"&&http.Requests[0].AbsoluteUri.StartsWith(DevicePackTrust.Mirror)&&http.Requests[1].AbsoluteUri.StartsWith(DevicePackTrust.GitHub),"mirror failure falls back to GitHub");
+        string pointerName="device-pack-v1-latest.json";
+        Check(manager.StateForTests.Current.Source=="github"&&http.Requests.Take(3).Select(uri=>uri.AbsoluteUri).SequenceEqual(new[]{
+            DevicePackTrust.CloudflareMirror+pointerName,DevicePackTrust.Mirror+pointerName,DevicePackTrust.GitHub+pointerName}),"both mirror failures fall back to GitHub in exact order");
         http=new Http();activation=new Activation();directory=Path.Combine(root,"repair");manager=Manager(directory,http,activation,keys);Feed(http,key,1);manager.Check(false,Now,CancellationToken.None);
         File.Delete(Path.Combine(directory,"current","device-pack-v1-1.json"));Feed(http,key,1);manager.Check(false,Now.AddMinutes(1),CancellationToken.None);Check(activation.Commits==2&&manager.StateForTests.Current.Version==1,"equal version repairs missing current file");
         File.WriteAllText(Path.Combine(directory,"state.json"),"broken");manager=Manager(directory,new Http(),new Activation(),keys);Check(manager.OpenForStart()==null&&manager.Diagnostic.Contains("pack_state_invalid"),"corrupt state fails closed instead of resetting rollback floor");
@@ -168,14 +170,14 @@ internal static class DevicePackTests {
         activation.BeforeCommit=delegate{File.WriteAllText(Path.Combine(directory,"staging","device-pack-v1-1.json"),Pack(1)+" ");};Feed(http,key,1);manager.Check(false,Now,CancellationToken.None);
         Check(manager.StateForTests.Current==null&&manager.StateForTests.Quarantine.Count==1,"promotion rechecks staged signature");
         http=new Http();activation=new Activation();directory=Path.Combine(root,"fallback-rejection");manager=Manager(directory,http,activation,keys);Feed(http,key,1);manager.Check(false,Now,CancellationToken.None);
-        http.Add(DevicePackTrust.Mirror+"device-pack-v1-latest.json",Bytes(Pointer(1,Bytes(Pack(1)+" "))));http.Add(DevicePackTrust.GitHub+"device-pack-v1-latest.json",Bytes(Pointer(1,Bytes(Pack(1)))));manager.Check(false,Now.AddMinutes(1),CancellationToken.None);
+        http.Add(DevicePackTrust.CloudflareMirror+"device-pack-v1-latest.json",Bytes(Pointer(1,Bytes(Pack(1)+" "))));http.Add(DevicePackTrust.GitHub+"device-pack-v1-latest.json",Bytes(Pointer(1,Bytes(Pack(1)))));manager.Check(false,Now.AddMinutes(1),CancellationToken.None);
         Check(manager.StateForTests.Result=="pack_unchanged"&&manager.Diagnostic.Contains("pack_version_digest_conflict"),"mirror digest conflict stays in diagnostics after GitHub success");
     }
     static void SingleFlight(string root,RSACryptoServiceProvider key,IDictionary<string,string> keys){
         var http=new Http();var activation=new Activation();var first=Manager(Path.Combine(root,"single"),http,activation,keys);var secondHttp=new Http();var second=Manager(Path.Combine(root,"second"),secondHttp,new Activation(),keys);
         using(var entered=new ManualResetEvent(false))using(var release=new ManualResetEvent(false)){
-            http.Add(DevicePackTrust.Mirror+"device-pack-v1-latest.json",delegate(CancellationToken token){entered.Set();if(!release.WaitOne(5000))throw new TimeoutException();return new UpdateResponse(200,new MemoryStream(Bytes(Pointer(1,Bytes(Pack(1))))),-1,null,null);});
-            http.Add(DevicePackTrust.Mirror+"device-pack-v1-1.json",Bytes(Pack(1)));http.Add(DevicePackTrust.Mirror+"device-pack-v1-1.json.sig",Sign(Bytes(Pack(1)),key));
+            http.Add(DevicePackTrust.CloudflareMirror+"device-pack-v1-latest.json",delegate(CancellationToken token){entered.Set();if(!release.WaitOne(5000))throw new TimeoutException();return new UpdateResponse(200,new MemoryStream(Bytes(Pointer(1,Bytes(Pack(1))))),-1,null,null);});
+            http.Add(DevicePackTrust.CloudflareMirror+"device-pack-v1-1.json",Bytes(Pack(1)));http.Add(DevicePackTrust.CloudflareMirror+"device-pack-v1-1.json.sig",Sign(Bytes(Pack(1)),key));
             var running=Task.Factory.StartNew(()=>first.Check(false,Now,CancellationToken.None));try{Check(entered.WaitOne(5000),"first check entered");second.Check(false,Now,CancellationToken.None);Check(secondHttp.Requests.Count==0,"global check single flight");}finally{release.Set();}Check(running.Wait(5000),"single flight releases");
         }
     }
@@ -321,6 +323,55 @@ internal static class DevicePackTests {
         restarted.Check(false,due.AddSeconds(1),CancellationToken.None);
         Check(activation.Commits==2&&transport.Requests.Count==6,"manual check remains independent of the automatic schedule");
     }
+    static void MirrorFailover(string root,RSACryptoServiceProvider key,IDictionary<string,string> keys){
+        const string name="device-pack-v1-latest.json";
+        string cloud=DevicePackTrust.CloudflareMirror,deno=DevicePackTrust.Mirror;
+        var http=new Http();
+        var manager=Manager(Path.Combine(root,"cloudflare-source"),http,new Activation(),keys);
+        Feed(http,key,1);
+        manager.Check(false,Now,CancellationToken.None);
+        Check(http.Requests.Count==3&&http.Requests.All(uri=>uri.AbsoluteUri.StartsWith(cloud,StringComparison.Ordinal))&&
+            manager.StateForTests.Current.Source=="mirror"&&manager.StateForTests.Current.MirrorSource=="cloudflare"&&
+            manager.Diagnostic.Contains("来源：Cloudflare"),"Cloudflare serves the complete signed pair and records its origin");
+        foreach(string failure in new[]{"429","503","connect","deadline","signature"}){
+            string path=Path.Combine(root,"cloudflare-fails-"+failure);
+            http=new Http();
+            var activation=new Activation();
+            manager=Manager(path,http,activation,keys);
+            var deadlineSeen=false;
+            if(failure=="deadline"){
+                http.Add(cloud+name,delegate(CancellationToken token){
+                    deadlineSeen=token.WaitHandle.WaitOne(10000);
+                    token.ThrowIfCancellationRequested();
+                    throw new TimeoutException();
+                });
+            }else if(failure=="connect"){
+                http.Add(cloud+name,delegate{throw new IOException("offline fixture");});
+            }else if(failure=="signature"){
+                Feed(http,key,1,cloud,sig:Sign(Bytes(Pack(2)),key));
+            }else{
+                http.Add(cloud+name,new byte[0],Int32.Parse(failure));
+            }
+            Feed(http,key,1,deno);
+            var watch=Stopwatch.StartNew();
+            manager.Check(false,Now,CancellationToken.None);
+            int denoIndex=failure=="signature"?3:1;
+            Check(http.Requests.Count==denoIndex+3&&http.Requests[0].AbsoluteUri==cloud+name&&
+                http.Requests[denoIndex].AbsoluteUri==deno+name&&activation.Commits==1&&
+                manager.Diagnostic.Contains("来源：Deno"),"Cloudflare "+failure+" tries the complete Deno mirror before GitHub");
+            if(failure=="deadline")Check(deadlineSeen&&watch.Elapsed.TotalSeconds>=4&&watch.Elapsed.TotalSeconds<10,"Cloudflare attempt has a five-second deadline");
+            if(failure=="signature")Check(manager.StateForTests.LastRejection=="pack_signature_invalid"&&
+                manager.StateForTests.Current.MirrorSource==null,"invalid Cloudflare signature cannot activate");
+            var reload=Manager(path,new Http(),new Activation(),keys);
+            using(var lease=reload.OpenForStart())Check(lease!=null&&lease.Document.Version==1&&reload.Diagnostic.Contains("来源：Deno"),"legacy mirror state still loads as Deno");
+        }
+        foreach(string location in new[]{deno+name,cloud+"unrelated.json",cloud+name+"?redirect=1"}){
+            http=new Http();
+            http.Add(cloud+name,new byte[0],302,location);
+            Reject(()=>DevicePackNetwork.Fetch(http,cloud,name,4096,CancellationToken.None),"Cloudflare mirror refuses redirect outside its exact asset");
+            Check(http.Requests.Count==1,"Cloudflare redirect was never requested");
+        }
+    }
     [STAThread] static int Main(string[] args){
         if(args.Length>0&&args[0]=="-I")return FakeWorker(args);
         if(args.Length==1&&args[0]=="--layout-only"){try{DiagnosticLayout();Console.WriteLine("PASS "+checks+" pack diagnostic layout checks");return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
@@ -335,6 +386,7 @@ internal static class DevicePackTests {
                 Reject(()=>DevicePackTrust.Verify(raw,Bytes(" "+Encoding.UTF8.GetString(sig)),keys),"signature is exactly one base64 line");
                 Reject(()=>DevicePackSigning.Verify(raw,sig),"production keyring cannot use injected test key");
                 ScheduledChecksAcrossRestarts(root,key,keys);
+                MirrorFailover(root,key,keys);
                 Diagnostics(root,key,keys);SecurityAndLifecycle(root,key,keys);SingleFlight(root,key,keys);WorkerInputEncodings(root,key,keys);Workers(root,args[1],key,keys);LinkedPaths(root,key,keys);Signer(root,args[1],key);
             }
             var card=new WirelessDevice {Name="Pack mouse",Kind="mouse",Provider="razer",ModelSource="pack"};var report=new FeedbackReport("1.3.6","Windows",new[]{card},new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0],"型号数据包：1 | 来源：镜像");
