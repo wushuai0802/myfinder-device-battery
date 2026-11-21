@@ -64,6 +64,8 @@ TABLES = {
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
+# Receiver IDs many unrelated keyboards share (Apple's borrowed 05AC:024F).
+SHARED_UNINDEXED = frozenset({(0x05AC, 0x024F)})
 HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles", "razer_v4",
            "aula_f99max"}
 
@@ -161,6 +163,10 @@ def build_index(root=None, *, engine_root=None):
                 for family in load_families(engine / "families" / "builtin").values():
                     vendors[module].update(family.vendor_ids)
                     for device in family.devices:
+                        # Shared receiver IDs stay out of the generic triage index
+                        # (as for F99 MAX): a product-string gate is not visible there.
+                        if (device.vendor_id, device.product_id) in SHARED_UNINDEXED:
+                            continue
                         add(module, device.vendor_id, device.product_id, device.name, family.kind)
             except (OSError, ValueError):
                 unparsed.add(module)

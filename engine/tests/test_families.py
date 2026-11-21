@@ -254,5 +254,100 @@ class IntegrationTests(unittest.TestCase):
         self.assertFalse(ours & others)
 
 
+def sum55(head, length=17):
+    frame = list(bytes.fromhex(head).ljust(length - 1, b"\0"))
+    return frame + [(0x55 - sum(frame)) & 0xFF]
+
+
+class BrimDeckPortTests(unittest.TestCase):
+    loaded = families.load()
+
+    def lofree_row(self, **changes):
+        row = dict(vendor_id=0x05AC, product_id=0x024F, product_string="2.4G Wireless Receiver",
+                   interface_number=1, usage_page=0xFF02, usage=0x0002, path=b"lofree",
+                   physical_id=r"pnp:usb\vid_05ac&pid_024f\rx",
+                   input_report_length=17, output_report_length=17,
+                   input_report_sizes={"8": 17}, output_report_sizes={"8": 17})
+        row.update(changes)
+        return row
+
+    def test_lofree_gate_then_battery_with_checksums(self):
+        family = self.loaded["lofree_flow"]
+        online = sum55("08 03 00 00 00 00 01")
+        battery = sum55("08 04 00 00 00 00 4b 01")
+        device = FakeDevice([sum55("08 03 00 00 00 80"), online, battery])  # echo, online, reply
+        outcome = runner.run(device, family, family.reads[0])
+        self.assertEqual((outcome.kind, outcome.level, outcome.charging), ("reading", 75, True))
+        self.assertEqual([w[1] for w in device.writes], [0x03, 0x04])
+        self.assertTrue(all(sum(w) & 0xFF == 0x55 for w in device.writes))
+
+    def test_lofree_offline_gate_sends_no_battery_query(self):
+        family = self.loaded["lofree_flow"]
+        device = FakeDevice([sum55("08 03 00 00 00 00 00")])
+        self.assertEqual(runner.run(device, family, family.reads[0]).kind, "asleep")
+        self.assertEqual(len(device.writes), 1)
+        bad = sum55("08 04 00 00 00 00 4b 01")
+        bad[16] ^= 1
+        device = FakeDevice([sum55("08 03 00 00 00 00 01"), bad])
+        self.assertNotEqual(runner.run(device, family, family.reads[0]).kind, "reading")
+
+    def test_lofree_needs_exact_name_and_interface(self):
+        for changes in ({"product_string": "INFI75-1.1"}, {"interface_number": 2}, {"usage_page": 0xFF60, "usage": 0x61}):
+            with self.subTest(changes=changes):
+                device = FakeDevice()
+                statuses, _ = poll([self.lofree_row(**changes)], device)
+                self.assertEqual((statuses, device.writes), ([], []))
+
+    def test_eweadn_beiyin_feature_read(self):
+        family = self.loaded["eweadn_beiyin"]
+        request = family.reads[0].request
+        self.assertEqual(request[1], sum(bytes.fromhex("50 00 02 4F 81")) & 0xFF)
+        reply = list(bytes.fromhex("03 50 00 0b 02 01 c9").ljust(64, b"\0"))
+        device = FakeDevice([reply])
+        outcome = runner.run(device, family, family.reads[0])
+        self.assertEqual((outcome.kind, outcome.level, outcome.charging), ("reading", 73, True))
+        self.assertEqual(device.feature_gets, [(0x03, 64)])
+        asleep = list(bytes.fromhex("03 50 00 0b 02 01 00").ljust(64, b"\0"))
+        self.assertEqual(runner.run(FakeDevice([asleep]), family, family.reads[0]).kind, "asleep")
+
+    def rongyuan(self, family_id, data):
+        family = self.loaded[family_id]
+        return runner.run(FakeDevice([list(bytes.fromhex(data).ljust(65, b"\0"))]), family, family.reads[0])
+
+    def test_rongyuan_keyboard_and_mouse_fields(self):
+        #            id rl kb ms ko mo rx pa .. upd
+        self.assertEqual(self.rongyuan("rongyuan", "00 01 36 00 00 01 01 01 00 00").level, 54)
+        self.assertEqual(self.rongyuan("rongyuan", "00 01 36 20 00 00 01 03 00 00").level, 54)
+        self.assertEqual(self.rongyuan("rongyuan", "00 01 00 52 01 00 01 02 00 00").level, 82)
+        self.assertEqual(self.rongyuan("rongyuan", "00 01 36 00 01 01 01 01 00 00").kind, "asleep")
+        self.assertEqual(self.rongyuan("rongyuan", "00 01 36 00 00 01 01 01 00 01").kind, "rejected")  # radio updating
+        self.assertEqual(self.rongyuan("rongyuan", "f7 00 00 00 00 00 00 00 00 00").kind, "rejected")  # request echoed
+        self.assertEqual(self.rongyuan("rongyuan", "00" * 10).kind, "rejected")                       # just plugged in
+        self.assertEqual(self.rongyuan("rongyuan_mouse", "00 01 36 2c 00 00 01 03 00 00").level, 44)
+        self.assertEqual(self.rongyuan("rongyuan_mouse", "00 01 36 2c 00 00 01 01 00 00").kind, "rejected")
+
+    def test_rongyuan_requests(self):
+        self.assertEqual(self.loaded["rongyuan"].reads[0].request, bytes([0, 0xF7]))
+        self.assertEqual(self.loaded["rongyuan_checksum"].reads[0].request, bytes([0, 0xF7, 0, 0, 0, 0, 0, 0, 0x08]))
+
+    def test_product_name_preferred_on_shared_receivers(self):
+        row = dict(vendor_id=0x3151, product_id=0x5038, product_string="Skyloong GK75", usage_page=0xFFFF, usage=0x0002,
+                   path=b"ry", physical_id=r"pnp:usb\vid_3151&pid_5038\rx", feature_report_length=65,
+                   feature_report_sizes={"0": 65})
+        statuses, _ = poll([row], FakeDevice([list(bytes.fromhex("00 01 36 00 00 01 01 01 00 00").ljust(65, b"\0"))]))
+        self.assertEqual((statuses[0].name, statuses[0].level), ("Skyloong GK75", 54))
+
+    def test_spec_rejects_unsafe_gates_and_layouts(self):
+        document = json.loads((Path(families.__file__).with_name("builtin") / "lofree_flow.json").read_text(encoding="utf-8"))
+        bad = copy.deepcopy(document)
+        bad["reads"][0]["gate"]["request"] = "09 03"
+        with self.assertRaises(spec.SpecError):
+            spec.parse_family(bad)
+        bad = copy.deepcopy(document)
+        bad["reads"][0]["reply"]["variants"] = [{"percent": {"at": 6, "min": 1, "max": 100}}]
+        with self.assertRaises(spec.SpecError):
+            spec.parse_family(bad)  # percent both top-level and in variants
+
+
 if __name__ == "__main__":
     unittest.main()

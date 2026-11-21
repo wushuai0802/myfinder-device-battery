@@ -66,3 +66,26 @@
 ## 7. 首个方案族：XIBERIA
 
 `36F9:F008`（T7，上游已做实机验证）、`F016`、`F002`、`F001`。协议来自 BrimDeck（Apache-2.0），BrimDeck 的来源是 Voltide（MIT），Voltide 的来源是官方 XIBERIA HUB：通过输出报告 `0x55` 发送 `55 65 00 00`，回复 `55 65 00 <电量>`。候选集合为 FF90:0001 或 FF82:0001，必须在同一接收器上唯一，并且证明报告 `0x55` 的输入、输出都是 64 字节。目前是 C 级，还没有本项目的实机回复。
+
+## 8. 第三阶段：规格扩展与 BrimDeck 首批移植
+
+**规格扩展（仍然只有读取，不放开任何写操作）：**
+
+- `reply.checksum`：对字节区间求和后取低 8 位，必须等于指定值；
+- `reply.spans`：一段字节必须落在指定范围内（例如设备型号必须是可打印 ASCII）；
+- `reply.variants`：按 `when` 条件选择字段布局，并支持 `require`、`asleep`、`chargingAlways`（例如容源接收器按配对状态读取键盘或鼠标的字段）；
+- `read.gate`：发送读法之前，先用同一传输方式问一次是否在线。在线才继续；离线记为休眠；没有回答则后续什么都不发；
+- 方案族级 `interface`（限定接口号）和 `preferProductName`（共享接收器显示设备自报的产品名）；
+- 拓扑层对方案族集合也计算 Feature 报告长度（只读的 HidP caps）。
+
+**首批移植（来源均为 BrimDeck f1510d0，Apache-2.0；二次来源均为 MIT 项目）：**
+
+| 方案族 | 设备 | 读法 |
+|---|---|---|
+| `lofree_flow` | 05AC:024F，仅产品名 `2.4G Wireless Receiver`、接口 1、FF02:0002、报告 08/17 | 先问在线（03），再读电量（04），17 字节求和须为 0x55 |
+| `eweadn_beiyin` | 372E 的 1027/1029/103D/105E/106E/107B/107C/108A/108D | Feature 03/64，状态字节低 7 位为电量，bit7 为充电，0 表示休眠 |
+| `rongyuan_checksum` | AJAZZ AK870、CAROTMAS Mars68、VGN Neon75 Air/Turbo/Extreme | Feature 0/65 F7 状态查询（带校验） |
+| `rongyuan` | MonsGeek/Akko 驱动列表中的 60 个接收器 | 同上，裸 F7 |
+| `rongyuan_mouse` | 4 个鼠标接收器 | 同上，读取鼠标字段 |
+
+所有与现有读取器重叠的 ID 都已排除。05AC:024F 被很多键盘共用，因此不进入分诊索引（`known_ids.SHARED_UNINDEXED`）。

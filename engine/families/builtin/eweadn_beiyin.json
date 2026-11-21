@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "id": "eweadn_beiyin",
+  "name": "EWEADN S7/S9 系列 beiyin 接收器",
+  "kind": "mouse",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d0/src/BrimDeck.Core/Brands/Eweadn.cs",
+    "revision": "f1510d0",
+    "license": "Apache-2.0 (BrimDeck); protocol origin MIT (vigil-watt EweadnMouseCodec)",
+    "origin": "vigil-watt EweadnMouseCodec (MIT), from EWEADN's web HUB beiying SDK",
+    "evidence": "Contributor reply 03 50 00 0B 02 01 49 (73%) on 372E:1026, which MyFinder already reads (eweadn_s9pro). EWEADN's web driver speaks to these sibling receivers the same way; not measured on them. Only FF00:0001 with a 64-byte feature report 03 is asked."
+  },
+  "devices": [
+    {
+      "vendorId": "372E",
+      "productId": "1027",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "1029",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "103D",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "105E",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "106E",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "107B",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "107C",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "108A",
+      "name": "EWEADN 2.4G 接收器"
+    },
+    {
+      "vendorId": "372E",
+      "productId": "108D",
+      "name": "EWEADN 2.4G 接收器"
+    }
+  ],
+  "preferProductName": true,
+  "collections": [
+    {
+      "usagePage": "FF00",
+      "usage": "0001"
+    }
+  ],
+  "reports": {
+    "feature": {
+      "id": "03",
+      "length": 64
+    }
+  },
+  "reads": [
+    {
+      "name": "battery",
+      "transport": "feature",
+      "request": "03 22 50 00 02 4F 81",
+      "reply": {
+        "length": 64,
+        "match": [
+          {
+            "at": 0,
+            "eq": "03"
+          },
+          {
+            "at": 1,
+            "eq": "50"
+          },
+          {
+            "at": 2,
+            "eq": "00"
+          },
+          {
+            "at": 3,
+            "eq": "0B"
+          },
+          {
+            "at": 4,
+            "eq": "02"
+          },
+          {
+            "at": 5,
+            "eq": "01"
+          }
+        ],
+        "asleep": [
+          {
+            "at": 6,
+            "eq": "00"
+          }
+        ],
+        "percent": {
+          "at": 6,
+          "mask": "7F",
+          "min": 1,
+          "max": 100
+        },
+        "charging": {
+          "at": 6,
+          "mask": "80",
+          "eq": "80"
+        }
+      }
+    }
+  ]
+}

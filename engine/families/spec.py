@@ -109,15 +109,59 @@ class ByteRule:
 
 
 @dataclass(frozen=True)
-class Reply:
-    length: Optional[int]
-    match: Tuple[ByteRule, ...]
+class Span:
+    """bytes[at:at+count] all within lo..hi (e.g. printable ASCII device IDs)."""
+    at: int
+    count: int
+    lo: int
+    hi: int
+
+
+@dataclass(frozen=True)
+class Checksum:
+    """(sum(bytes[start:end]) + add) & 0xFF == equals."""
+    start: int
+    end: int
+    equals: int
+
+
+@dataclass(frozen=True)
+class Variant:
+    """One field layout of a reply, chosen by ``when`` (all rules must hold)."""
+    when: Tuple[ByteRule, ...]
     percent_at: int
     percent_min: int
     percent_max: int
     percent_mask: int
     charging: Optional[ByteRule]
-    asleep: Optional[ByteRule]
+    charging_always: bool
+    asleep: Tuple[ByteRule, ...]
+    require: Tuple[ByteRule, ...] = ()   # must hold for a reading (checked after asleep)
+
+
+@dataclass(frozen=True)
+class Reply:
+    length: Optional[int]
+    match: Tuple[ByteRule, ...]
+    spans: Tuple[Span, ...]
+    checksum: Optional[Checksum]
+    asleep: Tuple[ByteRule, ...]      # checked after match/spans/checksum, before variants
+    variants: Tuple[Variant, ...]
+
+    # Single-layout convenience (the first variant), used by older callers and tests.
+    @property
+    def percent_at(self):
+        return self.variants[0].percent_at
+
+
+@dataclass(frozen=True)
+class Gate:
+    """A read-only question sent first: online -> go on, offline -> asleep, else nothing more is sent."""
+    request: bytes
+    match: Tuple[ByteRule, ...]
+    checksum: Optional[Checksum]
+    online: ByteRule
+    offline: Optional[ByteRule]
 
 
 @dataclass(frozen=True)
@@ -128,6 +172,7 @@ class Read:
     timeout_ms: int
     max_reads: int
     reply: Reply
+    gate: Optional[Gate] = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +191,8 @@ class Family:
     reads: Tuple[Read, ...]
     stand_aside_for: Tuple[str, ...]
     source: dict = field(compare=False, hash=False)
+    interface: Optional[int] = None
+    prefer_product_name: bool = False
 
     @property
     def vendor_ids(self):
@@ -181,27 +228,82 @@ def _rule(obj, where):
     return ByteRule(_int(obj["at"], 0, MAX_REPORT - 1, where + ".at"), equals, mask)
 
 
-def _reply(obj, where):
-    _fields(obj, ("match", "percent"), ("length", "charging", "asleep"), where)
-    match = obj["match"]
-    _check(isinstance(match, list) and 1 <= len(match) <= 16, f"{where}.match: 1..16 rules expected")
-    rules = tuple(_rule(m, f"{where}.match[{i}]") for i, m in enumerate(match))
+def _rules(value, where, lo=0, hi=16):
+    if isinstance(value, dict):
+        value = [value]
+    _check(isinstance(value, list) and lo <= len(value) <= hi, f"{where}: {lo}..{hi} rules expected")
+    return tuple(_rule(m, f"{where}[{i}]") for i, m in enumerate(value))
+
+
+def _checksum(obj, where):
+    if obj is None:
+        return None
+    _fields(obj, ("sum", "equals"), where=where)
+    span = obj["sum"]
+    _check(isinstance(span, list) and len(span) == 2, f"{where}.sum: [start, end] expected")
+    start = _int(span[0], 0, MAX_REPORT - 1, where + ".sum[0]")
+    end = _int(span[1], start + 1, MAX_REPORT, where + ".sum[1]")
+    return Checksum(start, end, _byte(obj["equals"], where + ".equals"))
+
+
+def _variant(obj, where):
+    _fields(obj, ("percent",), ("when", "charging", "chargingAlways", "asleep", "require"), where)
     percent = obj["percent"]
     _fields(percent, ("at", "min", "max"), ("mask",), where + ".percent")
     lo = _int(percent["min"], 0, 100, where + ".percent.min")
     hi = _int(percent["max"], lo, 100, where + ".percent.max")
-    return Reply(
-        length=_int(obj["length"], 2, MAX_REPORT, where + ".length") if "length" in obj else None,
-        match=rules,
+    always = obj.get("chargingAlways", False)
+    _check(always in (True, False), where + ".chargingAlways: boolean")
+    _check(not (always and "charging" in obj), where + ": charging and chargingAlways are exclusive")
+    return Variant(
+        when=_rules(obj.get("when", []), where + ".when", 0, 8),
         percent_at=_int(percent["at"], 0, MAX_REPORT - 1, where + ".percent.at"),
         percent_min=lo, percent_max=hi,
         percent_mask=_byte(percent["mask"], where + ".percent.mask") if "mask" in percent else 0xFF,
         charging=_rule(obj["charging"], where + ".charging") if "charging" in obj else None,
-        asleep=_rule(obj["asleep"], where + ".asleep") if "asleep" in obj else None)
+        charging_always=always,
+        asleep=_rules(obj.get("asleep", []), where + ".asleep", 0, 4),
+        require=_rules(obj.get("require", []), where + ".require", 0, 8))
+
+
+def _reply(obj, where):
+    _fields(obj, ("match",), ("length", "percent", "charging", "chargingAlways", "asleep", "spans", "checksum", "variants"), where)
+    rules = _rules(obj["match"], where + ".match", 1, 16)
+    spans = []
+    for i, span in enumerate(obj.get("spans", [])):
+        w = f"{where}.spans[{i}]"
+        _fields(span, ("at", "count", "min", "max"), where=w)
+        lo, hi = _byte(span["min"], w + ".min"), _byte(span["max"], w + ".max")
+        _check(lo <= hi, w + ": min > max")
+        spans.append(Span(_int(span["at"], 0, MAX_REPORT - 1, w + ".at"), _int(span["count"], 1, 64, w + ".count"), lo, hi))
+    if "variants" in obj:
+        _check(not any(k in obj for k in ("percent", "charging", "chargingAlways")), where + ": percent belongs in variants")
+        variants = obj["variants"]
+        _check(isinstance(variants, list) and 1 <= len(variants) <= 4, where + ".variants: 1..4 expected")
+        parsed = tuple(_variant(v, f"{where}.variants[{i}]") for i, v in enumerate(variants))
+    else:
+        _check("percent" in obj, where + ": percent or variants required")
+        parsed = (_variant({k: obj[k] for k in ("percent", "charging", "chargingAlways") if k in obj}, where),)
+    return Reply(
+        length=_int(obj["length"], 2, MAX_REPORT, where + ".length") if "length" in obj else None,
+        match=rules, spans=tuple(spans), checksum=_checksum(obj.get("checksum"), where + ".checksum"),
+        asleep=_rules(obj.get("asleep", []), where + ".asleep", 0, 4), variants=parsed)
+
+
+def _gate(obj, where, transport, reports):
+    _fields(obj, ("request", "match", "online"), ("checksum", "offline"), where)
+    request = _hex_bytes(obj["request"], where + ".request")
+    report = reports["output"] if transport == "output" else reports["feature"]
+    _check(request[0] == report.report_id and len(request) <= report.length,
+           f"{where}: request must start with the report ID and fit its length")
+    return Gate(request=request, match=_rules(obj["match"], where + ".match", 1, 16),
+                checksum=_checksum(obj.get("checksum"), where + ".checksum"),
+                online=_rule(obj["online"], where + ".online"),
+                offline=_rule(obj["offline"], where + ".offline") if "offline" in obj else None)
 
 
 def _read(obj, where, reports):
-    _fields(obj, ("name", "transport", "reply"), ("request", "timeoutMs", "maxReads"), where)
+    _fields(obj, ("name", "transport", "reply"), ("request", "timeoutMs", "maxReads", "gate"), where)
     transport = obj["transport"]
     _check(transport in TRANSPORTS, f"{where}.transport: one of {TRANSPORTS}")
     request = _hex_bytes(obj["request"], where + ".request") if "request" in obj else b""
@@ -220,18 +322,22 @@ def _read(obj, where, reports):
                f"{where}: request must start with the feature report ID and fit its length")
         if transport == "featureGet":
             _check(len(request) == 1, f"{where}: featureGet request is only the report ID")
+    gate = None
+    if "gate" in obj:
+        _check(transport in ("output", "feature"), f"{where}.gate: only for output or feature reads")
+        gate = _gate(obj["gate"], where + ".gate", transport, reports)
     return Read(
         name=_text(obj["name"], where + ".name", 64),
         transport=transport, request=request,
         timeout_ms=_int(obj.get("timeoutMs", 1000), 50, MAX_TIMEOUT_MS, where + ".timeoutMs"),
         max_reads=_int(obj.get("maxReads", 32), 1, MAX_READS, where + ".maxReads"),
-        reply=_reply(obj["reply"], where + ".reply"))
+        reply=_reply(obj["reply"], where + ".reply"), gate=gate)
 
 
 def parse_family(document):
     where = "family"
     _fields(document, ("schema", "id", "name", "kind", "verificationLevel", "source", "collections", "reports", "reads"),
-            ("devices", "probeVendorIds", "standAsideFor"), where)
+            ("devices", "probeVendorIds", "standAsideFor", "interface", "preferProductName"), where)
     _check(document["schema"] == SCHEMA, "family: unsupported schema")
     family_id = _text(document["id"], "family.id", 48)
     _check(family_id.replace("_", "").isalnum() and family_id.islower(), "family.id: lowercase [a-z0-9_]")
@@ -284,4 +390,6 @@ def parse_family(document):
         probe=bool(probe_vendors), devices=tuple(devices), probe_vendor_ids=probe_vendors,
         collections=tuple(collections), input_report=parsed_reports["input"],
         output_report=parsed_reports["output"], feature_report=parsed_reports["feature"],
-        reads=parsed_reads, stand_aside_for=stand, source=dict(source))
+        reads=parsed_reads, stand_aside_for=stand, source=dict(source),
+        interface=_int(document["interface"], 0, 255, "family.interface") if "interface" in document else None,
+        prefer_product_name=document.get("preferProductName") is True)

@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "id": "rongyuan_mouse",
+  "name": "容源 2.4G 鼠标接收器",
+  "kind": "mouse",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d0/src/BrimDeck.Core/Brands/RongyuanStatus.cs",
+    "revision": "f1510d0",
+    "license": "Apache-2.0 (BrimDeck); protocol origins MIT (HaloBattery, mousedock, vigil-watt, YesCharge)",
+    "origin": "HaloBattery monsgeek.py (MIT; 3151:5026 measured 54%/52%), mousedock (MIT; VGN V HUB RyServe.setStatus 391D:2A05 82%; MonsGeek V4 driver 3151:5038 user-tested), vigil-watt (MIT; AK870 3151:4011 41%), YesCharge (MIT; CAROTMAS 3151:502B); field layout corroborated by sharkfin notes (GPL, facts only)",
+    "evidence": "MonsGeek's table lists these as mouse receivers (AJAZZ AJ179P/AJ159P/MS955WB, VK M5 PRO, VGN 1A0E block); the mouse fields are read."
+  },
+  "devices": [
+    {
+      "vendorId": "3151",
+      "productId": "5020",
+      "name": "2.4G 鼠标接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "504B",
+      "name": "2.4G 鼠标接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A329",
+      "name": "2.4G 鼠标接收器"
+    },
+    {
+      "vendorId": "391D",
+      "productId": "1A0E",
+      "name": "2.4G 鼠标接收器"
+    }
+  ],
+  "preferProductName": true,
+  "collections": [
+    {
+      "usagePage": "FFFF",
+      "usage": "0002"
+    }
+  ],
+  "reports": {
+    "feature": {
+      "id": "00",
+      "length": 65
+    }
+  },
+  "reads": [
+    {
+      "name": "status",
+      "transport": "feature",
+      "request": "00 F7",
+      "reply": {
+        "length": 65,
+        "match": [
+          {
+            "at": 0,
+            "eq": "00"
+          },
+          {
+            "at": 1,
+            "mask": "FE",
+            "eq": "00"
+          },
+          {
+            "at": 9,
+            "mask": "01",
+            "eq": "00"
+          }
+        ],
+        "variants": [
+          {
+            "when": [
+              {
+                "at": 7,
+                "mask": "02",
+                "eq": "02"
+              }
+            ],
+            "asleep": [
+              {
+                "at": 5,
+                "eq": "01"
+              }
+            ],
+            "require": [
+              {
+                "at": 5,
+                "eq": "00"
+              }
+            ],
+            "percent": {
+              "at": 3,
+              "min": 1,
+              "max": 100
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,158 @@
+{
+  "schema": 1,
+  "id": "rongyuan_checksum",
+  "name": "容源 2.4G 接收器（带校验的状态查询）",
+  "kind": "keyboard",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d0/src/BrimDeck.Core/Brands/RongyuanStatus.cs",
+    "revision": "f1510d0",
+    "license": "Apache-2.0 (BrimDeck); protocol origins MIT (HaloBattery, mousedock, vigil-watt, YesCharge)",
+    "origin": "HaloBattery monsgeek.py (MIT; 3151:5026 measured 54%/52%), mousedock (MIT; VGN V HUB RyServe.setStatus 391D:2A05 82%; MonsGeek V4 driver 3151:5038 user-tested), vigil-watt (MIT; AK870 3151:4011 41%), YesCharge (MIT; CAROTMAS 3151:502B); field layout corroborated by sharkfin notes (GPL, facts only)",
+    "evidence": "Receivers named by their makers' drivers (AJAZZ, CAROTMAS, VGN V HUB), which send F7 with Rongyuan's checksum; measured upstream on 3151:4011 and 391D:2A05."
+  },
+  "devices": [
+    {
+      "vendorId": "3151",
+      "productId": "4011",
+      "name": "AJAZZ AK870"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "502B",
+      "name": "CAROTMAS Mars68"
+    },
+    {
+      "vendorId": "391D",
+      "productId": "2A05",
+      "name": "VGN Neon75 Air"
+    },
+    {
+      "vendorId": "391D",
+      "productId": "2A07",
+      "name": "VGN Neon75 Turbo"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5055",
+      "name": "VGN Neon75 Extreme"
+    }
+  ],
+  "preferProductName": true,
+  "collections": [
+    {
+      "usagePage": "FFFF",
+      "usage": "0002"
+    }
+  ],
+  "reports": {
+    "feature": {
+      "id": "00",
+      "length": 65
+    }
+  },
+  "reads": [
+    {
+      "name": "status",
+      "transport": "feature",
+      "request": "00 F7 00 00 00 00 00 00 08",
+      "reply": {
+        "length": 65,
+        "match": [
+          {
+            "at": 0,
+            "eq": "00"
+          },
+          {
+            "at": 1,
+            "mask": "FE",
+            "eq": "00"
+          },
+          {
+            "at": 9,
+            "mask": "01",
+            "eq": "00"
+          }
+        ],
+        "variants": [
+          {
+            "when": [
+              {
+                "at": 7,
+                "eq": "01"
+              }
+            ],
+            "asleep": [
+              {
+                "at": 4,
+                "eq": "01"
+              }
+            ],
+            "require": [
+              {
+                "at": 4,
+                "eq": "00"
+              }
+            ],
+            "percent": {
+              "at": 2,
+              "min": 1,
+              "max": 100
+            }
+          },
+          {
+            "when": [
+              {
+                "at": 7,
+                "eq": "03"
+              }
+            ],
+            "asleep": [
+              {
+                "at": 4,
+                "eq": "01"
+              }
+            ],
+            "require": [
+              {
+                "at": 4,
+                "eq": "00"
+              }
+            ],
+            "percent": {
+              "at": 2,
+              "min": 1,
+              "max": 100
+            }
+          },
+          {
+            "when": [
+              {
+                "at": 7,
+                "eq": "02"
+              }
+            ],
+            "asleep": [
+              {
+                "at": 5,
+                "eq": "01"
+              }
+            ],
+            "require": [
+              {
+                "at": 5,
+                "eq": "00"
+              }
+            ],
+            "percent": {
+              "at": 3,
+              "min": 1,
+              "max": 100
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

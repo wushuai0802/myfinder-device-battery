@@ -1,0 +1,433 @@
+{
+  "schema": 1,
+  "id": "rongyuan",
+  "name": "容源 2.4G 接收器（MonsGeek/Akko 驱动列表）",
+  "kind": "keyboard",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d0/src/BrimDeck.Core/Brands/RongyuanStatus.cs",
+    "revision": "f1510d0",
+    "license": "Apache-2.0 (BrimDeck); protocol origins MIT (HaloBattery, mousedock, vigil-watt, YesCharge)",
+    "origin": "HaloBattery monsgeek.py (MIT; 3151:5026 measured 54%/52%), mousedock (MIT; VGN V HUB RyServe.setStatus 391D:2A05 82%; MonsGeek V4 driver 3151:5038 user-tested), vigil-watt (MIT; AK870 3151:4011 41%), YesCharge (MIT; CAROTMAS 3151:502B); field layout corroborated by sharkfin notes (GPL, facts only)",
+    "evidence": "MonsGeek's and Akko's web-driver dongle filters (usage page FFFF, usage 2, interface 2) poll the bare F7; 3151:5038 user-tested upstream. Shared IDs: the product string names the device."
+  },
+  "devices": [
+    {
+      "vendorId": "3151",
+      "productId": "5038",
+      "name": "MonsGeek M2 V5 HE"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "4014",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "4017",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "4021",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "4027",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "4038",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5006",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5008",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5037",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "503D",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "503F",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5040",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5042",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5045",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "504E",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5050",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "5052",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "3151",
+      "productId": "505A",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3E0",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3E1",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3E2",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3E6",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3E7",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3E8",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3F5",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3F6",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3F7",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3FB",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3FC",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "342D",
+      "productId": "E3FD",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A205",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A217",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A220",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A223",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A226",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A229",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A234",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A237",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A251",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A263",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A268",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A311",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A314",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A319",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "374A",
+      "productId": "A322",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "38EE",
+      "productId": "0000",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "38EE",
+      "productId": "0002",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "38EE",
+      "productId": "0004",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "347A",
+      "productId": "A302",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "347A",
+      "productId": "A305",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "379A",
+      "productId": "1804",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "379A",
+      "productId": "1807",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "38A9",
+      "productId": "0002",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "25AA",
+      "productId": "2008",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "25AA",
+      "productId": "4008",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "25AA",
+      "productId": "4018",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "0DB0",
+      "productId": "197E",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "0DB0",
+      "productId": "8E9A",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "145F",
+      "productId": "0376",
+      "name": "2.4G 接收器"
+    },
+    {
+      "vendorId": "145F",
+      "productId": "038D",
+      "name": "2.4G 接收器"
+    }
+  ],
+  "preferProductName": true,
+  "collections": [
+    {
+      "usagePage": "FFFF",
+      "usage": "0002"
+    }
+  ],
+  "reports": {
+    "feature": {
+      "id": "00",
+      "length": 65
+    }
+  },
+  "reads": [
+    {
+      "name": "status",
+      "transport": "feature",
+      "request": "00 F7",
+      "reply": {
+        "length": 65,
+        "match": [
+          {
+            "at": 0,
+            "eq": "00"
+          },
+          {
+            "at": 1,
+            "mask": "FE",
+            "eq": "00"
+          },
+          {
+            "at": 9,
+            "mask": "01",
+            "eq": "00"
+          }
+        ],
+        "variants": [
+          {
+            "when": [
+              {
+                "at": 7,
+                "eq": "01"
+              }
+            ],
+            "asleep": [
+              {
+                "at": 4,
+                "eq": "01"
+              }
+            ],
+            "require": [
+              {
+                "at": 4,
+                "eq": "00"
+              }
+            ],
+            "percent": {
+              "at": 2,
+              "min": 1,
+              "max": 100
+            }
+          },
+          {
+            "when": [
+              {
+                "at": 7,
+                "eq": "03"
+              }
+            ],
+            "asleep": [
+              {
+                "at": 4,
+                "eq": "01"
+              }
+            ],
+            "require": [
+              {
+                "at": 4,
+                "eq": "00"
+              }
+            ],
+            "percent": {
+              "at": 2,
+              "min": 1,
+              "max": 100
+            }
+          },
+          {
+            "when": [
+              {
+                "at": 7,
+                "eq": "02"
+              }
+            ],
+            "asleep": [
+              {
+                "at": 5,
+                "eq": "01"
+              }
+            ],
+            "require": [
+              {
+                "at": 5,
+                "eq": "00"
+              }
+            ],
+            "percent": {
+              "at": 3,
+              "min": 1,
+              "max": 100
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

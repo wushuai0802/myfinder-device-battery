@@ -4,6 +4,9 @@ Only the four read transports of ``spec.TRANSPORTS`` exist. Every reply is
 checked against the family's rules before a percentage is accepted; anything
 else is "no reading". I/O errors are reported as an anomaly so the caller's
 memory can retire the read (``memory.py``).
+
+Frames are indexed as hidapi returns them: input reports with report ID 0 come
+without the ID byte; feature reports always start with their report ID.
 """
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from .spec import Family, Read, Reply
+from .spec import Family, Gate, Read, Reply
 
 
 @dataclass(frozen=True)
@@ -24,35 +27,86 @@ class Outcome:
     note: str = ""
 
 
+def _holds(data, rule):
+    return data[rule.at] & rule.mask == rule.equals
+
+
+def _checksum_ok(data, checksum):
+    return checksum is None or sum(data[checksum.start:checksum.end]) & 0xFF == checksum.equals
+
+
+def _envelope(data, match, spans=(), checksum=None, length=None):
+    """None when the frame is this reply's shape, else a rejection note."""
+    if length is not None and len(data) != length:
+        return "reply length"
+    needed = [r.at for r in match] + [s.at + s.count - 1 for s in spans] + ([checksum.end - 1] if checksum else [])
+    if needed and len(data) <= max(needed):
+        return "reply too short"
+    if not all(_holds(data, r) for r in match):
+        return "reply header"
+    if not all(s.lo <= b <= s.hi for s in spans for b in data[s.at:s.at + s.count]):
+        return "reply field range"
+    if not _checksum_ok(data, checksum):
+        return "reply checksum"
+    return None
+
+
 def parse(reply: Reply, frame) -> Outcome:
     data = bytes(frame)
-    if reply.length is not None and len(data) != reply.length:
-        return Outcome("rejected", note="reply length")
-    needed = max([r.at for r in reply.match] + [reply.percent_at]
-                 + [r.at for r in (reply.charging, reply.asleep) if r is not None])
-    if len(data) <= needed:
-        return Outcome("rejected", note="reply too short")
-    if any(data[r.at] & r.mask != r.equals for r in reply.match):
-        return Outcome("rejected", note="reply header")
-    if reply.asleep is not None and data[reply.asleep.at] & reply.asleep.mask == reply.asleep.equals:
+    note = _envelope(data, reply.match, reply.spans, reply.checksum, reply.length)
+    if note:
+        return Outcome("rejected", note=note)
+    if any(len(data) > r.at and _holds(data, r) for r in reply.asleep):
         return Outcome("asleep", note="device reports asleep/offline")
-    level = data[reply.percent_at] & reply.percent_mask
-    if not reply.percent_min <= level <= reply.percent_max:
-        return Outcome("rejected", note="percent out of range")
-    if reply.charging is None:
-        return Outcome("reading", level=level)
-    charging = data[reply.charging.at] & reply.charging.mask == reply.charging.equals
-    return Outcome("reading", level=level, charging=charging, charging_known=True)
+    for variant in reply.variants:
+        positions = [r.at for r in variant.when] + [variant.percent_at] + [r.at for r in variant.asleep]
+        if variant.charging is not None:
+            positions.append(variant.charging.at)
+        if len(data) <= max(positions):
+            continue
+        if not all(_holds(data, r) for r in variant.when):
+            continue
+        if any(_holds(data, r) for r in variant.asleep):
+            return Outcome("asleep", note="device reports asleep/offline")
+        if not all(len(data) > r.at and _holds(data, r) for r in variant.require):
+            return Outcome("rejected", note="reply state")
+        level = data[variant.percent_at] & variant.percent_mask
+        if not variant.percent_min <= level <= variant.percent_max:
+            return Outcome("rejected", note="percent out of range")
+        if variant.charging_always:
+            return Outcome("reading", level=level, charging=True, charging_known=True)
+        if variant.charging is None:
+            return Outcome("reading", level=level)
+        return Outcome("reading", level=level, charging=_holds(data, variant.charging), charging_known=True)
+    return Outcome("rejected", note="no reply layout applies")
+
+
+def parse_gate(gate: Gate, frame) -> Optional[bool]:
+    """True online, False offline (asleep), None not the gate's answer."""
+    data = bytes(frame)
+    if _envelope(data, gate.match, (), gate.checksum) is not None:
+        return None
+    if len(data) > gate.online.at and _holds(data, gate.online):
+        return True
+    if gate.offline is not None and len(data) > gate.offline.at and _holds(data, gate.offline):
+        return False
+    return None
 
 
 def _padded(request: bytes, length: int) -> bytes:
     return request + bytes(max(0, length - len(request)))
 
 
-def _read_inputs(dev, family: Family, read: Read, clock, request: bytes) -> Outcome:
+def _echo(request: bytes, report_id: int) -> bytes:
+    """The request as it would come back on the input side (no ID byte for report 0)."""
+    return request[1:] if report_id == 0 else request
+
+
+def _read_inputs(dev, family: Family, read: Read, clock, request: bytes, accept):
     length = family.input_report.length - (family.input_report.report_id == 0)
+    echo = _echo(request, family.input_report.report_id) if request else b""
     deadline = clock() + read.timeout_ms / 1000
-    last = Outcome("silent", note="no reply within deadline")
+    last = None
     for _ in range(read.max_reads):
         remaining = deadline - clock()
         if remaining <= 0:
@@ -61,33 +115,58 @@ def _read_inputs(dev, family: Family, read: Read, clock, request: bytes) -> Outc
         if not raw:
             break
         frame = bytes(raw)
-        if request and frame == request[:len(frame)]:
-            continue  # the request echoed back is never a reading
-        outcome = parse(read.reply, frame)
-        if outcome.kind in ("reading", "asleep"):
-            return outcome
-        last = outcome
+        if echo and frame[:len(echo)] == echo[:len(frame)]:
+            continue  # the request read back is never an answer
+        result, final = accept(frame)
+        if final:
+            return result
+        last = result
     return last
+
+
+def _exchange(dev, family: Family, read: Read, request: bytes, accept, clock):
+    """Send one request on the read's transport; returns (result, sent_ok)."""
+    if read.transport == "output":
+        padded = _padded(request, family.output_report.length)
+        if dev.write(list(padded)) != len(padded):
+            return None, False
+        return _read_inputs(dev, family, read, clock, padded, accept), True
+    length = family.feature_report.length
+    padded = _padded(request, length)
+    if read.transport == "feature" and dev.send_feature_report(list(padded)) != len(padded):
+        return None, False
+    raw = dev.get_feature_report(request[0], length)
+    if not raw:
+        return None, True
+    result, _ = accept(bytes(raw))
+    return result, True
 
 
 def run(dev, family: Family, read: Read, clock=time.monotonic) -> Outcome:
     try:
         if read.transport == "listen":
-            return _read_inputs(dev, family, read, clock, b"")
-        if read.transport == "output":
-            request = _padded(read.request, family.output_report.length)
-            if dev.write(list(request)) != len(request):
-                return Outcome("anomaly", note="short write")
-            return _read_inputs(dev, family, read, clock, request)
-        length = family.feature_report.length
-        if read.transport == "feature":
-            request = _padded(read.request, length)
-            if dev.send_feature_report(list(request)) != len(request):
-                return Outcome("anomaly", note="short feature set")
-        raw = dev.get_feature_report(read.request[0], length)
-        if not raw:
-            return Outcome("silent", note="empty feature report")
-        return parse(read.reply, raw)
+            def take(frame):
+                outcome = parse(read.reply, frame)
+                return outcome, outcome.kind in ("reading", "asleep")
+            return _read_inputs(dev, family, read, clock, b"", take) or Outcome("silent", note="no report within deadline")
+        if read.gate is not None:
+            def gate_answer(frame):
+                answer = parse_gate(read.gate, frame)
+                return answer, answer is not None
+            answer, sent = _exchange(dev, family, read, read.gate.request, gate_answer, clock)
+            if not sent:
+                return Outcome("anomaly", note="short gate write")
+            if answer is False:
+                return Outcome("asleep", note="gate: device offline")
+            if answer is not True:
+                return Outcome("silent", note="gate unanswered; read not sent")
+        def take(frame):
+            outcome = parse(read.reply, frame)
+            return outcome, outcome.kind in ("reading", "asleep")
+        outcome, sent = _exchange(dev, family, read, read.request, take, clock)
+        if not sent:
+            return Outcome("anomaly", note="short write")
+        return outcome or Outcome("silent", note="no reply within deadline")
     except (OSError, ValueError):
         # Backend text can carry device paths; keep only the category.
         return Outcome("anomaly", note="I/O error")
