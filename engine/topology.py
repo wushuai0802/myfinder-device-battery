@@ -646,6 +646,15 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if caps_complete and info.get("input_report_sizes") is None:
+                # Architecture v2: a declarative family asks for per-report
+                # proof only on its own identities and vendor-page collections.
+                from families import wants_caps
+                if wants_caps(attrs.vendor, attrs.product, caps.page, caps.usage):
+                    from battery_hid import battery_caps
+                    info.update(battery_caps(hid, data, caps))
+                    caps_complete = all(info.get(key) is not None
+                                        for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
             inventory.append(info)

@@ -109,6 +109,24 @@ static class WirelessTests {
             string json="{\"schema\":1,\"devices\":[{\"id\":\"device-000000000000000000000001\",\"name\":\"Keyboard\\nInjected\",\"kind\":\"keyboard\",\"percent\":42,\"online\":true,\"fresh\":true,\"confirmedAtUtc\":\""+DateTime.UtcNow.ToString("o")+"\"}]}";
             var snapshot=GenericBatteryWorker.Parse(json);Check(snapshot.Devices.Length==1&&snapshot.Devices[0].Percent==42&&snapshot.Devices[0].Fresh,"valid integer battery reports are accepted");
             Check(!snapshot.Devices[0].Name.Contains("\n"),"untrusted device names do not inject controls");
+            {
+                // T61: the native A9 Air+ receiver card absorbs its own cable connection.
+                Func<int,int,WirelessDevice> wired=delegate(int twinVid,int twinPid){return new WirelessDevice {Id="w-"+twinPid.ToString("X4"),Kind="mouse",VendorId=twinVid,ProductId=twinPid};};
+                var twin=wired(0x373B,0x1293);
+                Check(WirelessLayout.WiredTwin(new[]{wired(0x3554,0xF503),twin})==twin,"the native mouse's exact cable identity is its twin");
+                Check(WirelessLayout.WiredTwin(new[]{twin,wired(0x373B,0x1293)})==null,"two cables of the same model are never folded");
+                Check(WirelessLayout.WiredTwin(new[]{wired(0x373B,0x1278),wired(0x3554,0x1293)})==null,"other identities are not twins");
+                var receiverStale=new BatteryView {Name="ATK A9 Air+",Percent=35,Fresh=false};
+                var receiverNow=new BatteryView {Name="ATK A9 Air+",Percent=36,Fresh=true};
+                var charging=new BatteryView {Name="ATK A9 Air",Percent=60,Fresh=true,Charging=true};
+                var cableIdle=new BatteryView {Name="ATK A9 Air",Percent=58,Fresh=true};
+                BatteryView merged;
+                Check(WirelessLayout.FoldTwin(receiverStale,charging,out merged)&&merged.Name=="ATK A9 Air+"&&merged.Percent==60&&merged.Charging&&merged.Fresh,"stale receiver card shows the charging cable reading under the native name");
+                Check(WirelessLayout.FoldTwin(receiverNow,charging,out merged)&&merged.Percent==60&&merged.Charging,"a charging cable wins over a fresh receiver reading");
+                Check(!WirelessLayout.FoldTwin(receiverNow,cableIdle,out merged)&&merged==receiverNow,"two fresh, not charging readings stay two cards");
+                var cableStale=new BatteryView {Name="ATK A9 Air",Percent=60,Fresh=false};
+                Check(WirelessLayout.FoldTwin(receiverNow,cableStale,out merged)&&merged==receiverNow,"after unplugging, the receiver reading is shown and the stale cable card stays folded");
+            }
             var sameModelA=Device("a","keyboard",42);var sameModelB=Device("b","keyboard",42);
             Check(!sameModelA.SameCacheIdentity(sameModelB),"same-model history cannot migrate between different physical identities");
             Check(sameModelA.SameCacheIdentity(Device("a","keyboard",42)),"exact device/provider/type identity can retain history");

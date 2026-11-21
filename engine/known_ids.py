@@ -152,6 +152,19 @@ def build_index(root=None, *, engine_root=None):
         module = path.stem
         if module in HELPERS or module.endswith("_profiles"):
             continue  # Helpers and protocol data are represented by their owner.
+        if module == "families":
+            # Architecture v2: listed devices come from the family JSON data of
+            # this snapshot, parsed by the local audited parser (never imported).
+            vendors[module] = set()
+            try:
+                from families import load as load_families
+                for family in load_families(engine / "families" / "builtin").values():
+                    vendors[module].update(family.vendor_ids)
+                    for device in family.devices:
+                        add(module, device.vendor_id, device.product_id, device.name, family.kind)
+            except (OSError, ValueError):
+                unparsed.add(module)
+            continue
         if module in profiled:
             vendors[module] = set(profiled[module])
             for row in registered:

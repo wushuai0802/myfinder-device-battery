@@ -66,6 +66,7 @@ PROVIDERS = (
     ("hyperx_cloud3s", "HyperXCloud3SProvider"), ("nzxt", "NzxtProvider"),
     ("bluetooth", "BluetoothProvider"),
     ("xinput", "XInputProvider"),
+    ("families", "FamiliesProvider"),
 )
 PROVIDER_VIDS = {
     "asus_azoth": (0x0B05,), "mchose_g3v2": (0x3837,),
@@ -102,6 +103,9 @@ PROVIDER_VIDS = {
     "am_infinity": (0x3151,), "steelseries_elite": (0x1038,),
     "logitech_centurion": (0x046D,), "hyperx_cloud3s": (0x03F0,), "nzxt": (0x1E71,),
 }
+# Architecture v2: declarative families (engine/families) declare their own vendors.
+from families import vendor_ids as _family_vendor_ids  # noqa: E402
+PROVIDER_VIDS["families"] = _family_vendor_ids()
 NATIVE = {(0x373B, 0x1278), (0x03F0, 0x098D)}
 MAX_DEVICES = 64
 MAX_RETAIN_SECONDS = 300
@@ -112,8 +116,16 @@ BLUETOOTH_EMPTY_POLL_THRESHOLD = 3
 BLUETOOTH_POLL_SECONDS = 60
 BLUETOOTH_EMPTY_POLL_SECONDS = 300
 SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
+# Automatic polls of a device-scoped reader that keeps finding its device but no
+# reading (asleep, off, out of range) back off: 60, 120, then 300 seconds, so an
+# idle receiver is not asked again every round (#588). Any reading, a forced
+# sync, a targeted (device/physical) refresh or a topology change resumes at once.
+# Passive and system readers send nothing or run their own schedule.
+IDLE_BACKOFF_SECONDS = (60, 120, 300)
+IDLE_BACKOFF_AFTER = 2
+IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "fa6x_passive", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"sony_inzone", "delux", "vgn_ry_ms", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+READER_DIAGNOSTICS = {"families", "sony_inzone", "delux", "vgn_ry_ms", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -752,6 +764,8 @@ class BatteryEngine:
         self.last_poll = {}
         self.failures = {}
         self.retry_after = {}
+        self.idle_misses = {}
+        self.idle_until = {}
         self.physical_by_id = {}
         self.dpi_targets = {}
         self.provider_by_id = {}
@@ -882,6 +896,7 @@ class BatteryEngine:
         self.last_poll[reader_key] = time.monotonic()
         self.failures.pop(reader_key, None)
         self.retry_after.pop(reader_key, None)
+        self._idle_backoff(reader_key, name, physical, candidate_count, statuses)
         # Passive readers can return history without a new notification.
         # Keep the card, but expose the same idle health as a first silent poll.
         measured = bool(group) and (name not in ("rapoo", "fa6x_passive") or any(
@@ -1018,6 +1033,18 @@ class BatteryEngine:
                                  r"enumerate_failed|open_failed|send_failed|get_failed|short_reply|"
                                  r"busy_timeout|device_timeout_04|foreign_reply|reply_status_[0-9a-f]{2})", failure_code)):
             self.health[reader_key]["errorCode"] = failure_code
+
+    def _idle_backoff(self, reader_key, name, physical, candidate_count, statuses):
+        measured = any(s.online and not s.cached and s.level is not None for s in statuses)
+        if measured or not physical or candidate_count <= 0 or name in IDLE_BACKOFF_EXEMPT:
+            self.idle_misses.pop(reader_key, None)
+            self.idle_until.pop(reader_key, None)
+            return
+        misses = self.idle_misses.get(reader_key, 0) + 1
+        self.idle_misses[reader_key] = misses
+        if misses >= IDLE_BACKOFF_AFTER:
+            step = IDLE_BACKOFF_SECONDS[min(misses - IDLE_BACKOFF_AFTER, len(IDLE_BACKOFF_SECONDS) - 1)]
+            self.idle_until[reader_key] = time.monotonic() + step
 
     def _failure(self, reader_key, name, code):
         for key, value in self.by_provider.get(reader_key, {}).items():
@@ -1277,6 +1304,11 @@ class BatteryEngine:
                     minimum = (BLUETOOTH_EMPTY_POLL_SECONDS if self._bluetooth_empty_polls >= BLUETOOTH_EMPTY_POLL_THRESHOLD
                                else BLUETOOTH_POLL_SECONDS)
                 if action == "query" and not force:
+                    if (device_id is None and physical_id is None
+                            and time.monotonic() < self.idle_until.get(reader_key, 0)):
+                        # Idle back-off keeps the last health; it is not a failure.
+                        pending.remove(item)
+                        continue
                     if time.monotonic() < self.retry_after.get(reader_key, 0):
                         self.health[reader_key] = dict(self.health.get(reader_key, {}), provider=name, state="backoff")
                         pending.remove(item)
@@ -1342,6 +1374,10 @@ class BatteryEngine:
                         if physical_id is not None:
                             groups = {key: infos for key, infos in groups.items() if public_id(key) == physical_id}
                         if full_round:
+                            if set(groups) != set(self._inventory_groups):
+                                # A plugged or removed receiver resumes idle readers at once.
+                                self.idle_misses.clear()
+                                self.idle_until.clear()
                             self._inventory_groups = dict(groups)
                         else:
                             if physical_id is not None:

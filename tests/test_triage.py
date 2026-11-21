@@ -981,6 +981,8 @@ def index_fixture(folder):
     for path in (ROOT / "engine/providers").glob("*.py"):
         shutil.copyfile(path, providers / path.name)
     shutil.copyfile(ROOT / "engine/compatibility.json", root / "engine/compatibility.json")
+    # Architecture v2 family data is part of an engine snapshot, like provider tables.
+    shutil.copytree(ROOT / "engine/families/builtin", root / "engine/families/builtin")
     return root
 
 

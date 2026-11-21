@@ -16,6 +16,33 @@ namespace AtkBatteryTray {
         internal RectangleF DpiTrack;
     }
     internal sealed class WirelessLayout {
+        // One physical mouse seen twice: the native receiver path and the same model on its
+        // own cable (charging). Native receiver -> exact wired VID/PID of that model (#T61:
+        // ATK A9 Air+ receiver 373B:1278, cable 373B:1293). Only these pairs merge.
+        internal static readonly int[][] NativeWiredTwins={new[]{0x373B,0x1293}};
+        // The unique wired twin of the native mouse, or null (none, or more than one: a
+        // second mouse of the same model must never be folded into the native card).
+        internal static WirelessDevice WiredTwin(IEnumerable<WirelessDevice> devices) {
+            WirelessDevice found=null;
+            if(devices==null)return null;
+            foreach(var device in devices) {
+                if(device==null||device.Kind!="mouse"||!device.VendorId.HasValue||!device.ProductId.HasValue)continue;
+                foreach(var twin in NativeWiredTwins)if(device.VendorId.Value==twin[0]&&device.ProductId.Value==twin[1]){if(found!=null)return null;found=device;}
+            }
+            return found;
+        }
+        // Merge only when it is the cable of the same mouse: the receiver reading is stale
+        // (the mouse talks over the cable now) or the cable reports charging. A fresh
+        // receiver reading next to a fresh, not charging wired one is two mice: keep both.
+        // The merged card keeps the native name, position and DPI; the battery and charging
+        // state come from whichever reading is current, preferring the cable's.
+        internal static bool FoldTwin(BatteryView native,BatteryView wired,out BatteryView merged) {
+            merged=native;
+            if(native==null||wired==null)return false;
+            if(native.Fresh&&wired.Fresh&&!wired.Charging)return false;
+            if(wired.Fresh)merged=new BatteryView {Name=native.Name,Percent=wired.Percent,Fresh=true,Charging=wired.Charging,ConfirmedAt=wired.ConfirmedAt,Approximate=wired.Approximate,Unconfirmed=wired.Unconfirmed,SystemProvided=wired.SystemProvided,QueriedAt=wired.QueriedAt};
+            return true;
+        }
         internal readonly List<WirelessCard> Cards=new List<WirelessCard>();
         internal readonly List<WirelessCard> All=new List<WirelessCard>();
         internal int Start,End;
@@ -32,11 +59,17 @@ namespace AtkBatteryTray {
         internal Size Size {get{return new Size(VisualDesign.PanelWidth,(int)Footer+VisualDesign.FooterHeight+(ReaderNotice?ReaderNoticeHeight:0));}}
         internal static WirelessLayout Build(TrayContext owner,int offset,int maximumHeight,bool includeHidden=false,int controlOffset=0) {
             var layout=new WirelessLayout();var pref=DeviceSettings.Current;var now=DateTime.UtcNow;
-            layout.VolumeCollapsed=pref.VolumeCollapsed;
+            layout.VolumeCollapsed=pref.VolumeCollapsed;string folded=null;
             layout.ReaderNotice=owner.ReaderFailureVisible;
             if(layout.ReaderNotice)maximumHeight-=ReaderNoticeHeight;
-            if(owner.NativeMousePresent)layout.All.Add(new WirelessCard {Id="native:mouse",Name=pref.MouseAlias,Kind="mouse",Battery=UiState.Mouse(owner.Current,owner.LastGood,now),NativeMouse=true,Dpi=owner.Dpi});
+            if(owner.NativeMousePresent){
+                var mouse=UiState.Mouse(owner.Current,owner.LastGood,now);
+                var twin=WiredTwin(owner.WirelessDevices);BatteryView merged;
+                if(twin!=null&&FoldTwin(mouse,View(twin),out merged))folded=twin.Id;else merged=mouse;
+                layout.All.Add(new WirelessCard {Id="native:mouse",Name=pref.MouseAlias,Kind="mouse",Battery=merged,NativeMouse=true,Dpi=owner.Dpi});
+            }
             foreach(var device in owner.WirelessDevices) {
+                if(folded!=null&&device!=null&&device.Id==folded)continue;
                 string alias;string name=pref.DeviceAliases!=null&&pref.DeviceAliases.TryGetValue(device.Id,out alias)?alias:device.Name;
                 layout.All.Add(new WirelessCard {Id=device.Id,Name=name,Kind=device.Kind,Device=device,Battery=View(device)});
             }
