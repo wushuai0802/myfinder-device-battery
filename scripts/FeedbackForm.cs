@@ -35,6 +35,20 @@ namespace AtkBattery {
         internal static string CategoryLabel(string category){int index=Array.IndexOf(categories,category);if(index<0)throw new ArgumentException("Invalid feedback category.");return labels[index];}
         internal static string DefaultCategory(bool deviceMissing){return deviceMissing?"device":"other";}
         internal static bool Valid(string category,string description){int length=(description??"").Trim().Length;return Array.IndexOf(categories,category)>=0&&length>=5&&length<=2000;}
+        internal const string ComparisonQuestion = "MyFinder 显示的电量和官方软件一致吗？";
+        internal static string WithComparison(string description, int choice, int difference) {
+            string answer;
+            switch (choice) {
+                case 1: answer = "一致"; break;
+                case 2:
+                    if (difference < 1 || difference > 100) return description;
+                    answer = "相差 " + difference.ToString(CultureInfo.InvariantCulture) + "%";
+                    break;
+                case 3: answer = "官方读不到"; break;
+                default: return description;
+            }
+            return (description??"").TrimEnd() + "\r\n" + ComparisonQuestion + answer;
+        }
         internal static string Prefix(string text,int length){if(length>0&&length<text.Length&&Char.IsHighSurrogate(text[length-1]))length--;return text.Substring(0,length);}
     }
     [DataContract] internal sealed class FeedbackPayload {
@@ -182,10 +196,12 @@ namespace AtkBatteryTray {
     internal static class FeedbackDraft {
         internal static string Category,Description,EntryCategory;
         internal static bool Diagnostics;
-        internal static void Clear(){Category=null;Description=null;EntryCategory=null;Diagnostics=true;}
-        internal static void SaveIfChanged(string category,string description,bool diagnostics,string initialCategory){
-            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics){Clear();return;}
+        internal static int ComparisonChoice, ComparisonDifference;
+        internal static void Clear(){Category=null;Description=null;EntryCategory=null;Diagnostics=true;ComparisonChoice=0;ComparisonDifference=0;}
+        internal static void SaveIfChanged(string category,string description,bool diagnostics,string initialCategory,int comparisonChoice=0,int comparisonDifference=0){
+            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics&&comparisonChoice==0){Clear();return;}
             Category=category;Description=description;Diagnostics=diagnostics;EntryCategory=initialCategory;
+            ComparisonChoice=comparisonChoice;ComparisonDifference=comparisonDifference;
         }
     }
 
@@ -194,6 +210,8 @@ namespace AtkBatteryTray {
         readonly Action<string> copy,open;readonly Func<string,bool> confirm;
         readonly ThemedSegments categories;
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
+        readonly ComboBox comparison = new ComboBox { Name="BatteryComparison", DropDownStyle=ComboBoxStyle.DropDownList, Width=128 };
+        readonly TextBox difference = new TextBox { Name="BatteryComparisonDifference", AccessibleName="相差百分比", MaxLength=3, TextAlign=HorizontalAlignment.Right };
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,view,mine;
         CancellationTokenSource pending;FeedbackResult receipt;bool busy;
@@ -227,8 +245,8 @@ namespace AtkBatteryTray {
             typeCard.Controls.Add(categories);typeCard.Controls.Add(typeTitle);layout.Controls.Add(typeCard,0,0);
             sizeTypeCard();
             var descriptionCard=new ThemedSection(Theme) {Name="FeedbackDescriptionCard",Dock=DockStyle.Fill};
-            var descriptionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};descriptionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            for(int i=0;i<4;i++)descriptionLayout.RowStyles.Add(new RowStyle(i==2?SizeType.Percent:SizeType.AutoSize,i==2?100:0));
+            var descriptionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};descriptionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            for(int i=0;i<5;i++)descriptionLayout.RowStyles.Add(new RowStyle(i==2?SizeType.Percent:SizeType.AutoSize,i==2?100:0));
             descriptionLayout.Controls.Add(Caption("描述（必填，5–2000 字）",false,false,true),0,0);
             var hint=Caption("发生了什么？用的是什么设备、怎么连接的？",false,true);descriptionLayout.Controls.Add(hint,0,1);
             description.Name="Description";description.AccessibleName="描述";description.Multiline=true;description.AcceptsReturn=true;description.Dock=DockStyle.Fill;
@@ -240,7 +258,36 @@ namespace AtkBatteryTray {
             diagnostics.Name="IncludeDiagnostics";diagnostics.Text="附带诊断信息（推荐）";diagnostics.AccessibleName=diagnostics.Text;diagnostics.Checked=true;diagnostics.Margin=new Padding(0,0,12,0);
             if(restoreDraft){description.Text=FeedbackDraft.Description;diagnostics.Checked=FeedbackDraft.Diagnostics;}
             preview.Name="ViewDiagnostics";preview.Text="查看内容";preview.AutoSize=true;preview.BackColor=Theme.Card;preview.LinkColor=Theme.Accent;preview.ActiveLinkColor=preview.LinkColor;preview.VisitedLinkColor=preview.LinkColor;preview.DisabledLinkColor=Theme.Muted;preview.Margin=new Padding(0,4,0,3);preview.LinkClicked+=delegate{ShowDiagnostics();};
-            diagnosticRow.Controls.Add(diagnostics);diagnosticRow.Controls.Add(preview);diagnosticCard.Controls.Add(diagnosticRow);layout.Controls.Add(diagnosticCard,0,2);
+            diagnosticRow.Controls.Add(diagnostics);diagnosticRow.Controls.Add(preview);
+            diagnosticCard.Controls.Add(diagnosticRow);layout.Controls.Add(diagnosticCard,0,2);
+            var comparisonPanel=new TableLayoutPanel {Name="FeedbackComparison",Dock=DockStyle.Fill,AutoSize=true,RowCount=2,ColumnCount=1,Margin=new Padding(0,6,0,0)};
+            comparisonPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            comparisonPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            comparisonPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var comparisonCaption=Caption(FeedbackInput.ComparisonQuestion+"（可选）",false,true);
+            comparisonCaption.Dock=DockStyle.Fill;
+            comparison.AccessibleName=FeedbackInput.ComparisonQuestion;
+            comparison.Items.AddRange(new object[]{"未选择","一致","相差百分比","官方读不到"});
+            comparison.SelectedIndex=restoreDraft?FeedbackDraft.ComparisonChoice:0;
+            if(restoreDraft&&FeedbackDraft.ComparisonDifference>0)
+                difference.Text=FeedbackDraft.ComparisonDifference.ToString(CultureInfo.InvariantCulture);
+            difference.Dock=DockStyle.Fill;
+            var differenceBox=new ThemedTextBox(Theme,difference) {Width=60,Height=difference.PreferredHeight+20,Margin=new Padding(4,0,0,0)};
+            var percentLabel=Caption("%",false,true);
+            percentLabel.Margin=new Padding(0,4,0,0);
+            var comparisonRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,Margin=Padding.Empty,WrapContents=true};
+            comparisonRow.Controls.Add(comparison);
+            comparisonRow.Controls.Add(differenceBox);
+            comparisonRow.Controls.Add(percentLabel);
+            Action showDifference=delegate {
+                differenceBox.Visible=percentLabel.Visible=comparison.SelectedIndex==2;
+            };
+            showDifference();
+            comparison.SelectedIndexChanged+=delegate{showDifference();UpdateValidation();};
+            difference.TextChanged+=delegate{UpdateValidation();};
+            comparisonPanel.Controls.Add(comparisonCaption,0,0);
+            comparisonPanel.Controls.Add(comparisonRow,0,1);
+            descriptionLayout.Controls.Add(comparisonPanel,0,4);
             var noticeCard=new ThemedSection(Theme) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
             var noticeLayout=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Top,ColumnCount=1,RowCount=2,Margin=Padding.Empty};noticeLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -267,21 +314,31 @@ namespace AtkBatteryTray {
                     +noticeCard.GetPreferredSize(new Size(width,0)).Height+noticeCard.Margin.Vertical;
             });
             string initialCategory=FeedbackInput.DefaultCategory(deviceMissing);
-            FormClosing+=delegate{AbortSubmission();if(receipt==null)FeedbackDraft.SaveIfChanged(SelectedCategory,description.Text,diagnostics.Checked,initialCategory);else FeedbackDraft.Clear();};UpdateValidation();
+            FormClosing+=delegate{AbortSubmission();if(receipt==null)FeedbackDraft.SaveIfChanged(SelectedCategory,description.Text,diagnostics.Checked,initialCategory,comparison.SelectedIndex,DifferenceValue);else FeedbackDraft.Clear();};UpdateValidation();
         }
+        int DifferenceValue {
+            get {
+                int value;
+                return Int32.TryParse(difference.Text,NumberStyles.None,CultureInfo.InvariantCulture,out value)&&value>=1&&value<=100?value:0;
+            }
+        }
+        string SubmittedDescription {get{return FeedbackInput.WithComparison(description.Text,comparison.SelectedIndex,DifferenceValue);}}
+        bool InputValid {get{return (comparison.SelectedIndex!=2||DifferenceValue>0)&&FeedbackInput.Valid(SelectedCategory,description.Text)&&FeedbackInput.Valid(SelectedCategory,SubmittedDescription);}}
         void UpdateValidation(){
             int length=description.Text.Trim().Length;
-            remaining.Text=length<5?"还需输入 "+(5-length)+" 字；还可输入 "+(2000-length)+" 字":length>2000?"已超出 "+(length-2000)+" 字（最多 2000 字）":"还可输入 "+(2000-length)+" 字";
-            submit.Enabled=!busy&&(receipt!=null||FeedbackInput.Valid(SelectedCategory,description.Text));
-            fallback.Enabled=!busy&&FeedbackInput.Valid(SelectedCategory,description.Text);
+            int total=SubmittedDescription.Trim().Length;
+            remaining.Text=length<5?"还需输入 "+(5-length)+" 字；还可输入 "+(2000-total)+" 字":total>2000?"已超出 "+(total-2000)+" 字（最多 2000 字）":"还可输入 "+(2000-total)+" 字";
+            if(comparison.SelectedIndex==2&&DifferenceValue==0)remaining.Text+="。相差请输入 1–100 的整数。";
+            submit.Enabled=!busy&&(receipt!=null||InputValid);
+            fallback.Enabled=!busy&&InputValid;
         }
         bool ConfirmRepeat(){return !session.NeedsConfirmation||confirm("刚刚已提交过一次，确定还要再提交吗？");}
-        void EnableInputs(bool enabled){categories.Enabled=enabled;description.Enabled=enabled;diagnostics.Enabled=enabled;preview.Enabled=enabled;}
+        void EnableInputs(bool enabled){categories.Enabled=enabled;description.Enabled=enabled;diagnostics.Enabled=enabled;preview.Enabled=enabled;comparison.Enabled=enabled;difference.Enabled=enabled;}
         void Submit(){
             if(receipt!=null){Close();return;}
-            if(busy||!FeedbackInput.Valid(SelectedCategory,description.Text)||!ConfirmRepeat())return;
+            if(busy||!InputValid||!ConfirmRepeat())return;
             if(String.IsNullOrEmpty(relay)){OpenBrowser();return;}
-            string category=SelectedCategory,text=description.Text,diagnosticText=diagnostics.Checked?report.FullText:null;
+            string category=SelectedCategory,text=SubmittedDescription,diagnosticText=diagnostics.Checked?report.FullText:null;
             busy=true;EnableInputs(false);fallback.Visible=false;status.Text="正在提交…";UpdateValidation();
             var cancellation=new CancellationTokenSource();pending=cancellation;var token=cancellation.Token;
             ThreadPool.QueueUserWorkItem(delegate{
@@ -297,7 +354,7 @@ namespace AtkBatteryTray {
             else{EnableInputs(true);status.Text=result.Kind==FeedbackResultKind.RateLimited?"提交太频繁，请稍后再试":"暂时无法提交";fallback.Visible=result.Kind!=FeedbackResultKind.RateLimited;}
             UpdateValidation();
         }
-        void OpenBrowser(){if(busy||!FeedbackInput.Valid(SelectedCategory,description.Text))return;status.Text=report.BrowserSubmission(SelectedCategory,description.Text,diagnostics.Checked).Open(copy,open);}
+        void OpenBrowser(){if(busy||!InputValid)return;status.Text=report.BrowserSubmission(SelectedCategory,SubmittedDescription,diagnostics.Checked).Open(copy,open);}
         internal ThemedDialog CreateDiagnosticsDialog(){return CreateDiagnosticsDialog(Theme.Dark,report.FullText);}
         internal static ThemedDialog CreateDiagnosticsDialog(bool dark,string contents){
             var dialog=new ThemedDialog(dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};
