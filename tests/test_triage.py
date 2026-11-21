@@ -630,11 +630,13 @@ class TriageTests(unittest.TestCase):
     def test_issue_65_ignores_working_card_receiver_and_motherboard(self):
         body = (ROOT / "tests/fixtures/issue65-body.txt").read_text(encoding="utf-8")
         result = triage.decide(issue(body, labels=("triage:supported",)), known_ids.build_index())
-        self.assertEqual(result["label"], "triage:new-vendor")
+        # Architecture v2: the Rongyuan family reads other 342D receivers, so 342D is a
+        # supported vendor and the unlisted E407 is a pack candidate, not a new vendor.
+        self.assertEqual(result["label"], "triage:pack-candidate")
         self.assertEqual(result["reply"], triage.MARKER + "\n" + triage.UNSUPPORTED)
         self.assertEqual(result["remove_labels"], ["triage:supported"])
         classification, ignored = result["reason"].split(" 已忽略", 1)
-        self.assertIn("342D:E407", classification)
+        self.assertIn("已支持厂商的未知产品 ID", classification)  # pack-candidate reasons do not list IDs
         self.assertNotIn("046D:C547", result["reason"])
         self.assertNotIn("0B05:18A5", classification)
         self.assertIn("0B05:18A5", ignored)

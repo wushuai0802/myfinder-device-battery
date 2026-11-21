@@ -651,10 +651,12 @@ def discover(paths, excluded=(), *, full=False):
                 # proof only on its own identities and vendor-page collections.
                 from families import wants_caps
                 if wants_caps(attrs.vendor, attrs.product, caps.page, caps.usage):
-                    from battery_hid import battery_caps
+                    # Read-only HidP caps for every direction a family may declare;
+                    # the family itself decides which ones must be proven.
+                    from battery_hid import battery_caps, byte_report_sizes
                     info.update(battery_caps(hid, data, caps))
-                    caps_complete = all(info.get(key) is not None
-                                        for key in ("input_report_sizes", "output_report_sizes"))
+                    info.update(feature_report_length=caps.feature,
+                                feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
             inventory.append(info)

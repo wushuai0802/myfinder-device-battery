@@ -118,6 +118,8 @@ def select(infos: List[dict]):
         for info in infos:
             if (info.get("usage_page"), info.get("usage")) not in family.collections:
                 continue
+            if family.interface is not None and info.get("interface_number") != family.interface:
+                continue
             device = family.device_for(info.get("vendor_id"), info.get("product_id"), info.get("product_string"))
             if device is None:
                 continue

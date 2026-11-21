@@ -87,7 +87,8 @@ class FamiliesProvider(Provider):
                 self._diag.append(f"{family.id}.{name}: {outcome.kind}" + (f" ({outcome.note})" if outcome.note else ""))
                 if outcome.kind == "reading":
                     return DeviceStatus(
-                        f"{NAME}:{family.id}:{physical}", device.name, outcome.level, outcome.charging, True, NAME,
+                        f"{NAME}:{family.id}:{physical}",
+                        ((info.get("product_string") or "").strip() or device.name) if family.prefer_product_name else device.name, outcome.level, outcome.charging, True, NAME,
                         kind=family.kind, physical_id=physical, connection_known=True,
                         charging_known=outcome.charging_known, verification_level=family.level,
                         model_source="family:" + family.id)

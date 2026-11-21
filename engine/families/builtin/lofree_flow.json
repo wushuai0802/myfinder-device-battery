@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "id": "lofree_flow",
+  "name": "Lofree Flow Lite84 2.4G",
+  "kind": "keyboard",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d0/src/BrimDeck.Core/Brands/Lofree.cs",
+    "revision": "f1510d0",
+    "license": "Apache-2.0 (BrimDeck); protocol origin MIT (HaloBattery lofree.py)",
+    "origin": "HaloBattery lofree.py (MIT), Lofree Control HUB's read in Compx's 17-byte frame",
+    "evidence": "Upstream checked on a Flow Lite84 (level and charging). The receiver borrows Apple's 05AC:024F, shared with other keyboards; only the product string '2.4G Wireless Receiver', interface 1 and the FF02:0002 collection with 17-byte report 08 are asked."
+  },
+  "devices": [
+    {"vendorId": "05AC", "productId": "024F", "name": "Lofree Flow Lite84", "productString": "2.4G Wireless Receiver"}
+  ],
+  "interface": 1,
+  "collections": [{"usagePage": "FF02", "usage": "0002"}],
+  "reports": {
+    "input": {"id": "08", "length": 17},
+    "output": {"id": "08", "length": 17}
+  },
+  "reads": [
+    {
+      "name": "battery",
+      "transport": "output",
+      "request": "08 04 00 00 00 80 00 00 00 00 00 00 00 00 00 00 C9",
+      "timeoutMs": 800,
+      "gate": {
+        "request": "08 03 00 00 00 80 00 00 00 00 00 00 00 00 00 00 CA",
+        "match": [{"at": 0, "eq": "08"}, {"at": 1, "eq": "03"}, {"at": 2, "eq": "00"}],
+        "checksum": {"sum": [0, 17], "equals": "55"},
+        "online": {"at": 6, "eq": "01"},
+        "offline": {"at": 6, "eq": "00"}
+      },
+      "reply": {
+        "length": 17,
+        "match": [{"at": 0, "eq": "08"}, {"at": 1, "eq": "04"}, {"at": 2, "eq": "00"}],
+        "checksum": {"sum": [0, 17], "equals": "55"},
+        "percent": {"at": 6, "min": 1, "max": 100},
+        "charging": {"at": 7, "eq": "01"}
+      }
+    }
+  ],
+  "standAsideFor": ["lofree control hub.exe"]
+}

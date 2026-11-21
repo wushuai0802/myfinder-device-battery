@@ -222,7 +222,9 @@ class EweadnS9ProBridgeTests(unittest.TestCase):
                 self.assertEqual(recovered["feature_report_sizes"], {"3": 64})
 
     def test_feature_discovery_does_not_expand_to_other_id_or_collection(self):
-        for changes in (dict(product_id=0x103D), dict(product_id=0x106E), dict(product_id=0x1029),
+        # 103D, 106E and 1029 are read by the architecture v2 eweadn_beiyin family,
+        # which asks for their feature sizes itself; eweadn_s9pro still never does.
+        for changes in (dict(product_id=0x1028), dict(product_id=0x1030),
                         dict(vendor_id=0x372F), dict(usage_page=1, usage=2),
                         dict(usage_page=1, usage=6), dict(usage_page=0xFF60), dict(usage=2)):
             with self.subTest(changes=changes):
