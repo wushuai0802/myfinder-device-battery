@@ -606,6 +606,10 @@ def reader_child():
             command = json.loads(line, object_hook=wire_decode)
             sequence = command.get("sequence")
             action = command.get("action")
+            # Architecture v2: the manager owns probe policy and read memory;
+            # every command carries them so restarted children stay consistent.
+            import families as family_registry
+            family_registry.set_probe_enabled(command.get("probeFamilies") is True)
             document = command.get("devicePack", "")
             if document != device_pack.document:
                 candidate_pack = parse_pack(document) if document else EMPTY_PACK
@@ -655,6 +659,8 @@ def reader_child():
                     instances[key] = (provider_class(name)(device_pack=device_pack) if name in ("razer", "pulsar")
                                       else provider_class(name)())
                 provider = instances[key]
+                if name == "families" and isinstance(command.get("familyMemory"), dict):
+                    provider.memory.restore(command["familyMemory"])
                 if name in SYSTEM_PROVIDERS:
                     statuses = provider.poll()
                     misses = getattr(provider, "_misses", {})
@@ -670,6 +676,8 @@ def reader_child():
                     response["failureCode"] = provider.failure_code()
                 if name in READER_DIAGNOSTICS:
                     response["diagnostics"] = reader_diagnostics(provider)
+                if name == "families":
+                    response["familyMemory"] = provider.memory.snapshot()
             elif action == "set_dpi":
                 # Only the selected physical receiver reaches the provider. The
                 # provider revalidates identity/current/stages before one write.
@@ -743,7 +751,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
 
 class BatteryEngine:
     def __init__(self, providers=None, include_native=False, package_smoke=False, process_factory=None,
-                 device_pack=None):
+                 device_pack=None, probe_families=True):
         from providers import hidlist
         from isolation import ReaderProcess
         self._hidlist = hidlist
@@ -752,6 +760,13 @@ class BatteryEngine:
         self.package_smoke = package_smoke
         self.imported_provider_count = 0
         self.device_pack = device_pack or EMPTY_PACK
+        # Whole-vendor probe families are on unless the user switched them off.
+        # The manager never reads devices; each child command carries the flag
+        # (see _reader_command), so this process-wide switch stays untouched here.
+        self.probe_families = bool(probe_families)
+        self.family_memory = {}
+        self._family_user_disabled = {}   # memory key -> user's choice; outranks child snapshots
+        self._family_units = {}   # public device id -> (family id, memory unit)
         if self._direct and self.device_pack.loaded:
             for provider in self.providers:
                 if provider.name in ("razer", "pulsar"):
@@ -789,7 +804,59 @@ class BatteryEngine:
 
     def _reader_command(self, command):
         # Carry the immutable startup snapshot, including after child restarts.
-        return dict(command, devicePack=self.device_pack.document) if self.device_pack.loaded else command
+        command = dict(command, devicePack=self.device_pack.document) if self.device_pack.loaded else dict(command)
+        command["probeFamilies"] = self.probe_families
+        if command.get("provider") == "families":
+            command["familyMemory"] = self.family_memory
+        return command
+
+    FAMILY_MEMORY_LIMIT = 256   # keeps the snapshot line far below the host's 512 KiB frame cap
+
+    def _merge_family_memory(self, snapshot):
+        if not isinstance(snapshot, dict) or len(snapshot) > 4 * self.FAMILY_MEMORY_LIMIT:
+            return
+        from families.memory import ReadMemory
+        checked = ReadMemory()
+        checked.restore(snapshot)               # drops malformed entries
+        merged = checked.snapshot()
+        for key, value in merged.items():
+            if key not in self.family_memory and len(self.family_memory) >= self.FAMILY_MEMORY_LIMIT:
+                continue
+            if key in self._family_user_disabled:
+                value["disabled"] = self._family_user_disabled[key]
+            self.family_memory[key] = value
+
+    def family_memory_command(self, op, device_id=None, memory_key=None, snapshot=None):
+        """Host API for read memory.
+        get      -> current snapshot (persist it as family-memory.json)
+        set      -> replace the snapshot at startup (malformed entries are dropped)
+        disable  -> stop reading one family device by its public deviceId; the reply
+                    carries memoryKey, which the host keeps to undo it later
+        enable   -> resume a device by memoryKey (a disabled device has no card)"""
+        result = {}
+        if op == "set":
+            self.family_memory, self._family_user_disabled = {}, {}
+            self._merge_family_memory(snapshot)
+            self._family_user_disabled = {k: True for k, v in self.family_memory.items() if v.get("disabled")}
+        elif op in ("disable", "enable"):
+            if op == "disable":
+                unit = self._family_units.get(device_id)
+            else:
+                family_id, _, device_key = str(memory_key or "").partition("|")
+                unit = (family_id, device_key) if family_id and device_key.startswith("unit-") else None
+            if unit is None:
+                return {"ok": False, "error": "unknown_device"}
+            from families.memory import ReadMemory
+            memory = ReadMemory()
+            memory.restore(self.family_memory)
+            memory.disable(unit[0], unit[1], op == "disable")
+            self.family_memory = memory.snapshot()
+            result["memoryKey"] = unit[0] + "|" + unit[1]
+            self._family_user_disabled[result["memoryKey"]] = op == "disable"
+        elif op != "get":
+            return {"ok": False, "error": "invalid_op"}
+        result.update(ok=True, familyMemory=dict(self.family_memory), probeFamilies=self.probe_families)
+        return result
 
     def _snapshot(self, request_id=0, generation=0, complete=True, unadapted_inventory=None):
         live = {}
@@ -866,7 +933,9 @@ class BatteryEngine:
                 "suppressed": suppressed,
                 "providerCount": len(self.providers), "errors": (list(self.errors) + errors)[:32],
                 "importedProviderCount": self.imported_provider_count,
-                "health": health, "checkedAtUtc": utcnow(), "packageSmoke": self.package_smoke}
+                "health": health, "checkedAtUtc": utcnow(), "packageSmoke": self.package_smoke,
+                "probeFamilies": self.probe_families,
+                "familyMemory": dict(self.family_memory) if complete else None}
 
     def _accept(self, reader_key, name, statuses, now, physical="", candidate_count=0, diagnostics=(), failure_code=""):
         group = {}
@@ -888,6 +957,10 @@ class BatteryEngine:
             if group[key].get("dpi", {}) and group[key]["dpi"].get("canSet") and isinstance(getattr(status, "dpi_target", None), dict):
                 self.dpi_targets[key] = dict(status.dpi_target)
             self.provider_by_id[key] = name
+            source = getattr(status, "model_source", "") or ""
+            if name == "families" and source.startswith("family:") and status.physical_id:
+                from families import memory_key
+                self._family_units[key] = (source[len("family:"):], memory_key(status.physical_id))
             self.physical_by_id[key] = physical
         self.by_provider[reader_key] = group
         if name == "bluetooth":
@@ -1473,6 +1546,8 @@ class BatteryEngine:
                             # One receiver cannot establish a unique global
                             # legacy identity or authorise a cache migration.
                             statuses = [replace(status, legacy_key="") for status in statuses]
+                        if name == "families":
+                            self._merge_family_memory(result.get("familyMemory"))
                         self._accept(reader_key, name, statuses, valid_time(result.get("checkedAtUtc")) or utcnow(), physical,
                                      candidate_count=max(0, min(512, int(result.get("candidateCount", 0)))),
                                      diagnostics=result.get("diagnostics", ()),
@@ -1519,11 +1594,14 @@ def main():
     parser.add_argument("--reader-child", action="store_true")
     parser.add_argument("--package-smoke", action="store_true")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--probe-families", choices=("on", "off"), default="on",
+                        help="whole-vendor family probing (default on; the user can switch it off)")
     args = parser.parse_args()
     if args.reader_child:
         reader_child()
         return
-    engine = BatteryEngine(package_smoke=args.package_smoke, device_pack=load_pack(args.device_pack))
+    engine = BatteryEngine(package_smoke=args.package_smoke, device_pack=load_pack(args.device_pack),
+                           probe_families=args.probe_families == "on")
     try:
         if args.once:
             print(json.dumps(engine.poll(wait_bluetooth=True), ensure_ascii=True), flush=True)
@@ -1538,6 +1616,17 @@ def main():
                 if command.get("command") == "exit":
                     break
                 action = command.get("command")
+                if action == "family_memory":
+                    # Host API for probe read memory (C1). Replies carry "reply" so
+                    # the host never mistakes them for a battery snapshot.
+                    request_id = command.get("requestId", 0)
+                    if type(request_id) is not int or request_id < 0 or not valid_public_target(command.get("deviceId")):
+                        continue
+                    result = engine.family_memory_command(command.get("op"), command.get("deviceId"),
+                                                          command.get("memoryKey"), command.get("familyMemory"))
+                    result.update(reply="family_memory", requestId=request_id)
+                    print(json.dumps(result, ensure_ascii=True), flush=True)
+                    continue
                 if action not in ("poll", "set_dpi", "ready"):
                     continue
                 request_id, generation = command.get("requestId", 0), command.get("generation", 0)

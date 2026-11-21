@@ -10,10 +10,13 @@ docs/zh-CN/devices.md "读取方式与安全"), reimplemented here:
   ``MAX_ANOMALIES`` reads are retired, the device is not read again;
 * a remembered read that stays silent for ``STALE_POLLS`` polls is forgotten
   once, so the trial can run again (firmware updates change answers);
+* a device that never answered its trial is not abandoned: every
+  ``RETRY_POLLS`` polls it gets one more trial round;
 * the user can switch reading off per device (``disable``).
 
-State is in memory for the engine's lifetime; ``snapshot``/``restore`` let the
-host persist it without this module touching the filesystem.
+``snapshot``/``restore`` carry the whole state: the engine manager keeps the
+authoritative copy, hands it to the reader child with every families query and
+merges the child's result back; the host persists it as family-memory.json.
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ from typing import Dict, List, Optional, Set, Tuple
 MAX_TRIAL_ROUNDS = 3
 MAX_ANOMALIES = 2
 STALE_POLLS = 40
+RETRY_POLLS = 20   # after an unanswered trial, wait this many polls and try one more round
 
 
 @dataclass
@@ -35,6 +39,11 @@ class DeviceMemory:
     disabled: bool = False
 
 
+def _bounded(value, limit: int) -> int:
+    # Persisted by the host: anything that is not a small non-negative int is 0.
+    return min(limit, value) if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
 class ReadMemory:
     def __init__(self):
         self._devices: Dict[Tuple[str, str], DeviceMemory] = {}
@@ -45,12 +54,21 @@ class ReadMemory:
     def plan(self, family_id: str, device_key: str, read_names: List[str]) -> List[str]:
         """Reads to try this poll, in order. Empty: send nothing."""
         memory = self.entry(family_id, device_key)
+        # Persisted state can name reads a newer family file no longer has.
+        memory.retired &= set(read_names)
+        if memory.working not in read_names:
+            memory.working = None
         if memory.disabled or len(memory.retired) >= MAX_ANOMALIES:
             return []
         if memory.working is not None and memory.working not in memory.retired:
             return [memory.working]
         if memory.rounds >= MAX_TRIAL_ROUNDS:
-            return []
+            # Never give up for good: a receiver whose mouse was off, or a passive
+            # read of a device that only reports while in use, gets another trial.
+            memory.silent_polls += 1
+            if memory.silent_polls < RETRY_POLLS:
+                return []
+            memory.rounds, memory.silent_polls = MAX_TRIAL_ROUNDS - 1, 0
         memory.rounds += 1
         return [name for name in read_names if name not in memory.retired]
 
@@ -75,16 +93,20 @@ class ReadMemory:
 
     def snapshot(self) -> dict:
         return {f"{f}|{d}": {"working": m.working, "rounds": m.rounds, "retired": sorted(m.retired),
-                             "relearned": m.relearned, "disabled": m.disabled}
+                             "silentPolls": m.silent_polls, "relearned": m.relearned, "disabled": m.disabled}
                 for (f, d), m in self._devices.items()}
 
     def restore(self, data: dict):
-        for key, value in (data or {}).items():
-            family_id, _, device_key = key.partition("|")
+        if not isinstance(data, dict):
+            return
+        for key, value in data.items():
+            family_id, _, device_key = str(key).partition("|")
             if not family_id or not device_key or not isinstance(value, dict):
                 continue
+            retired = value.get("retired")
             self._devices[(family_id, device_key)] = DeviceMemory(
                 working=value.get("working") if isinstance(value.get("working"), str) else None,
-                rounds=min(MAX_TRIAL_ROUNDS, int(value.get("rounds", 0) or 0)),
-                retired={r for r in value.get("retired", []) if isinstance(r, str)},
-                relearned=bool(value.get("relearned")), disabled=bool(value.get("disabled")))
+                rounds=_bounded(value.get("rounds"), MAX_TRIAL_ROUNDS),
+                silent_polls=_bounded(value.get("silentPolls"), STALE_POLLS),
+                retired={r for r in retired if isinstance(r, str)} if isinstance(retired, list) else set(),
+                relearned=value.get("relearned") is True, disabled=value.get("disabled") is True)

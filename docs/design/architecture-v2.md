@@ -41,9 +41,32 @@
 - `device_pack.py`：`families` 加入可禁用的读取器范围。
 - `compatibility.json`：新增 `families` 读取器条目（C 级）。
 
-## 5. 试读族（整品牌识别）
+## 5. 试读族（整品牌识别）与宿主接口（C1）
 
-方案族可以用 `probeVendorIds` 声明整品牌识别。这类方案族默认**不生效**，只有宿主调用 `families.set_probe_enabled(True)` 才会启用，计划只对开启测试版试读的用户开放（决策 E1）。宿主侧的开关和设置界面还没有接入。
+方案族可以用 `probeVendorIds` 声明整品牌识别。这类方案族只有在试读开关打开时才生效。按维护者 2026-11-21 的决定，试读**默认开启**，用户可以在设置里关闭。
+
+**开关：** `server.py --probe-families on|off`（默认 `on`）。管理进程本身不读设备，所以不改动进程级的开关，而是在发给读取子进程的每条命令（包括拓扑命令）里带上 `probeFamilies`，由子进程调用 `families.set_probe_enabled`。子进程重启后也不会丢失这个设置。
+
+**读法记忆：** 记忆的键是 `<方案族 id>|unit-<sha256 前 24 位>`，由 `families.memory_key(physical)` 生成，不保存原始设备路径。管理进程持有权威副本，流程如下：
+
+1. 每次 families 查询时，管理进程把副本放进 `familyMemory` 发给子进程；
+2. 子进程先 `restore`，再读设备，最后把 `snapshot` 放进响应返回；
+3. 管理进程合并返回的快照。
+
+快照里包含 `silentPolls`，这样两个子进程交替读同一设备时，长期无回应后重新试读的逻辑仍然有效。为避免完整快照超过宿主每行 512 KiB 的上限，最多记录 256 个设备。
+
+**完整快照** 会附带 `probeFamilies` 和 `familyMemory`（只在 `complete` 时附带），供宿主写入 `family-memory.json`。
+
+**stdin 命令** `{"command":"family_memory","op":...,"requestId":n}`，回复带 `"reply":"family_memory"`：
+
+| op | 参数 | 作用 |
+|---|---|---|
+| `get` | — | 返回当前快照 |
+| `set` | `familyMemory` | 启动时恢复持久化的快照，格式错误的条目会被丢弃 |
+| `disable` | `deviceId`（卡片的公开 ID） | 停止读取这个设备，回复中带 `memoryKey` |
+| `enable` | `memoryKey` | 恢复读取。设备被停用后不再出现卡片，所以按 `memoryKey` 恢复 |
+
+用户的停用或恢复操作优先于子进程返回的快照：点击之前已经开始的那一轮读取，不会把用户的选择覆盖掉。
 
 ## 6. 下一步
 
@@ -58,7 +81,7 @@
 
 后续：
 1. 型号数据包扩展：允许签名数据包携带方案族 JSON（只能新增族或设备行，解析规则与内置相同）。
-2. 读法记忆持久化：宿主保存 `snapshot()` 的结果，启动时调用 `restore()`。
+2. ~~读法记忆持久化~~：引擎侧已完成（第 5 节，C1），宿主侧由 Codex 接入（B5 第 3.1 节）。
 3. 按 B2-9 的盘点结果，批量把 BrimDeck、OpenMouse 等项目的协议转换为方案族。
 4. 通用连接去重（A9 充电双卡，T61）和统一轮询退避（T15）。
 5. 引擎对外接口整理为 JSON-RPC 2.0。
