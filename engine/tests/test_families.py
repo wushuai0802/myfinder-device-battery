@@ -349,5 +349,161 @@ class BrimDeckPortTests(unittest.TestCase):
             spec.parse_family(bad)  # percent both top-level and in variants
 
 
+class HostControlTests(unittest.TestCase):
+    """C1: probe switch and read memory owned by the engine manager."""
+
+    def engine(self, **kwargs):
+        import server
+        from test_engine_reliability import FakePool
+        engine = server.BatteryEngine(process_factory=FakePool().factory, **kwargs)
+        self.addCleanup(engine.close)
+        return engine
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+        families.set_probe_enabled(False)
+        self.addCleanup(families.set_probe_enabled, False)
+
+    def test_memory_key_hides_device_path(self):
+        key = families.memory_key(r"pnp:usb\vid_36f9&pid_f016\receiver")
+        self.assertRegex(key, r"^unit-[0-9a-f]{24}$")
+        self.assertEqual(key, families.memory_key(r"pnp:usb\vid_36f9&pid_f016\receiver"))
+        provider = provider_module.FamiliesProvider(running=lambda names: False)
+        poll([collection()], FakeDevice([frame("55 65 00 3c")]), provider)
+        self.assertEqual(list(provider.memory.snapshot()), ["xiberia|" + key])
+
+    def test_probe_switch_defaults_on_and_rides_every_child_command(self):
+        on, off = self.engine(), self.engine(probe_families=False)
+        self.assertIs(on._reader_command({"action": "topology"})["probeFamilies"], True)
+        self.assertIs(off._reader_command({"action": "query", "provider": "families"})["probeFamilies"], False)
+        self.assertNotIn("familyMemory", on._reader_command({"action": "query", "provider": "razer"}))
+        self.assertEqual(on._reader_command({"action": "query", "provider": "families"})["familyMemory"], {})
+        self.assertFalse(families.probe_enabled())  # the manager never flips the process switch
+
+    def test_cli_flag(self):
+        import io
+        import server
+        for argv, expected in (([], True), (["--probe-families", "off"], False), (["--probe-families", "on"], True)):
+            with self.subTest(argv=argv), patch.object(server, "BatteryEngine") as engine, \
+                    patch.object(server.sys, "argv", ["server.py", "--once"] + argv), \
+                    patch.object(server.sys, "stdout", new_callable=io.StringIO):
+                engine.return_value.poll.return_value = {}
+                server.main()
+                self.assertIs(engine.call_args.kwargs["probe_families"], expected)
+
+    def test_child_applies_flag_restores_and_returns_memory(self):
+        import io
+        import types
+        import server
+        from isolation import wire_encode
+        key = "xiberia|" + families.memory_key("fixture-physical")
+        memory = {key: {"working": "battery", "rounds": 1, "retired": [], "silentPolls": 5,
+                        "relearned": False, "disabled": False}}
+        seen = []
+
+        def fake_scoped(provider, inventory, physical, pack):
+            seen.append((families.probe_enabled(), provider.memory.snapshot()[key]["silentPolls"]))
+            return []
+        commands = [{"action": "query", "provider": "families", "physicalId": "fixture-physical", "inventory": [],
+                     "probeFamilies": flag, "familyMemory": memory, "sequence": i}
+                    for i, flag in enumerate((True, False))]
+        data = b"".join((json.dumps(c, default=wire_encode) + "\n").encode() for c in commands)
+        output = io.StringIO()
+        with patch.object(server, "scoped_poll", side_effect=fake_scoped), \
+                patch.object(server.sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(data))), \
+                patch.object(server.sys, "stdout", output):
+            server.reader_child()
+        responses = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(seen, [(True, 5), (False, 5)])
+        self.assertEqual(responses[0]["familyMemory"][key]["working"], "battery")
+
+    def test_restored_unknown_read_names_are_forgotten(self):
+        memory = mem.ReadMemory()
+        memory.restore({"xiberia|unit-x": {"working": "renamed", "retired": ["gone", "battery"], "disabled": "false"}})
+        self.assertEqual(memory.plan("xiberia", "unit-x", ["battery", "other"]), ["other"])
+        self.assertFalse(memory.snapshot()["xiberia|unit-x"]["disabled"])
+        provider = provider_module.FamiliesProvider(running=lambda names: False)
+        provider.memory.restore({"xiberia|" + families.memory_key(collection()["physical_id"]): {"working": "renamed"}})
+        statuses, _ = poll([collection()], FakeDevice([frame("55 65 00 3c")]), provider)
+        self.assertEqual(statuses[0].level, 60)
+
+    def test_stale_relearn_survives_round_trips(self):
+        # The manager hands memory to the child each poll; the silence counter must persist.
+        provider = provider_module.FamiliesProvider(running=lambda names: False)
+        poll([collection()], FakeDevice([frame("55 65 00 3c")]), provider)
+        state = provider.memory.snapshot()
+        for _ in range(mem.STALE_POLLS):
+            fresh = provider_module.FamiliesProvider(running=lambda names: False)
+            fresh.memory.restore(state)
+            poll([collection()], FakeDevice([]), fresh)
+            state = fresh.memory.snapshot()
+        self.assertTrue(next(iter(state.values()))["relearned"])
+
+    def test_family_memory_command(self):
+        from server import public_id
+        from providers.base import DeviceStatus
+        engine = self.engine()
+        physical = r"pnp:usb\vid_36f9&pid_f016\receiver"
+        status = DeviceStatus(f"families:xiberia:{physical}", "XIBERIA K03S", 60, False, True, "families",
+                              kind="headset", physical_id=physical, model_source="family:xiberia")
+        engine._accept(("families", physical), "families", [status], "2026-11-21T00:00:00Z", physical)
+        device_id = public_id(status.key)
+        unit = "xiberia|" + families.memory_key(physical)
+
+        self.assertEqual(engine.family_memory_command("get"),
+                         {"ok": True, "familyMemory": {}, "probeFamilies": True})
+        self.assertEqual(engine.family_memory_command("disable", "device-unknown")["error"], "unknown_device")
+        self.assertEqual(engine.family_memory_command("bogus")["error"], "invalid_op")
+        reply = engine.family_memory_command("disable", device_id)
+        self.assertEqual(reply["memoryKey"], unit)
+        self.assertTrue(reply["familyMemory"][unit]["disabled"])
+        self.assertTrue(engine._reader_command({"action": "query", "provider": "families"})["familyMemory"][unit]["disabled"])
+
+        # A child poll that started before the click must not undo it.
+        stale = {unit: dict(reply["familyMemory"][unit], disabled=False)}
+        engine._merge_family_memory(stale)
+        self.assertTrue(engine.family_memory[unit]["disabled"])
+
+        self.assertEqual(engine.family_memory_command("enable", memory_key="xiberia|raw-path")["error"], "unknown_device")
+        self.assertFalse(engine.family_memory_command("enable", memory_key=unit)["familyMemory"][unit]["disabled"])
+
+        # Restoring a persisted file: malformed entries and non-objects are dropped.
+        restored = engine.family_memory_command("set", snapshot={
+            unit: {"working": 7, "rounds": "x", "retired": "battery", "silentPolls": True, "disabled": True},
+            "nobar": {}, "a|b": [], })
+        self.assertEqual(restored["familyMemory"], {unit: {"working": None, "rounds": 0, "retired": [],
+                                                            "silentPolls": 0, "relearned": False, "disabled": True}})
+        many = {f"xiberia|unit-{i:024x}": {} for i in range(engine.FAMILY_MEMORY_LIMIT + 10)}
+        self.assertEqual(len(engine.family_memory_command("set", snapshot=many)["familyMemory"]), engine.FAMILY_MEMORY_LIMIT)
+        self.assertTrue(engine.family_memory_command("set", snapshot=["not", "a", "dict"])["ok"])
+        self.assertEqual(engine.family_memory, {})
+
+    def test_stdin_family_memory_command(self):
+        import io
+        import server
+        lines = "\n".join(json.dumps(c) for c in (
+            {"command": "family_memory", "op": "set", "requestId": 4,
+             "familyMemory": {"xiberia|unit-" + "0" * 24: {"disabled": True}}},
+            {"command": "family_memory", "op": "get", "requestId": 5})) + "\n"
+        from test_engine_reliability import FakePool
+        real = server.BatteryEngine
+        made = []
+
+        def build(**kw):
+            made.append(real(process_factory=FakePool().factory, **kw))
+            return made[-1]
+        self.addCleanup(lambda: [e.close() for e in made])
+        with patch.object(server, "BatteryEngine", side_effect=build), \
+                patch.object(server.sys, "argv", ["server.py", "--probe-families", "off"]), \
+                patch.object(server.sys, "stdin", io.StringIO(lines)), \
+                patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+            server.main()
+        replies = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual({r.get("reply") for r in replies}, {"family_memory"})
+        self.assertEqual([r["requestId"] for r in replies], [4, 5])
+        self.assertEqual(replies[1]["probeFamilies"], False)
+        self.assertTrue(replies[1]["familyMemory"]["xiberia|unit-" + "0" * 24]["disabled"])
+
+
 if __name__ == "__main__":
     unittest.main()

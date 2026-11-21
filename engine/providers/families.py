@@ -68,7 +68,8 @@ class FamiliesProvider(Provider):
         if family.stand_aside_for and self._running(family.stand_aside_for):
             self._diag.append(f"{family.id}: vendor software running; stepping aside")
             return None
-        plan = self.memory.plan(family.id, physical, [r.name for r in family.reads])
+        unit = families.memory_key(physical)
+        plan = self.memory.plan(family.id, unit, [r.name for r in family.reads])
         if not plan:
             self._diag.append(f"{family.id}: no read left to try for this device; nothing sent")
             return None
@@ -83,7 +84,7 @@ class FamiliesProvider(Provider):
             for name in plan:
                 kwargs = {"clock": self._clock} if self._clock else {}
                 outcome = runner.run(dev, family, reads[name], **kwargs)
-                self.memory.record(family.id, physical, name, outcome.kind)
+                self.memory.record(family.id, unit, name, outcome.kind)
                 self._diag.append(f"{family.id}.{name}: {outcome.kind}" + (f" ({outcome.note})" if outcome.note else ""))
                 if outcome.kind == "reading":
                     return DeviceStatus(

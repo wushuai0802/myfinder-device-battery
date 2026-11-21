@@ -51,6 +51,12 @@ def families() -> Dict[str, Family]:
     return _families
 
 
+def memory_key(physical: str) -> str:
+    """Stable per-device key for read memory; never the raw (private) device path."""
+    import hashlib
+    return "unit-" + hashlib.sha256(str(physical).encode("utf-8")).hexdigest()[:24]
+
+
 def set_probe_enabled(enabled: bool):
     global _probe_enabled
     _probe_enabled = bool(enabled)
