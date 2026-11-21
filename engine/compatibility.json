@@ -126,7 +126,7 @@
         {"connection":"wired","productName":"INFI75-1.1","usagePage":"FF13","usage":"0001","featureBytes":65},
         {"connection":"2.4G","productName":"2.4G Wireless Keyboard","usagePage":"FFB5","usage":"0001","inputBytes":8,"outputBytes":8,"featureBytes":0,"standardBatteryCandidates":0,"checkedOn":"2026-10-18"}
       ],
-      "notes": "2.4G缺少现有标准电量字段，官方驱动产品匹配和65字节Feature通道也不适用。共享VID/PID不是其他键盘命令可用的证据；不发送未经验证的私有命令，不刷固件或屏幕Flash。"
+      "notes": "2.4G缺少现有标准电量字段，官方驱动产品匹配和65字节Feature通道也不适用。共享VID/PID不是其他键盘命令可用的证据；不发送未经验证的私有命令，不刷固件或屏幕Flash。 2026-11-21，键盘小屏有电量，当前官方驱动界面无电量显示，2.4G与有线被动监听均为0帧，维持D级和零发送，维护者决定暂停研究，待有新证据再重启。"
     },
     {
       "id": "rapoo_vt9_pro_1601_observed",
