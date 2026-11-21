@@ -233,6 +233,7 @@ namespace AtkBatteryTray {
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));
                 var feedbackRow=Row(258,"反馈问题",null,"info");feedbackRow.Detail=String.IsNullOrEmpty(FeedbackRelay.Url)?"提交需要 GitHub 账号":"在程序内提交，不需要 GitHub 账号";rows.Add(feedbackRow);
                 rows.Add(Row(262,owner.FeedbackReplies.Store.MenuText,null,"info"));
+                rows.Add(Row(AdaptationEvidence.ActionId,"导出适配资料",null,"info"));
                 var pack=Info("型号数据包",owner.DevicePackDiagnostic);pack.WrapText=true;rows.Add(pack);
             }else if(nav.Page==PopupPage.DeviceMissing) {
                 var layout=WirelessLayout.Build(owner,0,100000);
