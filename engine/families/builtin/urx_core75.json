@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "urx_core75",
+  "name": "URX Core75",
+  "kind": "keyboard",
+  "verificationLevel": "C",
+  "source": {
+    "project": "BrimDeck",
+    "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d09677492a13a31d26bc37c3509da1b818f/src/BrimDeck.Core/Brands/Urx.cs",
+    "revision": "f1510d09677492a13a31d26bc37c3509da1b818f",
+    "license": "Apache-2.0 (BrimDeck); MIT (HaloBattery)",
+    "origin": "HeyOkay/HaloBattery 73e229cbee2e97fad659fcd96c78afdfa78488fb providers/urx.py and issue #245",
+    "evidence": "HaloBattery #245 records the URX Core75 Wireless receiver at 76% with a 08 00 07 4C reply followed by zeros. Charging is not reported on the receiver. The shared 36B0:3002 VID/PID is limited to the captured product string and interface 1."
+  },
+  "devices": [
+    {"vendorId": "36B0", "productId": "3002", "name": "URX Core75", "productString": "URX Core75 Wireless"}
+  ],
+  "interface": 1,
+  "collections": [{"usagePage": "FF60", "usage": "0061"}],
+  "reports": {
+    "input": {"id": "00", "length": 33},
+    "output": {"id": "00", "length": 33}
+  },
+  "reads": [
+    {
+      "name": "battery",
+      "transport": "output",
+      "request": "00 08 00 07",
+      "timeoutMs": 800,
+      "reply": {
+        "length": 32,
+        "match": [{"at": 0, "eq": "08"}, {"at": 1, "eq": "00"}, {"at": 2, "eq": "07"}],
+        "percent": {"at": 3, "min": 1, "max": 100}
+      }
+    }
+  ]
+}
