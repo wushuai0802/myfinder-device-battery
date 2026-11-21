@@ -89,6 +89,7 @@ namespace AtkBatteryTray {
         int presentationDepth;
         bool ignoreDeactivate;
         bool feedbackModal;
+        bool adaptationExportBusy;
         FeedbackForm feedbackDialog;
         readonly System.Windows.Forms.Timer deactivateRelease=new System.Windows.Forms.Timer();
         bool deferredDeactivation;
@@ -358,6 +359,7 @@ namespace AtkBatteryTray {
                 else if(id==7||id==8){navigation.Offset=control.PageOffset>=0?control.PageOffset:Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
                 else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
                 else if(id==250){copyText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
+                else if(id==AdaptationEvidence.ActionId){ExportAdaptationEvidence();return;}
                 else if(id==258){ShowFeedback();return;}
                 else if(id==262){ShowMyFeedback();return;}
                 else if(id==259){openLink("https://github.com/wushuai0802/myfinder-device-battery/blob/main/docs/compatibility.md");return;}
@@ -405,6 +407,48 @@ namespace AtkBatteryTray {
         }
         void ShowMyFeedback(){
             owner.OpenMyFeedback();
+        }
+        void ExportAdaptationEvidence() {
+            if (adaptationExportBusy) return;
+            ProcessStartInfo start;
+            using (var dialog = new SaveFileDialog {
+                Title = "导出适配资料",
+                Filter = "接口资料 (*.txt)|*.txt",
+                DefaultExt = "txt",
+                FileName = "myfinder-hid-inventory.txt",
+                RestoreDirectory = true
+            }) {
+                ignoreDeactivate = true;
+                CancelDeferredDeactivation();
+                try {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                } finally {
+                    ignoreDeactivate = false;
+                }
+                try {
+                    string root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
+                    start = AdaptationEvidence.CreateStartInfo(root, DeviceSettings.DataDirectory, dialog.FileName);
+                } catch (FileNotFoundException) {
+                    Notice("导出工具不可用，请检查程序文件是否完整。");
+                    return;
+                } catch (Exception error) {
+                    if (!(error is ArgumentException || error is IOException ||
+                        error is UnauthorizedAccessException || error is NotSupportedException)) throw;
+                    Notice("请选择程序目录和数据目录之外的本地文件。");
+                    return;
+                }
+            }
+            adaptationExportBusy = true;
+            Notice("正在导出接口资料…");
+            ThreadPool.QueueUserWorkItem(delegate {
+                bool success = AdaptationEvidence.Export(start);
+                try {
+                    BeginInvoke((MethodInvoker)delegate {
+                        adaptationExportBusy = false;
+                        Notice(success ? "已保存接口资料，请手动附到对应反馈。" : "导出失败，请检查保存位置后重试。");
+                    });
+                } catch (InvalidOperationException) {}
+            });
         }
         void EditAlias(bool mouse,string deviceKey=null,string groupKey=null) {
             var pref=DeviceSettings.Current;
