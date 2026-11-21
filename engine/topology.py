@@ -392,6 +392,14 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(feature_report_length=caps.feature,
                             feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True))
                 caps_complete = (caps.feature == 33 and info["feature_report_sizes"] == {"15": 33})
+            if caps_complete and (attrs.vendor, attrs.product) in (
+                    (0x36B0, 0x3071), (0x36B0, 0x3075)) and (
+                    caps.page, caps.usage) == (0xFF60, 0x0061) and caps.input == caps.output == 257:
+                # WOB Rainy75 V2 receiver/wired: exactly one Array report per
+                # direction, so the collection maximum is that report's size.
+                info["input_report_sizes"] = {"0": 257}
+                info["output_report_sizes"] = {"0": 257}
+                info["input_report_proof"] = info["output_report_proof"] = "caps"
             if (caps_complete and attrs.vendor == 0x0B05 and
                     (attrs.product, caps.input, caps.output) in ((0x1A85, 65, 65), (0x1ACE, 64, 64))):
                 from providers.asus_azoth import collection_role

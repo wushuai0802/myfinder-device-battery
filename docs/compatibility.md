@@ -133,6 +133,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | Windows 系统蓝牙电量属性 | mouse, keyboard, headset, gamepad, device | C | 协议已接入，待本项目实机验证；Windows提供电量属性的已连接设备，含蓝牙手柄；Xbox系统百分比优先于XInput四档估算 |
 | Xbox 及兼容 XInput 手柄 | gamepad | C | 协议已接入，待本项目实机验证；Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄 |
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| WOB Rainy75 V2（2.4G 接收器 / USB） | keyboard | C | 协议已接入，待本项目实机验证；仅36B0:3071与36B0:3075的FF60:0061集合，caps证明每方向唯一Array report、总长257字节（含ID槽）；只被动监听接收器每约5秒推送的BE BB帧（不发送任何命令），帧长06/0A/0E字节、byte3=0至100、byte4仅0/1/2；协议取自官方WOB HUB内置rainy75v2无线测试页；贡献者本机实测97%尚未与键盘自身电量显示交叉核对，睡眠/充电中/满电/双连接未验收 |
 | INFI75-1.1 / RKGK890 | keyboard | D | 已发现但未取得电量，不列为兼容 |
 | Rapoo VT9 PRO（用户报告，24AE:1601） | mouse | D | 已发现但未取得电量，不列为兼容 |
 

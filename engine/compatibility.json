@@ -109,7 +109,8 @@
     {"provider":"nzxt","name":"NZXT Lift Elite Wireless","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/nzxt.py"},
     {"provider":"bluetooth","name":"Windows 系统蓝牙电量属性","kinds":["mouse","keyboard","headset","gamepad","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/bluetooth.py","matchScope":"Windows提供电量属性的已连接设备，含蓝牙手柄；Xbox系统百分比优先于XInput四档估算","precision":"系统提供的属性，未知设备测量时间"},
     {"provider":"xinput","name":"Xbox 及兼容 XInput 手柄","kinds":["gamepad"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/xinput.py","matchScope":"Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄","reference":"engine/upstream-protocols.md#windows-xinput-gamepad-battery","precision":"EMPTY/LOW/MEDIUM/FULL是四档估算，不是精确百分比；无设备测量时间"},
-    {"provider":"standard_hid","name":"描述符声明的标准HID电量Feature字段","kinds":["mouse","keyboard","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/standardhid.py","reference":"https://www.usb.org/hid","precision":"依据字段逻辑范围；无充电字段时充电未知"}
+    {"provider":"standard_hid","name":"描述符声明的标准HID电量Feature字段","kinds":["mouse","keyboard","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/standardhid.py","reference":"https://www.usb.org/hid","precision":"依据字段逻辑范围；无充电字段时充电未知"},
+    {"provider":"rainyrt","name":"WOB Rainy75 V2（2.4G 接收器 / USB）","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/rainyrt.py","matchScope":"仅36B0:3071与36B0:3075的FF60:0061集合，caps证明每方向唯一Array report、总长257字节（含ID槽）；只被动监听接收器每约5秒推送的BE BB帧（不发送任何命令），帧长06/0A/0E字节、byte3=0至100、byte4仅0/1/2；协议取自官方WOB HUB内置rainy75v2无线测试页；贡献者本机实测97%尚未与键盘自身电量显示交叉核对，睡眠/充电中/满电/双连接未验收","reference":"engine/upstream-protocols.md#wob-rainy75-v2-36b03071--3075"}
   ],
   "observedUnsupported": [
     {
