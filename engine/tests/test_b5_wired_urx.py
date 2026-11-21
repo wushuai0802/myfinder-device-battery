@@ -42,6 +42,15 @@ class WiredAndUrxTests(unittest.TestCase):
         self.assertEqual(fake.writes, [bytes.fromhex("00 30 00 01").ljust(33, b"\0")])
         self.assertEqual(fake.feature_sets, [])
 
+    def test_wired_reports_charging_with_either_valid_flag(self):
+        for flag in (0, 1):
+            with self.subTest(flag=flag):
+                reply = captured_wired_reply()
+                reply[12] = flag
+                statuses, _ = poll([wired()], FakeDevice([reply]))
+                self.assertEqual([(item.level, item.charging, item.charging_known) for item in statuses],
+                                 [(70, True, True)])
+
     def test_wired_ignores_incomplete_offline_and_invalid_identity_replies(self):
         base = captured_wired_reply()
         for reply in (base[:-1], base[:4] + [0] + base[5:], base[:14] + [0] + base[15:],

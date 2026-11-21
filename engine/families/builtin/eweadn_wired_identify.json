@@ -38,7 +38,7 @@
         "spans": [{"at": 4, "count": 4, "min": "20", "max": "7E"}],
         "asleep": [{"at": 14, "eq": "00"}],
         "percent": {"at": 13, "min": 1, "max": 100},
-        "charging": {"at": 12, "eq": "01"}
+        "chargingAlways": true
       }
     }
   ]
