@@ -65,12 +65,12 @@ namespace AtkBattery {
             "pack_startup_failed pack_startup_rollback pack_state pack_state_active pack_state_duplicate pack_state_field pack_state_floor pack_state_full pack_state_invalid pack_state_missing "+
             "pack_state_quarantine pack_state_record pack_status_write_failed pack_storage_failed pack_timeout pack_trial_stop_failed pack_unchanged").Split(' '),StringComparer.Ordinal);
         readonly object gate=new object();readonly string root;readonly IUpdateTransport http;readonly IDictionary<string,string> keys;
-        readonly Func<string,long,Func<string>,CancellationToken,bool> activate;readonly DateTime started;
-        DevicePackState state=new DevicePackState();bool valid=true,checkedThisSession;static int checking;
+        readonly Func<string,long,Func<string>,CancellationToken,bool> activate;readonly DateTime started;readonly int checkJitterMinutes;
+        DevicePackState state=new DevicePackState();bool valid=true;static int checking;
         internal DevicePackManager(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start)
-            :this(directory,transport,activation,start,DevicePackTrust.Keys()){}
-        DevicePackManager(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust){
-            root=Path.GetFullPath(directory);http=transport;activate=activation;started=start;keys=trust;
+            :this(directory,transport,activation,start,DevicePackTrust.Keys(),new Random().Next(61)){}
+        DevicePackManager(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust,int jitterMinutes){
+            root=Path.GetFullPath(directory);http=transport;activate=activation;started=start;keys=trust;checkJitterMinutes=jitterMinutes;
             try{
                 DevicePackFiles.NoLinks(root);foreach(string slot in new[]{"current","previous","staging"})DevicePackFiles.NoLinks(Path.Combine(root,slot));
                 string path=Path.Combine(root,"state.json");DevicePackFiles.NoLinks(path);
@@ -88,7 +88,7 @@ namespace AtkBattery {
             }catch(Exception){state=new DevicePackState {Result="pack_state_invalid"};valid=false;}
         }
 #if DEVICE_PACK_TESTS
-        internal static DevicePackManager ForTests(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust){return new DevicePackManager(directory,transport,activation,start,trust);}
+        internal static DevicePackManager ForTests(string directory,IUpdateTransport transport,Func<string,long,Func<string>,CancellationToken,bool> activation,DateTime start,IDictionary<string,string> trust,int jitterMinutes=0){return new DevicePackManager(directory,transport,activation,start,trust,jitterMinutes);}
         internal DevicePackState StateForTests {get{lock(gate)return UpdateJson.Read<DevicePackState>(Encoding.UTF8.GetBytes(UpdateJson.Text(state)));}}
 #endif
         void ValidateRecord(DevicePackRecord record){if(record==null||record.Version<1||record.Version>9999999999L||!Regex.IsMatch(record.Sha256??"",@"\A[a-f0-9]{64}\z")||(record.Source!="mirror"&&record.Source!="github")||record.Disabled<0||record.Disabled>2000)throw new InvalidDataException("pack_state_record");}
@@ -172,12 +172,18 @@ namespace AtkBattery {
             if(pointer.Version==state.HighestAcceptedVersion){try{using(var usable=Open("current",state.Current)){if(usable!=null)return false;}}catch(Exception){}}
             return true;
         }
+        bool AutomaticCheckDue(DateTime now){
+            if(state.LastCheckUtc==DateTime.MinValue&&state.LastSuccessUtc==DateTime.MinValue)
+                return (now-started).TotalSeconds>=20;
+            return (now-state.LastCheckUtc).TotalHours>=12
+                &&(now-state.LastSuccessUtc).TotalMinutes>=720+checkJitterMinutes;
+        }
         internal void Check(bool automatic,DateTime now,CancellationToken token){
             if(Interlocked.CompareExchange(ref checking,1,0)!=0)return;
             DevicePackRecord candidate=null;bool promoted=false;string stage=null;
             try{
-                lock(gate){if(!valid||automatic&&(!checkedThisSession?now<started.AddSeconds(20):now<state.LastCheckUtc.AddHours(12)))return;
-                    checkedThisSession=true;state.LastCheckUtc=now;state.Result="pack_checking";Save();}
+                lock(gate){if(!valid||automatic&&!AutomaticCheckDue(now))return;
+                    state.LastCheckUtc=now;state.Result="pack_checking";Save();}
                 byte[] raw=null,sig=null;string lastError="pack_check_failed";
                 foreach(string source in new[]{DevicePackTrust.Mirror,DevicePackTrust.GitHub}){
                     token.ThrowIfCancellationRequested();

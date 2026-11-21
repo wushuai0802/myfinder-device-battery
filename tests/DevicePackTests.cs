@@ -295,6 +295,32 @@ internal static class DevicePackTests {
             }
         }finally{DialogDpi.DeviceDpiReader=previousDpi;ThemedDialog.WorkingAreaProvider=previousArea;}
     }
+    static void ScheduledChecksAcrossRestarts(string root,RSACryptoServiceProvider key,IDictionary<string,string> keys){
+        string directory=Path.Combine(root,"persisted-check-interval");
+        var initial=new Http();
+        var creation=new Activation();
+        var manager=DevicePackManager.ForTests(directory,initial,creation.Run,Now,keys,15);
+        DateTime first=Now.AddSeconds(20);
+        Feed(initial,key,1);
+        manager.Check(true,first,CancellationToken.None);
+        Check(creation.Commits==1&&manager.StateForTests.LastSuccessUtc==first,"fresh installation keeps the 20 second check");
+
+        var transport=new Http();
+        var activation=new Activation();
+        var restarted=DevicePackManager.ForTests(directory,transport,activation.Run,Now.AddHours(1),keys,15);
+        restarted.Check(true,Now.AddHours(1).AddSeconds(20),CancellationToken.None);
+        restarted.Check(true,first.AddHours(12).AddMinutes(14),CancellationToken.None);
+        Check(transport.Requests.Count==0,"restart respects persisted last success and the scheduling jitter");
+
+        Feed(transport,key,2);
+        DateTime due=first.AddHours(12).AddMinutes(15);
+        restarted.Check(true,due,CancellationToken.None);
+        Check(transport.Requests.Count==3&&restarted.StateForTests.LastSuccessUtc==due,"automatic check runs at the scheduled time");
+
+        Feed(transport,key,3);
+        restarted.Check(false,due.AddSeconds(1),CancellationToken.None);
+        Check(activation.Commits==2&&transport.Requests.Count==6,"manual check remains independent of the automatic schedule");
+    }
     [STAThread] static int Main(string[] args){
         if(args.Length>0&&args[0]=="-I")return FakeWorker(args);
         if(args.Length==1&&args[0]=="--layout-only"){try{DiagnosticLayout();Console.WriteLine("PASS "+checks+" pack diagnostic layout checks");return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
@@ -308,6 +334,7 @@ internal static class DevicePackTests {
                 Reject(()=>DevicePackTrust.Verify(raw,Bytes(Convert.ToBase64String(key.SignData(raw,CryptoConfig.MapNameToOID("SHA256")))),keys),"unprefixed signature rejected");
                 Reject(()=>DevicePackTrust.Verify(raw,Bytes(" "+Encoding.UTF8.GetString(sig)),keys),"signature is exactly one base64 line");
                 Reject(()=>DevicePackSigning.Verify(raw,sig),"production keyring cannot use injected test key");
+                ScheduledChecksAcrossRestarts(root,key,keys);
                 Diagnostics(root,key,keys);SecurityAndLifecycle(root,key,keys);SingleFlight(root,key,keys);WorkerInputEncodings(root,key,keys);Workers(root,args[1],key,keys);LinkedPaths(root,key,keys);Signer(root,args[1],key);
             }
             var card=new WirelessDevice {Name="Pack mouse",Kind="mouse",Provider="razer",ModelSource="pack"};var report=new FeedbackReport("1.3.6","Windows",new[]{card},new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0],"型号数据包：1 | 来源：镜像");
