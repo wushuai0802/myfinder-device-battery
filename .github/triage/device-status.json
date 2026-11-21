@@ -206,6 +206,30 @@
       "status": "beta",
       "version": "1.3.11-beta.17",
       "note": "前行者 X23 Pro 2.4G 鼠标，监听指定接口的电量上报；充电状态未知"
+    },
+    "36F9:F008": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.22",
+      "note": "XIBERIA T7 2.4G 电量候选，限指定接收器及已证明的报告，待实机验证"
+    },
+    "36F9:F016": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.22",
+      "note": "XIBERIA K03S 2.4G 电量候选，需匹配产品串及报告，待实机验证"
+    },
+    "36F9:F002": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.22",
+      "note": "XIBERIA K06S 2.4G 电量候选，需匹配产品串及报告，待实机验证"
+    },
+    "36F9:F001": {
+      "reports": 0,
+      "status": "beta",
+      "version": "1.3.11-beta.22",
+      "note": "XIBERIA T10 2.4G 电量候选，需匹配产品串及报告，待实机验证"
     }
   }
 }
