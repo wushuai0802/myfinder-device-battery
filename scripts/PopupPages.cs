@@ -435,9 +435,19 @@ namespace AtkBatteryTray {
                     }
                 }
             }
+            AddReaderNotice(rows,owner,layout);
             if(layout.Paged){rows.Add(new PopupControl {Id=902,Text="上一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,false),Enabled=layout.Start>0});rows.Add(new PopupControl {Id=903,Text="下一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,true),Enabled=layout.End<layout.All.Count});}
             if(layout.HasVolume)AddMainVolume(rows,owner,nav,layout.VolumeRect,layout.VolumeCollapsed);
             return rows;
+        }
+        internal const int DismissReaderNotice=263;
+        internal static float WirelessFooterWidth(WirelessLayout layout){return VisualDesign.PanelWidth-(layout.Paged?114:52);}
+        internal static RectangleF ReaderNoticeLink(WirelessLayout layout){return VisualDesign.FooterTextRect(layout.Footer,WirelessFooterWidth(layout));}
+        internal static RectangleF ReaderNoticeButton(WirelessLayout layout){return new RectangleF(VisualDesign.PanelWidth-66,layout.Footer+VisualDesign.FooterHeight,58,WirelessLayout.ReaderNoticeHeight);}
+        static void AddReaderNotice(List<PopupControl> rows,TrayContext owner,WirelessLayout layout){
+            if(!layout.ReaderNotice)return;
+            rows.Add(new PopupControl {Id=202,Text=owner.GenericHealthSummary,AccessibleName=owner.GenericHealthSummary+"，查看诊断",Rect=ReaderNoticeLink(layout)});
+            rows.Add(new PopupControl {Id=DismissReaderNotice,Text="知道了",Rect=ReaderNoticeButton(layout)});
         }
         static List<PopupControl> BuildGrid(TrayContext owner,WirelessLayout layout,PopupNavigation nav) {
             var rows=new List<PopupControl>();
@@ -459,6 +469,7 @@ namespace AtkBatteryTray {
             }
             AddMainVolume(rows,owner,nav,layout.VolumeRect,layout.VolumeCollapsed);
             rows.Add(new PopupControl {Id=0,Text="立即同步全部设备",Rect=VisualDesign.FooterRefreshRect(layout.Footer)});rows.Add(new PopupControl {Id=1,Text="更多选项",Rect=VisualDesign.FooterMoreRect(layout.Footer)});
+            AddReaderNotice(rows,owner,layout);
             if(layout.Paged){rows.Add(new PopupControl {Id=902,Text="上一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,false),Enabled=layout.Start>0});rows.Add(new PopupControl {Id=903,Text="下一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,true),Enabled=layout.End<layout.All.Count});}
             return rows;
         }

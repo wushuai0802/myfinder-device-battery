@@ -304,6 +304,7 @@ namespace AtkBatteryTray {
             if(id==102){owner.ToggleMicrophoneMute();SchedulePendingHint();return;}
             if(id==2){Go(PopupPage.Mouse);return;}if(id==3){Go(PopupPage.Headset);return;}
             if(id==200){bool scoped=navigation.Page==PopupPage.Device;navigation.AudioDeviceKey=scoped?navigation.SelectedDeviceKey:null;navigation.AudioDeviceName=scoped?navigation.SelectedDeviceName:null;Go(PopupPage.Audio);owner.RefreshAudioDevices();return;}if(id==201){Go(PopupPage.Preferences);return;}
+            if(id==PopupPages.DismissReaderNotice){owner.DismissReaderFailure();SyncDevices();return;}
             if(id==202){Go(PopupPage.Diagnostics);return;}if(id==203){Go(PopupPage.Bindings);return;}if(id==204){owner.ExitThread();return;}
             if(id==260){owner.OpenUpdate();return;}if(id==261){owner.CheckUpdates();return;}
             if(id==206){Go(PopupPage.Devices);return;}if(id==251){owner.RefreshWireless(navigation.SelectedDeviceKey);return;}
@@ -823,6 +824,25 @@ namespace AtkBatteryTray {
         public bool NativeMousePresent=true,GenericReady;
         public string GenericError;
         public string GenericHealthSummary;
+        string readerFailureGroup,dismissedReaderFailure;
+        internal bool ReaderFailureVisible {get{return GenericFailureCount>0&&String.IsNullOrEmpty(GenericError)&&readerFailureGroup!=dismissedReaderFailure;}}
+        internal void DismissReaderFailure(){dismissedReaderFailure=readerFailureGroup;}
+        void UpdateReaderFailureGroup(WirelessSnapshot snapshot,bool complete){
+            if(!String.IsNullOrEmpty(snapshot.Error)||GenericFailureCount==0){
+                if(complete||!String.IsNullOrEmpty(snapshot.Error)){readerFailureGroup=null;dismissedReaderFailure=null;}
+                return;
+            }
+            var group=new SortedSet<string>(StringComparer.Ordinal);
+            foreach(var health in GenericHealth){
+                if(health.State=="unavailable"&&health.Reason=="no_measurement")continue;
+                if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")
+                    group.Add(health.Provider+"|"+health.PhysicalId+"|"+health.ErrorCode+"|"+health.Reason);
+            }
+            foreach(string error in snapshot.Errors??new string[0])group.Add("error|"+error);
+            string next=GenericFailureCount+"\n"+String.Join("\n",group);
+            if(next!=readerFailureGroup)dismissedReaderFailure=null;
+            readerFailureGroup=next;
+        }
         public int GenericFailureCount;
         public string GenericIdleSummary;
         public int GenericIdleCount;
@@ -1341,7 +1361,7 @@ namespace AtkBatteryTray {
                 foreach(var device in WirelessDevices)if(device.Kind=="mouse")activityRefresh.ObserveMouse(device.PhysicalId);
                 foreach(var health in GenericHealth)if(health.State=="unavailable"&&health.Reason=="no_measurement")GenericIdleCount++;else if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
-                GenericIdleSummary=GenericIdleCount>0&&GenericFailureCount==0?GenericIdleCount+" 台设备休眠中，动一下即可刷新":null;
+                GenericIdleSummary=GenericIdleCount>0&&GenericFailureCount==0?GenericIdleCount+" 台设备暂未取得读数":null;
                 var pref=DeviceSettings.Current;
                 foreach(var device in WirelessDevices){WirelessDevice cached;
                     // A legacy PID-only key cannot prove which physical device
@@ -1353,6 +1373,7 @@ namespace AtkBatteryTray {
                 if(complete&&!clearingHistory&&pref.RememberReadings)fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json"),ReadingCache.EncodeWireless(wirelessCache.Values));
                 if(!applyingPhysicalSnapshot){bool previous=NativeMousePresent;if(snapshot.NativeMousePresent.HasValue)NativeMousePresent=snapshot.NativeMousePresent.Value;if(NativeMousePresent&&!previous)RequestRead(true,false);}
             }else{GenericError=snapshot.Error;GenericHealthSummary="读取组件暂不可用";GenericIdleSummary=null;GenericIdleCount=0;BlockWirelessDpi();foreach(var device in WirelessDevices){device.Fresh=false;device.Charging=null;}}
+            UpdateReaderFailureGroup(snapshot,complete);
             if(complete){string state=GenericError??GenericHealthSummary??"ready";ThreadPool.QueueUserWorkItem(delegate{SafeDiagnostic.Transition("device_readers",state);});}
             UpdateIcon();
         }

@@ -20,6 +20,8 @@ namespace AtkBatteryTray {
         internal readonly List<WirelessCard> All=new List<WirelessCard>();
         internal int Start,End;
         internal float Footer;
+        internal bool ReaderNotice;
+        internal const int ReaderNoticeHeight=24;
         internal bool HasVolume=true;
         internal bool VolumeCollapsed;
         internal bool AllHidden;
@@ -27,10 +29,12 @@ namespace AtkBatteryTray {
         internal float VolumeTop;
         internal RectangleF VolumeRect {get{return new RectangleF(0,VolumeTop,VisualDesign.PanelWidth,VisualDesign.SystemVolumeHeightFor(VolumeCollapsed));}}
         internal bool Paged {get{return Start>0||End<All.Count;}}
-        internal Size Size {get{return new Size(VisualDesign.PanelWidth,(int)Footer+VisualDesign.FooterHeight);}}
+        internal Size Size {get{return new Size(VisualDesign.PanelWidth,(int)Footer+VisualDesign.FooterHeight+(ReaderNotice?ReaderNoticeHeight:0));}}
         internal static WirelessLayout Build(TrayContext owner,int offset,int maximumHeight,bool includeHidden=false,int controlOffset=0) {
             var layout=new WirelessLayout();var pref=DeviceSettings.Current;var now=DateTime.UtcNow;
             layout.VolumeCollapsed=pref.VolumeCollapsed;
+            layout.ReaderNotice=owner.ReaderFailureVisible;
+            if(layout.ReaderNotice)maximumHeight-=ReaderNoticeHeight;
             if(owner.NativeMousePresent)layout.All.Add(new WirelessCard {Id="native:mouse",Name=pref.MouseAlias,Kind="mouse",Battery=UiState.Mouse(owner.Current,owner.LastGood,now),NativeMouse=true,Dpi=owner.Dpi});
             foreach(var device in owner.WirelessDevices) {
                 string alias;string name=pref.DeviceAliases!=null&&pref.DeviceAliases.TryGetValue(device.Id,out alias)?alias:device.Name;
@@ -62,7 +66,7 @@ namespace AtkBatteryTray {
             layout.End=end;layout.VolumeTop=Math.Max(0,y);layout.Footer=layout.VolumeRect.Bottom+VisualDesign.MainFooterGap;return layout;
         }
         internal static string EmptyReason(TrayContext owner,bool allHidden) {
-            return allHidden?"设备已隐藏，可在设备管理中恢复":owner.GenericScanning?"正在识别设备…":!String.IsNullOrEmpty(owner.GenericError)?"设备读取组件暂不可用":owner.GenericFailureCount>0||!String.IsNullOrEmpty(owner.GenericHealthSummary)?"部分读取器暂不可用":!String.IsNullOrEmpty(owner.GenericIdleSummary)?"设备休眠中，动一下鼠标或按一下键盘即可刷新":!owner.GenericReady?"设备读取组件尚未就绪":"尚未连接兼容设备";
+            return allHidden?"设备已隐藏，可在设备管理中恢复":owner.GenericScanning?"正在识别设备…":!String.IsNullOrEmpty(owner.GenericError)?"设备读取组件暂不可用":owner.GenericFailureCount>0||!String.IsNullOrEmpty(owner.GenericHealthSummary)?"部分读取器暂不可用":!String.IsNullOrEmpty(owner.GenericIdleSummary)?"设备暂未取得读数":!owner.GenericReady?"设备读取组件尚未就绪":"尚未连接兼容设备";
         }
         internal static BatteryView View(WirelessDevice device) {
             bool system=device.SourceQuality=="system_property";
