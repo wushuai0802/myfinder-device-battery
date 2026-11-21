@@ -64,8 +64,8 @@ TABLES = {
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
-# Receiver IDs shared by unrelated keyboards (Apple and URX/PMO receivers).
-SHARED_UNINDEXED = frozenset({(0x05AC, 0x024F), (0x36B0, 0x3002)})
+# Receiver IDs shared by unrelated device models.
+SHARED_UNINDEXED = frozenset({(0x05AC, 0x024F), (0x093A, 0x522C), (0x36B0, 0x3002)})
 HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles", "razer_v4",
            "aula_f99max"}
 
