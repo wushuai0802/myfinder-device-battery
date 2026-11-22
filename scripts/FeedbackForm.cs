@@ -229,6 +229,7 @@ namespace AtkBatteryTray {
         readonly TextBox difference = new TextBox { Name="BatteryComparisonDifference", AccessibleName="相差百分比", MaxLength=3, TextAlign=HorizontalAlignment.Right };
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,copyReport,view,mine;
+        readonly FeedbackActionBar actionBar;
         CancellationTokenSource pending;FeedbackResult receipt;bool busy,inputError;
         internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
         internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null,Action<long> openMyFeedback=null):base(dark){
@@ -303,25 +304,27 @@ namespace AtkBatteryTray {
             comparisonPanel.Controls.Add(comparisonCaption,0,0);
             comparisonPanel.Controls.Add(comparisonRow,0,1);
             descriptionLayout.Controls.Add(comparisonPanel,0,4);
-            var noticeCard=new ThemedSection(Theme) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
-            var noticeLayout=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Top,ColumnCount=1,RowCount=1,Margin=Padding.Empty};noticeLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var notice=Caption(String.IsNullOrEmpty(relay)?"将打开 GitHub 提交，需要 GitHub 账号":"提交后会公开显示在 GitHub 项目的问题列表里。诊断不含序列号和文件路径，请不要在描述里填写个人信息。",false,true);
-            notice.Name="FeedbackNotice";notice.Margin=new Padding(0,0,0,4);notice.Dock=DockStyle.Fill;noticeLayout.Controls.Add(notice,0,0);
+            notice.Name="FeedbackNotice";
+            notice.AutoSize=false;
+            notice.Margin=Padding.Empty;
+            notice.Dock=DockStyle.Fill;
+            var noticeCard=new FeedbackNoticeSection(Theme,notice) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill};
+            layout.Controls.Add(noticeCard,0,3);
             status.Name="FeedbackStatus";status.AutoSize=true;status.Dock=DockStyle.Fill;status.Font=hint.Font;status.BackColor=Theme.Card;status.ForeColor=Theme.Foreground;status.Margin=new Padding(0,0,0,6);status.Visible=false;
-            noticeCard.Controls.Add(noticeLayout);layout.Controls.Add(noticeCard,0,3);
-            var buttons=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=true,Margin=Padding.Empty};
+            var buttons=new FlowLayoutPanel {FlowDirection=FlowDirection.RightToLeft,WrapContents=true,Margin=Padding.Empty};
             submit.Name="SubmitFeedback";submit.Text=String.IsNullOrEmpty(relay)?"在浏览器中提交":"提交";submit.AutoSize=true;submit.MinimumSize=new Size(82,30);submit.Click+=delegate{Submit();};
             cancel.Name="CancelFeedback";cancel.Text="取消";cancel.AutoSize=true;cancel.MinimumSize=new Size(82,30);cancel.Click+=delegate{Close();};
             fallback.Name="BrowserFallback";fallback.Text="改用浏览器提交";fallback.AutoSize=true;fallback.MinimumSize=new Size(132,30);fallback.Visible=false;fallback.Click+=delegate{if(ConfirmRepeat())OpenBrowser();};
             copyReport.Name="CopyFeedbackReport";copyReport.Text="复制报告";copyReport.AutoSize=true;copyReport.MinimumSize=new Size(82,30);copyReport.Visible=false;copyReport.Click+=delegate{CopyReport();};
             view.Name="ViewIssue";view.Text="在浏览器中查看";view.AutoSize=true;view.MinimumSize=new Size(132,30);view.Visible=false;
             view.Click+=delegate{if(receipt!=null&&FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url))try{open(receipt.Url);}catch(Exception){SetStatus("无法打开浏览器，请稍后重试。");}};
-            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback,copyReport,mine});
+            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback,copyReport});
+            actionBar=new FeedbackActionBar(mine,buttons) {Dock=DockStyle.Fill,Margin=Padding.Empty};
             var footer=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            footer.Controls.Add(status,0,0);footer.Controls.Add(buttons,0,1);
+            footer.Controls.Add(status,0,0);footer.Controls.Add(actionBar,0,1);
             layout.Controls.Add(footer,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
             ConfigureLayout(layout,footer,delegate(int width){
                 int textWidth=Math.Max(1,width-descriptionCard.Padding.Horizontal);
@@ -335,7 +338,79 @@ namespace AtkBatteryTray {
                     +noticeCard.GetPreferredSize(new Size(width,0)).Height+noticeCard.Margin.Vertical;
             });
             string initialCategory=FeedbackInput.DefaultCategory(deviceMissing);
+            Shown+=delegate{LayoutFooter();};
             FormClosing+=delegate{AbortSubmission();if(receipt==null)FeedbackDraft.SaveIfChanged(SelectedCategory,description.Text,diagnostics.Checked,initialCategory,comparison.SelectedIndex,DifferenceValue);else FeedbackDraft.Clear();};UpdateValidation();
+        }
+        sealed class FeedbackNoticeSection:ThemedSection {
+            readonly Label notice;
+
+            internal FeedbackNoticeSection(DialogTheme theme,Label notice):base(theme){
+                this.notice=notice;
+                Controls.Add(notice);
+                AutoSizeMode=AutoSizeMode.GrowAndShrink;
+                AutoSize=true;
+            }
+
+            public override Size GetPreferredSize(Size proposedSize){
+                if(notice==null)return base.GetPreferredSize(proposedSize);
+                int width=proposedSize.Width>0?proposedSize.Width:Width;
+                int textWidth=Math.Max(1,width-Padding.Horizontal);
+                return new Size(width,notice.GetPreferredSize(new Size(textWidth,0)).Height+Padding.Vertical);
+            }
+        }
+        sealed class FeedbackActionBar:Panel {
+            readonly ThemedButton history;
+            readonly FlowLayoutPanel actions;
+            bool arranging;
+
+            internal FeedbackActionBar(ThemedButton history,FlowLayoutPanel actions){
+                this.history=history;
+                this.actions=actions;
+                AutoSize=true;
+                AutoSizeMode=AutoSizeMode.GrowAndShrink;
+                Controls.Add(history);
+                Controls.Add(actions);
+            }
+
+            public override Size GetPreferredSize(Size proposedSize){
+                if(history==null||actions==null)return base.GetPreferredSize(proposedSize);
+                Size historySize=history.GetPreferredSize(Size.Empty);
+                int historyWidth=historySize.Width+history.Margin.Horizontal;
+                int width=proposedSize.Width>0?proposedSize.Width:Width;
+                int actionsHeight=MeasureActions(Math.Max(1,width-historyWidth));
+                return new Size(width,Math.Max(historySize.Height+history.Margin.Vertical,actionsHeight));
+            }
+
+            int MeasureActions(int width){
+                int height=0,rowWidth=0,rowHeight=0;
+                foreach(Control action in actions.Controls){
+                    if(!action.Visible)continue;
+                    Size size=action.GetPreferredSize(Size.Empty)+action.Margin.Size;
+                    if(rowWidth>0&&rowWidth+size.Width>width){
+                        height+=rowHeight;
+                        rowWidth=rowHeight=0;
+                    }
+                    rowWidth+=size.Width;
+                    rowHeight=Math.Max(rowHeight,size.Height);
+                }
+                return height+rowHeight;
+            }
+
+            protected override void OnLayout(LayoutEventArgs e){
+                base.OnLayout(e);
+                if(history==null||actions==null||arranging)return;
+                arranging=true;
+                try{
+                    Size historySize=history.GetPreferredSize(Size.Empty);
+                    int historyWidth=historySize.Width+history.Margin.Horizontal;
+                    int actionWidth=Math.Max(1,ClientSize.Width-historyWidth);
+                    int actionHeight=MeasureActions(actionWidth);
+                    int actionTop=Math.Max(0,ClientSize.Height-actionHeight);
+                    actions.Bounds=new Rectangle(historyWidth,actionTop,actionWidth,actionHeight);
+                    int historyTop=history.Margin.Top+Math.Max(0,actionTop+(actionHeight-historySize.Height-history.Margin.Vertical)/2);
+                    history.Bounds=new Rectangle(history.Margin.Left,historyTop,historySize.Width,historySize.Height);
+                }finally{arranging=false;}
+            }
         }
         int DifferenceValue {
             get {
@@ -345,9 +420,15 @@ namespace AtkBatteryTray {
         }
         string SubmittedDescription {get{return FeedbackInput.WithComparison(description.Text,comparison.SelectedIndex,DifferenceValue);}}
         bool InputValid {get{return (comparison.SelectedIndex!=2||DifferenceValue>0)&&FeedbackInput.Valid(SelectedCategory,description.Text)&&FeedbackInput.Valid(SelectedCategory,SubmittedDescription);}}
+        void LayoutFooter(){
+            actionBar.Parent.PerformLayout(actionBar,"PreferredSize");
+            actionBar.PerformLayout();
+            PerformLayout();
+        }
         void SetStatus(string text){
             status.Text=text;
             status.Visible=text.Length!=0;
+            LayoutFooter();
         }
         void InputChanged(){
             if(inputError){inputError=false;SetStatus("");}
@@ -395,9 +476,14 @@ namespace AtkBatteryTray {
         }
         void Complete(FeedbackResult result){
             pending=null;busy=false;
-            if(result.Kind==FeedbackResultKind.Success){FeedbackDraft.Clear();receipt=result;SetStatus("已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。"));submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;}
+            if(result.Kind==FeedbackResultKind.Success){
+                FeedbackDraft.Clear();receipt=result;
+                submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;
+                SetStatus("已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。"));
+            }
             else{
                 EnableInputs(true);
+                fallback.Visible=copyReport.Visible=true;
                 if(result.Kind==FeedbackResultKind.RateLimited)SetStatus("提交太频繁，请过一会儿再试。");
                 else{
                     string reason="暂时无法提交";
@@ -405,7 +491,6 @@ namespace AtkBatteryTray {
                     else if(result.Failure==FeedbackFailure.Service)reason="反馈服务暂时停用";
                     SetStatus("提交失败："+reason+"。可以改用浏览器提交，或复制报告发到群里。");
                 }
-                fallback.Visible=copyReport.Visible=true;
             }
             UpdateValidation();
         }

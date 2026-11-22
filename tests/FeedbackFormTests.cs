@@ -83,6 +83,11 @@ static class FeedbackFormTests {
             Check(http.Calls==0&&submit.Enabled&&status.Visible&&status.Text=="描述至少 5 个字，还差 3 个字","invalid click explains exactly what is missing without sending");
             Check(form.ActiveControl==input||input.Focused,"invalid click returns focus to the description");
             Check(status.RectangleToScreen(status.ClientRectangle).Bottom<=submit.RectangleToScreen(submit.ClientRectangle).Top,"validation text remains above the button");
+            var notice=Find<Label>(form,"FeedbackNotice");
+            var viewport=Find<Panel>(form,"DialogContentViewport");
+            Check(viewport.VerticalScroll.Visible||
+                viewport.RectangleToScreen(viewport.ClientRectangle).Contains(notice.RectangleToScreen(notice.ClientRectangle)),
+                "showing the validation message does not hide the notice in a non-scrolling window");
             input.Text="设备反馈内容";
             Check(!status.Visible,"editing clears the stale validation prompt");
             submit.PerformClick();Pump(delegate{return status.Text==Submitted;});
@@ -284,11 +289,23 @@ static class FeedbackFormTests {
                     Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?GenericFailure:Submitted);});
                 }
                 Check(area.Contains(form.Bounds),state+": entire feedback window fits (window="+form.Bounds+", client="+form.ClientSize+", work area="+area+")");
+                var notice=Find<Label>(form,"FeedbackNotice");
+                int noticePreferredHeight=notice.GetPreferredSize(new Size(notice.Width,0)).Height;
+                Check(noticePreferredHeight<=notice.Height,state+": the public feedback notice fits its full height (needed "+noticePreferredHeight+", got "+notice.Height+")");
+                var noticeBounds=notice.RectangleToScreen(notice.ClientRectangle);
+                Check(notice.Parent.RectangleToScreen(notice.Parent.ClientRectangle).Contains(noticeBounds),state+": the parent does not clip the public feedback notice");
+                var history=Find<Button>(form,"MyFeedback");
+                var historyBounds=history.RectangleToScreen(history.ClientRectangle);
+                var actionsBounds=Rectangle.Empty;
                 foreach(string name in new[]{"SubmitFeedback","CancelFeedback","BrowserFallback","CopyFeedbackReport","ViewIssue"}){
                     var button=Find<Button>(form,name);if(!button.Visible)continue;
                     var bounds=button.RectangleToScreen(button.ClientRectangle);
+                    actionsBounds=actionsBounds.IsEmpty?bounds:Rectangle.Union(actionsBounds,bounds);
+                    Check(historyBounds.Right<=bounds.Left,state+": "+name+" stays to the right of My Feedback");
                     for(Control parent=button.Parent;parent!=null;parent=parent.Parent)Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),state+": "+name+" fully visible through ancestors");
                 }
+                Check(Math.Abs(historyBounds.Top+historyBounds.Height/2-actionsBounds.Top-actionsBounds.Height/2)<=1,
+                    state+": My Feedback stays vertically centered beside the action rows");
                 var input=Find<TextBox>(form,"Description");Check(input.Height>=3*input.Font.Height,state+": description keeps three lines");
                 var viewport=Find<Panel>(form,"DialogContentViewport");if(height==560)Check(viewport.AutoScroll&&viewport.VerticalScroll.Visible,state+": constrained content can scroll");
                 viewport.AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
@@ -350,6 +367,7 @@ static class FeedbackFormTests {
             Check(submit.Visible&&form.RectangleToScreen(form.ClientRectangle).Contains(submit.RectangleToScreen(submit.ClientRectangle)),"primary button fits actual client at scale "+scale);
             Check(input.Height>=100||viewport.AutoScroll&&viewport.VerticalScroll.Visible&&input.Height>=3*input.Font.Height,"description stays roomy or scrolls at its readable minimum at scale "+scale);
             var note=Find<Label>(form,"FeedbackNotice");Check(note.GetPreferredSize(new Size(note.Width,0)).Height<=note.Height,"full public/privacy notice fits at scale "+scale);
+            Check(note.Parent.ClientRectangle.Contains(note.Bounds),"the public/privacy notice stays inside its card at scale "+scale);
             if(output!=null&&scale==1f)using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(output,dark?"feedback-dark.png":"feedback-light.png"));}
             form.Close();
         }
