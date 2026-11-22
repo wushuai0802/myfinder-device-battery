@@ -46,6 +46,17 @@ Windows PowerShell 5.1 / PowerShell 7。所有入口都在本目录；不会修�
 
 人工核对并解决 `manual` 后，可在停止监控时备份 `state.json` 并仅删除对应 issue 记录，让下一次重试。对 `posting` 必须先确认远端是否已收到评论；已收到时将该条状态改为 `commented` 后补标签，明确未收到时才能改回 `ready`。不要为恢复起草而清空整个状态文件。监控与审批共用目录文件锁，防止同时改写。
 
+## 反馈中转检查
+
+用仓库自带的 Python 或系统 Python 执行：
+
+```powershell
+python -I -B tools/issue-watch/issue_digest.py --feedback-relay-only
+python -I -B tools/issue-watch/issue_digest.py --check-feedback-relay
+```
+
+第一条运行单独的检查，异常时退出码为 1。仓库的 Feedback relay health 工作流每日执行一次，将结果写入 Actions 运行摘要。第二条在人工生成 Issue 汇总时把结果一并写入。请求使用不存在的 #999999 和临时随机键。`403 denied` 表示中转已到达 GitHub 的读取路径，创建权限用真实反馈的提交回执验证。
+
 ## 计划任务
 
 ```powershell

@@ -14,17 +14,24 @@ Run: python -I -B tools/issue-watch/issue_digest.py [--dir E:\\AIArchive\\issue-
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+import uuid
 
 REPO = "wushuai0802/myfinder-device-battery"
 MAINTAINER = "wushuai0802"
 BOT = "github-actions[bot]"
 DAILY_CAP = 200
+FEEDBACK_PROBE_URL = "https://myfinder-feedback-relay.wushuai591459380.workers.dev/feedback/supplement"
+FEEDBACK_PROBE_ISSUE = 999999
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NOISE = re.compile(r"HIDI2C|VHF|LED|Touch|Controller|ITE Device|Virtual|OrayVHID|Tecent", re.I)
 ID_LINE = re.compile(r'^\s*([0-9A-F]{4}):([0-9A-F]{4}) "([^"]*)"(.*)$')
@@ -55,6 +62,54 @@ BUILTIN_NAME = re.compile(r"USB Audio|N-KEY|Idea\d|Bluetooth|Realtek|Webcam|Came
 # their own (MCHOSE MagDock is a charging dock; the mouse reports through its
 # own receiver, see engine/research/batch2-protocols.md section 4).
 NO_BATTERY_IDS = {"3837:1012", "187C:0551"}  # MagDock charging dock; Alienware AW-ELC light controller
+
+
+class NoProbeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def probe_feedback_relay(opener=None):
+    """Test the relay's GitHub read path with a missing issue and an ephemeral key."""
+    opener = opener or urllib.request.build_opener(NoProbeRedirect())
+    payload = {
+        "schema": 1,
+        "number": FEEDBACK_PROBE_ISSUE,
+        "replyKey": base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii"),
+        "requestId": str(uuid.uuid4()),
+        "description": "relay token probe",
+        "diagnostics": None,
+        "appVersion": "1.3.11",
+    }
+    request = urllib.request.Request(
+        FEEDBACK_PROBE_URL, data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "MyFinderDeviceBattery-RelayHealth/1",
+        },
+        method="POST",
+    )
+    status = None
+    try:
+        try:
+            response = opener.open(request, timeout=10)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            status = response.getcode()
+            data = json.loads(response.read(1025))
+        allowed_errors = ("denied", "disabled", "unavailable", "rate_limited", "invalid")
+        reason = data.get("error") if isinstance(data, dict) else None
+        error_code = reason if reason in allowed_errors else "unexpected_response"
+    except (OSError, ValueError, UnicodeError):
+        error_code = "network_or_invalid_response"
+    return {"ok": status == 403 and error_code == "denied", "status": status, "error": error_code}
+
+
+def feedback_relay_summary(result):
+    if result["ok"]:
+        return "反馈中转可读取 GitHub（403 denied）。创建权限需用测试反馈回执验证。"
+    return f"[告警] 反馈中转异常（HTTP {result['status'] or '无响应'}，{result['error']}）"
 
 
 def gh(path, paginate=False):
@@ -180,7 +235,18 @@ def main():
     ap.add_argument("--dir", default=r"E:\AIArchive\issue-digest")
     ap.add_argument("--repo", default=REPO)
     ap.add_argument("--since")
+    probe_mode = ap.add_mutually_exclusive_group()
+    probe_mode.add_argument("--check-feedback-relay", action="store_true")
+    probe_mode.add_argument("--feedback-relay-only", action="store_true")
     a = ap.parse_args()
+    relay_probe = None
+    if a.check_feedback_relay or a.feedback_relay_only:
+        if a.repo != REPO:
+            ap.error("反馈中转检查只适用于 MyFinder Device Battery 主仓库")
+        relay_probe = probe_feedback_relay()
+        if a.feedback_relay_only:
+            print(feedback_relay_summary(relay_probe))
+            return 0 if relay_probe["ok"] else 1
     os.makedirs(a.dir, exist_ok=True)
     mark = os.path.join(a.dir, "watermark.json")
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
@@ -225,6 +291,9 @@ def main():
     priority = priority_items(new_issues, user_comments, supplements, os.path.join(a.dir, "id-counts.json"))
     digest["priority"] = priority
     lines = [f"# Issue 汇总 {digest['generatedAt']}", "", f"范围：{since} 起。程序内反馈 24 小时 {count}/{DAILY_CAP}。", ""]
+    if relay_probe is not None:
+        digest["feedbackRelay"] = relay_probe
+        lines.extend([feedback_relay_summary(relay_probe), ""])
     lines.append(f"## 需要人工处理（{len(priority)}）")
     lines += [f"- [{p['kind']}] #{p['number']}: {p['why']}" for p in priority] or ["- 无。其余由自动回复覆盖，可不逐条处理。"]
     lines.append("")
@@ -255,4 +324,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
