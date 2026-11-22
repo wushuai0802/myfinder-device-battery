@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from .spec import Family, Gate, Read, Reply
+from .spec import DpiSpec, DpiValue, Family, Gate, Read, Reply
 
 
 @dataclass(frozen=True)
@@ -170,3 +170,51 @@ def run(dev, family: Family, read: Read, clock=time.monotonic) -> Outcome:
     except (OSError, ValueError):
         # Backend text can carry device paths; keep only the category.
         return Outcome("anomaly", note="I/O error")
+
+
+def _value(frames, field: DpiValue, offset=0):
+    data = frames[field.exchange]
+    at = field.at + offset
+    if len(data) < at + field.width:
+        raise ValueError("dpi field outside reply")
+    raw = int.from_bytes(data[at:at + field.width], "big" if field.big_endian else "little")
+    return (raw & field.mask) * field.scale
+
+
+def run_dpi(dev, family: Family, clock=time.monotonic):
+    """Read-only DPI evidence: (dict(current=, stages=, stageSource=), note).
+
+    Each exchange is sent once in order on the open handle; any rejected,
+    silent or short exchange stops the sequence and yields no DPI at all.
+    """
+    spec: DpiSpec = family.dpi
+    frames = {}
+    try:
+        for exchange in spec.exchanges:
+            def take(frame, exchange=exchange):
+                ok = _envelope(frame, exchange.match, exchange.spans, exchange.checksum, exchange.length) is None
+                return (frame if ok else None), ok
+            frame, sent = _exchange(dev, family, exchange, exchange.request, take, clock)
+            if not sent:
+                return None, f"dpi {exchange.name}: short write"
+            if frame is None:
+                return None, f"dpi {exchange.name}: no valid reply"
+            frames[exchange.name] = bytes(frame)
+        count = _value(frames, spec.stage_count) if spec.stage_count else spec.fixed_count
+        if not 1 <= count <= 8:
+            return None, "dpi stage count out of range"
+        stages = [_value(frames, spec.stage_first, i * spec.stride) for i in range(count)]
+        if not all(50 <= v <= 65535 for v in stages):
+            return None, "dpi stage out of range"
+        if spec.current_stage is not None:
+            index = _value(frames, spec.current_stage) - spec.stage_base
+            if not 0 <= index < count:
+                return None, "dpi current stage out of range"
+            current = stages[index]
+        else:
+            current = _value(frames, spec.current)
+            if not 50 <= current <= 65535:
+                return None, "dpi current out of range"
+        return {"current": current, "stages": stages, "stageSource": spec.stage_source}, ""
+    except (OSError, ValueError):
+        return None, "dpi I/O error"

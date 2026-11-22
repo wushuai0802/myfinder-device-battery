@@ -11,7 +11,7 @@
 | 层 | 内容 | 位置 |
 |---|---|---|
 | 方案族 | 识别规则（VID/PID 或整品牌、厂商集合、报告 ID 与长度证明）和只读读法 | `engine/families/builtin/<id>.json` |
-| 能力 | 目前只有电量和充电状态；DPI 等写操作**不进入**数据，仍在代码中单独审查 | `engine/families/spec.py`（`TRANSPORTS`） |
+| 能力 | 电量、充电状态、DPI 读取（第 10 节）；DPI 切换等写操作**不进入**数据，只能通过逐个审查的代码适配器实现（第 11 节） | `engine/families/spec.py`（`TRANSPORTS`） |
 | 型号表 | 方案族内逐项列出的设备行 | 同一 JSON 的 `devices` |
 
 ## 3. 组成
@@ -134,4 +134,29 @@
   - `probeVendorIds` 覆盖了已有读取器的品牌（`probe_vendor_claimed`）——远程数据包不能对已有品牌开启整品牌试读，这类方案族必须作为内置方案族走审查。
 - **生效：** 子进程收到新的数据包快照后，调用 `families.set_pack_families`。内置方案族始终优先，不会被覆盖。管理进程的厂商预筛由 `_provider_vids("families")` 合并数据包方案族的厂商。`disabled` 也可以指向 `families` 读取器的具体 VID/PID。
 - **诊断：** `devicePack.families` 列出已生效的方案族 ID，被拒绝的行写在 `rejected` 里，例如 `families[3]: builtin_id_conflict`。
+
+## 10. DPI 读取（C3，只读）
+
+鼠标方案族（`kind: "mouse"`）可以声明 `dpi`。只有在本轮电量读数成功后，才用同一个打开的句柄读取 DPI。DPI 读取失败不会影响电量读数；连续 3 次失败后，本次运行内不再读取这个设备的 DPI。DPI 读数会以 `canSet: false` 发布，写入只能通过 C4 的适配器。
+
+```json
+"dpi": {
+  "exchanges": [
+    {"name": "table", "transport": "output", "request": "55 70",
+     "reply": {"match": [{"at": 0, "eq": "55"}, {"at": 1, "eq": "70"}]}}
+  ],
+  "stages": {"exchange": "table", "count": {"at": 2}, "first": 4, "stride": 2, "width": 2},
+  "currentStage": {"exchange": "table", "at": 3},
+  "stageSource": "onboard"
+}
+```
+
+| 字段 | 规则 |
+|---|---|
+| `exchanges` | 1–3 个，按顺序各发送一次。传输方式只能是 `output`、`feature`、`featureGet`，没有 `listen`，也没有 `gate`。请求的校验规则与电量读法相同（首字节必须是已声明的报告 ID，长度不超过已证明的报告长度）。回复只做外形校验：`match`，可选 `length`、`spans`、`checksum`。任何一个问答没有得到有效回复，这一轮就没有 DPI 读数 |
+| `stages` | `count` 可以是固定值（1–8），也可以是回复中的一个字节（`{"at", "mask"}`）。第 i 档的值位于 `first + i × stride`；`width` 为 1 或 2；`endian` 为 `little` 或 `big`；`mask` 为 2 位或 4 位十六进制；`scale` 为 1–100。每档的值必须在 50–65535 之间 |
+| `current` / `currentStage` | 二选一。`current` 是直接读到的 DPI 值，取值规则与 `stages` 相同；`currentStage` 是档位序号（`base` 为 0 或 1），必须落在档位表内 |
+| `stageSource` | `onboard` 表示设备上的档位表（默认），`quick` 表示预设列表 |
+
+编码复杂到 JSON 写不出来的设备（例如数值跨字节拼接、XY 分轴），由 C4 适配器的 `read_stages` 在代码里实现。
 
