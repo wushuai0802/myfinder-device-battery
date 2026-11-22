@@ -160,3 +160,46 @@
 
 编码复杂到 JSON 写不出来的设备（例如数值跨字节拼接、XY 分轴），由 C4 适配器的 `read_stages` 在代码里实现。
 
+## 11. DPI 切换适配器（C4）
+
+DPI 写操作**永远不进入 JSON**。每个允许切换 DPI 的方案族，配一个经过审查的小模块 `engine/families/dpi/<family_id>.py`，并在 `families/dpi/__init__.py` 的 `ADAPTERS` 中登记后才生效。只放文件不登记，不会生效。数据包下发的方案族永远用不了适配器：框架要求方案族对象必须就是内置方案族本身。
+
+**适配器只需要写协议相关的部分：**
+
+```python
+REVISION = 1          # 可选，改协议时加一，旧令牌随之失效
+MAX_WRITES = 1        # 可选，1 或 2；select_stage 最多发送的写报告数
+MAX_QUERY_WRITES = 2  # 可选，0–4；read_stages 用来提问的写报告数上限
+
+def select_stage(dev, info, index):
+    """发送"切换到第 index 档（从 0 开始）"的命令。可以读回复；不能自己重试。"""
+
+def read_stages(dev, info):   # 可选；不提供时使用方案族 JSON 的 dpi 块（第 10 节）
+    return {"current": 1600, "stages": [400, 800, 1600, 3200]}
+```
+
+**安全规则由框架统一执行，适配器无法绕过：**
+
+1. 只有板载档位表（`stageSource: onboard`）、档位值互不重复、当前值在档位表内时才可写；目标值必须是已有档位；
+2. 令牌 = sha256（设备身份五元组 + 方案族 + 适配器 + 修订号 + 完整档位表），不包含当前值，因此切档后令牌不变；
+3. 写入前重新读取：令牌必须一致，当前值必须等于用户看到的值；目标值等于当前值时不发送；
+4. 适配器拿到的是计数包装后的设备对象（原始句柄不作为属性暴露），`select_stage` 写入超过 `MAX_WRITES` 次、`read_stages` 写入超过 `MAX_QUERY_WRITES` 次时直接抛异常，多余的报告不会发出；
+5. 写入后读回：当前值等于目标值、档位表不变，才算成功；否则记为"结果未知"，DPI 能力立即下线，必须重新读取后才能再次操作；
+6. 厂商软件正在运行时（`standAsideFor`）拒绝切档（`dpi_vendor_software`），不与官方工具抢设备；
+7. 失败不重试，只在用户点击时执行。管理进程的 `set_dpi` 对身份、令牌、在线状态、新鲜度（90 秒）的检查保持不变，`families` 与 `pulsar` 一样只允许板载档位。
+
+**接入点：**
+
+- `server.DPI_PROVIDERS["families"]` 只在 `ADAPTERS` 非空时出现，值为这些方案族的厂商 ID；
+- 读取器在电量读数之后发布 DPI 读数（`dpi`）和内部目标（`dpi_target`）；
+- 模块级 `providers.families.set_device_dpi` 要求清单中恰好有一个集合与目标身份完全一致，并且该集合满足方案族的设备与报告证明；
+- C# 宿主 `WirelessDpi.CanWrite` 放行 `families`，条件与 `pulsar` 相同，只允许板载档位。
+
+**审查清单（每个适配器 PR 都要 Claude 审查，不能自行合并）：**
+
+- 协议来源与许可证；
+- `select_stage` 只发送切档命令，不涉及保存到闪存、配置文件或灯光；
+- 不 `import hid`/`ctypes`，不重新打开 `info["path"]`，只通过传入的 `dev` 收发；
+- 写报告数与 `MAX_WRITES` 一致；
+- 回放测试覆盖：成功、读回不一致、令牌过期、当前值已变化。
+

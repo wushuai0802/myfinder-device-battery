@@ -8,10 +8,8 @@ otherwise). It sends nothing to a collection no family selected.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import families
-from families import processes, runner
+from families import dpi as dpi_framework, processes, runner
 from families.memory import ReadMemory
 
 from . import hidlist
@@ -91,13 +89,13 @@ class FamiliesProvider(Provider):
                 self.memory.record(family.id, unit, name, outcome.kind)
                 self._diag.append(f"{family.id}.{name}: {outcome.kind}" + (f" ({outcome.note})" if outcome.note else ""))
                 if outcome.kind == "reading":
-                    dpi = self._read_dpi(dev, family, unit, kwargs)
+                    dpi, dpi_target = self._read_dpi(dev, family, info, unit)
                     return DeviceStatus(
                         f"{NAME}:{family.id}:{physical}",
                         ((info.get("product_string") or "").strip() or device.name) if family.prefer_product_name else device.name, outcome.level, outcome.charging, True, NAME,
                         kind=family.kind, physical_id=physical, connection_known=True,
                         charging_known=outcome.charging_known, verification_level=family.level,
-                        model_source="family:" + family.id, dpi=dpi)
+                        model_source="family:" + family.id, dpi=dpi, dpi_target=dpi_target)
                 if outcome.kind in ("asleep", "anomaly"):
                     break
             return None
@@ -107,20 +105,53 @@ class FamiliesProvider(Provider):
             except OSError:
                 self._diag.append("HID handle close failed")
 
-    def _read_dpi(self, dev, family, unit, kwargs):
-        """Read-only DPI evidence after a battery reading; never affects the battery result."""
+    def _read_dpi(self, dev, family, info, unit):
+        """DPI evidence after a battery reading; never affects the battery result.
+        Writable (token + target) only through a reviewed adapter (families/dpi)."""
         key = (family.id, unit)
-        if family.dpi is None or self._dpi_failures.get(key, 0) >= DPI_MAX_FAILURES:
-            return None
-        value, note = runner.run_dpi(dev, family, **kwargs)
-        if value is None:
+        if (family.dpi is None and dpi_framework.adapter_for(family) is None) or \
+                self._dpi_failures.get(key, 0) >= DPI_MAX_FAILURES:
+            return None, None
+        view, target, note = dpi_framework.read(dev, family, info, self._clock)
+        if view is None:
             self._dpi_failures[key] = self._dpi_failures.get(key, 0) + 1
             self._diag.append(f"{family.id}: {note}")
-            return None
+            return None, None
         self._dpi_failures.pop(key, None)
-        # canSet stays False here: writes exist only through a reviewed adapter (C4).
-        return dict(value, supported=True, canSet=False, targetToken=None,
-                    checkedAtUtc=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"))
+        return view, target
+
+    def set_device_dpi(self, inventory, target, value, expected_dpi, target_token):
+        return set_device_dpi(inventory, target, value, expected_dpi, target_token, self._clock, self._running)
 
     def diagnostics(self):
         return list(self._diag)
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token, clock=None, running=processes.running):
+    """Engine set_dpi entry: one adapter-guarded stage switch on one exact collection."""
+    failure = {"dpi": None, "success": False, "outcomeUnknown": False, "confirmedDpi": None}
+    family = families.builtin_families().get(target.get("family")) if isinstance(target, dict) else None
+    if family is None or dpi_framework.adapter_for(family) is None:
+        return dict(failure, error="dpi_invalid_target")
+    if family.stand_aside_for and running(family.stand_aside_for):
+        return dict(failure, error="dpi_vendor_software")   # never race the vendor tool
+    wanted = {key: target.get(key) for key in dpi_framework.IDENTITY_KEYS}
+    matches = [info for info in inventory if isinstance(info, dict)
+               and dpi_framework.identity(info) == wanted
+               and family.device_for(info.get("vendor_id"), info.get("product_id"), info.get("product_string"))
+               and families.proven(family, info)]
+    if len(matches) != 1 or hid is None:
+        return dict(failure, error="dpi_target_changed")
+    dev = hid.device()
+    try:
+        dev.open_path(matches[0]["path"])
+    except (OSError, ValueError):
+        return dict(failure, error="dpi_read_failed")
+    try:
+        return dpi_framework.select(dev, family, matches[0], target, value, expected_dpi, target_token, clock)
+    finally:
+        try:
+            dev.close()
+        except OSError:
+            pass
+

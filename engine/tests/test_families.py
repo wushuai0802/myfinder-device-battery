@@ -701,5 +701,161 @@ class DpiReadTests(unittest.TestCase):
         self.assertEqual(len(device.writes), 1)  # battery only; DPI no longer asked
 
 
+class DpiAdapterTests(unittest.TestCase):
+    """C4: reviewed adapters switch an existing stage; the framework owns every guard."""
+
+    def setUp(self):
+        import types
+        from families import dpi as framework
+        self.framework = framework
+        self.family = spec.parse_family(dpi_family())
+        self.adapter = types.ModuleType("families.dpi._fixture")
+        self.adapter_writes = []
+
+        def select_stage(dev, info, index):
+            self.adapter_writes.append(index)
+            dev.write(list(bytes([0x55, 0x71, index]).ljust(64, b"\0")))
+        self.adapter.select_stage = select_stage
+        for target, value in ((sys.modules, {"families.dpi._fixture": self.adapter}),):
+            patcher = patch.dict(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for obj, name, value in ((framework, "ADAPTERS", {"dpi_test": "_fixture"}),
+                                 (families, "_builtin", {"dpi_test": self.family}),
+                                 (families, "_families", {"dpi_test": self.family})):
+            patcher = patch.object(obj, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def capture(self, reply=DPI_REPLY):
+        view, target, note = self.framework.read(FakeDevice([frame(reply)]), self.family, collection())
+        return view, target
+
+    def test_writable_only_with_reviewed_adapter_on_builtin_family(self):
+        view, target = self.capture()
+        self.assertTrue(view["canSet"])
+        self.assertEqual(view["targetToken"], self.framework.token(target))
+        self.assertEqual((target["family"], target["stages"], target["path"]), ("dpi_test", [400, 800, 1600], b"xiberia-ff90".hex()))
+        self.assertNotIn("current", target)  # the token survives a stage change
+        self.assertEqual(self.framework.vendor_ids(), (0x36F9,))
+        with patch.object(families, "_builtin", {"dpi_test": spec.parse_family(dpi_family())}):
+            self.assertIsNone(self.framework.adapter_for(self.family))   # e.g. a pack family of the same id
+        with patch.object(self.framework, "ADAPTERS", {}):
+            self.assertFalse(self.capture()[0]["canSet"])
+        for name, reply in (("duplicate stages", "55 70 03 01 9001 9001 4006"),):
+            with self.subTest(name):
+                self.assertFalse(self.capture(reply)[0]["canSet"])
+        quick = spec.parse_family(dpi_family(stageSource="quick"))
+        with patch.object(families, "_builtin", {"dpi_test": quick}):
+            view, target, _ = self.framework.read(FakeDevice([frame(DPI_REPLY)]), quick, collection())
+            self.assertEqual((view["canSet"], target), (False, None))
+
+    def select(self, replies, value=1600, expected=800, token=None, target=None):
+        _, captured = self.capture()
+        target = target or captured
+        device = FakeDevice([frame(r) for r in replies])
+        result = self.framework.select(device, self.family, collection(), target, value, expected,
+                                       token or self.framework.token(target))
+        return result, device
+
+    def test_switch_with_readback(self):
+        result, device = self.select([DPI_REPLY, "55 70 03 02 9001 2003 4006"])
+        self.assertEqual((result["success"], result["confirmedDpi"], result["error"], result["outcomeUnknown"]),
+                         (True, 1600, None, False))
+        self.assertEqual(self.adapter_writes, [2])
+        self.assertEqual([w[:3] for w in device.writes], [b"\x55\x70\x00", b"\x55\x71\x02", b"\x55\x70\x00"])
+        self.assertTrue(result["dpi"]["canSet"])
+
+    def test_refusals_send_no_switch(self):
+        cases = {
+            "stale token": dict(token="0" * 64),
+            "not a stage": dict(value=1200),
+            "current changed": dict(replies=["55 70 03 00 9001 2003 4006"]),
+            "table changed": dict(replies=["55 70 03 01 9001 2003 8007"]),
+            "no live answer": dict(replies=[]),
+        }
+        for name, kwargs in cases.items():
+            with self.subTest(name):
+                self.adapter_writes.clear()
+                result, device = self.select(kwargs.pop("replies", [DPI_REPLY]), **kwargs)
+                self.assertFalse(result["success"])
+                self.assertFalse(result["outcomeUnknown"])
+                self.assertEqual(self.adapter_writes, [])
+                self.assertFalse(any(w[:2] == b"\x55\x71" for w in device.writes))
+
+    def test_same_value_needs_no_write(self):
+        result, device = self.select([DPI_REPLY], value=800)
+        self.assertTrue(result["success"])
+        self.assertEqual(self.adapter_writes, [])
+
+    def test_unconfirmed_outcomes_are_unknown_and_never_retried(self):
+        for name, replies in (("readback differs", [DPI_REPLY, DPI_REPLY]), ("no readback", [DPI_REPLY])):
+            with self.subTest(name):
+                self.adapter_writes.clear()
+                result, device = self.select(replies)
+                self.assertEqual((result["success"], result["outcomeUnknown"]), (False, True))
+                self.assertEqual(self.adapter_writes, [2])
+                self.assertEqual(sum(w[:2] == b"\x55\x71" for w in device.writes), 1)
+
+    def test_write_budget(self):
+        def greedy(dev, info, index):
+            dev.write(list(bytes([0x55, 0x71, index]).ljust(64, b"\0")))
+            dev.send_feature_report([0x55, 0x72])
+        self.adapter.select_stage = greedy
+        result, device = self.select([DPI_REPLY, "55 70 03 02 9001 2003 4006"])
+        self.assertEqual((result["success"], result["outcomeUnknown"]), (False, True))
+        self.assertEqual(device.feature_sets, [])
+        self.adapter.MAX_WRITES = 3
+        self.assertIsNone(self.framework.adapter_for(self.family))
+        self.adapter.MAX_WRITES = 1
+
+        def sneaky(dev, info, index):
+            self.assertFalse(hasattr(dev, "_dev") or hasattr(dev, "__dict__"))
+            dev.write(list(bytes([0x55, 0x71, index]).ljust(64, b"\0")))
+        self.adapter.select_stage = sneaky
+        result, _ = self.select([DPI_REPLY, "55 70 03 02 9001 2003 4006"])
+        self.assertTrue(result["success"])
+
+    def test_read_stages_queries_are_capped(self):
+        def chatty(dev, info):
+            for _ in range(3):
+                dev.write([0x55, 0x70])
+            return {"current": 800, "stages": [400, 800]}
+        self.adapter.read_stages = chatty
+        device = FakeDevice()
+        view, target, note = self.framework.read(device, self.family, collection())
+        self.assertIsNone(view)
+        self.assertEqual(len(device.writes), 2)   # MAX_QUERY_WRITES default
+
+    def test_vendor_software_blocks_switch(self):
+        _, target = self.capture()
+        device = FakeDevice([frame(DPI_REPLY)])
+        family = spec.parse_family(dict(dpi_family(), standAsideFor=["vendor.exe"]))
+        with patch.object(families, "_builtin", {"dpi_test": family}), \
+                patch.object(provider_module.hid, "device", return_value=device):
+            result = provider_module.set_device_dpi([collection()], target, 1600, 800, self.framework.token(target),
+                                                    running=lambda names: True)
+        self.assertEqual(result["error"], "dpi_vendor_software")
+        self.assertEqual(device.writes, [])
+
+    def test_provider_publishes_lease_and_engine_entry_matches_exact_collection(self):
+        statuses, _ = poll([collection()], FakeDevice([frame("55 65 00 3c"), frame(DPI_REPLY)]))
+        status, = statuses
+        self.assertTrue(status.dpi["canSet"])
+        self.assertEqual(status.dpi["targetToken"], self.framework.token(status.dpi_target))
+        import server
+        self.assertTrue(server.normalise_dpi(status.dpi, usable=True)["canSet"])
+        target, token = status.dpi_target, status.dpi["targetToken"]
+        device = FakeDevice([frame(DPI_REPLY), frame("55 70 03 02 9001 2003 4006")])
+        with patch.object(provider_module.hid, "device", return_value=device):
+            result = provider_module.set_device_dpi([collection(), collection(path=b"other")], target, 1600, 800, token)
+            self.assertTrue(result["success"], result)
+            twins = [collection(), collection()]
+            self.assertEqual(provider_module.set_device_dpi(twins, target, 1600, 800, token)["error"], "dpi_target_changed")
+            forged = dict(target, family="xiberia")
+            self.assertEqual(provider_module.set_device_dpi([collection()], forged, 1600, 800, token)["error"],
+                             "dpi_invalid_target")
+
+
 if __name__ == "__main__":
     unittest.main()
