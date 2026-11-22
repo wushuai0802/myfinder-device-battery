@@ -49,11 +49,15 @@ static class FeedbackAgreementTests {
             using(var f=Form("",new FakeHttp(),x=>copied=x)){
                 Show(f);
                 var box=Find<TextBox>(f,"Description");
-                var choice=Find<ComboBox>(f,"BatteryComparison");
+                var choice=Find<ThemedSegments>(f,"BatteryComparison");
                 var delta=Find<TextBox>(f,"BatteryComparisonDifference");
                 var submit=Find<Button>(f,"SubmitFeedback");
                 var status=Find<Label>(f,"FeedbackStatus");
                 Check(choice.SelectedIndex==0&&!delta.Visible,"Comparison is optional and hides the unused input.");
+                var labels=new[]{"不填","一致","有差异","官方读不到"};
+                Check(choice.OptionCount==labels.Length,"All four comparison choices are present.");
+                for(int i=0;i<labels.Length;i++)
+                    Check(choice.AccessibilityObject.GetChild(i).Name==labels[i],"Draft choice "+i+" retains its intended label.");
                 choice.SelectedIndex=2;
                 Application.DoEvents();
                 submit.PerformClick();
@@ -71,10 +75,12 @@ static class FeedbackAgreementTests {
                 box.Text=description;
                 submit.PerformClick();
                 Check(copied!=null&&copied.Contains(answer+"相差 7%"),"The browser fallback carries the selected comparison.");
+                Check(delta.PointToScreen(System.Drawing.Point.Empty).X>=choice.PointToScreen(new System.Drawing.Point(choice.Width,0)).X,
+                    "The percentage field appears to the right of the comparison choices.");
                 f.Close();
             }
             using(var f=Form("",new FakeHttp(),null)){
-                Check(Find<ComboBox>(f,"BatteryComparison").SelectedIndex==2&&
+                Check(Find<ThemedSegments>(f,"BatteryComparison").SelectedIndex==2&&
                     Find<TextBox>(f,"BatteryComparisonDifference").Text=="7","The draft restores the optional answer.");
             }
             FeedbackDraft.Clear();
@@ -82,7 +88,7 @@ static class FeedbackAgreementTests {
             using(var f=Form("https://feedback.invalid/service",http,null)){
                 Show(f);
                 Find<TextBox>(f,"Description").Text=description;
-                Find<ComboBox>(f,"BatteryComparison").SelectedIndex=1;
+                Find<ThemedSegments>(f,"BatteryComparison").SelectedIndex=1;
                 Find<Button>(f,"SubmitFeedback").PerformClick();
                 var until=DateTime.UtcNow.AddSeconds(5);
                 while(Find<Button>(f,"SubmitFeedback").Text!="关闭"&&DateTime.UtcNow<until){

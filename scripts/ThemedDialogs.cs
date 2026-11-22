@@ -451,6 +451,7 @@ namespace AtkBatteryTray {
         float ScaleFactor {get{return DialogDpi.Scale(this);}}
         internal int OptionCount {get{return options.Count;}}
         internal string SelectedValue {get{return selectedIndex<0?null:options[selectedIndex].SelectionValue;}}
+        internal event EventHandler SelectedIndexChanged;
         internal int SelectedIndex {
             get{return selectedIndex;}
             set{
@@ -460,6 +461,8 @@ namespace AtkBatteryTray {
                 if(previous>=0)AccessibilityNotifyClients(AccessibleEvents.StateChange,previous);
                 AccessibilityNotifyClients(AccessibleEvents.StateChange,value);AccessibilityNotifyClients(AccessibleEvents.Selection,value);
                 if(Focused)AccessibilityNotifyClients(AccessibleEvents.Focus,value);
+                var changed=SelectedIndexChanged;
+                if(changed!=null)changed(this,EventArgs.Empty);
             }
         }
         internal void AddOption(string name,string text,string value){
