@@ -198,6 +198,11 @@ ZHUAUDIO_DIAGNOSTICS = frozenset({
     "HID handle close failed",
 })
 DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
+# Architecture v2 (C4): families join only when a reviewed adapter is listed in
+# families.dpi.ADAPTERS; with none, the families write path does not exist.
+from families import dpi as _family_dpi  # noqa: E402
+if _family_dpi.vendor_ids():
+    DPI_PROVIDERS["families"] = _family_dpi.vendor_ids()
 
 
 def fa6x_diagnostic_summary(line):
@@ -1222,7 +1227,7 @@ class BatteryEngine:
         provider = self.provider_by_id.get(device_id)
         if (self._direct or self.package_smoke or provider not in DPI_PROVIDERS
                 or device.get("modelSource") == "pack"
-                or provider == "pulsar" and dpi.get("stageSource") != "onboard"
+                or provider in ("pulsar", "families") and dpi.get("stageSource") != "onboard"
                 or not physical or not target or not device.get("online")
                 or dpi.get("canSet") is not True or dpi.get("targetToken") != target_token):
             return finish("stale_target")
