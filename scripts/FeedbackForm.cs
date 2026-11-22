@@ -312,15 +312,13 @@ namespace AtkBatteryTray {
             var noticeCard=new FeedbackNoticeSection(Theme,notice) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill};
             layout.Controls.Add(noticeCard,0,3);
             status.Name="FeedbackStatus";status.AutoSize=true;status.Dock=DockStyle.Fill;status.Font=hint.Font;status.BackColor=Theme.Card;status.ForeColor=Theme.Foreground;status.Margin=new Padding(0,0,0,6);status.Visible=false;
-            var buttons=new FlowLayoutPanel {FlowDirection=FlowDirection.RightToLeft,WrapContents=true,Margin=Padding.Empty};
             submit.Name="SubmitFeedback";submit.Text=String.IsNullOrEmpty(relay)?"在浏览器中提交":"提交";submit.AutoSize=true;submit.MinimumSize=new Size(82,30);submit.Click+=delegate{Submit();};
             cancel.Name="CancelFeedback";cancel.Text="取消";cancel.AutoSize=true;cancel.MinimumSize=new Size(82,30);cancel.Click+=delegate{Close();};
             fallback.Name="BrowserFallback";fallback.Text="改用浏览器提交";fallback.AutoSize=true;fallback.MinimumSize=new Size(132,30);fallback.Visible=false;fallback.Click+=delegate{if(ConfirmRepeat())OpenBrowser();};
             copyReport.Name="CopyFeedbackReport";copyReport.Text="复制报告";copyReport.AutoSize=true;copyReport.MinimumSize=new Size(82,30);copyReport.Visible=false;copyReport.Click+=delegate{CopyReport();};
             view.Name="ViewIssue";view.Text="在浏览器中查看";view.AutoSize=true;view.MinimumSize=new Size(132,30);view.Visible=false;
             view.Click+=delegate{if(receipt!=null&&FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url))try{open(receipt.Url);}catch(Exception){SetStatus("无法打开浏览器，请稍后重试。");}};
-            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback,copyReport});
-            actionBar=new FeedbackActionBar(mine,buttons) {Dock=DockStyle.Fill,Margin=Padding.Empty};
+            actionBar=new FeedbackActionBar(mine,submit,cancel,view,fallback,copyReport) {Dock=DockStyle.Fill,Margin=Padding.Empty};
             var footer=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -360,12 +358,21 @@ namespace AtkBatteryTray {
         }
         sealed class FeedbackActionBar:Panel {
             readonly ThemedButton history;
+            readonly ThemedButton browserFallback,copyReport;
             readonly FlowLayoutPanel actions;
+            readonly Control[] singleRowOrder,groupedOrder;
             bool arranging;
 
-            internal FeedbackActionBar(ThemedButton history,FlowLayoutPanel actions){
+            internal FeedbackActionBar(ThemedButton history,ThemedButton submit,ThemedButton cancel,
+                    ThemedButton view,ThemedButton browserFallback,ThemedButton copyReport){
                 this.history=history;
-                this.actions=actions;
+                this.browserFallback=browserFallback;
+                this.copyReport=copyReport;
+                singleRowOrder=new Control[]{submit,cancel,view,browserFallback,copyReport};
+                // The flow is right to left within each row.
+                groupedOrder=new Control[]{copyReport,browserFallback,submit,cancel,view};
+                actions=new FlowLayoutPanel {FlowDirection=FlowDirection.RightToLeft,WrapContents=true,Margin=Padding.Empty};
+                actions.Controls.AddRange(singleRowOrder);
                 AutoSize=true;
                 AutoSizeMode=AutoSizeMode.GrowAndShrink;
                 Controls.Add(history);
@@ -377,13 +384,23 @@ namespace AtkBatteryTray {
                 Size historySize=history.GetPreferredSize(Size.Empty);
                 int historyWidth=historySize.Width+history.Margin.Horizontal;
                 int width=proposedSize.Width>0?proposedSize.Width:Width;
-                int actionsHeight=MeasureActions(Math.Max(1,width-historyWidth));
+                int actionWidth=Math.Max(1,width-historyWidth);
+                int actionsHeight=MeasureActions(actionWidth,NeedsGroupedRows(actionWidth));
                 return new Size(width,Math.Max(historySize.Height+history.Margin.Vertical,actionsHeight));
             }
 
-            int MeasureActions(int width){
+            bool NeedsGroupedRows(int width){
+                if(!browserFallback.Visible||!copyReport.Visible)return false;
+                int required=0;
+                foreach(Control action in singleRowOrder){
+                    if(action.Visible)required+=action.GetPreferredSize(Size.Empty).Width+action.Margin.Horizontal;
+                }
+                return required>width;
+            }
+
+            int MeasureActions(int width,bool grouped){
                 int height=0,rowWidth=0,rowHeight=0;
-                foreach(Control action in actions.Controls){
+                foreach(Control action in grouped?groupedOrder:singleRowOrder){
                     if(!action.Visible)continue;
                     Size size=action.GetPreferredSize(Size.Empty)+action.Margin.Size;
                     if(rowWidth>0&&rowWidth+size.Width>width){
@@ -392,8 +409,22 @@ namespace AtkBatteryTray {
                     }
                     rowWidth+=size.Width;
                     rowHeight=Math.Max(rowHeight,size.Height);
+                    if(grouped&&action==browserFallback){
+                        height+=rowHeight;
+                        rowWidth=rowHeight=0;
+                    }
                 }
                 return height+rowHeight;
+            }
+
+            void SetGroupedRows(bool grouped){
+                if(actions.GetFlowBreak(browserFallback)==grouped)return;
+                var order=grouped?groupedOrder:singleRowOrder;
+                actions.SuspendLayout();
+                try{
+                    for(int i=0;i<order.Length;i++)actions.Controls.SetChildIndex(order[i],i);
+                    actions.SetFlowBreak(browserFallback,grouped);
+                }finally{actions.ResumeLayout(false);}
             }
 
             protected override void OnLayout(LayoutEventArgs e){
@@ -404,9 +435,12 @@ namespace AtkBatteryTray {
                     Size historySize=history.GetPreferredSize(Size.Empty);
                     int historyWidth=historySize.Width+history.Margin.Horizontal;
                     int actionWidth=Math.Max(1,ClientSize.Width-historyWidth);
-                    int actionHeight=MeasureActions(actionWidth);
+                    bool grouped=NeedsGroupedRows(actionWidth);
+                    int actionHeight=MeasureActions(actionWidth,grouped);
                     int actionTop=Math.Max(0,ClientSize.Height-actionHeight);
+                    SetGroupedRows(grouped);
                     actions.Bounds=new Rectangle(historyWidth,actionTop,actionWidth,actionHeight);
+                    actions.PerformLayout();
                     int historyTop=history.Margin.Top+Math.Max(0,actionTop+(actionHeight-historySize.Height-history.Margin.Vertical)/2);
                     history.Bounds=new Rectangle(history.Margin.Left,historyTop,historySize.Width,historySize.Height);
                 }finally{arranging=false;}

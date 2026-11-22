@@ -318,7 +318,35 @@ static class FeedbackFormTests {
                 }
                 form.Close();
             }
-        }}finally{ThemedDialog.WorkingAreaProvider=previous;}
+        }
+        area.Size=new Size(1600,900);
+        using(var form=Form(new FakeHttp {Reply=delegate{return Response(500);}})){
+            Show(form);
+            var submit=Find<Button>(form,"SubmitFeedback");
+            var cancel=Find<Button>(form,"CancelFeedback");
+            var browser=Find<Button>(form,"BrowserFallback");
+            var copy=Find<Button>(form,"CopyFeedbackReport");
+            submit.PerformClick();
+            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==GenericFailure;});
+
+            int oneRowWidth=0;
+            foreach(Button button in new[]{submit,cancel,browser,copy})
+                oneRowWidth+=button.GetPreferredSize(Size.Empty).Width+button.Margin.Horizontal;
+            int nonActionWidth=form.ClientSize.Width-submit.Parent.ClientSize.Width;
+            form.ClientSize=new Size(nonActionWidth+oneRowWidth-1,form.ClientSize.Height);
+            Application.DoEvents();
+            Check(submit.Top==cancel.Top&&cancel.Bottom==submit.Parent.ClientSize.Height&&
+                submit.Top>browser.Top&&browser.Top==copy.Top&&browser.Left<copy.Left&&cancel.Left<submit.Left,
+                "wrapped feedback failure puts both fallback actions above Cancel and Submit");
+
+            form.ClientSize=new Size(nonActionWidth+oneRowWidth+16,form.ClientSize.Height);
+            Application.DoEvents();
+            Check(copy.Top==browser.Top&&browser.Top==cancel.Top&&cancel.Top==submit.Top&&
+                copy.Left<browser.Left&&browser.Left<cancel.Left&&cancel.Left<submit.Left,
+                "wide feedback failure keeps the original single-row action order");
+            form.Close();
+        }
+        }finally{ThemedDialog.WorkingAreaProvider=previous;}
     }
     static void NativeBoundsAfterSubmission(){
         var previous=ThemedDialog.WorkingAreaProvider;var area=new Rectangle(0,24,1024,560);
