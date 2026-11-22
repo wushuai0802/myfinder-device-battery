@@ -505,5 +505,102 @@ class HostControlTests(unittest.TestCase):
         self.assertTrue(replies[1]["familyMemory"]["xiberia|unit-" + "0" * 24]["disabled"])
 
 
+class PackFamilyTests(unittest.TestCase):
+    """C2: loader-2 signed device packs may add families, never override them."""
+
+    def document(self, families_rows, loader=2, entries=()):
+        return json.dumps({"format": "myfinder-device-pack", "loader": loader, "packVersion": 2026112101,
+                           "keyId": "test", "createdAt": "2026-11-21T00:00:00Z", "entries": list(entries),
+                           "disabled": [], "families": families_rows})
+
+    def family(self, family_id="pack_test", pid="F0F0", vid="36F9", **changes):
+        row = copy.deepcopy(XIBERIA)
+        row.update(id=family_id, devices=[{"vendorId": vid, "productId": pid, "name": "Pack Test"}])
+        row.update(changes)
+        return row
+
+    def setUp(self):
+        self.addCleanup(families.set_pack_families, ())
+
+    def test_accepts_new_family_and_reports_it(self):
+        from device_pack import parse_pack
+        result = parse_pack(self.document([self.family()]))
+        self.assertTrue(result.loaded, result.rejected)
+        self.assertEqual([f.id for f in result.families], ["pack_test"])
+        self.assertEqual(result.diagnostic()["families"], ["pack_test"])
+        families.set_pack_families(result.families)
+        self.assertIn("pack_test", families.families())
+        self.assertIn((0x36F9, 0xF0F0), {(d.vendor_id, d.product_id) for d in families.families()["pack_test"].devices})
+        families.set_pack_families(())
+        self.assertNotIn("pack_test", families.families())
+
+    def test_row_rejections_keep_the_rest(self):
+        from device_pack import parse_pack
+        bad_spec = self.family("bad_spec", "F0F1")
+        bad_spec["reads"][0]["transport"] = "session"
+        rows = [
+            self.family("xiberia", "F0F2"),                       # builtin family id
+            self.family("dup_a", "F0F3"), self.family("dup_a", "F0F4"),
+            self.family("claims_builtin", "F016"),                # XIBERIA builtin device
+            self.family("claims_reader", "1278", vid="373B"),     # pulsar reader device
+            self.family("pid_a", "F0F5"), self.family("pid_b", "F0F5"),
+            self.family("probe_claimed", "F0F6", probeVendorIds=["046D"]),
+            bad_spec,
+            self.family("good", "F0F7"),
+        ]
+        result = parse_pack(self.document(rows))
+        self.assertTrue(result.loaded)
+        self.assertEqual([f.id for f in result.families], ["good"])
+        reasons = sorted(r.split(": ", 1)[1] for r in result.rejected)
+        self.assertEqual(reasons, sorted(["builtin_family_conflict", "duplicate_family_id", "duplicate_family_id",
+                                          "builtin_id_conflict", "builtin_id_conflict", "duplicate_id", "duplicate_id",
+                                          "probe_vendor_claimed", "invalid_family"]))
+
+    def test_family_may_repeat_its_own_pid_with_product_strings(self):
+        from device_pack import parse_pack
+        row = self.family()
+        row["devices"] = [{"vendorId": "36F9", "productId": "F0F0", "name": "A", "productString": "A"},
+                          {"vendorId": "36F9", "productId": "F0F0", "name": "B", "productString": "B"}]
+        self.assertEqual(len(parse_pack(self.document([row])).families), 1)
+
+    def test_whole_pack_errors(self):
+        from device_pack import parse_pack
+        cases = {"loader 1 with families": self.document([self.family()], loader=1),
+                 "loader 3": self.document([], loader=3),
+                 "family not an object": self.document(["xiberia"]),
+                 "too many": self.document([self.family(f"f{i}", f"{0xE000 + i:04X}") for i in range(65)])}
+        for name, document in cases.items():
+            with self.subTest(name):
+                self.assertFalse(parse_pack(document).loaded)
+        legacy = json.loads(self.document([], loader=1))
+        del legacy["families"]
+        self.assertTrue(parse_pack(json.dumps(legacy)).loaded)
+
+    def test_child_installs_pack_families_and_manager_prefilters_their_vendors(self):
+        import io
+        import types
+        import server
+        from device_pack import parse_pack
+        from isolation import wire_encode
+        result = parse_pack(self.document([self.family("pack_vendor", "0001", vid="ABCD")]))
+        self.assertEqual([f.id for f in result.families], ["pack_vendor"])
+        seen = []
+        command = {"action": "query", "provider": "families", "physicalId": "p", "inventory": [],
+                   "devicePack": result.document, "sequence": 0}
+        data = (json.dumps(command, default=wire_encode) + "\n").encode()
+        with patch.object(server, "scoped_poll", side_effect=lambda *a: seen.append(families.vendor_ids()) or []), \
+                patch.object(server.sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(data))), \
+                patch.object(server.sys, "stdout", io.StringIO()):
+            server.reader_child()
+        self.assertIn(0xABCD, seen[0])
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+        from test_engine_reliability import FakePool
+        engine = server.BatteryEngine(process_factory=FakePool().factory, device_pack=result)
+        self.addCleanup(engine.close)
+        self.assertIn(0xABCD, engine._provider_vids("families"))
+        self.assertIn(0x36F9, engine._provider_vids("families"))
+        self.assertNotIn(0xABCD, server.PROVIDER_VIDS["families"])
+
+
 if __name__ == "__main__":
     unittest.main()

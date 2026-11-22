@@ -1,20 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "MyFinder device pack loader 1",
-  "$comment": "UTF-8 JSON, maximum 262144 bytes; reject duplicate object keys and non-JSON numeric constants before schema validation. Integers must be JSON integer tokens (not booleans or 1.0). Strings marked x-printable use Unicode Python str.isprintable semantics (exclude all Unicode Other/Separator categories except ASCII space). entries + disabled <= 2000. Structural errors, disallowed profile match fields and unsupported profileRev reject the whole pack. Semantic conflicts reject every affected row: duplicate VID/PID even across providers or disjoint interfaces, builtin/reserved VID/PID, unknown profile/provider, profile vendor/kind mismatch. native_atk rows (including disabled) are always rejected. Profile catalog and allowed match fields come from providers.profiles; only Razer additions in stage 2a. disabled supports the existing engine HID brand providers, never native/Bluetooth readers. Disabled targets override accepted entries and builtins. level defaults to C; source defaults to empty. Only the selected profile's battery reads are allowed; metadata cannot select another protocol. Signatures, key trust and rollback policy belong to the C# host.",
+  "title": "MyFinder device pack loader 1-2",
+  "$comment": "UTF-8 JSON, maximum 262144 bytes; reject duplicate object keys and non-JSON numeric constants before schema validation. Integers must be JSON integer tokens (not booleans or 1.0). Strings marked x-printable use Unicode Python str.isprintable semantics (exclude all Unicode Other/Separator categories except ASCII space). entries + disabled <= 2000. Structural errors, disallowed profile match fields and unsupported profileRev reject the whole pack. Semantic conflicts reject every affected row: duplicate VID/PID even across providers or disjoint interfaces, builtin/reserved VID/PID, unknown profile/provider, profile vendor/kind mismatch. native_atk rows (including disabled) are always rejected. Profile catalog and allowed match fields come from providers.profiles; only Razer additions in stage 2a. disabled supports the existing engine HID brand providers, never native/Bluetooth readers. Disabled targets override accepted entries and builtins. level defaults to C; source defaults to empty. Only the selected profile's battery reads are allowed; metadata cannot select another protocol. Signatures, key trust and rollback policy belong to the C# host. Loader 2 (published only as device-pack-v2-*.json; loader-1 hosts never fetch it) adds optional families: at most 64 objects marked x-family-spec, which hosts check only for being objects; the engine validates each with families.spec.parse_family and rejects a row on any spec error, a builtin family id, a duplicate id, or a device already claimed by a builtin reader, a builtin family, a pack entry or another pack family. families in a loader-1 document reject the whole pack.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format", "loader", "packVersion", "keyId", "createdAt", "entries", "disabled"],
   "properties": {
     "format": {"type": "string", "const": "myfinder-device-pack"},
-    "loader": {"type": "integer", "const": 1},
+    "loader": {"type": "integer", "enum": [1, 2]},
     "packVersion": {"type": "integer", "minimum": 1, "maximum": 9999999999},
     "keyId": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$"},
     "createdAt": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "entries": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/entry"}},
-    "disabled": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/disabled"}}
+    "disabled": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/disabled"}},
+    "families": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/family"}}
   },
   "$defs": {
+    "family": {"type": "object", "x-family-spec": true},
     "id": {"type": "string", "pattern": "^[0-9A-Fa-f]{4}$"},
     "identifier": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9_-]*$"},
     "match": {

@@ -3,7 +3,9 @@
 The bundled schema is the authoritative structural contract. This deliberately
 small validator implements exactly its keywords without a runtime dependency.
 All validation precedes semantic row selection, so a malformed rejected row
-cannot hide a whole-pack error. No pack ever changes protocol parameters.
+cannot hide a whole-pack error. No pack ever changes protocol parameters of an
+existing reader; loader 2 may add declarative families (architecture v2), each
+validated by the same parser and safety rules as the builtin family files.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from providers.profiles import builtin_ids, profiles
 
 MAX_BYTES = 256 * 1024
 MAX_ENTRIES = 2000
+MAX_FAMILIES = 64
 BRAND_PROVIDERS = frozenset((
     "families",
     "atk_headset",
@@ -91,6 +94,8 @@ class DevicePack:
     # Original validated bytes decoded once. Children receive this snapshot,
     # never a pathname that might change after the manager's ready handshake.
     document: str = ""
+    # Loader 2: accepted families.spec.Family objects, never overriding builtins.
+    families: tuple = ()
 
     def is_disabled(self, provider, vendor_id, product_id):
         return self.loaded and any((d.provider, d.vendor_id, d.product_id) ==
@@ -98,6 +103,7 @@ class DevicePack:
 
     def diagnostic(self):
         return {"version": self.version, "entries": len(self.entries),
+                "families": [f.id for f in self.families],
                 "disabled": [d.diagnostic() for d in self.disabled],
                 "rejected": list(self.rejected), "loaded": self.loaded}
 
@@ -145,6 +151,8 @@ def _validate(value, rule, root, path="pack"):
     expected = {"object": dict, "array": list, "string": str, "integer": int}[rule["type"]]
     if type(value) is not expected:
         raise ValueError(path + ": invalid_type")
+    if rule.get("x-family-spec"):
+        return  # structure is owned by families.spec.parse_family (see _pack_families)
     if "const" in rule and value != rule["const"] or "enum" in rule and value not in rule["enum"]:
         raise ValueError(path + ": unsupported_value")
     if expected is dict:
@@ -187,6 +195,8 @@ def parse_pack(document):
         _validate(data, schema, schema)
         if len(data["entries"]) + len(data["disabled"]) > MAX_ENTRIES:
             raise ValueError("too_many_entries")
+        if "families" in data and data["loader"] < 2:
+            raise ValueError("families_require_loader_2")
         catalog = profiles()
         # Check revisions/field permissions even on rows later rejected for a
         # duplicate ID. Unknown profiles are row errors; known revisions aren't.
@@ -228,11 +238,62 @@ def parse_pack(document):
                 continue
             disabled.append(Disabled(item["provider"], int(item["vendorId"], 16),
                                      int(item["productId"], 16), item["reason"]))
-        return DevicePack(data["packVersion"], tuple(accepted), tuple(disabled), tuple(rejected), True, text)
+        families = _pack_families(data.get("families", []), accepted, rejected)
+        return DevicePack(data["packVersion"], tuple(accepted), tuple(disabled), tuple(rejected), True,
+                          document=text, families=families)
     except (ValueError, TypeError, UnicodeError, RecursionError, OSError) as error:
         # No untrusted names, paths or JSON payloads in diagnostic exceptions.
         reason = str(error) if type(error) is ValueError else type(error).__name__
         return DevicePack(rejected=("pack: " + reason[:160],))
+
+
+@lru_cache(maxsize=1)
+def _claimed_ids():
+    """(vid, pid) already read by any builtin reader or builtin family."""
+    from known_ids import build_index
+    import families as registry
+    claimed = {(d["vendorId"], d["productId"]) for d in build_index()["devices"]}
+    claimed |= {(vid, pid) for vid, pid, *_ in registry.builtin_listed_ids()}
+    return frozenset(claimed) | builtin_ids()
+
+
+def _pack_families(rows, entries, rejected):
+    """Row-level semantics for loader-2 families; any doubt rejects the row."""
+    if not rows:
+        return ()
+    import families as registry
+    from families.spec import SpecError, parse_family
+    try:
+        claimed = _claimed_ids()
+        builtin = set(registry.builtin_families())
+    except Exception:  # an index we cannot build proves nothing: add no family
+        rejected.extend(f"families[{i}]: claimed_ids_unavailable" for i in range(len(rows)))
+        return ()
+    claimed = claimed | {(e.match.vendor_id, e.match.product_id) for e in entries}
+    parsed = []
+    for index, row in enumerate(rows):
+        try:
+            parsed.append((index, parse_family(row)))
+        except (SpecError, ValueError, TypeError, KeyError):
+            rejected.append(f"families[{index}]: invalid_family")
+    ids = Counter(f.id for _, f in parsed)
+    owners = Counter(p for _, f in parsed for p in {(d.vendor_id, d.product_id) for d in f.devices})
+    claimed_vendors = {vid for vid, _ in claimed}
+    accepted = []
+    for index, family in parsed:
+        pairs = {(d.vendor_id, d.product_id) for d in family.devices}
+        reason = ("builtin_family_conflict" if family.id in builtin else
+                  "duplicate_family_id" if ids[family.id] > 1 else
+                  "builtin_id_conflict" if pairs & claimed else
+                  # Remote packs may not open whole-vendor probing on a brand an
+                  # existing reader owns; that needs a reviewed builtin family.
+                  "probe_vendor_claimed" if set(family.probe_vendor_ids) & claimed_vendors else
+                  "duplicate_id" if any(owners[p] > 1 for p in pairs) else "")
+        if reason:
+            rejected.append(f"families[{index}]: {reason}")
+        else:
+            accepted.append(family)
+    return tuple(accepted)
 
 
 def load_pack(path=None):
