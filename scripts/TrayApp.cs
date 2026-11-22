@@ -590,6 +590,7 @@ namespace AtkBatteryTray {
         }
         public void OpenAnimated(bool fromLauncher=false) {OpenAnimatedCore(fromLauncher,null);}
         internal void OpenFromTray(Point point){OpenAnimatedCore(false,null,point);}
+        internal void OpenAtTrayAnchor(TrayPanelAnchor placement){OpenAnimatedCore(false,placement);}
         internal void OpenUpdated(TrayPanelAnchor placement){OpenAnimatedCore(false,placement);}
         void OpenAnimatedCore(bool fromLauncher,TrayPanelAnchor? placement,Point? click=null) {
             if(disposingPopup||Disposing||IsDisposed)return;
@@ -1088,7 +1089,12 @@ namespace AtkBatteryTray {
         }
         internal void ListenForExitRequest(ShowPanelSignal signal){signal.Listen(delegate{try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)ExitThread();});}catch(InvalidOperationException){}});}
         public void ShowSettings() {
-            if(details==null||details.IsDisposed){details=new Details(this);details.OpenAnimated(true);}else details.Reveal();
+            if (details == null || details.IsDisposed) {
+                details = new Details(this);
+                details.OpenAtTrayAnchor(TrayPanelPlacement.ForSettings(tray, DeviceSettings.Current.LastTrayIconPosition));
+            } else {
+                details.Reveal();
+            }
             details.ShowPreferences();
         }
         public void RefreshAudioDevices(){RequestAudioRead(true);}

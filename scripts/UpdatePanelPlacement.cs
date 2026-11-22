@@ -85,6 +85,11 @@ namespace AtkBatteryTray {
         internal static TrayPanelAnchor Fallback(Rectangle screen,Rectangle workArea,TaskbarEdge edge,Rectangle? taskbar=null,bool autoHide=false){
             return Anchor(null,Reserved(screen,workArea,taskbar,edge,autoHide),workArea.Top>screen.Top?TaskbarEdge.Top:edge);
         }
+        internal static TrayPanelAnchor SettingsFallback(Rectangle screen, Rectangle workArea, Rectangle? taskbar,
+            TaskbarEdge edge, bool autoHide, TrayPanelAnchor? remembered) {
+            if (!taskbar.HasValue) return remembered ?? Fallback(screen, workArea, edge);
+            return Anchor(null, Reserved(screen, workArea, taskbar, edge, autoHide), edge);
+        }
         // Physical coordinates throughout. The caller caps panel size to the work area.
         internal static Point Position(Point anchor,Rectangle workArea,Size panel,TaskbarEdge edge) {
             if(panel.Width<0||panel.Height<0||panel.Width>workArea.Width||panel.Height>workArea.Height)throw new ArgumentOutOfRangeException("panel");
@@ -139,6 +144,18 @@ namespace AtkBatteryTray {
             if(remembered.HasValue)return remembered;
             Rectangle? iconRect=TryIconRect(icon,out rect)?rect:(Rectangle?)null;
             return FindAnchor(null,null,iconRect,autoHide,screens,areas,bar,edge);
+        }
+        internal static TrayPanelAnchor ForSettings(NotifyIcon icon, TrayIconPosition last) {
+            var iconAnchor = FindIcon(icon);
+            if (iconAnchor.HasValue) return iconAnchor.Value;
+
+            Rectangle taskbar;
+            TaskbarEdge edge;
+            bool foundTaskbar = TryTaskbar(out taskbar, out edge);
+            var screen = foundTaskbar ? Screen.FromRectangle(taskbar) : Screen.PrimaryScreen;
+            var remembered = foundTaskbar ? (TrayPanelAnchor?)null : FindIcon(null, last);
+            return SettingsFallback(screen.Bounds, screen.WorkingArea,
+                foundTaskbar ? taskbar : (Rectangle?)null, edge, TaskbarAutoHide(), remembered);
         }
         internal static TrayPanelAnchor Fallback() {
             Rectangle taskbar;TaskbarEdge edge;

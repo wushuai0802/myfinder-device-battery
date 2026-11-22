@@ -188,6 +188,29 @@ static class UpdateAnchorTests {
             owner.ExitThread();
         }
     }
+    static void SettingsMenuPositions() {
+        var screen = new Rectangle(0,0,1600,900);
+        var size = new Size(260,300);
+        var remembered = new TrayPanelAnchor(new Point(140,100), screen, TaskbarEdge.Left);
+        var edges = new[]{TaskbarEdge.Left,TaskbarEdge.Top,TaskbarEdge.Right,TaskbarEdge.Bottom};
+        var bars = new[]{
+            new Rectangle(0,0,40,900), new Rectangle(0,0,1600,40),
+            new Rectangle(1560,0,40,900), new Rectangle(0,860,1600,40)
+        };
+        var areas = new[]{
+            new Rectangle(40,24,1560,876), new Rectangle(0,40,1600,860),
+            new Rectangle(0,24,1560,876), new Rectangle(0,24,1600,836)
+        };
+        var expected = new[]{new Point(48,599),new Point(1340,48),new Point(1291,599),new Point(1340,551)};
+        for (int i=0;i<edges.Length;i++) {
+            var anchor = TrayPanelPlacement.SettingsFallback(screen,areas[i],bars[i],edges[i],false,remembered);
+            var position = TrayPanelPlacement.Position(anchor.Point,anchor.WorkArea,size,anchor.Edge);
+            Check(anchor.Edge==edges[i] && position==expected[i] && areas[i].Contains(new Rectangle(position,size)),
+                "settings preserve the actual taskbar edge and fit its work area: "+edges[i]);
+        }
+        var fallback = TrayPanelPlacement.SettingsFallback(screen,screen,null,TaskbarEdge.Bottom,false,remembered);
+        Check(fallback.Point==remembered.Point && fallback.Edge==remembered.Edge,"settings use the remembered panel position when taskbar is unknown");
+    }
     static void PositionSettings(){
         string path=System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tray-position-settings.json");
         var settings=new AudioBindings {Theme="dark",MouseAlias="保留名称"};
@@ -277,6 +300,8 @@ static class UpdateAnchorTests {
             var cursorScreen=TrayPanelPlacement.WorkingArea(Screen.FromPoint(fixedPoint));
             Check((Point)Field(popup,"anchor")==new Point(cursorScreen.Right-24,cursorScreen.Top+16),"launcher keeps its existing upper-right anchor");
             Check(saves==0,"updated and legacy launcher paths do not record an icon click");
+            popup.Close();owner.ShowSettings();popup=(Details)Field(owner,"details");
+            Check(Field(popup,"updatedAnchor") is TrayPanelAnchor,"tray settings use tray placement instead of the launcher anchor");
             popup.Close();reads=0;owner.HandleTrayMouseUp(MouseButtons.Left);popup=(Details)Field(owner,"details");
             Check((Point)Field(popup,"anchor")==fixedPoint&&reads==1,"tray click samples the injected cursor once and keeps that anchor");
             var stored=DeviceSettings.Current.LastTrayIconPosition;
@@ -292,7 +317,7 @@ static class UpdateAnchorTests {
         }
     }
     [STAThread] static int Main() {
-        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();AnchorPriority();AutoHiddenTaskbarAreas();ReservedPanelLimits();PositionSettings();Retries();OpeningThenDeactivation();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
+        try{Application.EnableVisualStyles();ArgumentsAndForwarding();Positions();AnchorPriority();AutoHiddenTaskbarAreas();ReservedPanelLimits();SettingsMenuPositions();PositionSettings();Retries();OpeningThenDeactivation();PopupRouting();Console.WriteLine("PASS "+checks+" update anchor checks; shell visibility/overflow behavior still requires Explorer verification");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
 }
