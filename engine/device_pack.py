@@ -259,6 +259,8 @@ def _claimed_ids():
 
 def _pack_families(rows, entries, rejected):
     """Row-level semantics for loader-2 families; any doubt rejects the row."""
+    if not rows:
+        return ()
     import families as registry
     from families.spec import SpecError, parse_family
     try:
