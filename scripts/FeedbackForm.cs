@@ -208,9 +208,8 @@ namespace AtkBatteryTray {
     internal sealed class FeedbackForm:ThemedDialog {
         readonly FeedbackReport report;readonly FeedbackClient client;readonly FeedbackSession session;readonly string relay;readonly FeedbackReplies replies;
         readonly Action<string> copy,open;readonly Func<string,bool> confirm;
-        readonly ThemedSegments categories;
+        readonly ThemedSegments categories,comparison;
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
-        readonly ComboBox comparison = new ComboBox { Name="BatteryComparison", DropDownStyle=ComboBoxStyle.DropDownList, Width=128 };
         readonly TextBox difference = new TextBox { Name="BatteryComparisonDifference", AccessibleName="相差百分比", MaxLength=3, TextAlign=HorizontalAlignment.Right };
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,view,mine;
@@ -236,6 +235,14 @@ namespace AtkBatteryTray {
                 string category=FeedbackInput.CategoryAt(i);categories.AddOption("Category-"+category,FeedbackInput.CategoryLabel(category),category);
                 if(category==FeedbackInput.DefaultCategory(deviceMissing))categories.SelectedIndex=i;
             }
+            comparison=new ThemedSegments(Theme) {
+                Name="BatteryComparison",AccessibleName=FeedbackInput.ComparisonQuestion,
+                Anchor=AnchorStyles.Left|AnchorStyles.Right,Margin=Padding.Empty
+            };
+            comparison.AddOption("Comparison-Unanswered","不填","unanswered");
+            comparison.AddOption("Comparison-Agreement","一致","agreement");
+            comparison.AddOption("Comparison-Difference","有差异","difference");
+            comparison.AddOption("Comparison-Unavailable","官方读不到","unavailable");
             bool restoreDraft=FeedbackDraft.Description!=null&&FeedbackDraft.EntryCategory==FeedbackInput.DefaultCategory(deviceMissing);
             if(restoreDraft){
                 for(int i=0;i<categories.OptionCount;i++)if(FeedbackInput.CategoryAt(i)==FeedbackDraft.Category){categories.SelectedIndex=i;break;}
@@ -266,8 +273,6 @@ namespace AtkBatteryTray {
             comparisonPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var comparisonCaption=Caption(FeedbackInput.ComparisonQuestion+"（可选）",false,true);
             comparisonCaption.Dock=DockStyle.Fill;
-            comparison.AccessibleName=FeedbackInput.ComparisonQuestion;
-            comparison.Items.AddRange(new object[]{"未选择","一致","相差百分比","官方读不到"});
             comparison.SelectedIndex=restoreDraft?FeedbackDraft.ComparisonChoice:0;
             if(restoreDraft&&FeedbackDraft.ComparisonDifference>0)
                 difference.Text=FeedbackDraft.ComparisonDifference.ToString(CultureInfo.InvariantCulture);
@@ -275,12 +280,21 @@ namespace AtkBatteryTray {
             var differenceBox=new ThemedTextBox(Theme,difference) {Width=60,Height=difference.PreferredHeight+20,Margin=new Padding(4,0,0,0)};
             var percentLabel=Caption("%",false,true);
             percentLabel.Margin=new Padding(0,4,0,0);
-            var comparisonRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,Margin=Padding.Empty,WrapContents=true};
-            comparisonRow.Controls.Add(comparison);
-            comparisonRow.Controls.Add(differenceBox);
-            comparisonRow.Controls.Add(percentLabel);
+            var comparisonRow=new TableLayoutPanel {
+                AutoSize=true,Dock=DockStyle.Fill,Margin=Padding.Empty,RowCount=1,ColumnCount=2
+            };
+            comparisonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            comparisonRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            comparisonRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var percentageRow=new FlowLayoutPanel {
+                AutoSize=true,Anchor=AnchorStyles.Left,Margin=Padding.Empty,WrapContents=false
+            };
+            percentageRow.Controls.Add(differenceBox);
+            percentageRow.Controls.Add(percentLabel);
+            comparisonRow.Controls.Add(comparison,0,0);
+            comparisonRow.Controls.Add(percentageRow,1,0);
             Action showDifference=delegate {
-                differenceBox.Visible=percentLabel.Visible=comparison.SelectedIndex==2;
+                percentageRow.Visible=comparison.SelectedIndex==2;
             };
             showDifference();
             comparison.SelectedIndexChanged+=delegate{showDifference();UpdateValidation();};
