@@ -1403,7 +1403,18 @@ namespace AtkBatteryTray {
                 if(snapshot.Unadapted!=null)unadaptedDevices=snapshot.Unadapted;
                 if(snapshot.Suppressed!=null)suppressedDevices=snapshot.Suppressed;
                 foreach(var device in WirelessDevices)if(device.Kind=="mouse")activityRefresh.ObserveMouse(device.PhysicalId);
-                foreach(var health in GenericHealth)if(health.State=="unavailable"&&health.Reason=="no_measurement")GenericIdleCount++;else if(health.State=="error"||health.State=="timeout"||health.State=="unavailable"||health.State=="backoff")GenericFailureCount++;
+                foreach (var health in GenericHealth) {
+                    if (health.State == "unavailable" && health.Reason == "no_measurement") {
+                        bool hasDevice = health.DeviceCount > 0 || Array.Exists(WirelessDevices, device =>
+                            device != null && device.Provider == health.Provider &&
+                            (health.Scope != "device" ||
+                                (!String.IsNullOrEmpty(health.PhysicalId) && device.PhysicalId == health.PhysicalId)));
+                        if (hasDevice) GenericIdleCount++;
+                        continue;
+                    }
+                    if (health.State == "error" || health.State == "timeout" ||
+                        health.State == "unavailable" || health.State == "backoff") GenericFailureCount++;
+                }
                 GenericFailureCount=Math.Max(GenericFailureCount,(snapshot.Errors??new string[0]).Length);GenericHealthSummary=GenericFailureCount>0?"部分读取暂不可用（"+GenericFailureCount+"项）":null;
                 GenericIdleSummary=GenericIdleCount>0&&GenericFailureCount==0?GenericIdleCount+" 台设备暂未取得读数":null;
                 var pref=DeviceSettings.Current;

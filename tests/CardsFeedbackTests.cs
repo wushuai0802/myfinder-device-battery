@@ -50,7 +50,16 @@ static class CardsFeedbackTests {
     }
     static void ReaderHealthStates(TrayContext owner){
         owner.Headset=null;owner.Audio=null;
-        const string idle="{\"provider\":\"vgn\",\"state\":\"unavailable\",\"reason\":\"no_measurement\"}";
+        var keyboard=Device(A,"ROG keyboard");keyboard.Kind="keyboard";keyboard.Provider="asus_keyboard";
+        var unpaired=HealthSnapshot("{\"provider\":\"asus_omni\",\"state\":\"unavailable\",\"reason\":\"no_measurement\",\"deviceCount\":0}");
+        unpaired.Devices=new[]{keyboard};Apply(owner,unpaired);
+        Check(owner.GenericIdleCount==0&&owner.GenericFailureCount==0,"OMNI with only a keyboard must not count the unpaired mouse as idle");
+        var mouse=Device(B,"ROG mouse");mouse.Provider="asus_omni";
+        unpaired.Devices=new[]{keyboard,mouse};Apply(owner,unpaired);
+        Check(owner.GenericIdleCount==1&&owner.GenericFailureCount==0,"an existing OMNI mouse card still counts as idle");
+        unpaired.Health[0].Scope="device";unpaired.Health[0].PhysicalId=A;Apply(owner,unpaired);
+        Check(owner.GenericIdleCount==0,"a card from the same reader on a different physical device does not count");
+        const string idle="{\"provider\":\"vgn\",\"state\":\"unavailable\",\"reason\":\"no_measurement\",\"deviceCount\":1}";
         var snapshot=HealthSnapshot(idle);Check(snapshot.Health[0].Reason=="no_measurement","worker preserves the no_measurement reason");
         Apply(owner,snapshot);CheckHealthPresentation(owner,0,1);
         Apply(owner,HealthSnapshot(idle+","+idle));CheckHealthPresentation(owner,0,2);
