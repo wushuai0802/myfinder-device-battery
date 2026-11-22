@@ -105,10 +105,12 @@ namespace AtkBattery {
         internal void MarkSuccess(){lock(gate)lastSuccess=clock();}
     }
     internal enum FeedbackResultKind {Success,RateLimited,Unavailable,Browser}
+    internal enum FeedbackFailure {Unspecified,Connection,Service}
     internal sealed class FeedbackResult {
         internal readonly FeedbackResultKind Kind;internal readonly long Number;internal readonly string Url;
+        internal readonly FeedbackFailure Failure;
         internal readonly bool ReplyAccess,Saved;
-        internal FeedbackResult(FeedbackResultKind kind,long number=0,string url=null,bool replyAccess=false,bool saved=true){Kind=kind;Number=number;Url=url;ReplyAccess=replyAccess;Saved=saved;}
+        internal FeedbackResult(FeedbackResultKind kind,long number=0,string url=null,bool replyAccess=false,bool saved=true,FeedbackFailure failure=FeedbackFailure.Unspecified){Kind=kind;Number=number;Url=url;ReplyAccess=replyAccess;Saved=saved;Failure=failure;}
     }
     [DataContract] internal sealed class FeedbackReceipt {
         [DataMember(Name="number",IsRequired=true)] public long Number {get;set;}
@@ -125,6 +127,7 @@ namespace AtkBattery {
             if(!FeedbackInput.Valid(category,description))return new FeedbackResult(FeedbackResultKind.Unavailable);
             if(String.IsNullOrEmpty(relay))return new FeedbackResult(FeedbackResultKind.Browser);
             string creation=null;bool mayHaveCreated=false;
+            var failure=FeedbackFailure.Unspecified;
             try{
                 string key=FeedbackProtocol.NewKey();
                 creation=store.BeginCreation(category,description,key,clock());
@@ -146,6 +149,7 @@ namespace AtkBattery {
                                         !production&&(response.Status==429||response.Status==503))mayHaveCreated=false;
                                     cancel.ThrowIfCancellationRequested();
                                     if(production&&(response.Status==429||response.Status==503)){
+                                        if(response.Status==503)failure=FeedbackFailure.Service;
                                         var rejection=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
                                         // The relay returns these codes before it calls GitHub to create an issue.
                                         // A generic upstream failure is ambiguous, even with a 503 status.
@@ -159,7 +163,10 @@ namespace AtkBattery {
                                         var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
                                         if(error!=null&&error.Error=="invalid")continue;
                                     }
-                                    if(response.Status!=201)return new FeedbackResult(FeedbackResultKind.Unavailable);
+                                    if(response.Status!=201){
+                                        if(response.Status==502||response.Status==503)failure=FeedbackFailure.Service;
+                                        return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
+                                    }
                                     var receipt=readReceipt(FeedbackProtocol.Read(response,16384,cancel));
                                     if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
                                     session.MarkSuccess();
@@ -172,11 +179,19 @@ namespace AtkBattery {
                     }catch(FeedbackNotSentException){
                         mayHaveCreated=false;
                         token.ThrowIfCancellationRequested();
+                        if(failure==FeedbackFailure.Unspecified)failure=FeedbackFailure.Connection;
                         if(!canSwitch)throw;
                     }
                 }
-                return new FeedbackResult(FeedbackResultKind.Unavailable);
-            }catch(Exception){token.ThrowIfCancellationRequested();return new FeedbackResult(FeedbackResultKind.Unavailable);}
+                return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
+            }catch(WebException){
+                token.ThrowIfCancellationRequested();
+                if(failure==FeedbackFailure.Unspecified)failure=FeedbackFailure.Connection;
+                return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
+            }catch(Exception){
+                token.ThrowIfCancellationRequested();
+                return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
+            }
             finally{if(creation!=null&&!mayHaveCreated)try{store.CancelCreation(creation);}catch(Exception){}}
         }
     }
@@ -213,8 +228,8 @@ namespace AtkBatteryTray {
         readonly ComboBox comparison = new ComboBox { Name="BatteryComparison", DropDownStyle=ComboBoxStyle.DropDownList, Width=128 };
         readonly TextBox difference = new TextBox { Name="BatteryComparisonDifference", AccessibleName="相差百分比", MaxLength=3, TextAlign=HorizontalAlignment.Right };
         readonly Label remaining=new Label(),status=new Label();
-        readonly ThemedButton submit,cancel,fallback,view,mine;
-        CancellationTokenSource pending;FeedbackResult receipt;bool busy;
+        readonly ThemedButton submit,cancel,fallback,copyReport,view,mine;
+        CancellationTokenSource pending;FeedbackResult receipt;bool busy,inputError;
         internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
         internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null,Action<long> openMyFeedback=null):base(dark){
             report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;
@@ -224,7 +239,7 @@ namespace AtkBatteryTray {
             client=new FeedbackClient(relay,transport??new FeedbackHttp(),session,20000,replies.Store);
             Text="反馈问题";ShowInTaskbar=false;StartPosition=FormStartPosition.CenterParent;FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
             ClientSize=new Size(540,568);categories=new ThemedSegments(Theme) {Name="Categories",AccessibleName="类型"};diagnostics=new ThemedSwitch(Theme);
-            submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
+            submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);copyReport=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
             mine=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="MyFeedback",Text=replies.Store.MenuText,AutoSize=true,Enabled=openMyFeedback!=null};
             mine.Click+=delegate{openMyFeedback(0);mine.Text=replies.Store.MenuText;};
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
@@ -250,7 +265,7 @@ namespace AtkBatteryTray {
             descriptionLayout.Controls.Add(Caption("描述（必填，5–2000 字）",false,false,true),0,0);
             var hint=Caption("发生了什么？用的是什么设备、怎么连接的？",false,true);descriptionLayout.Controls.Add(hint,0,1);
             description.Name="Description";description.AccessibleName="描述";description.Multiline=true;description.AcceptsReturn=true;description.Dock=DockStyle.Fill;
-            description.TextChanged+=delegate{UpdateValidation();};descriptionLayout.Controls.Add(new ThemedTextBox(Theme,description) {Dock=DockStyle.Fill,Margin=new Padding(0,5,0,4)},0,2);
+            description.TextChanged+=delegate{InputChanged();};descriptionLayout.Controls.Add(new ThemedTextBox(Theme,description) {Dock=DockStyle.Fill,Margin=new Padding(0,5,0,4)},0,2);
             remaining.Name="FeedbackRemaining";remaining.AutoSize=true;remaining.Font=hint.Font;remaining.BackColor=Theme.Card;remaining.ForeColor=Theme.Muted;remaining.Margin=Padding.Empty;descriptionLayout.Controls.Add(remaining,0,3);
             descriptionCard.Controls.Add(descriptionLayout);layout.Controls.Add(descriptionCard,0,1);
             var diagnosticCard=new ThemedSection(Theme) {Name="FeedbackDiagnosticsCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
@@ -283,26 +298,32 @@ namespace AtkBatteryTray {
                 differenceBox.Visible=percentLabel.Visible=comparison.SelectedIndex==2;
             };
             showDifference();
-            comparison.SelectedIndexChanged+=delegate{showDifference();UpdateValidation();};
-            difference.TextChanged+=delegate{UpdateValidation();};
+            comparison.SelectedIndexChanged+=delegate{showDifference();InputChanged();};
+            difference.TextChanged+=delegate{InputChanged();};
             comparisonPanel.Controls.Add(comparisonCaption,0,0);
             comparisonPanel.Controls.Add(comparisonRow,0,1);
             descriptionLayout.Controls.Add(comparisonPanel,0,4);
             var noticeCard=new ThemedSection(Theme) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
-            var noticeLayout=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Top,ColumnCount=1,RowCount=2,Margin=Padding.Empty};noticeLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var noticeLayout=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Top,ColumnCount=1,RowCount=1,Margin=Padding.Empty};noticeLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            noticeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var notice=Caption(String.IsNullOrEmpty(relay)?"将打开 GitHub 提交，需要 GitHub 账号":"提交后会公开显示在 GitHub 项目的问题列表里。诊断不含序列号和文件路径，请不要在描述里填写个人信息。",false,true);
             notice.Name="FeedbackNotice";notice.Margin=new Padding(0,0,0,4);notice.Dock=DockStyle.Fill;noticeLayout.Controls.Add(notice,0,0);
-            status.Name="FeedbackStatus";status.AutoSize=true;status.Dock=DockStyle.Fill;status.Font=hint.Font;status.BackColor=Theme.Card;status.ForeColor=Theme.Muted;status.Margin=Padding.Empty;noticeLayout.Controls.Add(status,0,1);
+            status.Name="FeedbackStatus";status.AutoSize=true;status.Dock=DockStyle.Fill;status.Font=hint.Font;status.BackColor=Theme.Card;status.ForeColor=Theme.Foreground;status.Margin=new Padding(0,0,0,6);status.Visible=false;
             noticeCard.Controls.Add(noticeLayout);layout.Controls.Add(noticeCard,0,3);
             var buttons=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=true,Margin=Padding.Empty};
             submit.Name="SubmitFeedback";submit.Text=String.IsNullOrEmpty(relay)?"在浏览器中提交":"提交";submit.AutoSize=true;submit.MinimumSize=new Size(82,30);submit.Click+=delegate{Submit();};
             cancel.Name="CancelFeedback";cancel.Text="取消";cancel.AutoSize=true;cancel.MinimumSize=new Size(82,30);cancel.Click+=delegate{Close();};
             fallback.Name="BrowserFallback";fallback.Text="改用浏览器提交";fallback.AutoSize=true;fallback.MinimumSize=new Size(132,30);fallback.Visible=false;fallback.Click+=delegate{if(ConfirmRepeat())OpenBrowser();};
+            copyReport.Name="CopyFeedbackReport";copyReport.Text="复制报告";copyReport.AutoSize=true;copyReport.MinimumSize=new Size(82,30);copyReport.Visible=false;copyReport.Click+=delegate{CopyReport();};
             view.Name="ViewIssue";view.Text="在浏览器中查看";view.AutoSize=true;view.MinimumSize=new Size(132,30);view.Visible=false;
-            view.Click+=delegate{if(receipt!=null&&FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url))try{open(receipt.Url);}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}};
-            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback,mine});layout.Controls.Add(buttons,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
-            ConfigureLayout(layout,buttons,delegate(int width){
+            view.Click+=delegate{if(receipt!=null&&FeedbackClient.IsIssueUrl(receipt.Number,receipt.Url))try{open(receipt.Url);}catch(Exception){SetStatus("无法打开浏览器，请稍后重试。");}};
+            buttons.Controls.AddRange(new Control[]{submit,cancel,view,fallback,copyReport,mine});
+            var footer=new TableLayoutPanel {AutoSize=true,Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            footer.Controls.Add(status,0,0);footer.Controls.Add(buttons,0,1);
+            layout.Controls.Add(footer,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
+            ConfigureLayout(layout,footer,delegate(int width){
                 int textWidth=Math.Max(1,width-descriptionCard.Padding.Horizontal);
                 int minimum=descriptionCard.Padding.Vertical;
                 foreach(Control child in descriptionLayout.Controls){
@@ -324,22 +345,46 @@ namespace AtkBatteryTray {
         }
         string SubmittedDescription {get{return FeedbackInput.WithComparison(description.Text,comparison.SelectedIndex,DifferenceValue);}}
         bool InputValid {get{return (comparison.SelectedIndex!=2||DifferenceValue>0)&&FeedbackInput.Valid(SelectedCategory,description.Text)&&FeedbackInput.Valid(SelectedCategory,SubmittedDescription);}}
+        void SetStatus(string text){
+            status.Text=text;
+            status.Visible=text.Length!=0;
+        }
+        void InputChanged(){
+            if(inputError){inputError=false;SetStatus("");}
+            UpdateValidation();
+        }
         void UpdateValidation(){
             int length=description.Text.Trim().Length;
             int total=SubmittedDescription.Trim().Length;
             remaining.Text=length<5?"还需输入 "+(5-length)+" 字；还可输入 "+(2000-total)+" 字":total>2000?"已超出 "+(total-2000)+" 字（最多 2000 字）":"还可输入 "+(2000-total)+" 字";
             if(comparison.SelectedIndex==2&&DifferenceValue==0)remaining.Text+="。相差请输入 1–100 的整数。";
-            submit.Enabled=!busy&&(receipt!=null||InputValid);
-            fallback.Enabled=!busy&&InputValid;
+            submit.Enabled=!busy;
+            fallback.Enabled=copyReport.Enabled=!busy&&InputValid;
         }
         bool ConfirmRepeat(){return !session.NeedsConfirmation||confirm("刚刚已提交过一次，确定还要再提交吗？");}
         void EnableInputs(bool enabled){categories.Enabled=enabled;description.Enabled=enabled;diagnostics.Enabled=enabled;preview.Enabled=enabled;comparison.Enabled=enabled;difference.Enabled=enabled;}
         void Submit(){
             if(receipt!=null){Close();return;}
-            if(busy||!InputValid||!ConfirmRepeat())return;
+            if(busy)return;
+            if(!InputValid){
+                inputError=true;
+                int length=description.Text.Trim().Length;
+                if(length<5){
+                    SetStatus("描述至少 5 个字，还差 "+(5-length)+" 个字");
+                    description.Focus();
+                }else if(comparison.SelectedIndex==2&&DifferenceValue==0){
+                    SetStatus("相差请输入 1–100 的整数。");
+                    difference.Focus();
+                }else{
+                    SetStatus("描述最多 2000 个字，请缩短后再提交。");
+                    description.Focus();
+                }
+                return;
+            }
+            if(!ConfirmRepeat())return;
             if(String.IsNullOrEmpty(relay)){OpenBrowser();return;}
             string category=SelectedCategory,text=SubmittedDescription,diagnosticText=diagnostics.Checked?report.FullText:null;
-            busy=true;EnableInputs(false);fallback.Visible=false;status.Text="正在提交…";UpdateValidation();
+            busy=true;EnableInputs(false);fallback.Visible=copyReport.Visible=false;SetStatus("正在提交…");UpdateValidation();
             var cancellation=new CancellationTokenSource();pending=cancellation;var token=cancellation.Token;
             ThreadPool.QueueUserWorkItem(delegate{
                 try{
@@ -350,11 +395,28 @@ namespace AtkBatteryTray {
         }
         void Complete(FeedbackResult result){
             pending=null;busy=false;
-            if(result.Kind==FeedbackResultKind.Success){FeedbackDraft.Clear();receipt=result;status.Text="已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。");submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;}
-            else{EnableInputs(true);status.Text=result.Kind==FeedbackResultKind.RateLimited?"提交太频繁，请稍后再试":"暂时无法提交";fallback.Visible=result.Kind!=FeedbackResultKind.RateLimited;}
+            if(result.Kind==FeedbackResultKind.Success){FeedbackDraft.Clear();receipt=result;SetStatus("已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。"));submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;}
+            else{
+                EnableInputs(true);
+                if(result.Kind==FeedbackResultKind.RateLimited)SetStatus("提交太频繁，请过一会儿再试。");
+                else{
+                    string reason="暂时无法提交";
+                    if(result.Failure==FeedbackFailure.Connection)reason="连不上反馈服务";
+                    else if(result.Failure==FeedbackFailure.Service)reason="反馈服务暂时停用";
+                    SetStatus("提交失败："+reason+"。可以改用浏览器提交，或复制报告发到群里。");
+                }
+                fallback.Visible=copyReport.Visible=true;
+            }
             UpdateValidation();
         }
-        void OpenBrowser(){if(busy||!InputValid)return;status.Text=report.BrowserSubmission(SelectedCategory,SubmittedDescription,diagnostics.Checked).Open(copy,open);}
+        void OpenBrowser(){if(busy||!InputValid)return;SetStatus(report.BrowserSubmission(SelectedCategory,SubmittedDescription,diagnostics.Checked).Open(copy,open));}
+        void CopyReport(){
+            if(busy||!InputValid)return;
+            try{
+                copy(report.BrowserSubmission(SelectedCategory,SubmittedDescription,diagnostics.Checked).Text);
+                SetStatus("已复制");
+            }catch(Exception){SetStatus("无法复制报告，请稍后再试。");}
+        }
         internal ThemedDialog CreateDiagnosticsDialog(){return CreateDiagnosticsDialog(Theme.Dark,report.FullText);}
         internal static ThemedDialog CreateDiagnosticsDialog(bool dark,string contents){
             var dialog=new ThemedDialog(dark) {Text="诊断信息",ClientSize=new Size(620,420),FormBorderStyle=FormBorderStyle.Sizable};

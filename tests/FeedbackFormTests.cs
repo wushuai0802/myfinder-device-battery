@@ -16,6 +16,10 @@ static class FeedbackFormTests {
     const string Relay="https://feedback.invalid/service";
     const string Issue="https://github.com/wushuai0802/myfinder-device-battery/issues/42";
     const string Submitted="已提交，编号 #42。可在「我的反馈」查看回复和补充资料。";
+    const string GenericFailure="提交失败：暂时无法提交。可以改用浏览器提交，或复制报告发到群里。";
+    const string ConnectionFailure="提交失败：连不上反馈服务。可以改用浏览器提交，或复制报告发到群里。";
+    const string ServiceFailure="提交失败：反馈服务暂时停用。可以改用浏览器提交，或复制报告发到群里。";
+    const string RateLimit="提交太频繁，请过一会儿再试。";
     static int checks,failures;
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window,IntPtr insertAfter,int x,int y,int width,int height,uint flags);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
@@ -61,10 +65,29 @@ static class FeedbackFormTests {
             Check(form.SelectedCategory==FeedbackInput.DefaultCategory(missing),"actual radio default");Check(form.Text=="反馈问题"&&!form.ShowInTaskbar&&form.AutoScaleMode==AutoScaleMode.Dpi,"modal/DPI window properties");
             Check(Find<CheckBox>(form,"IncludeDiagnostics").Checked,"diagnostics checked by default");
             Check(Find<Label>(form,"FeedbackNotice").Text=="将打开 GitHub 提交，需要 GitHub 账号","explicit empty relay retains the browser account notice");
-            var submit=Find<Button>(form,"SubmitFeedback");var input=Find<TextBox>(form,"Description");Check(!submit.Enabled&&submit.Text=="在浏览器中提交","initial invalid description disables browser submission");
+            var submit=Find<Button>(form,"SubmitFeedback");var input=Find<TextBox>(form,"Description");Check(submit.Enabled&&submit.Text=="在浏览器中提交","browser submission can explain invalid input");
             input.Text=" 12345 ";Check(submit.Enabled&&Find<Label>(form,"FeedbackRemaining").Text.Contains("1995"),"trimmed remaining count");
-            input.Text=new string('中',2001);Check(!submit.Enabled&&Find<Label>(form,"FeedbackRemaining").Text.Contains("超出 1"),"over-limit input stays visible and disabled");
-            input.Text="1234";Check(!submit.Enabled&&Find<Label>(form,"FeedbackRemaining").Text.Contains("还需输入 1"),"minimum count");
+            input.Text=new string('中',2001);Check(submit.Enabled&&Find<Label>(form,"FeedbackRemaining").Text.Contains("超出 1"),"over-limit count stays visible");
+            input.Text="1234";Check(submit.Enabled&&Find<Label>(form,"FeedbackRemaining").Text.Contains("还需输入 1"),"minimum count");
+        }
+    }
+    static void ShortDescriptionClick(){
+        var http=new FakeHttp();
+        using(var form=Form(http)){
+            Show(form);
+            var input=Find<TextBox>(form,"Description");
+            var submit=Find<Button>(form,"SubmitFeedback");
+            var status=Find<Label>(form,"FeedbackStatus");
+            input.Text="  测试  ";
+            submit.Focus();submit.PerformClick();Application.DoEvents();
+            Check(http.Calls==0&&submit.Enabled&&status.Visible&&status.Text=="描述至少 5 个字，还差 3 个字","invalid click explains exactly what is missing without sending");
+            Check(form.ActiveControl==input||input.Focused,"invalid click returns focus to the description");
+            Check(status.RectangleToScreen(status.ClientRectangle).Bottom<=submit.RectangleToScreen(submit.ClientRectangle).Top,"validation text remains above the button");
+            input.Text="设备反馈内容";
+            Check(!status.Visible,"editing clears the stale validation prompt");
+            submit.PerformClick();Pump(delegate{return status.Text==Submitted;});
+            Check(http.Calls==1,"valid input submits once");
+            form.Close();
         }
     }
     static void PayloadAndPolicy(){
@@ -157,17 +180,48 @@ static class FeedbackFormTests {
         }
         http=new FakeHttp {Reply=delegate{return Response(500);}};
         using(var form=Form(http,Relay,delegate(string value){copied=value;},delegate(string value){opened=value;})){
-            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="暂时无法提交";});
+            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==GenericFailure;});
             var fallback=Find<Button>(form,"BrowserFallback");Check(fallback.Visible&&fallback.Text=="改用浏览器提交"&&Find<TextBox>(form,"Description").Enabled,"failure offers browser and restores inputs");
             fallback.PerformClick();Check(http.Calls==1&&copied.Contains("设备连接后没有显示电量")&&Decode(opened).Contains("设备连接后没有显示电量"),"explicit fallback copies and opens without a second POST");form.Close();
         }
         http=new FakeHttp {Reply=delegate{return Response(429);}};using(var form=Form(http)){
-            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="提交太频繁，请稍后再试";});Check(!Find<Button>(form,"BrowserFallback").Visible,"429 uses its specific message");form.Close();
+            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==RateLimit;});Check(Find<Button>(form,"BrowserFallback").Visible&&Find<Button>(form,"CopyFeedbackReport").Visible,"429 uses its specific message and offers both fallbacks");form.Close();
         }
         var devices=new List<WirelessDevice>();for(int i=0;i<64;i++)devices.Add(new WirelessDevice {Name=new string('中',80)+i,Kind="mouse",Provider="fixture",Percent=50});
         var large=new FeedbackReport(new string('版',80),new string('窗',80),devices,new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0]);
         var browser=large.BrowserSubmission("device",new string('中',2000),true);
         Check(browser.Url.Length<=6000&&Decode(browser.Url).Contains("完整内容已复制")&&browser.Text.Contains(large.FullText),"worst-case report and description keep complete clipboard content and bounded prefill");
+    }
+    static void FailureStatusAndCopy(){
+        foreach(bool network in new[]{true,false}){
+            FeedbackDraft.Clear();
+            var http=new FakeHttp {Reply=delegate{
+                if(network)throw new WebException("fixture");
+                return Response(502,"{\"error\":\"unavailable\"}");
+            }};
+            string copied=null,opened=null;
+            using(var form=Form(http,Relay,value=>copied=value,value=>opened=value)){
+                Show(form);
+                var status=Find<Label>(form,"FeedbackStatus");
+                Find<Button>(form,"SubmitFeedback").PerformClick();
+                Pump(delegate{return status.Text==(network?ConnectionFailure:ServiceFailure);});
+                var copy=Find<Button>(form,"CopyFeedbackReport");
+                Check(status.ForeColor==form.Theme.Foreground&&copy.Visible&&copy.Enabled&&Find<Button>(form,"BrowserFallback").Visible,"feedback failure uses readable foreground text and both actions");
+                copy.PerformClick();
+                Check(status.Text=="已复制"&&copied==Report().BrowserSubmission("other","设备连接后没有显示电量",true).Text&&opened==null&&http.Calls==1,"copy leaves only the full report in the injected clipboard");
+                Find<CheckBox>(form,"IncludeDiagnostics").Checked=false;
+                copy.PerformClick();
+                Check(copied==Report().BrowserSubmission("other","设备连接后没有显示电量",false).Text,"copy respects the diagnosis switch");
+                form.Close();
+            }
+        }
+        int calls=0;
+        var fallbackFailure=new FakeHttp {Reply=delegate{
+            if(++calls==1)return Response(503,"{\"error\":\"disabled\"}");
+            throw new FeedbackNotSentException(new WebException("fixture"));
+        }};
+        var failed=Submit(fallbackFailure,FeedbackRelay.Url);
+        Check(failed.Kind==FeedbackResultKind.Unavailable&&failed.Failure==FeedbackFailure.Service&&calls==2,"the known primary pause survives an unreachable fallback");
     }
     static void SuccessAndRepeat(){
         DateTime now=new DateTime(2026,11,3,0,0,0,DateTimeKind.Utc);var session=new FeedbackSession(delegate{return now;});var http=new FakeHttp();string opened=null;
@@ -183,7 +237,7 @@ static class FeedbackFormTests {
         }
         now=now.AddMinutes(10).AddTicks(-1);Check(session.NeedsConfirmation,"just inside ten minutes");now=now.AddTicks(1);Check(!session.NeedsConfirmation,"ten-minute boundary");Check(!new FeedbackSession().NeedsConfirmation,"separate process session starts clean");
         http=new FakeHttp {Reply=delegate{return Response(201,"{\"number\":42,\"url\":\"https://evil.invalid/\"}");}};int opens=0;using(var form=Form(http,Relay,null,delegate{opens++;})){
-            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text=="暂时无法提交";});Check(!Find<Button>(form,"ViewIssue").Visible&&opens==0,"untrusted success URL never exposed as a browser action");form.Close();
+            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==GenericFailure;});Check(!Find<Button>(form,"ViewIssue").Visible&&opens==0,"untrusted success URL never exposed as a browser action");form.Close();
         }
     }
     static void DraftAndDeactivation(){
@@ -227,10 +281,10 @@ static class FeedbackFormTests {
                 form.Scale(new SizeF(2,2));form.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);Show(form);
                 if(state!="browser"){
                     Find<Button>(form,"SubmitFeedback").PerformClick();
-                    Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?"暂时无法提交":Submitted);});
+                    Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?GenericFailure:Submitted);});
                 }
                 Check(area.Contains(form.Bounds),state+": entire feedback window fits (window="+form.Bounds+", client="+form.ClientSize+", work area="+area+")");
-                foreach(string name in new[]{"SubmitFeedback","CancelFeedback","BrowserFallback","ViewIssue"}){
+                foreach(string name in new[]{"SubmitFeedback","CancelFeedback","BrowserFallback","CopyFeedbackReport","ViewIssue"}){
                     var button=Find<Button>(form,name);if(!button.Visible)continue;
                     var bounds=button.RectangleToScreen(button.ClientRectangle);
                     for(Control parent=button.Parent;parent!=null;parent=parent.Parent)Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),state+": "+name+" fully visible through ancestors");
@@ -238,7 +292,13 @@ static class FeedbackFormTests {
                 var input=Find<TextBox>(form,"Description");Check(input.Height>=3*input.Font.Height,state+": description keeps three lines");
                 var viewport=Find<Panel>(form,"DialogContentViewport");if(height==560)Check(viewport.AutoScroll&&viewport.VerticalScroll.Visible,state+": constrained content can scroll");
                 viewport.AutoScrollPosition=new Point(0,Int32.MaxValue);Application.DoEvents();
-                var status=Find<Label>(form,"FeedbackStatus");Check(status.RectangleToScreen(status.ClientRectangle).Bottom<=viewport.RectangleToScreen(viewport.ClientRectangle).Bottom,state+": final status reachable");
+                var status=Find<Label>(form,"FeedbackStatus");
+                if(status.Visible){
+                    var statusBounds=status.RectangleToScreen(status.ClientRectangle);
+                    var primary=Find<Button>(form,"SubmitFeedback");
+                    Check(form.RectangleToScreen(form.ClientRectangle).Contains(statusBounds)&&statusBounds.Bottom<=primary.RectangleToScreen(primary.ClientRectangle).Top,state+": final status is visible above the actions");
+                    Check(status.GetPreferredSize(new Size(status.Width,0)).Height<=status.Height,state+": final status fits the footer");
+                }
                 form.Close();
             }
         }}finally{ThemedDialog.WorkingAreaProvider=previous;}
@@ -256,7 +316,7 @@ static class FeedbackFormTests {
             Check(SetWindowPos(form.Handle,IntPtr.Zero,initial.Left+17,initial.Top+23,form.Width,form.Height,0x0004|0x0010),"native move delivered");
             Check(area.Contains(form.Bounds),state+": late same-monitor move remains inside work area ("+form.Bounds+")");
             Find<Button>(form,"SubmitFeedback").PerformClick();
-            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?"暂时无法提交":Submitted);});
+            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?GenericFailure:Submitted);});
             Check(area.Contains(form.Bounds),state+": result-state layout retains the native bounds constraint");
             Check(SetWindowPos(form.Handle,IntPtr.Zero,area.Left-11,area.Top-13,form.Width+40,form.Height+32,0x0004|0x0010),"result-state native bounds delivered");
             Check(area.Contains(form.Bounds),state+": result-state native move and size remain inside work area ("+form.Bounds+")");
@@ -303,6 +363,8 @@ static class FeedbackFormTests {
             Console.WriteLine(checks+" feedback fit checks, "+failures+" failed groups");return failures==0?0:1;
         }
         Run("shipped relay configuration",RelayConfiguration);Run("validation and defaults",Validation);Run("exact payload and HTTP policy",PayloadAndPolicy);Run("HTTP failure boundaries",Failures);Run("cancellation during send and read",Cancellation);Run("browser fallback",BrowserFallback);Run("success and repeat confirmation",SuccessAndRepeat);Run("draft and deactivation",DraftAndDeactivation);Run("diagnostic preview and DPI bounds",delegate{PreviewAndLayout(args.Length>0?args[0]:null);});
+        Run("short description click",ShortDescriptionClick);
+        Run("failure status and report copy",FailureStatusAndCopy);
         Run("small work area feedback states",SmallWorkAreaStates);
         Run("native bounds after submission",NativeBoundsAfterSubmission);
         Console.WriteLine(checks+" feedback checks, "+failures+" failed groups; no network or real clipboard/browser/configuration");return failures==0?0:1;
