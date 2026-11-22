@@ -494,10 +494,24 @@ namespace AtkBatteryTray {
                 columns=ColumnsFor(ClientSize.Width);Height=Rows(columns)*RowHeight+(Rows(columns)-1)*Gap;Invalidate();
             }finally{arranging=false;}
         }
+        RectangleF? ScrollViewport(float scale){
+            RectangleF? viewport=null;
+            for(Control parent=Parent;parent!=null;parent=parent.Parent){
+                var scroll=parent as ScrollableControl;
+                if(scroll==null||!scroll.AutoScroll)continue;
+                var pixels=RectangleToClient(scroll.RectangleToScreen(scroll.ClientRectangle));
+                var logical=new RectangleF(pixels.X/scale,pixels.Y/scale,pixels.Width/scale,pixels.Height/scale);
+                viewport=viewport.HasValue?RectangleF.Intersect(viewport.Value,logical):logical;
+            }
+            return viewport;
+        }
         protected override void OnPaint(PaintEventArgs e){
             base.OnPaint(e);float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.SetClip(ClientRectangle,CombineMode.Intersect);
+            RectangleF? viewport=null;
             if(!theme.HighContrast){
                 e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;e.Graphics.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                viewport=ScrollViewport(scale);
+                if(viewport.HasValue)e.Graphics.SetClip(viewport.Value,CombineMode.Intersect);
                 for(int row=0;row<Rows(columns);row++)CompactRenderer.Fill(e.Graphics,new RectangleF(0,row*(RowHeight+Gap)/scale,Width/scale,RowHeight/scale),theme.Track,VisualDesign.SelectionRadius);
             }
             for(int i=0;i<options.Count;i++){
@@ -511,7 +525,17 @@ namespace AtkBatteryTray {
                     var textBounds=Rectangle.FromLTRB(bounds.Left+glyph.Width+3,bounds.Top,bounds.Right,bounds.Bottom);
                     TextRenderer.DrawText(e.Graphics,options[i].Name,Font,textBounds,Enabled?SystemColors.WindowText:SystemColors.GrayText,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis|TextFormatFlags.PreserveGraphicsClipping);
                     if(Focused&&ShowFocusCues&&i==selectedIndex)ControlPaint.DrawFocusRectangle(e.Graphics,textBounds);
-                }else CompactRenderer.Selection(e.Graphics,rect,options[i].Name,null,i==selectedIndex,Enabled,i==hovered,i==pressed,false,theme.Dark,Focused&&ShowFocusCues&&i==selectedIndex,DialogInteraction.Card(this,scale,rect));
+                }else{
+                    var card=DialogInteraction.Card(this,scale,rect);
+                    if(viewport.HasValue){
+                        // Measure the full segment while the scroll viewport clips its visible pixels.
+                        var segmentCard=rect;
+                        segmentCard.Inflate(8,8);
+                        card=RectangleF.Union(card,segmentCard);
+                    }
+                    CompactRenderer.Selection(e.Graphics,rect,options[i].Name,null,i==selectedIndex,Enabled,
+                        i==hovered,i==pressed,false,theme.Dark,Focused&&ShowFocusCues&&i==selectedIndex,card,viewport:viewport);
+                }
                 e.Graphics.Restore(segmentState);
             }
             e.Graphics.Restore(state);
