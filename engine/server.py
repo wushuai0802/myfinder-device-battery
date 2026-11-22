@@ -308,6 +308,54 @@ def suppress_bluetooth_xinput(devices):
     return {key: value for key, value in devices.items() if key not in hidden}
 
 
+# The same device seen twice while it charges: (cable VID, PID) -> (receiver VID, PID).
+# Only declared pairs fold. Guessing by vendor merged two different mice of one
+# brand (Codex replay, 2026-11-22), so a pair is added only from a user's
+# diagnostics showing both cards. The native ATK receiver is paired in C#
+# (WirelessLayout.NativeWiredTwins), not here.
+CHARGING_TWINS = {
+    (0x088D, 0x062E): (0x089D, 0x062F),   # EWEADN mouse: cable / receiver
+}
+
+
+def fold_charging_twins(devices):
+    """Presentation only: fold a declared cable/receiver pair into the receiver card.
+
+    Exactly one cable card and one receiver card of the pair must be present
+    (a second unit of the same model makes it ambiguous: keep both), on
+    different connections, the cable reporting a current charging reading, and
+    either the receiver reading stale or both readings within 3 points.
+    """
+    def model(d):
+        vid, pid = d.get("vendorId"), d.get("productId")
+        return (vid, pid) if type(vid) is int and type(pid) is int else None
+
+    folded, hidden = {}, set()
+    for cable_id, receiver_id in CHARGING_TWINS.items():
+        cables = [d for d in devices if model(d) == cable_id]
+        receivers = [d for d in devices if model(d) == receiver_id]
+        if len(cables) != 1 or len(receivers) != 1:
+            continue
+        cable, receiver = cables[0], receivers[0]
+        if (cable.get("kind") != receiver.get("kind") or not cable.get("online")
+                or not cable.get("physicalId") or cable.get("physicalId") == receiver.get("physicalId")
+                or cable.get("charging") is not True or cable.get("measurementState") != "current"
+                or cable.get("percent") is None):
+            continue
+        if (receiver.get("measurementState") == "current" and receiver.get("percent") is not None
+                and abs(receiver["percent"] - cable["percent"]) > 3):
+            continue   # two current, different readings: two devices
+        merged = dict(receiver)
+        merged.update({k: cable.get(k) for k in ("percent", "charging", "chargingKnown", "fresh", "approximate",
+                                                "confirmedAtUtc", "measuredAtUtc", "queriedAtUtc",
+                                                "chargingCheckedAtUtc", "measurementState", "sourceQuality")})
+        merged["chargingTwinId"] = cable["id"]
+        folded[receiver["id"]] = merged
+        hidden.add(cable["id"])
+    return ([folded.get(d["id"], d) for d in devices if d["id"] not in hidden],
+            [{"name": d["name"], "kind": d["kind"]} for d in devices if d["id"] in hidden])
+
+
 def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
@@ -924,7 +972,9 @@ class BatteryEngine:
                 if all(type(v) is int and 0 <= v <= 65535 for v in (vid, pid)):
                     device.update(vendorId=vid, productId=pid)
             public_devices.append(device)
+        public_devices, twins = fold_charging_twins(public_devices)
         devices, suppressed = suppress_old_connections(public_devices)
+        suppressed = (suppressed + twins)[:16]
         health = [dict(value, physicalId=public_id(key.split("|", 1)[1]) if "|" in key else
                        key[len("topology:"):] if key.startswith("topology:device-")
                        and valid_public_target(key[len("topology:"):]) else None)
