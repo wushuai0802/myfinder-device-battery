@@ -176,6 +176,45 @@ class Read:
 
 
 @dataclass(frozen=True)
+class DpiExchange:
+    """One read-only DPI question; same transports and envelope rules as a battery read.
+    Attribute names match ``Read`` so the runner's exchange code is shared."""
+    name: str
+    transport: str
+    request: bytes
+    timeout_ms: int
+    max_reads: int
+    length: Optional[int]
+    match: Tuple[ByteRule, ...]
+    spans: Tuple[Span, ...]
+    checksum: Optional[Checksum]
+
+
+@dataclass(frozen=True)
+class DpiValue:
+    """An unsigned field: (bytes[at..at+width) in ``endian`` & mask) * scale."""
+    exchange: str
+    at: int
+    width: int
+    big_endian: bool
+    mask: int
+    scale: int
+
+
+@dataclass(frozen=True)
+class DpiSpec:
+    exchanges: Tuple[DpiExchange, ...]
+    stage_count: Optional[DpiValue]   # None: fixed_count
+    fixed_count: int
+    stage_first: DpiValue             # value of stage 0; stage i is at first.at + i * stride
+    stride: int
+    current: Optional[DpiValue]       # exactly one of current / current_stage
+    current_stage: Optional[DpiValue]
+    stage_base: int                   # 0 or 1: index of the first stage as the device numbers it
+    stage_source: str                 # "onboard" (device stage table) or "quick" (preset list)
+
+
+@dataclass(frozen=True)
 class Family:
     id: str
     name: str
@@ -193,6 +232,7 @@ class Family:
     source: dict = field(compare=False, hash=False)
     interface: Optional[int] = None
     prefer_product_name: bool = False
+    dpi: Optional[DpiSpec] = None
 
     @property
     def vendor_ids(self):
@@ -334,10 +374,80 @@ def _read(obj, where, reports):
         reply=_reply(obj["reply"], where + ".reply"), gate=gate)
 
 
+MAX_DPI_STAGES = 8
+
+
+def _dpi_value(obj, where, names, wide=True, scaled=True):
+    optional = ("width", "endian", "mask", "scale") if wide else ("mask",)
+    _fields(obj, ("exchange", "at"), optional if scaled else ("mask",), where)
+    _check(obj["exchange"] in names, f"{where}.exchange: one of {sorted(names)}")
+    width = _int(obj.get("width", 1), 1, 2, where + ".width")
+    endian = obj.get("endian", "little")
+    _check(endian in ("little", "big"), where + ".endian: little or big")
+    full = (1 << (8 * width)) - 1
+    mask = obj.get("mask", f"{full:0{2 * width}X}")
+    _check(isinstance(mask, str) and len(mask) == 2 * width and all(c in "0123456789abcdefABCDEF" for c in mask)
+           and int(mask, 16) > 0, f"{where}.mask: {2 * width}-digit non-zero hex expected")
+    return DpiValue(obj["exchange"], _int(obj["at"], 0, MAX_REPORT - width, where + ".at"), width,
+                    endian == "big", int(mask, 16),
+                    _int(obj.get("scale", 1), 1, 100, where + ".scale"))
+
+
+def _dpi(obj, where, reports):
+    """Read-only DPI evidence. Writes never live in data (see families/dpi/)."""
+    _fields(obj, ("exchanges", "stages"), ("current", "currentStage", "stageSource"), where)
+    raw = obj["exchanges"]
+    _check(isinstance(raw, list) and 1 <= len(raw) <= 3, where + ".exchanges: 1..3 expected")
+    exchanges = []
+    for i, item in enumerate(raw):
+        w = f"{where}.exchanges[{i}]"
+        _fields(item, ("name", "transport", "request", "reply"), ("timeoutMs", "maxReads"), w)
+        _check(item["transport"] in ("output", "feature", "featureGet"), w + ".transport: output, feature or featureGet")
+        # Reuse the battery read validation for transport, request and report proof.
+        probe = _read({"name": item["name"], "transport": item["transport"], "request": item["request"],
+                       "reply": {"match": item["reply"].get("match") if isinstance(item["reply"], dict) else None,
+                                 "percent": {"at": 0, "min": 0, "max": 100}},
+                       **{k: item[k] for k in ("timeoutMs", "maxReads") if k in item}}, w, reports)
+        reply = item["reply"]
+        _fields(reply, ("match",), ("length", "spans", "checksum"), w + ".reply")
+        envelope = _reply(dict(reply, percent={"at": 0, "min": 0, "max": 100}), w + ".reply")
+        exchanges.append(DpiExchange(probe.name, probe.transport, probe.request, probe.timeout_ms, probe.max_reads,
+                                     envelope.length, envelope.match, envelope.spans, envelope.checksum))
+    names = {e.name for e in exchanges}
+    _check(len(names) == len(exchanges), where + ".exchanges: duplicate name")
+
+    stages = obj["stages"]
+    _fields(stages, ("exchange", "count", "first", "stride"), ("width", "endian", "mask", "scale"), where + ".stages")
+    first = _dpi_value({k: stages[k] for k in ("exchange", "width", "endian", "mask", "scale") if k in stages}
+                       | {"at": stages["first"]}, where + ".stages", names)
+    stride = _int(stages["stride"], first.width, 16, where + ".stages.stride")
+    count = stages["count"]
+    if isinstance(count, dict):
+        _fields(count, ("at",), ("mask",), where + ".stages.count")
+        stage_count, fixed = _dpi_value(dict(count, exchange=stages["exchange"]), where + ".stages.count", names, wide=False), 0
+    else:
+        stage_count, fixed = None, _int(count, 1, MAX_DPI_STAGES, where + ".stages.count")
+    _check(first.at + stride * (MAX_DPI_STAGES - 1 if stage_count else fixed - 1) + first.width <= MAX_REPORT,
+           where + ".stages: table exceeds the report")
+
+    _check(("current" in obj) != ("currentStage" in obj), where + ": exactly one of current or currentStage")
+    current = _dpi_value(obj["current"], where + ".current", names) if "current" in obj else None
+    current_stage, base = None, 0
+    if "currentStage" in obj:
+        item = obj["currentStage"]
+        _fields(item, ("exchange", "at"), ("mask", "base"), where + ".currentStage")
+        base = _int(item.get("base", 0), 0, 1, where + ".currentStage.base")
+        current_stage = _dpi_value({k: item[k] for k in ("exchange", "at", "mask") if k in item},
+                                   where + ".currentStage", names, wide=False)
+    source = obj.get("stageSource", "onboard")
+    _check(source in ("onboard", "quick"), where + ".stageSource: onboard or quick")
+    return DpiSpec(tuple(exchanges), stage_count, fixed, first, stride, current, current_stage, base, source)
+
+
 def parse_family(document):
     where = "family"
     _fields(document, ("schema", "id", "name", "kind", "verificationLevel", "source", "collections", "reports", "reads"),
-            ("devices", "probeVendorIds", "standAsideFor", "interface", "preferProductName"), where)
+            ("devices", "probeVendorIds", "standAsideFor", "interface", "preferProductName", "dpi"), where)
     _check(document["schema"] == SCHEMA, "family: unsupported schema")
     family_id = _text(document["id"], "family.id", 48)
     _check(family_id.replace("_", "").isalnum() and family_id.islower(), "family.id: lowercase [a-z0-9_]")
@@ -380,6 +490,7 @@ def parse_family(document):
     parsed_reads = tuple(_read(r, f"family.reads[{i}]", parsed_reports) for i, r in enumerate(reads))
     _check(len({r.name for r in parsed_reads}) == len(parsed_reads), "family.reads: duplicate name")
 
+    _check("dpi" not in document or kind == "mouse", "family.dpi: only mouse families")
     stand = tuple(_text(p, f"family.standAsideFor[{i}]", 64).lower()
                   for i, p in enumerate(document.get("standAsideFor", [])))
     _check(all(p.endswith(".exe") and "\\" not in p and "/" not in p for p in stand),
@@ -392,4 +503,5 @@ def parse_family(document):
         output_report=parsed_reports["output"], feature_report=parsed_reports["feature"],
         reads=parsed_reads, stand_aside_for=stand, source=dict(source),
         interface=_int(document["interface"], 0, 255, "family.interface") if "interface" in document else None,
-        prefer_product_name=document.get("preferProductName") is True)
+        prefer_product_name=document.get("preferProductName") is True,
+        dpi=_dpi(document["dpi"], "family.dpi", parsed_reports) if "dpi" in document else None)

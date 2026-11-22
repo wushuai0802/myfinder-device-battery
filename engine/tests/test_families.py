@@ -602,5 +602,104 @@ class PackFamilyTests(unittest.TestCase):
         self.assertNotIn(0xABCD, server.PROVIDER_VIDS["families"])
 
 
+def dpi_family(**dpi_changes):
+    row = copy.deepcopy(XIBERIA)
+    row.update(id="dpi_test", kind="mouse")
+    dpi = {"exchanges": [{"name": "table", "transport": "output", "request": "55 70",
+                          "reply": {"match": [{"at": 0, "eq": "55"}, {"at": 1, "eq": "70"}]}}],
+           "stages": {"exchange": "table", "count": {"at": 2}, "first": 4, "stride": 2, "width": 2},
+           "currentStage": {"exchange": "table", "at": 3}}
+    dpi.update(dpi_changes)
+    row["dpi"] = dpi
+    return row
+
+
+DPI_REPLY = "55 70 03 01 9001 2003 4006"   # 3 stages: 400, 800, 1600; current index 1
+
+
+class DpiReadTests(unittest.TestCase):
+    """C3: read-only DPI evidence from family data."""
+
+    def test_spec_accepts_and_rejects(self):
+        parsed = spec.parse_family(dpi_family()).dpi
+        self.assertEqual((parsed.fixed_count, parsed.stride, parsed.stage_first.width, parsed.stage_source), (0, 2, 2, "onboard"))
+        bad = {
+            "not a mouse": dict(dpi_family(), kind="headset"),
+            "listen transport": dpi_family(exchanges=[{"name": "table", "transport": "listen", "request": "",
+                                                       "reply": {"match": [{"at": 0, "eq": "55"}]}}]),
+            "request without report id": dpi_family(exchanges=[{"name": "table", "transport": "output", "request": "01 70",
+                                                                "reply": {"match": [{"at": 0, "eq": "55"}]}}]),
+            "both current fields": dpi_family(current={"exchange": "table", "at": 4, "width": 2}),
+            "no current field": {k: v for k, v in dpi_family().items()},
+            "unknown exchange": dpi_family(currentStage={"exchange": "other", "at": 3}),
+            "write-ish field": dpi_family(set={"exchange": "table", "at": 3}),
+            "too many stages": dpi_family(stages={"exchange": "table", "count": 9, "first": 4, "stride": 2, "width": 2}),
+            "stride below width": dpi_family(stages={"exchange": "table", "count": 3, "first": 4, "stride": 1, "width": 2}),
+            "four exchanges": dpi_family(exchanges=[{"name": f"e{i}", "transport": "output", "request": "55 70",
+                                                     "reply": {"match": [{"at": 0, "eq": "55"}]}} for i in range(4)]),
+        }
+        del bad["no current field"]["dpi"]["currentStage"]
+        for name, document in bad.items():
+            with self.subTest(name), self.assertRaises(spec.SpecError):
+                spec.parse_family(document)
+
+    def run_dpi(self, reply, **changes):
+        family = spec.parse_family(dpi_family(**changes))
+        device = FakeDevice([frame(reply)])
+        return runner.run_dpi(device, family), device
+
+    def test_runner_decodes_stage_table(self):
+        (value, note), device = self.run_dpi(DPI_REPLY)
+        self.assertEqual((value, note), ({"current": 800, "stages": [400, 800, 1600], "stageSource": "onboard"}, ""))
+        self.assertEqual(device.writes, [bytes.fromhex("5570").ljust(64, b"\0")])
+
+    def test_runner_value_fields_and_fixed_count(self):
+        row = dpi_family(stages={"exchange": "table", "count": 3, "first": 4, "stride": 1, "scale": 100},
+                         current={"exchange": "table", "at": 7, "width": 2, "endian": "big"})
+        del row["dpi"]["currentStage"]
+        family = spec.parse_family(row)
+        value, note = runner.run_dpi(FakeDevice([frame("55 70 00 00 08 10 20 0c 80")]), family)
+        self.assertEqual(value, {"current": 3200, "stages": [800, 1600, 3200], "stageSource": "onboard"}, note)
+
+    def test_runner_rejects_bad_evidence(self):
+        cases = {"header": "55 71 03 01 9001 2003 4006", "count 0": "55 70 00 01 9001",
+                 "count 9": "55 70 09 01 9001", "index out of range": "55 70 03 03 9001 2003 4006",
+                 "stage below 50": "55 70 02 00 3000 2003"}
+        for name, reply in cases.items():
+            with self.subTest(name):
+                (value, note), _ = self.run_dpi(reply)
+                self.assertIsNone(value)
+                self.assertTrue(note)
+        (value, note), _ = self.run_dpi(DPI_REPLY, currentStage={"exchange": "table", "at": 3, "base": 1})
+        self.assertEqual(value["current"], 400)
+
+    def poll_dpi(self, replies, provider=None):
+        family = spec.parse_family(dpi_family())
+        with patch.object(families, "_families", {"dpi_test": family}):
+            return poll([collection()], FakeDevice([frame(r) for r in replies]), provider)
+
+    def test_provider_attaches_dpi_without_write_capability(self):
+        statuses, _ = self.poll_dpi(["55 65 00 3c", DPI_REPLY])
+        status, = statuses
+        self.assertEqual(status.level, 60)
+        self.assertEqual((status.dpi["current"], status.dpi["stages"], status.dpi["canSet"], status.dpi["targetToken"]),
+                         (800, [400, 800, 1600], False, None))
+        import server
+        public = server.normalise_dpi(status.dpi, usable=True)
+        self.assertEqual((public["current"], public["canSet"], public["stageSource"]), (800, False, "onboard"))
+
+    def test_dpi_failure_keeps_battery_and_backs_off(self):
+        provider = provider_module.FamiliesProvider(running=lambda names: False)
+        for _ in range(3):
+            statuses, _ = self.poll_dpi(["55 65 00 3c"], provider)
+            self.assertEqual((statuses[0].level, statuses[0].dpi), (60, None))
+        family = spec.parse_family(dpi_family())
+        device = FakeDevice([frame("55 65 00 3c"), frame(DPI_REPLY)])
+        with patch.object(families, "_families", {"dpi_test": family}):
+            statuses, _ = poll([collection()], device, provider)
+        self.assertIsNone(statuses[0].dpi)
+        self.assertEqual(len(device.writes), 1)  # battery only; DPI no longer asked
+
+
 if __name__ == "__main__":
     unittest.main()

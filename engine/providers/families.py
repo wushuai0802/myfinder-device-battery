@@ -8,6 +8,8 @@ otherwise). It sends nothing to a collection no family selected.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import families
 from families import processes, runner
 from families.memory import ReadMemory
@@ -21,6 +23,7 @@ except ImportError:          # pragma: no cover
     hid = None
 
 NAME = "families"
+DPI_MAX_FAILURES = 3   # consecutive failed DPI reads before DPI is left alone for this device
 
 
 class FamiliesProvider(Provider):
@@ -32,6 +35,7 @@ class FamiliesProvider(Provider):
         self._running = running
         self._clock = clock
         self.candidate_count = 0
+        self._dpi_failures = {}
 
     def _inventory(self):
         rows = []
@@ -87,12 +91,13 @@ class FamiliesProvider(Provider):
                 self.memory.record(family.id, unit, name, outcome.kind)
                 self._diag.append(f"{family.id}.{name}: {outcome.kind}" + (f" ({outcome.note})" if outcome.note else ""))
                 if outcome.kind == "reading":
+                    dpi = self._read_dpi(dev, family, unit, kwargs)
                     return DeviceStatus(
                         f"{NAME}:{family.id}:{physical}",
                         ((info.get("product_string") or "").strip() or device.name) if family.prefer_product_name else device.name, outcome.level, outcome.charging, True, NAME,
                         kind=family.kind, physical_id=physical, connection_known=True,
                         charging_known=outcome.charging_known, verification_level=family.level,
-                        model_source="family:" + family.id)
+                        model_source="family:" + family.id, dpi=dpi)
                 if outcome.kind in ("asleep", "anomaly"):
                     break
             return None
@@ -101,6 +106,21 @@ class FamiliesProvider(Provider):
                 dev.close()
             except OSError:
                 self._diag.append("HID handle close failed")
+
+    def _read_dpi(self, dev, family, unit, kwargs):
+        """Read-only DPI evidence after a battery reading; never affects the battery result."""
+        key = (family.id, unit)
+        if family.dpi is None or self._dpi_failures.get(key, 0) >= DPI_MAX_FAILURES:
+            return None
+        value, note = runner.run_dpi(dev, family, **kwargs)
+        if value is None:
+            self._dpi_failures[key] = self._dpi_failures.get(key, 0) + 1
+            self._diag.append(f"{family.id}: {note}")
+            return None
+        self._dpi_failures.pop(key, None)
+        # canSet stays False here: writes exist only through a reviewed adapter (C4).
+        return dict(value, supported=True, canSet=False, targetToken=None,
+                    checkedAtUtc=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"))
 
     def diagnostics(self):
         return list(self._diag)
