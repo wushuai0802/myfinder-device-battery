@@ -13,6 +13,8 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
+from functools import reduce
+from operator import xor
 from typing import Optional
 
 from .spec import DpiSpec, DpiValue, Family, Gate, Read, Reply
@@ -32,7 +34,12 @@ def _holds(data, rule):
 
 
 def _checksum_ok(data, checksum):
-    return checksum is None or sum(data[checksum.start:checksum.end]) & 0xFF == checksum.equals
+    if checksum is None:
+        return True
+    span = data[checksum.start:checksum.end]
+    if checksum.kind == "xor":
+        return reduce(xor, span, 0) == checksum.equals
+    return sum(span) & 0xFF == checksum.equals
 
 
 def _envelope(data, match, spans=(), checksum=None, length=None):
@@ -84,7 +91,7 @@ def parse(reply: Reply, frame) -> Outcome:
 def parse_gate(gate: Gate, frame) -> Optional[bool]:
     """True online, False offline (asleep), None not the gate's answer."""
     data = bytes(frame)
-    if _envelope(data, gate.match, (), gate.checksum) is not None:
+    if _envelope(data, gate.match, (), gate.checksum, gate.length) is not None:
         return None
     if len(data) > gate.online.at and _holds(data, gate.online):
         return True
@@ -116,6 +123,10 @@ def _read_inputs(dev, family: Family, read: Read, clock, request: bytes, accept)
             break
         frame = bytes(raw)
         if echo and frame[:len(echo)] == echo[:len(frame)]:
+            # A T10 with all status fields zero can echo the query byte for byte.
+            # Reserve the old-firmware fallback for a receiver that stayed silent.
+            if family.id == "xiberia" and read.name == "t10_status":
+                last = Outcome("rejected", note="status request echoed")
             continue  # the request read back is never an answer
         result, final = accept(frame)
         if final:

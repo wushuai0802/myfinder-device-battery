@@ -119,10 +119,11 @@ class Span:
 
 @dataclass(frozen=True)
 class Checksum:
-    """(sum(bytes[start:end]) + add) & 0xFF == equals."""
+    """Sum modulo 256, or XOR, of bytes[start:end] must equal equals."""
     start: int
     end: int
     equals: int
+    kind: str = "sum"
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,7 @@ class Gate:
     checksum: Optional[Checksum]
     online: ByteRule
     offline: Optional[ByteRule]
+    length: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -278,12 +280,15 @@ def _rules(value, where, lo=0, hi=16):
 def _checksum(obj, where):
     if obj is None:
         return None
-    _fields(obj, ("sum", "equals"), where=where)
-    span = obj["sum"]
-    _check(isinstance(span, list) and len(span) == 2, f"{where}.sum: [start, end] expected")
-    start = _int(span[0], 0, MAX_REPORT - 1, where + ".sum[0]")
-    end = _int(span[1], start + 1, MAX_REPORT, where + ".sum[1]")
-    return Checksum(start, end, _byte(obj["equals"], where + ".equals"))
+    _fields(obj, ("equals",), ("sum", "xor"), where=where)
+    _check(("sum" in obj) != ("xor" in obj), f"{where}: exactly one of sum or xor")
+    kind = "xor" if "xor" in obj else "sum"
+    span = obj[kind]
+    span_where = where + "." + kind
+    _check(isinstance(span, list) and len(span) == 2, f"{span_where}: [start, end] expected")
+    start = _int(span[0], 0, MAX_REPORT - 1, span_where + "[0]")
+    end = _int(span[1], start + 1, MAX_REPORT, span_where + "[1]")
+    return Checksum(start, end, _byte(obj["equals"], where + ".equals"), kind)
 
 
 def _variant(obj, where):
@@ -331,15 +336,25 @@ def _reply(obj, where):
 
 
 def _gate(obj, where, transport, reports):
-    _fields(obj, ("request", "match", "online"), ("checksum", "offline"), where)
+    _fields(obj, ("request", "match", "online"), ("checksum", "offline", "length"), where)
     request = _hex_bytes(obj["request"], where + ".request")
     report = reports["output"] if transport == "output" else reports["feature"]
     _check(request[0] == report.report_id and len(request) <= report.length,
            f"{where}: request must start with the report ID and fit its length")
-    return Gate(request=request, match=_rules(obj["match"], where + ".match", 1, 16),
+    gate = Gate(request=request, match=_rules(obj["match"], where + ".match", 1, 16),
                 checksum=_checksum(obj.get("checksum"), where + ".checksum"),
                 online=_rule(obj["online"], where + ".online"),
-                offline=_rule(obj["offline"], where + ".offline") if "offline" in obj else None)
+                offline=_rule(obj["offline"], where + ".offline") if "offline" in obj else None,
+                length=_int(obj["length"], 2, MAX_REPORT, where + ".length") if "length" in obj else None)
+    if gate.length is not None:
+        incoming = reports["input"] if transport == "output" else report
+        maximum = incoming.length - (transport == "output" and incoming.report_id == 0)
+        _check(gate.length <= maximum, f"{where}.length: exceeds reply report length")
+        rules = gate.match + (gate.online,) + ((gate.offline,) if gate.offline is not None else ())
+        _check(all(rule.at < gate.length for rule in rules), f"{where}: rule outside reply length")
+        _check(gate.checksum is None or gate.checksum.end <= gate.length,
+               f"{where}: checksum outside reply length")
+    return gate
 
 
 def _read(obj, where, reports):

@@ -71,11 +71,19 @@ class FamiliesProvider(Provider):
             self._diag.append(f"{family.id}: vendor software running; stepping aside")
             return None
         unit = families.memory_key(physical)
-        plan = self.memory.plan(family.id, unit, [r.name for r in family.reads])
+        reads = {r.name: r for r in family.reads}
+        if family.id == "xiberia":
+            # Keep the legacy read/index and memory keys. Only the exact listed
+            # T10 gets the status trial first; a remembered legacy read still wins.
+            status_read = reads.pop("t10_status", None)
+            if status_read is not None and (
+                    device.vendor_id, device.product_id, device.product_string
+            ) == (0x36F9, 0xF001, "XIBERIA T10 Wireless"):
+                reads = {status_read.name: status_read, **reads}
+        plan = self.memory.plan(family.id, unit, list(reads))
         if not plan:
             self._diag.append(f"{family.id}: no read left to try for this device; nothing sent")
             return None
-        reads = {r.name: r for r in family.reads}
         dev = hid.device()
         try:
             dev.open_path(info["path"])
@@ -98,6 +106,8 @@ class FamiliesProvider(Provider):
                         model_source="family:" + family.id, dpi=dpi, dpi_target=dpi_target)
                 if outcome.kind in ("asleep", "anomaly"):
                     break
+                if family.id == "xiberia" and name == "t10_status" and outcome.kind != "silent":
+                    break  # Only silence permits the legacy early-firmware fallback.
             return None
         finally:
             try:

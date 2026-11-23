@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "id": "machenike_l7_air",
+  "name": "MACHENIKE L7 Air 1K",
+  "kind": "mouse",
+  "verificationLevel": "C",
+  "source": {
+    "project": "MACHENIKE official China download center",
+    "url": "https://www.machenike.com/driver/download/",
+    "revision": "MKM_App_L7-Air-1K.exe SHA256 4B0D2F2EBDF9A64FF8D70F9A5AEF3F05BEF337FAAAA8DB78BEE98255F5332DC1",
+    "license": "Proprietary official driver; protocol facts only; no code redistributed.",
+    "file": "Machenike L7 Air 1K Gaming Mouse.exe",
+    "origin": "Official driver binary SHA256 7FCB6C4C65C2F9EDB74E0E64FEC8E64026FDE1BD47EA48DCFED504273EDBF3AA",
+    "evidence": "#1059: 320F:226F, \"2.4G Wireless Receiver\". Official fixed-table product 180: same VID/PID, FF1C:0092. Static path 0x4A4430 gates through 0x47BE70 then 0x47BC80: 04 AA 00 AA requires ID04, byte3=AA, byte8=FF before 04 1C 00 1A 02 reads byte8 percent and byte9=1 charging. Require exact 64-byte replies and conservatively byte7=00; states 0/2 leave charging unknown. Two fixed read-only output requests at most, once each. No mode/init/config/feature writes or 4K. No hardware verification."
+  },
+  "devices": [
+    {
+      "vendorId": "320F",
+      "productId": "226F",
+      "name": "MACHENIKE L7 Air 1K",
+      "productString": "2.4G Wireless Receiver"
+    }
+  ],
+  "collections": [
+    {"usagePage": "FF1C", "usage": "0092"}
+  ],
+  "reports": {
+    "input": {"id": "04", "length": 64},
+    "output": {"id": "04", "length": 64}
+  },
+  "reads": [
+    {
+      "name": "battery",
+      "transport": "output",
+      "request": "04 1C 00 1A 02",
+      "timeoutMs": 800,
+      "maxReads": 1,
+      "gate": {
+        "request": "04 AA 00 AA",
+        "length": 64,
+        "match": [
+          {"at": 0, "eq": "04"},
+          {"at": 3, "eq": "AA"},
+          {"at": 7, "eq": "00"}
+        ],
+        "online": {"at": 8, "eq": "FF"}
+      },
+      "reply": {
+        "length": 64,
+        "match": [
+          {"at": 0, "eq": "04"},
+          {"at": 3, "eq": "1A"},
+          {"at": 7, "eq": "00"}
+        ],
+        "variants": [
+          {
+            "when": {"at": 9, "eq": "01"},
+            "percent": {"at": 8, "min": 0, "max": 100},
+            "chargingAlways": true
+          },
+          {
+            "when": {"at": 9, "eq": "00"},
+            "percent": {"at": 8, "min": 0, "max": 100}
+          },
+          {
+            "when": {"at": 9, "eq": "02"},
+            "percent": {"at": 8, "min": 0, "max": 100}
+          }
+        ]
+      }
+    }
+  ],
+  "standAsideFor": ["Machenike L7 Air 1K Gaming Mouse.exe"]
+}
