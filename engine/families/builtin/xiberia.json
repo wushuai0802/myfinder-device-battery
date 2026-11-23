@@ -10,7 +10,7 @@
     "revision": "f1510d0",
     "license": "Apache-2.0 (BrimDeck); protocol origin MIT (Voltide)",
     "origin": "Voltide XiberiaT7Provider.cs (MIT), derived from XIBERIA HUB ActHID.dll",
-    "evidence": "Upstream hardware check on XIBERIA T7 (36F9:F008). XIBERIA HUB binds any 36F9 receiver declaring reports 0x55 and 0x41. MyFinder issues list F016 (#56 #259), F002 (#846 #852), F001 (#225 #271) with FF82:0001 and FF90:0001 collections; no MyFinder hardware reply yet."
+    "evidence": "Upstream hardware check on XIBERIA T7 (36F9:F008). XIBERIA HUB binds any 36F9 receiver declaring reports 0x55 and 0x41. MyFinder issues list F016 (#56 #259), F002 (#846 #852) and F001 (#225 #271) with FF82:0001 and FF90:0001. In #846 a K06S owner manually received a 64-byte reply starting 55 65 00 64 (100%) on FF90:0001. The FF82 write returned -1. In-app verification is pending."
   },
   "devices": [
     {"vendorId": "36F9", "productId": "F008", "name": "XIBERIA T7"},
