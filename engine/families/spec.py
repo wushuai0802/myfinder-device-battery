@@ -119,10 +119,11 @@ class Span:
 
 @dataclass(frozen=True)
 class Checksum:
-    """(sum(bytes[start:end]) + add) & 0xFF == equals."""
+    """Sum modulo 256, or XOR, of bytes[start:end] must equal equals."""
     start: int
     end: int
     equals: int
+    kind: str = "sum"
 
 
 @dataclass(frozen=True)
@@ -279,12 +280,15 @@ def _rules(value, where, lo=0, hi=16):
 def _checksum(obj, where):
     if obj is None:
         return None
-    _fields(obj, ("sum", "equals"), where=where)
-    span = obj["sum"]
-    _check(isinstance(span, list) and len(span) == 2, f"{where}.sum: [start, end] expected")
-    start = _int(span[0], 0, MAX_REPORT - 1, where + ".sum[0]")
-    end = _int(span[1], start + 1, MAX_REPORT, where + ".sum[1]")
-    return Checksum(start, end, _byte(obj["equals"], where + ".equals"))
+    _fields(obj, ("equals",), ("sum", "xor"), where=where)
+    _check(("sum" in obj) != ("xor" in obj), f"{where}: exactly one of sum or xor")
+    kind = "xor" if "xor" in obj else "sum"
+    span = obj[kind]
+    span_where = where + "." + kind
+    _check(isinstance(span, list) and len(span) == 2, f"{span_where}: [start, end] expected")
+    start = _int(span[0], 0, MAX_REPORT - 1, span_where + "[0]")
+    end = _int(span[1], start + 1, MAX_REPORT, span_where + "[1]")
+    return Checksum(start, end, _byte(obj["equals"], where + ".equals"), kind)
 
 
 def _variant(obj, where):

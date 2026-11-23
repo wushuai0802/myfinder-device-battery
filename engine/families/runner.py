@@ -13,6 +13,8 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
+from functools import reduce
+from operator import xor
 from typing import Optional
 
 from .spec import DpiSpec, DpiValue, Family, Gate, Read, Reply
@@ -32,7 +34,12 @@ def _holds(data, rule):
 
 
 def _checksum_ok(data, checksum):
-    return checksum is None or sum(data[checksum.start:checksum.end]) & 0xFF == checksum.equals
+    if checksum is None:
+        return True
+    span = data[checksum.start:checksum.end]
+    if checksum.kind == "xor":
+        return reduce(xor, span, 0) == checksum.equals
+    return sum(span) & 0xFF == checksum.equals
 
 
 def _envelope(data, match, spans=(), checksum=None, length=None):
