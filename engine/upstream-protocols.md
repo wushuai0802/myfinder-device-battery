@@ -4,6 +4,45 @@ How each device's battery level is read - one section per device, linked from th
 the [README](../README.md#supported-devices). These are the implementation notes: what is sent,
 what comes back, and where each protocol was taken from.
 
+## AJAZZ AJ179 NLP (7768:642E)
+
+Issue #1064, candidate evidence level C. Independently implemented from public
+[protocol notes](https://github.com/RamonDantasPolicarpo/ajazz-suite/blob/9028eefff6d51bde532f37521c95f62f82061529/docs/protocol/mouse_protocol.md)
+and [mouse.rs](https://github.com/RamonDantasPolicarpo/ajazz-suite/blob/9028eefff6d51bde532f37521c95f62f82061529/crates/ajazz-protocol/src/mouse.rs)
+at the pinned revision; no vendor implementation or assets are included.
+The issue's five-bar display is not hardware confirmation of a percentage.
+The public upstream parses a percentage; this project has synthetic evidence only.
+
+Scope is the 7768:642E NearLink 2.4G receiver, interface 1, FFB2:0001,
+with a matching MI_01 HID path and resolved native `pnp:usb` parent VID/PID.
+Count target collections before checking paths or report proof. Duplicate target
+collections block that receiver; any unresolved target parent blocks the poll
+because its relationship to the resolved receivers is unknown.
+Wired 6D2E, FFB1 DFU, and other identities are excluded.
+
+Windows report sizes use the existing scoped HidP/descriptor helpers. Only
+numbered report 06 as the sole IN and OUT report, each exactly 64 bytes including
+the report ID, is accepted. Unsupported layouts and an implicit unnumbered
+format are conservatively ignored. No Feature report is used.
+
+Before sending, discard already queued input using at most 16 nonblocking reads
+and a 40 ms deadline. Failure to observe an empty queue means no send.
+Each eligible receiver receives at most one output per poll:
+`06 05` followed by 62 zero bytes. A successful full 64-byte write is required;
+there is no retry, reset, configuration, firmware command, or additional write.
+Reply processing is bounded to 16 reads and 120 ms.
+
+A 64-byte `06 05` status requires at least one nonzero firmware byte at offsets
+9 and 10. Offset 12 nonzero means online; offset 13 is 0..100 percent and
+offset 14 must be 0 or 1 for a known charging flag. Offline status invalidates
+the current percentage, including any pending notification.
+During the wait, `06 FA` notifications qualify only when offset 5 is 03,
+offset 6 is 1..100, and offset 7 is 0 or 1. Notification zero and other async
+messages are ignored. Notifications remain pending while awaiting a preferred
+status response. The protocol provides no transaction token; draining excludes
+already queued packets, but cannot distinguish an old packet still in flight.
+No value is retained across polls.
+
 ## Headsets
 
 ### ATK N9 headsets (373B:1262, 12D6 and deferred 1204)
@@ -4393,3 +4432,13 @@ Issue #317 identifies the original Azoth receiver as 0B05:1A85 with USB product 
 The G-Helper Windows implementation selects MI_02 Col01 for device identity. The rogctl transport writes 01 A0 padded to 64 bytes, then checks its echoed header. Its captured Falchion example starts 01 A0 00 01 00 06 1B 02 04. Four-byte slots beginning at byte 5 contain little-endian product IDs. The identity request only reads the list. The reader requires the exact Col01 path and per-report input/output proof of ID 1 at 64 bytes before opening it, and separately proves the keyboard port on that physical receiver. It accepts one Azoth (1A85) or Falchion RX Low Profile (1B06), optionally with one documented mouse. Unknown, ambiguous or absent models do not trigger a keyboard page read.
 
 The power port receives one padded 12 01 battery-page query. hidapi removes the implicit ID on unnumbered input. Relative to the payload beginning with the 12 01 echo, Azoth byte 5 is the percentage and byte 8 is the charging flag. On OMNI, including the ID, those are bytes 6 and 9; Falchion uses byte 11 for its percentage. A Falchion gauge at byte 6 must not be shown as a percentage. An absent reply, an ambiguous zero or an invalid value leaves the level unknown. Fixtures cover both layouts. MyFinder hardware results are pending. [ChargeDock battery reader](https://github.com/SgZincanya/ChargeDock/blob/b2e25a965c2e01db6ef6e684cfc55c7927eab805/rog_proto.py) · [ChargeDock hardware check](https://github.com/SgZincanya/ChargeDock/blob/b2e25a965c2e01db6ef6e684cfc55c7927eab805/VALIDATION.md) · [OpenAzoth protocol](https://github.com/albzO/OpenAzoth/blob/d3e8482fdd2f9916790f75e98b564e75672517c2/docs/PROTOCOL.md) · [Dedicated receiver](https://github.com/wushuai0802/myfinder-device-battery/issues/317) · [OMNI receiver](https://github.com/wushuai0802/myfinder-device-battery/issues/711) [rogctl identity transport](https://github.com/Humblemonk/rogctl/blob/de007e06974fc630e9299516153ea202ab94282f/src/device.rs#L219-L234) · [Captured Falchion battery and receiver identity frames](https://github.com/Humblemonk/rogctl/blob/de007e06974fc630e9299516153ea202ab94282f/src/protocol.rs) · [Falchion report](https://github.com/wushuai0802/myfinder-device-battery/issues/694)
+
+## Rapoo MT560 passive input (24AE:1872)
+
+Grade C candidate for [#1060](https://github.com/wushuai0802/myfinder-device-battery/issues/1060), based on the supplied official [A HUB static source](https://hid.rapoo.cn/AHUB_WEB/dist/assets/js/index-cgGQw9wn.js) snapshot, SHA256 `09a7906e669d75275a77ab394207bb6ab7264efa6eb6998fea3c792a31a36ecf`. Its equipment directory maps `24AE:1872` to `Telink8273_Mouse`; the default control collection `FF00:000E` also appears in the reporter's inventory. This establishes a narrowly scoped passive candidate, not MyFinder hardware confirmation.
+
+A HUB independently dispatches BB input reports. The BA control path is not used. Including the report ID, accepted input begins `BB B0`, has at least seven bytes (six payload bytes), has `raw[5] == 1`, and carries an integer percentage in `raw[6]` from 0 through 100 inclusive. Missing or invalid percentages and other headers/flags are rejected. Charging remains unknown.
+
+The separate `rapoo_mt560` provider requires exact `24AE:1872`, a resolved physical USB parent, and one `FF00:000E` candidate. Duplicate candidates count before report proof; an unparented candidate or a conflicting VID/PID path blocks opening. Windows report-size discovery is scoped to this exact collection and input reports only. Input ID 187 must have descriptor-proven length, and every accepted raw report must equal that length; no 64-byte size is assumed. VT Input 07, other PIDs, and `25A7:2410` are excluded.
+
+The provider inherits the existing passive handle lifecycle: bounded initial listening, retained handles, bounded draining to the newest valid queued reading, and historical status on silence or proof loss until receiver removal. It performs no output, feature request, activation, or BA exchange. Synthetic fixtures cover parsing, descriptor proof, ambiguity, identity exclusions, lifecycle, and VT separation. Report timing, native Windows topology execution, and real MT560 behavior remain unverified.

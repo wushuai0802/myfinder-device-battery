@@ -355,6 +355,17 @@ def discover(paths, excluded=(), *, full=False):
                     info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
                     _descriptor_fallback(info, caps, ("input", "output"))
                     caps_complete = reports_proven(info)
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x7768, 0x642E, 0xFFB2, 0x0001):
+                from providers.ajazz_aj179_nlp import matches_collection
+                if matches_collection(info):
+                    from battery_hid import battery_caps
+                    info.update(input_report_length=caps.input,
+                                output_report_length=caps.output)
+                    info.update(battery_caps(hid, data, caps))
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                    # Retain collections whose report proof failed: the reader
+                    # must count duplicates before deciding whether it may query.
             if caps_complete and attrs.vendor == 0x391D and (caps.page, caps.usage) == (0xFFFF, 0x0002):
                 from providers.vgn_ry_ms import matches_collection
                 if matches_collection(info):
@@ -526,6 +537,13 @@ def discover(paths, excluded=(), *, full=False):
                 info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
                 _descriptor_fallback(info, caps, ("input",))
                 caps_complete = bool(info["input_report_sizes"] and "7" in info["input_report_sizes"])
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x24AE, 0x1872, 0xFF00, 0x000E):
+                # MT560 passive input only; prove BB on this exact collection.
+                from battery_hid import byte_report_sizes
+                info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
+                _descriptor_fallback(info, caps, ("input",))
+                caps_complete = bool(info["input_report_sizes"] and "187" in info["input_report_sizes"])
             if caps_complete and ((attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x1D57, 0xFA60, 0x000A, 0x0000),
                     (0x1D57, 0xFA65, 0xFF00, 0x0001))

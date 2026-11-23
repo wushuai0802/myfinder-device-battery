@@ -1,6 +1,11 @@
 {
   "schema": 1,
   "devices": {
+    "7768:642E": {
+      "status": "researching",
+      "note": "黑爵 AJ179 NLP 星闪版 2.4G 接收器，电量与充电状态待 MyFinder 实机核对。",
+      "reports": 1
+    },
     "05AC:024F": {
       "status": "beta",
       "version": "1.3.11-beta.20",
@@ -70,6 +75,11 @@
       "status": "no-evidence",
       "reports": 6,
       "rank": 16
+    },
+    "24AE:1872": {
+      "status": "researching",
+      "note": "雷柏 MT560 2.4G 被动电量候选，待测试版实机核对。充电状态未知。",
+      "reports": 1
     },
     "260D:1074": {
       "status": "beta",

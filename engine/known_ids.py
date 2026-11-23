@@ -33,6 +33,7 @@ from providers.profiles import profiles, registered_ids
 # Only the name (first tuple item) is needed; parser function references are inert.
 TABLES = {
     "atk_headset": ("PIDS",),
+    "ajazz_aj179_nlp": ("PIDS",),
     "astro": ("PIDS",), "asus": ("KNOWN",), "asus_omni": ("PIDS",), "asus_headset": ("PIDS",), "audeze": ("KNOWN",),
     "corsair": ("PIDS", "BRAGI_PIDS"), "gwolves": ("WIRED", "MODELS"),
     "hyperx": ("PIDS",), "hyperx_cloud3": ("PIDS",),
@@ -57,6 +58,7 @@ TABLES = {
     "lingbao": ("PIDS",),
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
+    "rapoo_mt560": ("PIDS",),
     "fa6x_passive": ("PIDS",),
     "dareu": ("PIDS",), "delux": ("PIDS",), "vgn_ry_ms": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),

@@ -42,6 +42,7 @@ PROVIDERS = (
     ("vgn_beiying", "VgnBeiyingProvider"),
     ("vgn_dragonfly3", "VgnDragonfly3Provider"),
     ("vgn_ry_ms", "VgnRyMsProvider"),
+    ("ajazz_aj179_nlp", "AjazzAj179NlpProvider"),
     ("ninjutso_legacy", "NinjutsoLegacyProvider"),
     ("flydigi", "FlydigiProvider"),
     ("mchose_qhw_keyboard", "MchoseQhwKeyboardProvider"),
@@ -54,6 +55,7 @@ PROVIDERS = (
     ("dareu", "DareuProvider"),
     ("delux", "DeluxProvider"),
     ("rapoo", "RapooProvider"),
+    ("rapoo_mt560", "RapooMT560Provider"),
     ("fa6x_passive", "Fa6xPassiveProvider"),
     ("logitech", "LogitechProvider"), ("steelseries", "SteelSeriesProvider"),
     ("barracuda", "BarracudaProvider"), ("asus", "AsusProvider"),
@@ -87,6 +89,7 @@ PROVIDER_VIDS = {
     "lingbao": (0x088D,),
     "vgn_beiying": (0x258A, 0x391D),
     "vgn_dragonfly3": (0x391D,), "vgn_ry_ms": (0x391D,), "ninjutso_legacy": (0x1915,),
+    "ajazz_aj179_nlp": (0x7768,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,), "mchose_k99v3": (0x3837,),
     "mchose_v9pro2": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
@@ -95,6 +98,7 @@ PROVIDER_VIDS = {
     "dareu": (0x260D,),
     "delux": (0x3554,),
     "rapoo": (0x24AE,),
+    "rapoo_mt560": (0x24AE,),
     "fa6x_passive": (0x1D57,),
     "logitech": (0x046D,), "steelseries": (0x1038,), "barracuda": (0x1532,),
     "asus": (0x0B05,), "gwolves": (0x33E4,), "lofree": (0x388D,),
@@ -123,9 +127,9 @@ SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 # Passive and system readers send nothing or run their own schedule.
 IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
-IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "fa6x_passive", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
+IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "fa6x_passive", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"families", "sony_inzone", "delux", "vgn_ry_ms", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+READER_DIAGNOSTICS = {"families", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "rapoo_mt560", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -769,7 +773,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return 0
     module = importlib.import_module("providers." + name)
     inventory = device_pack.select_inventory(name, inventory)
-    if name in ("atk_headset", "delux", "vgn_ry_ms"):
+    if name in ("atk_headset", "delux", "vgn_ry_ms", "ajazz_aj179_nlp"):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("moondrop", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
@@ -985,7 +989,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "moondrop", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "rapoo_mt560", "moondrop", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -1035,7 +1039,7 @@ class BatteryEngine:
         self._idle_backoff(reader_key, name, physical, candidate_count, statuses)
         # Passive readers can return history without a new notification.
         # Keep the card, but expose the same idle health as a first silent poll.
-        measured = bool(group) and (name not in ("rapoo", "fa6x_passive") or any(
+        measured = bool(group) and (name not in ("rapoo", "rapoo_mt560", "fa6x_passive") or any(
             s.online and not s.cached and s.level is not None for s in statuses))
         self.health[reader_key] = {"provider": name, "readerId": public_id(reader_key),
                                    "state": "ok" if measured else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),
@@ -1100,7 +1104,7 @@ class BatteryEngine:
                     if reason in diagnostics:
                         self.health[reader_key]["diagnosticSummary"] = reason
                         break
-            if name in ("rapoo", "moondrop") and not measured and diagnostics:
+            if name in ("rapoo", "rapoo_mt560", "moondrop") and not measured and diagnostics:
                 # These readers emit only fixed text, numeric descriptor sizes and
                 # input report IDs/lengths. No paths, payloads or exceptions.
                 self.health[reader_key]["diagnosticSummary"] = reader_health_summary(diagnostics[0])
