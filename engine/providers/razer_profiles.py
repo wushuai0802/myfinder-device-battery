@@ -146,4 +146,4 @@ for _pid, (_name, _tid) in KNOWN.items():
 
 # Barracuda's own PA reader, the 2020 charging cable, and intentional exclusions
 # (Bluetooth Orochi / wired-only Basilisk) must not become generic pack targets.
-reserve_ids((RAZER_VID, pid) for pid in (0x053A, 0x052E, 0x0095, 0x00CB))
+reserve_ids((RAZER_VID, pid) for pid in (0x053A, 0x052E, 0x0095, 0x00CB, 0x0565))

@@ -68,7 +68,8 @@ TABLES = {
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
 # Receiver IDs shared by unrelated device models.
 SHARED_UNINDEXED = frozenset({(0x05AC, 0x024F), (0x093A, 0x522C), (0x36B0, 0x3002)})
-HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles", "razer_v4",
+HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "blackshark_hyperspeed",
+           "profiles", "razer_v4",
            "aula_f99max"}
 
 
@@ -244,6 +245,9 @@ def build_index(root=None, *, engine_root=None):
             # branch of aula_keyboard. Its shared 05AC:024F identity stays out
             # of the generic triage index so other keyboards with that PID are
             # never presented as supported by static enumeration.
+            if module == "razer" and path.with_name("blackshark_hyperspeed.py").is_file():
+                dedicated = StaticSource(path.with_name("blackshark_hyperspeed.py"))
+                add(module, dedicated.get("VID"), dedicated.get("PID"), dedicated.get("NAME"), "headset")
             if module in SINGLE:
                 vid = next(iter(vendors[module]))
                 name = (readers[module]["name"] if module == "barracuda" else source.get("NAME"))

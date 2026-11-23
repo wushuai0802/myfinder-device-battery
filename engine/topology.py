@@ -437,6 +437,15 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = (caps.input == caps.output == 64
                                  and info["input_report_sizes"] == {"206": 64}
                                  and info["output_report_sizes"] == {"205": 64})
+            if (caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage)
+                    == (0x1532, 0x0565, 0xFF14, 0x0001)
+                    and info["product_string"] == "Razer BlackShark V2 HS 2.4"
+                    and info["interface_number"] == 3 and caps.input == caps.output == 64):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = all(info[d + "_report_sizes"] is not None for d in ("input", "output"))
+
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3837, 0x1018, 0xFF01, 0x0001),
                     (0x3837, 0x101D, 0xFF01, 0x0001),
