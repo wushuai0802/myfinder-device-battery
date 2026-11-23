@@ -2,7 +2,8 @@
   "schema": 1,
   "devices": {
     "7768:642E": {
-      "status": "researching",
+      "status": "beta",
+      "version": "1.4.0-beta.2",
       "note": "黑爵 AJ179 NLP 星闪版 2.4G 接收器，电量与充电状态待 MyFinder 实机核对。",
       "reports": 1
     },
@@ -77,8 +78,9 @@
       "rank": 16
     },
     "24AE:1872": {
-      "status": "researching",
-      "note": "雷柏 MT560 2.4G 被动电量候选，待测试版实机核对。充电状态未知。",
+      "status": "beta",
+      "version": "1.4.0-beta.2",
+      "note": "雷柏 MT560 2.4G 被动电量候选，待 MyFinder 实机核对。充电状态未知。",
       "reports": 1
     },
     "260D:1074": {
@@ -136,8 +138,8 @@
     "3837:3033": {
       "reports": 0,
       "status": "beta",
-      "version": "1.3.11-beta.16",
-      "note": "此共享编号仅覆盖完整名称 MCHOSE K99 V3 2.4G 的键盘"
+      "version": "1.4.0-beta.2",
+      "note": "此共享编号仅覆盖完整名称 MCHOSE K99 V3 2.4G 的键盘。本版修复报告描述符识别，待用户实机核对"
     },
     "3837:6011": {
       "status": "beta",
@@ -232,8 +234,8 @@
     "36F9:F002": {
       "reports": 0,
       "status": "beta",
-      "version": "1.3.11-beta.22",
-      "note": "XIBERIA K06S 2.4G 电量候选，需匹配产品串及报告，待实机验证"
+      "version": "1.4.0-beta.2",
+      "note": "XIBERIA K06S 2.4G 电量候选，双接口时仅匹配有报告证明的唯一 FF90，待用户实机核对"
     },
     "36F9:F001": {
       "reports": 0,
