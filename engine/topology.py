@@ -485,7 +485,8 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
                 if (not caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage)
-                        == (0x3837, 0x1018, 0xFF01, 0x0001)
+                        in ((0x3837, 0x1018, 0xFF01, 0x0001),
+                            (0x3837, 0x1014, 0xFF01, 0x0001))
                         and info.get("report_descriptor_error") == "collection maximum mismatch"):
                     from providers.mchose import (V3_REPORT_ID, V3_REPORT_LEN,
                                                   v3_ultra_windows_report_candidate)
