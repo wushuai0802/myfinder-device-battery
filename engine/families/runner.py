@@ -84,7 +84,7 @@ def parse(reply: Reply, frame) -> Outcome:
 def parse_gate(gate: Gate, frame) -> Optional[bool]:
     """True online, False offline (asleep), None not the gate's answer."""
     data = bytes(frame)
-    if _envelope(data, gate.match, (), gate.checksum) is not None:
+    if _envelope(data, gate.match, (), gate.checksum, gate.length) is not None:
         return None
     if len(data) > gate.online.at and _holds(data, gate.online):
         return True

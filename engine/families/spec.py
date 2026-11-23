@@ -162,6 +162,7 @@ class Gate:
     checksum: Optional[Checksum]
     online: ByteRule
     offline: Optional[ByteRule]
+    length: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -331,15 +332,25 @@ def _reply(obj, where):
 
 
 def _gate(obj, where, transport, reports):
-    _fields(obj, ("request", "match", "online"), ("checksum", "offline"), where)
+    _fields(obj, ("request", "match", "online"), ("checksum", "offline", "length"), where)
     request = _hex_bytes(obj["request"], where + ".request")
     report = reports["output"] if transport == "output" else reports["feature"]
     _check(request[0] == report.report_id and len(request) <= report.length,
            f"{where}: request must start with the report ID and fit its length")
-    return Gate(request=request, match=_rules(obj["match"], where + ".match", 1, 16),
+    gate = Gate(request=request, match=_rules(obj["match"], where + ".match", 1, 16),
                 checksum=_checksum(obj.get("checksum"), where + ".checksum"),
                 online=_rule(obj["online"], where + ".online"),
-                offline=_rule(obj["offline"], where + ".offline") if "offline" in obj else None)
+                offline=_rule(obj["offline"], where + ".offline") if "offline" in obj else None,
+                length=_int(obj["length"], 2, MAX_REPORT, where + ".length") if "length" in obj else None)
+    if gate.length is not None:
+        incoming = reports["input"] if transport == "output" else report
+        maximum = incoming.length - (transport == "output" and incoming.report_id == 0)
+        _check(gate.length <= maximum, f"{where}.length: exceeds reply report length")
+        rules = gate.match + (gate.online,) + ((gate.offline,) if gate.offline is not None else ())
+        _check(all(rule.at < gate.length for rule in rules), f"{where}: rule outside reply length")
+        _check(gate.checksum is None or gate.checksum.end <= gate.length,
+               f"{where}: checksum outside reply length")
+    return gate
 
 
 def _read(obj, where, reports):

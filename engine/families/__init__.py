@@ -12,6 +12,7 @@ was called, which the host does only for users who opted in to beta probing.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -154,6 +155,10 @@ def select(infos: List[dict]):
                 continue
             device = family.device_for(info.get("vendor_id"), info.get("product_id"), info.get("product_string"))
             if device is None:
+                continue
+            if family.id == "machenike_l7_air" and not re.fullmatch(
+                    r"pnp:usb\\vid_320f&pid_226f(?:&rev_[0-9a-f]{4})?\\[^\\/\s\x00-\x1f]+",
+                    info.get("physical_id") or "", re.I | re.ASCII):
                 continue
             if family.id == "xiberia" and (device.vendor_id, device.product_id) == (0x36F9, 0xF002):
                 # #846 identifies FF90 as the K06S battery interface. Count all FF90
