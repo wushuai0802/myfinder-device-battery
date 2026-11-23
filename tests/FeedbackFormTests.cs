@@ -15,7 +15,7 @@ using AtkBatteryTray;
 static class FeedbackFormTests {
     const string Relay="https://feedback.invalid/service";
     const string Issue="https://github.com/wushuai0802/myfinder-device-battery/issues/42";
-    const string Submitted="已提交，编号 #42。可在「我的反馈」查看回复和补充资料。";
+    const string Submitted="已提交，编号 #42。";
     const string GenericFailure="提交失败：暂时无法提交。可以改用浏览器提交，或复制报告发到群里。";
     const string ConnectionFailure="提交失败：连不上反馈服务。可以改用浏览器提交，或复制报告发到群里。";
     const string ServiceFailure="提交失败：反馈服务暂时停用。可以改用浏览器提交，或复制报告发到群里。";
@@ -23,6 +23,7 @@ static class FeedbackFormTests {
     static int checks,failures;
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window,IntPtr insertAfter,int x,int y,int width,int height,uint flags);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
     static void Check(bool value,string message){if(!value)throw new Exception(message);checks++;}
     static void Run(string name,Action action){try{action();Console.WriteLine("PASS "+name);}catch(Exception error){failures++;Console.Error.WriteLine("FAIL "+name+": "+error);}}
     static void Pump(Func<bool> ready){var until=DateTime.UtcNow.AddSeconds(5);while(!ready()&&DateTime.UtcNow<until){Application.DoEvents();Thread.Sleep(2);}Check(ready(),"background work settles without blocking the UI");}
@@ -245,6 +246,82 @@ static class FeedbackFormTests {
             Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==GenericFailure;});Check(!Find<Button>(form,"ViewIssue").Visible&&opens==0,"untrusted success URL never exposed as a browser action");form.Close();
         }
     }
+    static void ModalHistoryNavigation(){
+        FeedbackDraft.Clear();
+        try{foreach(string state in new[]{"draft","failure","success"}){
+            FeedbackDraft.Clear();bool succeeded=state=="success";
+            var http=new FakeHttp {Reply=delegate{return state=="failure"?Response(500):Success();}};
+            var store=new FeedbackStore(null);
+            store.Change(delegate(FeedbackData data){data.Records.Add(new FeedbackRecord {
+                Number=43,Url=FeedbackClient.IssueUrl(43),Category="other",Summary="已有反馈",
+                CreatedAt=DateTime.UtcNow.AddMinutes(-1),LastActivityAt=DateTime.UtcNow
+            });});
+            var service=new FeedbackReplies(store,http,Relay);string opened=null;
+            using(var owner=new System.Windows.Forms.Form())
+            using(var history=new MyFeedbackDialog(service,Report(),false,delegate(string url){opened=url;},43)){
+                owner.Opacity=0;history.Opacity=0;owner.Show();history.Show();Application.DoEvents();
+                int navigations=0;long selected=-1;FeedbackForm active=null;
+                using(var form=new FeedbackForm(Report(),false,false,delegate{},delegate{},Relay,http,new FeedbackSession(),
+                    feedbackReplies:service,openMyFeedback:delegate(long number){
+                        navigations++;selected=number;
+                        Check(active!=null&&!active.Visible&&!active.Modal&&IsWindowEnabled(owner.Handle)&&IsWindowEnabled(history.Handle),
+                            state+": navigation runs after modal dismissal and native owner restoration");
+                        history.Reload(number);
+                    })){
+                    active=form;form.Opacity=0;
+                    bool started=false,clicked=false,timedOut=false;Exception timerError=null;
+                    var until=DateTime.UtcNow.AddSeconds(5);
+                    using(var guard=new System.Windows.Forms.Timer {Interval=10}){
+                        guard.Tick+=delegate{
+                            try{
+                                if(DateTime.UtcNow>=until){timedOut=true;guard.Stop();form.Close();return;}
+                                var mine=Find<Button>(form,"MyFeedback");
+                                if(!started){
+                                    started=true;
+                                    Check(!IsWindowEnabled(owner.Handle)&&!IsWindowEnabled(history.Handle),
+                                        state+": the real modal loop disables the existing windows");
+                                    Check(mine.Enabled,"history entry is available before submission");
+                                    if(state!="draft"){
+                                        Find<TextBox>(form,"Description").Text="设备连接后没有显示电量";
+                                        Find<Button>(form,"SubmitFeedback").PerformClick();
+                                        Check(!mine.Enabled,"history entry is disabled while submitting");
+                                        return;
+                                    }
+                                }
+                                if(state!="draft"&&Find<Label>(form,"FeedbackStatus").Text!=(succeeded?Submitted:GenericFailure))return;
+                                var list=Find<ListBox>(history,"FeedbackRecords");
+                                if(succeeded&&list.Items.Count!=2)return;
+                                Check(mine.Enabled&&mine.Text==(succeeded?"查看我的反馈":"我的反馈"),
+                                    state+": history entry has the expected enabled state and copy");
+                                Check(Find<Button>(form,"ViewIssue").Visible==succeeded,
+                                    state+": successful submission retains its browser entry");
+                                if(succeeded){
+                                    Check(store.Find(42)!=null&&list.Items.Count==2,
+                                        "an already-open history window refreshes after actual fake-transport submission");
+                                    Check(list.GetItemText(list.SelectedItem).StartsWith("#43 ·",StringComparison.Ordinal),
+                                        "automatic refresh preserves the existing selection");
+                                }
+                                clicked=true;mine.PerformClick();
+                                Check(navigations==0,"the history click does not navigate inside the modal loop");
+                                guard.Stop();
+                            }catch(Exception error){timerError=error;guard.Stop();form.Close();}
+                        };
+                        guard.Start();form.ShowDialog(owner);guard.Stop();
+                    }
+                    if(timerError!=null)throw timerError;
+                    Check(clicked&&!timedOut&&navigations==0,"the modal history request returns to its caller before navigation");
+                    form.OpenRequestedHistory();
+                    Check(navigations==1&&selected==(succeeded?42L:0L),
+                        state+": dismissal opens history with the receipt number only after success");
+                    Find<Button>(history,"OpenFeedbackWeb").PerformClick();
+                    Check(opened==FeedbackClient.IssueUrl(succeeded?42:43),
+                        state+": history navigation selects the requested real record");
+                    form.OpenRequestedHistory();Check(navigations==1,"a deferred history request is consumed once");
+                }
+                history.Close();owner.Close();
+            }
+        }}finally{FeedbackDraft.Clear();}
+    }
     static void DraftAndDeactivation(){
         FeedbackDraft.Clear();try{
             var http=new FakeHttp();using(var form=Form(http)){
@@ -409,6 +486,7 @@ static class FeedbackFormTests {
             Console.WriteLine(checks+" feedback fit checks, "+failures+" failed groups");return failures==0?0:1;
         }
         Run("shipped relay configuration",RelayConfiguration);Run("validation and defaults",Validation);Run("exact payload and HTTP policy",PayloadAndPolicy);Run("HTTP failure boundaries",Failures);Run("cancellation during send and read",Cancellation);Run("browser fallback",BrowserFallback);Run("success and repeat confirmation",SuccessAndRepeat);Run("draft and deactivation",DraftAndDeactivation);Run("diagnostic preview and DPI bounds",delegate{PreviewAndLayout(args.Length>0?args[0]:null);});
+        Run("modal dismissal and selected feedback navigation",ModalHistoryNavigation);
         Run("short description click",ShortDescriptionClick);
         Run("failure status and report copy",FailureStatusAndCopy);
         Run("small work area feedback states",SmallWorkAreaStates);

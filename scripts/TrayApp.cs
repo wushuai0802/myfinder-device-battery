@@ -399,6 +399,7 @@ namespace AtkBatteryTray {
                 feedbackDialog=dialog;feedbackModal=true;ignoreDeactivate=true;CancelDeferredDeactivation();
                 try{dialog.ShowDialog(this);}finally{feedbackModal=false;ignoreDeactivate=false;}
                 feedbackDialog=null;
+                dialog.OpenRequestedHistory();
             }
         }
         internal bool ActivateFeedback(){
@@ -814,6 +815,8 @@ namespace AtkBatteryTray {
         readonly TrayBalloonRoute balloonRoute=new TrayBalloonRoute();
         internal FeedbackReplies FeedbackReplies=new FeedbackReplies(new FeedbackStore(null),new FeedbackHttp());
         FeedbackReplyController feedbackChecks;MyFeedbackDialog feedbackDialog;
+        // Direct entries retain restore/activation behavior. Submission forms
+        // defer this entry until their modal loop has returned.
         internal void OpenMyFeedback(long number=0){
             if(feedbackDialog!=null&&!feedbackDialog.IsDisposed){feedbackDialog.Reload(number);DialogVisibility.RestoreAndActivate(feedbackDialog);return;}
             feedbackDialog=new MyFeedbackDialog(FeedbackReplies,CreateFeedbackReport(),Style.Dark,selected:number);feedbackDialog.Show();
@@ -1453,6 +1456,7 @@ namespace AtkBatteryTray {
                 "\r\n后台间隔："+DeviceSettings.Current.BackgroundSeconds+"秒\r\n自启："+PopupPages.StartupState();
             text+="\r\n软件更新："+UpdateStatus;if(!String.IsNullOrEmpty(UpdateFailure))text+="\r\n上次更新失败："+UpdateFailure;
             text+="\r\n"+DevicePackDiagnostic;
+            text+="\r\n"+FeedbackReplies.Store.Diagnostic;
             if(!String.IsNullOrEmpty(ErrorMessage))text+="\r\n鼠标读取："+SafeDiagnostic.Clean(ErrorMessage);
             if(!String.IsNullOrEmpty(DpiError))text+="\r\nDPI读取："+SafeDiagnostic.Clean(DpiError);
             foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip+(device.ModelSource=="pack"?" | 来自数据包，待验证":"");

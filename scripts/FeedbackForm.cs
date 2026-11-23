@@ -223,6 +223,7 @@ namespace AtkBatteryTray {
     internal sealed class FeedbackForm:ThemedDialog {
         readonly FeedbackReport report;readonly FeedbackClient client;readonly FeedbackSession session;readonly string relay;readonly FeedbackReplies replies;
         readonly Action<string> copy,open;readonly Func<string,bool> confirm;
+        readonly Action<long> openHistory;long? requestedHistory;
         readonly ThemedSegments categories,comparison;
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
         readonly TextBox difference = new TextBox { Name="BatteryComparisonDifference", AccessibleName="相差百分比", MaxLength=3, TextAlign=HorizontalAlignment.Right };
@@ -232,7 +233,7 @@ namespace AtkBatteryTray {
         CancellationTokenSource pending;FeedbackResult receipt;bool busy,inputError;
         internal string SelectedCategory {get{return categories.SelectedValue??"other";}}
         internal FeedbackForm(FeedbackReport snapshot,bool deviceMissing,bool dark,Action<string> copyText=null,Action<string> openLink=null,string address=null,IFeedbackTransport transport=null,FeedbackSession history=null,Func<string,bool> confirmation=null,FeedbackReplies feedbackReplies=null,Action<long> openMyFeedback=null):base(dark){
-            report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;
+            report=snapshot;relay=address??FeedbackRelay.Url;session=history??FeedbackSession.Current;openHistory=openMyFeedback;
             copy=copyText??Clipboard.SetText;open=openLink??delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});};
             confirm=confirmation??delegate(string question){return ThemedMessage.Show(this,"反馈问题",question,MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)==DialogResult.Yes;};
             replies=feedbackReplies??new FeedbackReplies(new FeedbackStore(null),transport??new FeedbackHttp(),relay);
@@ -241,7 +242,12 @@ namespace AtkBatteryTray {
             ClientSize=new Size(540,568);categories=new ThemedSegments(Theme) {Name="Categories",AccessibleName="类型"};diagnostics=new ThemedSwitch(Theme);
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);copyReport=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
             mine=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="MyFeedback",Text=replies.Store.MenuText,AutoSize=true,Enabled=openMyFeedback!=null};
-            mine.Click+=delegate{openMyFeedback(0);mine.Text=replies.Store.MenuText;};
+            mine.Click+=delegate{
+                if(busy||openHistory==null)return;
+                requestedHistory=receipt==null?0:receipt.Number;
+                bool modal=Modal;Close();
+                if(!modal)OpenRequestedHistory();
+            };
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
             var typeCard=new ThemedSection(Theme) {Name="FeedbackTypeCard",Dock=DockStyle.Fill,Height=54};
@@ -473,6 +479,12 @@ namespace AtkBatteryTray {
             actionBar.PerformLayout();
             PerformLayout();
         }
+        // Modal callers consume this only after ShowDialog has returned and
+        // Windows has restored the windows disabled by its modal loop.
+        internal void OpenRequestedHistory(){
+            if(Modal||Visible||!requestedHistory.HasValue||openHistory==null)return;
+            long number=requestedHistory.Value;requestedHistory=null;openHistory(number);
+        }
         void SetStatus(string text){
             status.Text=text;
             status.Visible=text.Length!=0;
@@ -488,6 +500,7 @@ namespace AtkBatteryTray {
             remaining.Text=length<5?"还需输入 "+(5-length)+" 字；还可输入 "+(2000-total)+" 字":total>2000?"已超出 "+(total-2000)+" 字（最多 2000 字）":"还可输入 "+(2000-total)+" 字";
             if(comparison.SelectedIndex==2&&DifferenceValue==0)remaining.Text+="。相差请输入 1–100 的整数。";
             submit.Enabled=!busy;
+            mine.Enabled=!busy&&openHistory!=null;
             fallback.Enabled=copyReport.Enabled=!busy&&InputValid;
         }
         bool ConfirmRepeat(){return !session.NeedsConfirmation||confirm("刚刚已提交过一次，确定还要再提交吗？");}
@@ -526,8 +539,8 @@ namespace AtkBatteryTray {
             pending=null;busy=false;
             if(result.Kind==FeedbackResultKind.Success){
                 FeedbackDraft.Clear();receipt=result;
-                submit.Text="关闭";view.Visible=true;cancel.Visible=false;CancelButton=submit;
-                SetStatus("已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+(result.Saved?"。可在「我的反馈」查看回复和补充资料。":"。本地记录未保存，请记下编号并在网页查看。"));
+                submit.Text="关闭";mine.Text="查看我的反馈";view.Visible=true;cancel.Visible=false;CancelButton=submit;
+                SetStatus("已提交，编号 #"+result.Number.ToString(CultureInfo.InvariantCulture)+"。"+(result.Saved?"":"本地记录未保存，请记下编号并在网页查看。"));
             }
             else{
                 EnableInputs(true);
