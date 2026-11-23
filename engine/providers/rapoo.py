@@ -134,6 +134,11 @@ def parse_battery(raw):
 
 class RapooProvider(Provider):
     name = "rapoo"
+    product_ids = PIDS
+    collection = COLLECTION
+    input_id = INPUT_ID
+    minimum_input_length = 9
+    parse_input = staticmethod(parse_battery)
 
     def __init__(self):
         self._diag = []
@@ -142,22 +147,28 @@ class RapooProvider(Provider):
         self._handles = {}  # physical USB parent -> (collection path, open handle)
         self._seen_inputs = {}  # path -> bounded ID/length pairs since open/last valid input
 
+    def _inventory_safe(self, inventory):
+        return True
+
     def _pick(self, infos):
         candidates = [d for d in infos
-                      if d.get("vendor_id") == VID and d.get("product_id") in PIDS
-                      and (d.get("usage_page"), d.get("usage")) == COLLECTION]
+                      if d.get("vendor_id") == VID and d.get("product_id") in self.product_ids
+                      and (d.get("usage_page"), d.get("usage")) == self.collection]
         if len(candidates) != 1 or not candidates[0].get("path"):
-            self._diag.append("missing or ambiguous FF00:0002 collection; not opened")
+            page, usage = self.collection
+            self._diag.append(f"missing or ambiguous {page:04X}:{usage:04X} collection; not opened")
             return None
         info = candidates[0]
         maximum = info.get("input_report_length")
         sizes = info.get("input_report_sizes")
-        if (type(maximum) is not int or not 9 <= maximum <= 4096
+        key = str(self.input_id)
+        if (type(maximum) is not int or not self.minimum_input_length <= maximum <= 4096
                 or not isinstance(sizes, dict) or not sizes
                 or any(type(n) is not int or not 2 <= n <= maximum for n in sizes.values())
                 or max(sizes.values()) != maximum
-                or type(sizes.get("7")) is not int or not 9 <= sizes["7"] <= maximum):
-            self._diag.append(f"report 07 unproven; sizes={_sizes_summary(sizes)}"
+                or type(sizes.get(key)) is not int
+                or not self.minimum_input_length <= sizes[key] <= maximum):
+            self._diag.append(f"report {self.input_id:02X} unproven; sizes={_sizes_summary(sizes)}"
                               + report_proof_summary(info, "input", include_declared=True) + "; not opened")
             return None
         return info
@@ -174,7 +185,7 @@ class RapooProvider(Provider):
                               + report_proof_summary(info, "input"))
         else:
             summary = ",".join(f"{report_id:02X}/{length}" for report_id, length in seen[:6])
-            self._diag.append("opened; no valid report 07; seen=" + summary
+            self._diag.append(f"opened; no valid report {self.input_id:02X}; seen=" + summary
                               + (",..." if len(seen) > 6 else "") + report_proof_summary(info, "input"))
 
     def _drain(self, dev, info):
@@ -185,9 +196,9 @@ class RapooProvider(Provider):
             if not raw:
                 break
             self._observe_input(info, raw)
-            if raw[0] != INPUT_ID or len(raw) != info["input_report_sizes"]["7"]:
+            if raw[0] != self.input_id or len(raw) != info["input_report_sizes"][str(self.input_id)]:
                 continue
-            parsed = parse_battery(raw)
+            parsed = self.parse_input(raw)
             if parsed is not None:
                 newest = parsed
                 self._seen_inputs.pop(info["path"], None)
@@ -226,9 +237,9 @@ class RapooProvider(Provider):
             if not raw:
                 break
             self._observe_input(info, raw)
-            if raw[0] != INPUT_ID or len(raw) != info["input_report_sizes"]["7"]:
+            if raw[0] != self.input_id or len(raw) != info["input_report_sizes"][str(self.input_id)]:
                 continue
-            parsed = parse_battery(raw)
+            parsed = self.parse_input(raw)
             if parsed is not None:
                 self._seen_inputs.pop(info["path"], None)
                 return parsed
@@ -248,10 +259,11 @@ class RapooProvider(Provider):
             # Failed enumeration cannot prove that a receiver left the USB tree.
             self._diag.append("enumeration failed; retaining history")
             return [self._historical(s) for s in self._last.values()]
+        inventory_safe = self._inventory_safe(inventory)
         groups = {}
         present_paths = set()
         for info in inventory:
-            if info.get("vendor_id") != VID or info.get("product_id") not in PIDS:
+            if info.get("vendor_id") != VID or info.get("product_id") not in self.product_ids:
                 continue
             present_paths.add(info.get("path"))
             physical = info.get("physical_id", "")
@@ -264,7 +276,7 @@ class RapooProvider(Provider):
         for physical, infos in groups.items():
             self._paths[physical] = {d.get("path") for d in infos if d.get("path")}
             reading = None
-            info = self._pick(infos)
+            info = self._pick(infos) if inventory_safe else None
             if info is None:
                 self._release(physical)
             else:
@@ -295,7 +307,7 @@ class RapooProvider(Provider):
                 level, charging, charging_known = reading
                 received = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 status = DeviceStatus(
-                    f"{self.name}:{physical}", PIDS[info["product_id"]],
+                    f"{self.name}:{physical}", self.product_ids[info["product_id"]],
                     level, charging, True, self.name, kind="mouse",
                     physical_id=physical, connection_known=True,
                     charging_known=charging_known, verification_level="C",
