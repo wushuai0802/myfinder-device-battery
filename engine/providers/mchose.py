@@ -120,10 +120,14 @@ A5V2_ATTEMPTS, A5V2_TIMEOUT, A5V2_GAP = 20, 2.0, 0.09
 # src/drivers/mchose/v3-hid.ts (AGPL-3.0; see upstream-protocols.md).
 # The upstream hardware capture is an Ultra+ sibling, not this Pro: level C.
 V3_VID, V3_PID = 0x3837, 0x1018
+V7_VID, V7_PID = 0x3837, 0x101D
+V7_NAME = "MCHOSE V7 Pro"
+# M HUB maps 16446 (wired) and 4125 (receiver) to V7 Pro. Only the receiver is enabled.
 V3_PIDS = {
     0x1018: "MCHOSE A7 V3 Pro (V3 8K 接收器)",
     0x1014: "MCHOSE A7 V3 Ultra+",  # Fallback; #276 verified this model, not every 1014.
     0x1016: "MCHOSE V3 1K 接收器",
+    0x101D: "MCHOSE V7 Pro",
 }
 V3_USAGE = (0xFF01, 0x0001)
 V3_ALTERNATE_USAGE = (0xFF0B, 0x00C4)  # 1018 only; actual #493 placement unknown.
@@ -285,7 +289,8 @@ def device_key(vid: int, pid: int) -> str:
     G7's 0xA8A5, and the newer 0x3837 receivers (the A7 V2 Ultra in issue #4) - which is
     what keeps two MCHOSE devices on one machine off a single shared icon.
     """
-    if (vid, pid) == (A5V2_VID, A5V2_PID) or vid == V3_VID and pid in V3_PIDS:
+    if ((vid, pid) in ((A5V2_VID, A5V2_PID), (V7_VID, V7_PID))
+            or vid == V3_VID and pid in V3_PIDS):
         return f"mchose:{vid:04x}:{pid:04x}"
     return "mchose" if vid == MEASURED_VID else f"mchose:{vid:04x}"
 
@@ -353,6 +358,14 @@ def parse_v3(resp) -> Optional[Tuple[int, bool]]:
     if int.from_bytes(data[:2], "little") != V3_VID or data[10] == 0 or data[12] > 100:
         return None
     return data[12], bool(data[11])
+
+
+def parse_v7(resp) -> Optional[Tuple[int, bool]]:
+    """M HUB treats a zero wireless percentage as disconnected."""
+    power = parse_v3(resp)
+    if power is None or not power[0] or resp[19] not in (0, 1):
+        return None
+    return power
 
 
 def _a5v2_path(path):
@@ -758,7 +771,26 @@ class MchoseProvider(Provider):
                       + "; considering FF0B:00C4")
         return self._check_v3(info, alternate=True)
 
-    def _read_v3(self, path: bytes) -> Optional[Tuple[int, bool]]:
+    def _pick_v7(self, ifaces):
+        # hidlist can group multiple receivers of the same PID. Refuse an
+        # ambiguous parent, never select an arbitrary collection by order.
+        parents = {d.get("physical_id") for d in ifaces}
+        if len(parents) != 1:
+            return None
+        parent = next(iter(parents))
+        if not isinstance(parent, str) or not re.fullmatch(
+                r"pnp:usb\\vid_3837&pid_101d(?:&rev_[0-9a-f]{4})?\\[^\\\s]+", parent, re.I):
+            return None
+        cols = [d for d in ifaces if (d.get("usage_page"), d.get("usage")) == V3_USAGE]
+        if len(cols) != 1 or cols[0].get("product_string") != V7_NAME:
+            return None
+        info = cols[0]
+        if info.get("report_descriptor_error") or not all(
+                self._v3_report_proven(info, direction, alternate=True) for direction in ("input", "output")):
+            return None
+        return info if info.get("path") else None
+
+    def _read_v3(self, path: bytes, parse_power=parse_v3) -> Optional[Tuple[int, bool]]:
         """One power query per poll; ignore unrelated input within a bounded wait."""
         dev = hid.device()
         try:
@@ -774,7 +806,7 @@ class MchoseProvider(Provider):
                 resp = dev.read(V3_REPORT_LEN, max(1, int(remaining * 1000)))
                 if not resp:
                     break
-                got = parse_v3(resp)
+                got = parse_power(resp)
                 if got is not None:
                     self._note_v3("V3 valid power reply")
                     return got
@@ -787,6 +819,7 @@ class MchoseProvider(Provider):
             except Exception:
                 pass
         return None
+
 
     def poll(self) -> List[DeviceStatus]:
         """One icon per device, whether it is on the dongle, on the cable or on radio."""
@@ -841,6 +874,17 @@ class MchoseProvider(Provider):
                 self._diag.append("[MCHOSE] keyboard identity reserved; no mouse commands sent")
                 continue
             key = device_key(vid, pid)
+            if (vid, pid) == (V7_VID, V7_PID):
+                self._note_v3("[MCHOSE] 3837:101d MCHOSE V7 Pro power reader")
+                self._names[key] = V7_NAME
+                info = self._pick_v7(ifaces)
+                if info is None:
+                    self._last.pop(key, None)
+                    continue
+                got_v7 = self._read_v3(info["path"], parse_v7)
+                if got_v7 is not None:
+                    found.setdefault(key, []).append((got_v7[0], got_v7[1], pid, 0))
+                continue
             if vid == V3_VID and pid in V3_PIDS:
                 self._note_v3(f"[MCHOSE] 3837:{pid:04x} V3 power reader (C / 待实机验证)")
                 self._names[key] = next(((d.get("product_string") or "").strip()

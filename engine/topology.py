@@ -439,6 +439,7 @@ def discover(paths, excluded=(), *, full=False):
                                  and info["output_report_sizes"] == {"205": 64})
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3837, 0x1018, 0xFF01, 0x0001),
+                    (0x3837, 0x101D, 0xFF01, 0x0001),
                     (0x3837, 0x1018, 0xFF0B, 0x00C4),
                     (0x3837, 0x1014, 0xFF01, 0x0001),
                     (0x3837, 0x1016, 0xFF01, 0x0001),
@@ -461,7 +462,8 @@ def discover(paths, excluded=(), *, full=False):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
                 if (attrs.vendor, attrs.product) in (
-                        (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x1014),
+                        (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x101D),
+                        (0x3837, 0x1014),
                         (0x3837, 0x1016),
                         (0x41E4, 0x2001), (0x3554, 0xFA09), (0x3554, 0xFB26),
                         (0x3554, 0xFB3E)):
