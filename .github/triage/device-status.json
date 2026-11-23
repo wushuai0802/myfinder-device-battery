@@ -76,6 +76,11 @@
       "reports": 6,
       "rank": 16
     },
+    "24AE:1872": {
+      "status": "researching",
+      "note": "雷柏 MT560 2.4G 被动电量候选，待测试版实机核对。充电状态未知。",
+      "reports": 1
+    },
     "260D:1074": {
       "status": "beta",
       "version": "1.3.11-beta.13",
