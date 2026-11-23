@@ -126,6 +126,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | Astro A50 Gen 5 | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Corsair 已列明鼠标与耳机 | mouse, headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | LAMZU Maya X | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| AJAZZ AJ179 NLP 2.4G (NearLink) | mouse | C | 协议已接入，待本项目实机验证；仅7768:642E / FFB2:0001；要求原生pnp:usb父设备、匹配VID/PID的MI_01路径和接口1，先计数再验证，每个父设备唯一目标集合；仅接受IN/OUT均唯一编号06且含报告ID恰64字节的描述符证明。排空旧输入后每接收器每轮仅一次64字节06 05查询；有界等待状态或电池通知，离线状态清除当前百分比；不使用Feature。公开上游协议与合成测试候选，本项目未实机验证；五格显示不作为实测百分比证据，排除有线6D2E、FFB1 DFU及其他型号 |
 | Angry Miao AM Infinity 8K | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | SteelSeries Arctis Nova Elite | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | Logitech G PRO X 2 LIGHTSPEED | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
