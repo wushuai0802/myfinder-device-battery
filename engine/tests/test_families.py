@@ -162,6 +162,118 @@ class MemoryTests(unittest.TestCase):
 
 
 class ProviderTests(unittest.TestCase):
+    def k06s_collection(self, **changes):
+        row = collection(
+            product_id=0xF002,
+            product_string="XIBERIA K06S Wireless",
+            physical_id=r"pnp:usb\vid_36f9&pid_f002\receiver",
+            path=b"k06s-ff90",
+        )
+        row.update(changes)
+        return row
+
+    def test_k06s_queries_only_ff90(self):
+        ff90 = self.k06s_collection()
+        ff82 = self.k06s_collection(usage_page=0xFF82, path=b"k06s-ff82")
+        for rows in ([ff90], [ff90, ff82], [ff82, ff90],
+                     [dict(ff90, product_string="  xiberia k06s wireless  "), ff82]):
+            with self.subTest(paths=[row["path"] for row in rows]):
+                device = FakeDevice([frame("55 65 00 64")])
+                statuses, provider = poll(rows, device)
+                status, = statuses
+                self.assertEqual(
+                    (status.level, status.source, status.kind, status.verification_level),
+                    (100, "families", "headset", "C"),
+                )
+                self.assertFalse(status.charging_known)
+                self.assertEqual(status.model_source, "family:xiberia")
+                self.assertEqual(device.opened, [b"k06s-ff90"])
+                self.assertEqual(
+                    device.writes,
+                    [bytes.fromhex("55 65 00 00").ljust(64, b"\0")],
+                )
+                self.assertEqual(device.closed, 1)
+                self.assertEqual(provider.candidate_count, 1)
+
+    def test_k06s_zero_send_gates(self):
+        ff90 = self.k06s_collection()
+        ff82 = self.k06s_collection(usage_page=0xFF82, path=b"k06s-ff82")
+        cases = {
+            "ff82 only": [ff82],
+            "normalized name still excludes ff82": [dict(ff82, product_string="  xiberia k06s wireless  ")],
+            "wrong product": [
+                self.k06s_collection(product_string="XIBERIA K06S"), ff82],
+            "missing product": [
+                self.k06s_collection(product_string=None), ff82],
+            "wrong usage page": [
+                self.k06s_collection(usage_page=0xFF91), ff82],
+            "wrong usage": [self.k06s_collection(usage=2), ff82],
+            "missing path": [self.k06s_collection(path=None), ff82],
+            "two proven ff90": [
+                ff90, self.k06s_collection(path=b"other"), ff82],
+            "second ff90 unproved": [
+                ff90, self.k06s_collection(
+                    path=b"other", input_report_sizes=None), ff82],
+            "second ff90 missing product": [
+                ff90, self.k06s_collection(
+                    path=b"other", product_string=None), ff82],
+            "second ff90 missing path": [
+                ff90, self.k06s_collection(path=None), ff82],
+            "second ff90 missing product and path": [
+                ff90, self.k06s_collection(
+                    product_string=None, path=None), ff82],
+        }
+        for direction in ("input", "output"):
+            for name, changes in (
+                ("missing sizes", {direction + "_report_sizes": None}),
+                ("missing maximum", {direction + "_report_length": None}),
+                ("wrong id", {direction + "_report_sizes": {"1": 64}}),
+                ("wrong per-id size", {direction + "_report_sizes": {"85": 63}}),
+                ("wrong length", {
+                    direction + "_report_length": 65,
+                    direction + "_report_sizes": {"85": 65},
+                }),
+            ):
+                cases[f"{direction}: {name}"] = [
+                    self.k06s_collection(**changes), ff82]
+        for name, rows in cases.items():
+            for ordered in (rows, list(reversed(rows))):
+                with self.subTest(name=name, paths=[r.get("path") for r in ordered]):
+                    self.assert_nothing_sent(ordered)
+
+    def test_k06s_saved_disabled_opens_nothing(self):
+        ff90 = self.k06s_collection()
+        ff82 = self.k06s_collection(usage_page=0xFF82, path=b"k06s-ff82")
+        provider = provider_module.FamiliesProvider(running=lambda names: False)
+        provider.memory.disable(
+            "xiberia", provider_module.families.memory_key(ff90["physical_id"]))
+        restored = provider_module.FamiliesProvider(running=lambda names: False)
+        restored.memory.restore(provider.memory.snapshot())
+        device = FakeDevice([frame("55 65 00 64")])
+        statuses, _ = poll([ff90, ff82], device, restored)
+        self.assertEqual(statuses, [])
+        self.assertEqual((device.opened, device.writes), ([], []))
+
+    def test_k06s_uniqueness_is_per_physical_device(self):
+        first = self.k06s_collection()
+        second = self.k06s_collection(
+            path=b"second-ff90",
+            physical_id=r"pnp:usb\vid_36f9&pid_f002\second",
+        )
+        device = FakeDevice([frame("55 65 00 64"), frame("55 65 00 64")])
+        statuses, provider = poll([first, second], device)
+        self.assertEqual(len(statuses), 2)
+        self.assertCountEqual(device.opened, [first["path"], second["path"]])
+        self.assertEqual(provider.candidate_count, 2)
+
+    def test_f016_still_reads_ff82_alone(self):
+        device = FakeDevice([frame("55 65 00 3c")])
+        statuses, _ = poll(
+            [collection(usage_page=0xFF82, path=b"f016-ff82")], device)
+        status, = statuses
+        self.assertEqual((status.level, status.verification_level), (60, "C"))
+        self.assertEqual(device.opened, [b"f016-ff82"])
+
     def test_reads_one_proven_collection(self):
         device = FakeDevice([frame("55 65 00 3c")])
         statuses, provider = poll([collection(), collection(usage_page=0xFF82, path=b"ff82", input_report_sizes={"1": 64},

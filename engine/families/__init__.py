@@ -144,6 +144,7 @@ def select(infos: List[dict]):
     sends nothing. Returns also human-readable reasons for diagnostics.
     """
     chosen, notes = [], []
+    k06s_ff90 = None
     for family in active():
         matches = []
         for info in infos:
@@ -154,6 +155,17 @@ def select(infos: List[dict]):
             device = family.device_for(info.get("vendor_id"), info.get("product_id"), info.get("product_string"))
             if device is None:
                 continue
+            if family.id == "xiberia" and (device.vendor_id, device.product_id) == (0x36F9, 0xF002):
+                # #846 identifies FF90 as the K06S battery interface. Count all FF90
+                # rows on this receiver, even when a sibling's name or caps are missing.
+                if k06s_ff90 is None:
+                    k06s_ff90 = [row for row in infos
+                                 if (row.get("vendor_id"), row.get("product_id"),
+                                     row.get("usage_page"), row.get("usage")) == (0x36F9, 0xF002, 0xFF90, 1)]
+                    if len(k06s_ff90) != 1:
+                        notes.append(f"xiberia: {len(k06s_ff90)} K06S FF90 collections, expected one")
+                if len(k06s_ff90) != 1 or info is not k06s_ff90[0]:
+                    continue
             matches.append((device, info))
         if not matches:
             continue
