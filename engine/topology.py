@@ -580,6 +580,8 @@ def discover(paths, excluded=(), *, full=False):
                     and (info["interface_number"], caps.page, caps.usage) == (1, 1, 0)):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
+                if caps.input == caps.output == 65 and caps.feature == 0:
+                    _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info[key] is not None for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete and (attrs.vendor, attrs.product) == (0x3837, 0x6011)
                     and info["product_string"].casefold() == "mchose v9 pro 2"
