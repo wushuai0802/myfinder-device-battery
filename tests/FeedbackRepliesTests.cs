@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -14,9 +15,13 @@ using AtkBatteryTray;
 // Entirely offline. DPAPI files and settings fixtures stay under the supplied test output.
 static class FeedbackRepliesTests {
     const string Relay="https://feedback.invalid/service";
+    const string EmptyHistoryText="还没有在程序里提交过反馈。通过浏览器提交的反馈不会出现在这里，可以在网页查看。";
+    const string BackedUpWarning="之前的反馈记录无法读取，已另存为备份。已提交的反馈仍可在网页查看。";
+    const string UnbackedWarning="之前的反馈记录无法读取，未能另存为备份。暂时无法保存本地记录。已提交的反馈仍可在网页查看。";
     static readonly DateTime Start=new DateTime(2026,11,5,0,0,0,DateTimeKind.Utc);
     static int checks,failures;static string output;
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
     static void Check(bool value,string text){if(!value)throw new Exception(text);checks++;}
     static void Run(string name,Action action){try{action();Console.WriteLine("PASS "+name);}catch(Exception e){failures++;Console.Error.WriteLine("FAIL "+name+": "+e);}}
     static UpdateResponse Response(int code,string body,string retry=null,long? length=null){var bytes=Encoding.UTF8.GetBytes(body);return new UpdateResponse(code,new MemoryStream(bytes),length??bytes.Length,null,retry);}
@@ -231,6 +236,114 @@ static class FeedbackRepliesTests {
         string directory=Path.Combine(output,"blocked-store");Directory.CreateDirectory(directory);store=new FeedbackStore(directory);var http=new Http();
         Check(new FeedbackClient(Relay,http,new FeedbackSession(),20000,store).Submit("other","valid description",null,CancellationToken.None).Kind==FeedbackResultKind.Unavailable&&http.Bodies.Count==0,"no HTTP when pending record cannot be saved");
     }
+    static void StoreChanges(){
+        string path=Path.Combine(output,"feedback-events-"+Guid.NewGuid().ToString("N")+".dat");
+        var store=new FeedbackStore(path);int notifications=0;bool outsideGate=false,persisted=false;Exception readError=null;Thread reader=null;
+        EventHandler broken=delegate{throw new InvalidOperationException("fixture observer");};
+        EventHandler observer=delegate{
+            notifications++;
+            reader=new Thread(delegate(){
+                try{persisted=store.Snapshot().Records.Count==1&&new FeedbackStore(path).Find(42)!=null;}
+                catch(Exception error){readError=error;}
+            });
+            reader.IsBackground=true;reader.Start();outsideGate=reader.Join(2000);
+        };
+        store.Changed+=broken;store.Changed+=observer;
+        var record=Record();record.Comments.Add(Comment("901"));
+        store.Change(delegate(FeedbackData data){data.Records.Add(record);});
+        Check(reader!=null&&reader.Join(5000),"notification reader completes");
+        Check(notifications==1&&outsideGate&&persisted&&readError==null,
+            "observers run after persistence outside the store lock, and one throwing observer cannot suppress the next");
+        store.Changed-=broken;store.Changed-=observer;
+        int writes=0;store.Changed+=delegate{writes++;};
+        store.MarkRead(42);
+        Check(writes==1&&store.Find(42).ReadIds.Contains("901")&&store.Find(42).NotifiedIds.Contains("901"),
+            "a changed read acknowledgement persists and notifies once");
+        string original=Convert.ToBase64String(File.ReadAllBytes(path));
+        using(var held=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){
+            store.MarkRead(42);store.MarkRead(999);
+        }
+        Check(writes==1&&Convert.ToBase64String(File.ReadAllBytes(path))==original&&store.Writable,
+            "already-read and missing records do not attempt another file replacement or notification");
+        bool rejected=false;
+        try{store.Change(delegate(FeedbackData data){data.Records[0].Url="https://evil.invalid";});}
+        catch(InvalidDataException){rejected=true;}
+        Check(rejected&&writes==1&&store.Diagnostic=="反馈记录：1 条 | 存储：正常",
+            "validation failure neither commits nor marks healthy storage unavailable");
+        IOException writeError=null;
+        using(var held=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){
+            try{store.Change(delegate(FeedbackData data){data.Records[0].Summary="尚未保存的修改";});}
+            catch(IOException error){writeError=error;}
+        }
+        Check(writeError!=null&&writeError.Message=="Feedback storage is unavailable."&&writes==1,
+            "failed persistence has a generic error and emits no change");
+        Check(Convert.ToBase64String(File.ReadAllBytes(path))==original&&store.Find(42).Summary==record.Summary,
+            "failed replacement preserves both the original file and the committed snapshot");
+        Check(!store.Writable&&!store.Unreadable&&!store.BackedUp&&store.ResetReason==null&&store.LoadWarning==""&&
+            store.Diagnostic=="反馈记录：1 条 | 存储：不可写"&&Directory.GetFiles(output,Path.GetFileName(path)+"*.bad").Length==0,
+            "a failed save is non-writable storage, not an unreadable load, reset or backup");
+    }
+    static void StorageRecoveryDiagnostics(){
+        byte[] entropy=Encoding.UTF8.GetBytes("MyFinderDeviceBattery/feedback-v1");
+        foreach(string kind in new[]{"decrypt","format","io"}){
+            string path=Path.Combine(output,"feedback-layer-"+kind+"-"+Guid.NewGuid().ToString("N")+".dat");
+            byte[] damaged=kind=="format"?ProtectedData.Protect(Encoding.UTF8.GetBytes("{"),entropy,DataProtectionScope.CurrentUser):new byte[]{1,2,3,4,5};
+            byte[] previousBackup={8,9,10};bool collision=kind=="format";File.WriteAllBytes(path,damaged);
+            if(collision)File.WriteAllBytes(path+".bad",previousBackup);
+            FeedbackStore store;
+            if(kind=="io"){
+                // Deny reads but permit rename: the failure belongs to the I/O
+                // layer even though these bytes would also fail DPAPI.
+                using(var held=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Delete))store=new FeedbackStore(path);
+            }else store=new FeedbackStore(path);
+            Check(store.Unreadable&&store.Writable&&store.BackedUp&&store.ResetReason==kind&&store.Snapshot().Records.Count==0,
+                kind+": recovery classification follows the failing layer");
+            Check(!File.Exists(path),"recovery actually quarantines the input file");
+            string[] backups=Directory.GetFiles(output,Path.GetFileName(path)+"*.bad");string backup=null;
+            foreach(string candidate in backups)if(Convert.ToBase64String(File.ReadAllBytes(candidate))==Convert.ToBase64String(damaged))backup=candidate;
+            Check(backups.Length==(collision?2:1)&&backup!=null,
+                "quarantine preserves the exact original bytes without overwriting another backup");
+            if(collision)Check(backup!=path+".bad"&&Convert.ToBase64String(File.ReadAllBytes(path+".bad"))==Convert.ToBase64String(previousBackup),
+                "an existing .bad file is preserved and the new backup uses a unique suffix");
+            else Check(backup==path+".bad","the first backup keeps the established .bad name");
+            Check(store.Diagnostic=="反馈记录：0 条 | 存储：已重置（"+kind+"）"&&store.LoadWarning==BackedUpWarning,
+                "recovered diagnostics and warning contain only the count and fixed category");
+            using(var dialog=new MyFeedbackDialog(Service(store,new Http()),Report(),kind=="format",delegate{})){
+                dialog.Opacity=0;dialog.Show();Application.DoEvents();
+                var warning=Find<Label>(dialog,"FeedbackHistoryWarning");var list=Find<ListBox>(dialog,"FeedbackRecords");
+                Check(warning.Visible&&warning.Text==BackedUpWarning&&
+                    warning.RectangleToScreen(warning.ClientRectangle).Bottom<=list.RectangleToScreen(list.ClientRectangle).Top,
+                    "the themed recovery warning is visible above the list");
+                dialog.Close();
+            }
+            store.Change(delegate(FeedbackData data){data.Records.Add(Record(99));});
+            Check(new FeedbackStore(path).Find(99)!=null&&Convert.ToBase64String(File.ReadAllBytes(backup))==Convert.ToBase64String(damaged),
+                "a recovered store can save without changing the quarantined original");
+        }
+        string blockedPath=Path.Combine(output,"feedback-unreadable-"+Guid.NewGuid().ToString("N")+".dat");
+        byte[] original={11,12,13};File.WriteAllBytes(blockedPath,original);FeedbackStore blocked;
+        using(var held=new FileStream(blockedPath,FileMode.Open,FileAccess.ReadWrite,FileShare.None))blocked=new FeedbackStore(blockedPath);
+        Check(File.Exists(blockedPath)&&Convert.ToBase64String(File.ReadAllBytes(blockedPath))==Convert.ToBase64String(original)&&
+            Directory.GetFiles(output,Path.GetFileName(blockedPath)+"*.bad").Length==0,
+            "failed quarantine leaves the original file untouched");
+        Check(blocked.Unreadable&&!blocked.Writable&&!blocked.BackedUp&&blocked.ResetReason==null&&blocked.LoadFailureKind=="io"&&
+            blocked.Diagnostic=="反馈记录：0 条 | 存储：不可写"&&blocked.LoadWarning==UnbackedWarning,
+            "failed quarantine reports unreadable and non-writable without claiming a reset or backup");
+        using(var dialog=new MyFeedbackDialog(Service(blocked,new Http()),Report(),false,delegate{})){
+            dialog.Opacity=0;dialog.Show();Application.DoEvents();
+            Check(Find<Label>(dialog,"FeedbackHistoryWarning").Visible&&Find<Label>(dialog,"FeedbackHistoryWarning").Text==UnbackedWarning,
+                "the unbacked warning accurately describes failed preservation");dialog.Close();
+        }
+        bool rejected=false;try{blocked.Change(delegate(FeedbackData data){data.Records.Add(Record());});}catch(IOException){rejected=true;}
+        Check(rejected&&Convert.ToBase64String(File.ReadAllBytes(blockedPath))==Convert.ToBase64String(original),
+            "later changes cannot overwrite an unpreserved input");
+        string directory=Path.Combine(output,"feedback-directory-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+        string marker=Path.Combine(directory,"original");File.WriteAllBytes(marker,original);var inaccessible=new FeedbackStore(directory);
+        Check(!File.Exists(directory)&&Directory.Exists(directory)&&inaccessible.Unreadable&&!inaccessible.Writable&&
+            !inaccessible.BackedUp&&inaccessible.ResetReason==null&&inaccessible.Diagnostic=="反馈记录：0 条 | 存储：不可写"&&
+            Convert.ToBase64String(File.ReadAllBytes(marker))==Convert.ToBase64String(original),
+            "File.Exists false does not disguise an inaccessible input as an empty healthy store");
+    }
     static void Scheduler(){
         var record=Record();
         Check(FeedbackSchedule.First(Start,0)==Start.AddMinutes(1)&&FeedbackSchedule.First(Start,1)==Start.AddMinutes(10),"startup jitter 1 to 10 minutes");
@@ -387,6 +500,67 @@ static class FeedbackRepliesTests {
     }
     static T Find<T>(Control owner,string name) where T:Control{return (T)owner.Controls.Find(name,true)[0];}
     static void Pump(Func<bool> ready){var end=DateTime.UtcNow.AddSeconds(5);while(!ready()&&DateTime.UtcNow<end){Application.DoEvents();Thread.Sleep(2);}Check(ready(),"UI async work settles");}
+    static void Background(Action action){
+        Exception error=null;var worker=new Thread(delegate(){try{action();}catch(Exception failure){error=failure;}});
+        worker.IsBackground=true;worker.Start();Check(worker.Join(5000)&&error==null,"offline store worker completes");
+    }
+    static int StoreSubscribers(FeedbackStore store){
+        var handlers=(EventHandler)Field(store,"Changed");return handlers==null?0:handlers.GetInvocationList().Length;
+    }
+    static void EmptyHistory(){
+        var store=Store();var http=new Http();string opened=null;
+        using(var dialog=new MyFeedbackDialog(Service(store,http),Report(),false,delegate(string url){opened=url;})){
+            dialog.Opacity=0;dialog.Show();Application.DoEvents();
+            Check(Find<Label>(dialog,"FeedbackHistoryEmpty").Visible&&Find<Label>(dialog,"FeedbackHistoryEmpty").Text==EmptyHistoryText&&
+                Find<TextBox>(dialog,"FeedbackComments").Text==EmptyHistoryText,"empty history explains the browser-only boundary");
+            var web=Find<Button>(dialog,"OpenFeedbackWeb");
+            Check(web.Enabled&&web.Text=="在网页查看"&&!Find<Label>(dialog,"FeedbackHistoryWarning").Visible,
+                "empty healthy history retains its web action without a recovery warning");
+            web.PerformClick();
+            Check(opened=="https://github.com/wushuai0802/myfinder-device-battery/issues?q=is%3Aissue%20label%3Ain-app-feedback"&&http.Bodies.Count==0,
+                "empty history opens only the fixed project issue filter without contacting the relay");dialog.Close();
+        }
+    }
+    static void HistoryStoreRefresh(){
+        var store=Store(Record(),Record(43));var http=new Http();int changes=0;
+        EventHandler observer=delegate{Interlocked.Increment(ref changes);};store.Changed+=observer;
+        int baseline=StoreSubscribers(store);string opened=null;
+        using(var dialog=new MyFeedbackDialog(Service(store,http),Report(),false,delegate(string url){opened=url;},43)){
+            Check(StoreSubscribers(store)==baseline+1,"history subscribes to its injected store");
+            Background(delegate{store.Change(delegate(FeedbackData data){data.Records.Find(delegate(FeedbackRecord r){return r.Number==43;}).Comments.Add(Comment("930","maintainer","before handle"));});});
+            dialog.Opacity=0;dialog.Show();
+            Pump(delegate{return Find<TextBox>(dialog,"FeedbackComments").Text.Contains("before handle")&&store.Find(43).Unread==0;});
+            var list=Find<ListBox>(dialog,"FeedbackRecords");int selections=0;
+            list.SelectedIndexChanged+=delegate{selections++;};int before=changes;
+            Background(delegate{
+                for(int i=0;i<5;i++){
+                    int item=i;
+                    store.Change(delegate(FeedbackData data){data.Records.Find(delegate(FeedbackRecord r){return r.Number==43;}).Comments.Add(Comment((940+item).ToString(),"maintainer","batch "+item));});
+                }
+            });
+            // Invalidate the handle targeted by the queued notification before
+            // pumping it. The replacement handle must resume the pending reload.
+            typeof(Control).GetMethod("RecreateHandle",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(dialog,null);
+            Pump(delegate{return Find<TextBox>(dialog,"FeedbackComments").Text.Contains("batch 4")&&store.Find(43).Unread==0;});
+            for(int i=0;i<8;i++)Application.DoEvents();
+            Check(changes==before+6&&selections<=8,"a burst coalesces and acknowledges all selected replies in one additional write");
+            Find<Button>(dialog,"OpenFeedbackWeb").PerformClick();
+            Check(opened==FeedbackClient.IssueUrl(43)&&list.GetItemText(list.SelectedItem).StartsWith("#43 ·",StringComparison.Ordinal),
+                "background refresh and handle recreation preserve the selected record");
+            int settledChanges=changes,settledSelections=selections;
+            for(int i=0;i<8;i++)Application.DoEvents();
+            Check(changes==settledChanges&&selections==settledSelections&&http.Bodies.Count==0,
+                "read acknowledgement settles without a write, reload or reselection loop");
+            Background(delegate{store.Change(delegate(FeedbackData data){data.Records.Find(delegate(FeedbackRecord r){return r.Number==43;}).Comments.Add(Comment("999"));});});
+            dialog.Close();Application.DoEvents();
+        }
+        Check(StoreSubscribers(store)==baseline,"closing releases the subscription and discards queued reloads");
+        var hidden=new MyFeedbackDialog(Service(store,http),Report(),false,delegate{},43);
+        Check(StoreSubscribers(store)==baseline+1,"an unshown history also subscribes");
+        hidden.Dispose();Application.DoEvents();
+        Check(StoreSubscribers(store)==baseline,"disposing without showing releases the subscription");
+        store.Changed-=observer;Check(StoreSubscribers(store)==0,"no history subscriber remains");
+    }
     static void SettingsAndUi(){
         string path=Path.Combine(output,"feedback-settings.json");File.WriteAllText(path,"{\"SchemaVersion\":1}");Check(DeviceSettings.LoadBindings(path).CheckFeedbackReplies,"old settings default to enabled");
         var settings=new AudioBindings {CheckFeedbackReplies=false};DeviceSettings.SaveBindings(path,settings);Check(!DeviceSettings.LoadBindings(path).Clone().CheckFeedbackReplies,"disabled preference survives save/load/clone");
@@ -564,6 +738,23 @@ static class FeedbackRepliesTests {
         }
         Check(duplicates==0&&HistoryWindows()==1&&!expected.IsDisposed&&Find<TextBox>(expected,"FeedbackComments").Text.Contains(marker),"entry reloads the existing history window");
         if(submission)Check(clicked,"production submission form button was exercised");
+        if(submission)Check(IsWindowEnabled(expected.Handle),"production submission entry restores history after dismissing its modal form");
+    }
+    static void InjectedFeedbackDiagnostics(TrayContext owner){
+        var previous=owner.FeedbackReplies;
+        string path=Path.Combine(output,"feedback-diagnostic-"+Guid.NewGuid().ToString("N")+".dat");byte[] damaged={1,2,3,4,5};
+        File.WriteAllBytes(path,damaged);var store=new FeedbackStore(path);
+        try{
+            owner.FeedbackReplies=Service(store,new Http());
+            const string row="反馈记录：0 条 | 存储：已重置（decrypt）";
+            Check(!File.Exists(path)&&File.Exists(path+".bad")&&Convert.ToBase64String(File.ReadAllBytes(path+".bad"))==Convert.ToBase64String(damaged),
+                "the injected diagnostic store really quarantined its original bytes");
+            Check(Array.IndexOf(owner.DiagnosticSummary().Split(new[]{Environment.NewLine},StringSplitOptions.None),row)>=0,
+                "local diagnostic summary uses the injected recovered store");
+            Check(!owner.CreateFeedbackReport().FullText.Contains(row),"the public issue report retains its existing data boundary");
+        }finally{owner.FeedbackReplies=previous;}
+        Check(Array.IndexOf(owner.DiagnosticSummary().Split(new[]{Environment.NewLine},StringSplitOptions.None),"反馈记录：2 条 | 存储：正常")>=0,
+            "diagnostics follow the restored injected service rather than a global store");
     }
     static void NativeBalloonRouting(){
         DeviceSettings.UseTransientConfiguration(new AudioBindings {RememberReadings=false,ReducedMotion=true});
@@ -571,6 +762,7 @@ static class FeedbackRepliesTests {
             Pump(delegate{return !owner.IsRefreshing;});((System.Windows.Forms.Timer)Field(owner,"refresh")).Stop();
             var first=Record();first.Comments.Add(Comment("7","maintainer","selected record reply"));var second=Record(43);second.Comments.Add(Comment("8"));
             owner.FeedbackReplies=Service(Store(first,second),new Http());
+            InjectedFeedbackDiagnostics(owner);
             using(var form=new FeedbackForm(Report(),false,false,delegate{},delegate{},Relay,new Http(),feedbackReplies:owner.FeedbackReplies))Check(Find<Button>(form,"MyFeedback").Text=="我的反馈（2）","submission form shows unread reply count");
             var tray=(NotifyIcon)Field(owner,"tray");var route=(TrayBalloonRoute)Field(owner,"balloonRoute");
             typeof(ContextMenuStrip).GetMethod("OnOpening",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tray.ContextMenuStrip,new object[]{new System.ComponentModel.CancelEventArgs()});
@@ -589,6 +781,10 @@ static class FeedbackRepliesTests {
     }
     [STAThread] static int Main(string[] args){
         output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);NativeDisplay.EnableDpiAwareness();Application.EnableVisualStyles();
+        Run("store changes and no-op read persistence",StoreChanges);
+        Run("storage recovery layers, backups and warnings",StorageRecoveryDiagnostics);
+        Run("empty history and fixed web entry",EmptyHistory);
+        Run("pumped store refresh and handle recreation",HistoryStoreRefresh);
         Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history themes, adaptive rows and DPI",HistoryAppearance);Run("history and supplement layout",Layouts);Run("history with long real replies settles",HistoryLongReplies);Run("native balloon and unread routing",NativeBalloonRouting);
         Run("shipped relay safe creation failover",ShippedCreationFailover);
         Run("shipped relay read and supplement failover",ShippedReadAndSupplementFailover);
