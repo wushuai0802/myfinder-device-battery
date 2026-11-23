@@ -23,6 +23,11 @@ _families: Optional[Dict[str, Family]] = None   # merged view: builtin + pack
 _builtin: Optional[Dict[str, Family]] = None
 _pack: Tuple[Family, ...] = ()
 _probe_enabled = False
+_RECEIVER_PARENTS = {
+    ("xiberia", 0x36F9, 0xF001),
+    ("machenike_l7_air", 0x320F, 0x226F),
+    ("razer_blackshark_v3_pro_rx", 0x1532, 0x0577),
+}
 
 
 def load(directory: Path = BUILTIN) -> Dict[str, Family]:
@@ -156,10 +161,11 @@ def select(infos: List[dict]):
             device = family.device_for(info.get("vendor_id"), info.get("product_id"), info.get("product_string"))
             if device is None:
                 continue
-            if family.id == "machenike_l7_air" and not re.fullmatch(
-                    r"pnp:usb\\vid_320f&pid_226f(?:&rev_[0-9a-f]{4})?\\[^\\/\s\x00-\x1f]+",
-                    info.get("physical_id") or "", re.I | re.ASCII):
-                continue
+            if (family.id, device.vendor_id, device.product_id) in _RECEIVER_PARENTS:
+                parent = info.get("physical_id")
+                expected = rf"pnp:usb\\vid_{device.vendor_id:04x}&pid_{device.product_id:04x}(?:&rev_[0-9a-f]{{4}})?\\[^\\/\s\x00-\x1f]+"
+                if not isinstance(parent, str) or not re.fullmatch(expected, parent, re.I | re.ASCII):
+                    continue
             if family.id == "xiberia" and (device.vendor_id, device.product_id) == (0x36F9, 0xF002):
                 # #846 identifies FF90 as the K06S battery interface. Count all FF90
                 # rows on this receiver, even when a sibling's name or caps are missing.

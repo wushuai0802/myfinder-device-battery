@@ -258,7 +258,8 @@ class BlackSharkPassiveTests(unittest.TestCase):
         missing = receiver()
         missing.pop("physical_id")
         rows_cases.append([missing])
-        rows_cases.extend([[receiver(physical_id=value)] for value in (None, "")])
+        rows_cases.extend([[receiver(physical_id=value)] for value in (
+            None, "", r"pnp:usb\vid_1532&pid_057a\other", "collection:unknown")])
         duplicate = [
             receiver(),
             receiver(path=b"blackshark-v3-pro-mi_05-ff14-duplicate"),

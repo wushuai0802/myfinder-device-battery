@@ -123,6 +123,10 @@ def _read_inputs(dev, family: Family, read: Read, clock, request: bytes, accept)
             break
         frame = bytes(raw)
         if echo and frame[:len(echo)] == echo[:len(frame)]:
+            # A T10 with all status fields zero can echo the query byte for byte.
+            # Reserve the old-firmware fallback for a receiver that stayed silent.
+            if family.id == "xiberia" and read.name == "t10_status":
+                last = Outcome("rejected", note="status request echoed")
             continue  # the request read back is never an answer
         result, final = accept(frame)
         if final:

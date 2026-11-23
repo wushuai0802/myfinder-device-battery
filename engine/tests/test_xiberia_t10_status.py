@@ -116,7 +116,7 @@ class T10StatusTests(unittest.TestCase):
 
     def test_unproved_parent_cannot_borrow_an_unidentified_siblings_proof(self):
         unproved = t10_collection(output_report_sizes={})
-        for parent in ("", None, "collection:unidentified"):
+        for parent in ("", None, "collection:unidentified", r"pnp:usb\vid_36f9&pid_f002\other"):
             with self.subTest(parent=parent):
                 sibling = t10_collection(physical_id=parent, usage_page=0xFF82,
                                          path=b"unidentified-parent")
@@ -170,10 +170,10 @@ class T10StatusTests(unittest.TestCase):
                 self.assertEqual(dev.writes, [STATUS_REQUEST])
 
     def test_echoes_are_not_fresh_status(self):
-        dev = FakeDevice([list(STATUS_REQUEST), [], list(LEGACY_REQUEST)])
+        dev = FakeDevice([list(STATUS_REQUEST), [], frame("55 65 00 64")])
         statuses, provider = poll([t10_collection()], dev)
         self.assertEqual(statuses, [])
-        self.assertEqual(dev.writes, [STATUS_REQUEST, LEGACY_REQUEST])
+        self.assertEqual(dev.writes, [STATUS_REQUEST])
         entry = provider.memory.entry("xiberia", families.memory_key(T10_PARENT))
         self.assertIsNone(entry.working)
 
