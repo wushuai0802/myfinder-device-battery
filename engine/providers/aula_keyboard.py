@@ -27,6 +27,10 @@ F99_VID = 0x05AC
 F99_PIDS = {0x024F: "AULA F99 MAX"}
 PRODUCT = "AULA F87ProV2D Dongle"
 INTERFACE = 3
+F108_VID = 0x05AC
+F108_PID = 0x024F
+F108_PRODUCT = "F108Pro Dongle"
+F108_REQUEST = [0x00, 0x20, 0x01] + [0] * 29 + [0x21]
 
 
 def make_request():
@@ -43,6 +47,49 @@ def parse_reply(reply):
     return reply[25], False, ""
 
 
+def make_f108_request():
+    return list(F108_REQUEST)
+
+
+def parse_f108_reply(reply):
+    if (not isinstance(reply, (bytes, bytearray, list, tuple))
+            or len(reply) != 32
+            or any(type(n) is not int or not 0 <= n <= 255 for n in reply)
+            or list(reply[:3]) != [0x20, 0x01, 0x00]
+            or not 1 <= reply[3] <= 100
+            or reply[31] != (sum(reply[:31]) & 0xFF)):
+        return None
+    return reply[3], False, ""
+
+
+class AulaF108ProProvider(BatteryHidProvider):
+    """Isolated AULA F108 Pro 2.4 GHz receiver battery reader."""
+    name = "aula_keyboard"
+    vid, pids = F108_VID, {F108_PID: "AULA F108 Pro"}
+    collection = (0xFF60, 0x0061)
+    input_id = output_id = 0
+    input_bounds = (33, 33)
+    output_bytes = 33
+    kind = "keyboard"
+    charging_known = False
+    make_request = staticmethod(make_f108_request)
+    parse_reply = staticmethod(parse_f108_reply)
+
+    def _pick(self, infos):
+        info = super()._pick(infos)
+        if info is None:
+            return None
+        physical = info.get("physical_id")
+        if (not isinstance(physical, str) or not physical
+                or physical.startswith("collection:")):
+            self._diag.append("physical parent unresolved; uniqueness unknown: nothing sent")
+            return None
+        if info.get("product_string") != F108_PRODUCT:
+            self._diag.append("unverified AULA F108 product: nothing sent")
+            return None
+        return info
+
+
 class AulaKeyboardProvider(BatteryHidProvider):
     name = "aula_keyboard"
     vid, pids = VID, PIDS
@@ -55,19 +102,22 @@ class AulaKeyboardProvider(BatteryHidProvider):
     parse_reply = staticmethod(parse_reply)
 
     def poll(self):
-        """Run the F87 reader and the isolated F99 branch under one owner."""
+        """Run the AULA keyboard readers under one public owner."""
         result = super().poll()
         try:
-            f99_inventory = hidlist.enumerate(F99_VID)
+            inventory = hidlist.enumerate(F99_VID)
         except OSError:
             return result
-        # Avoid emitting an F99-specific diagnostic during ordinary F87 polls.
-        # The F99 branch performs its own complete enumeration/proof before I/O.
-        if not any(info.get("vendor_id") == F99_VID for info in f99_inventory):
-            return result
-        f99 = AulaF99MaxProvider()
-        result.extend(f99.poll())
-        self._diag.extend(f99.diagnostics())
+        if any(info.get("product_string") == "F99 MAX Dongle"
+               for info in inventory):
+            f99 = AulaF99MaxProvider()
+            result.extend(f99.poll())
+            self._diag.extend(f99.diagnostics())
+        if any(info.get("product_string") == F108_PRODUCT
+               for info in inventory):
+            f108 = AulaF108ProProvider()
+            result.extend(f108.poll())
+            self._diag.extend(f108.diagnostics())
         return result
 
     def _pick(self, infos):

@@ -341,6 +341,8 @@ namespace InstallerTests {
     $foreignDirectory=Join-Path $fixtureRoot 'unrelated files';New-Item -ItemType Directory -Path $foreignDirectory|Out-Null
     [IO.File]::WriteAllText((Join-Path $foreignDirectory 'keep.txt'),'keep')
     Assert-Rejected {Assert-DeviceBatteryInstallDirectory $foreignDirectory $source $data} 'unrelated nonempty directory is preserved'
+    $reason=try{Assert-DeviceBatteryInstallDirectory $foreignDirectory $source $data}catch{$_.Exception.Message}
+    Assert ($reason.Contains($foreignDirectory) -and $reason.Contains('-InstallDirectory') -and $reason.Contains('启动.bat')) 'collision explains the target, empty-directory option and portable entry'
     Install-DeviceBattery @arguments|Out-Null
     $unknown=Join-Path $target 'user note.txt';[IO.File]::WriteAllText($unknown,'keep unknown')
     $unknownData=Join-Path $data 'personal-note.txt';[IO.File]::WriteAllText($unknownData,'keep personal')

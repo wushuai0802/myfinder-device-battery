@@ -172,32 +172,25 @@ namespace AtkBattery {
                     var batch=due.GetRange(start,Math.Min(10,due.Count-start));var numbers=batch.ConvertAll(delegate(FeedbackRecord r){return r.Number;}).ToArray();
                     FeedbackRepliesResponse reply=null;DateTime? retry=null;bool pause=false;
                     byte[] body=FeedbackProtocol.Json(new FeedbackRepliesRequest {Numbers=numbers});
-                    foreach(string address in FeedbackRelay.Addresses(relay)){
-                        bool canSwitch=address==FeedbackRelay.Url;
-                        retry=null;pause=false;
-                        try{
-                            token.ThrowIfCancellationRequested();
-                            using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
-                                timeout.CancelAfter(FeedbackRelay.Deadline(address,timeoutMilliseconds));
-                                using(var response=http.Post(new Uri(FeedbackRelay.Endpoint(address).AbsoluteUri+"/replies"),body,timeout.Token)){
-                                    token.ThrowIfCancellationRequested();
-                                    if(canSwitch&&(response.Status==429||response.Status>=500&&response.Status<600))continue;
-                                    retry=FeedbackProtocol.RetryAt(response.RetryAfter,clock());
-                                    pause=response.Status==429||response.Status==503;
-                                    if(pause&&!retry.HasValue)retry=clock().AddMinutes(15);
-                                    var bytes=FeedbackProtocol.Read(response,512*1024,timeout.Token);
-                                    if(response.Status==200){
-                                        reply=UpdateJson.Read<FeedbackRepliesResponse>(bytes);
-                                        if(reply==null||reply.Schema!=1||reply.Items==null||reply.Items.Length!=numbers.Length)throw new InvalidDataException("Invalid replies.");
-                                        for(int i=0;i<numbers.Length;i++){if(reply.Items[i]==null||reply.Items[i].Number!=numbers[i])throw new InvalidDataException("Mismatched replies.");reply.Items[i].Validate();}
-                                    }
+                    try{
+                        token.ThrowIfCancellationRequested();
+                        using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
+                            timeout.CancelAfter(timeoutMilliseconds);
+                            using(var response=http.Post(new Uri(FeedbackRelay.Endpoint(relay).AbsoluteUri+"/replies"),body,timeout.Token)){
+                                token.ThrowIfCancellationRequested();
+                                retry=FeedbackProtocol.RetryAt(response.RetryAfter,clock());
+                                pause=response.Status==429||response.Status==503;
+                                if(pause&&!retry.HasValue)retry=clock().AddMinutes(15);
+                                var bytes=FeedbackProtocol.Read(response,512*1024,timeout.Token);
+                                if(response.Status==200){
+                                    reply=UpdateJson.Read<FeedbackRepliesResponse>(bytes);
+                                    if(reply==null||reply.Schema!=1||reply.Items==null||reply.Items.Length!=numbers.Length)throw new InvalidDataException("Invalid replies.");
+                                    for(int i=0;i<numbers.Length;i++){if(reply.Items[i]==null||reply.Items[i].Number!=numbers[i])throw new InvalidDataException("Mismatched replies.");reply.Items[i].Validate();}
                                 }
                             }
-                        }catch(Exception error){
-                            token.ThrowIfCancellationRequested();reply=null;
-                            if(canSwitch&&(error is WebException||error is IOException||error is TimeoutException||error is OperationCanceledException))continue;
                         }
-                        break;
+                    }catch(Exception){
+                        token.ThrowIfCancellationRequested();reply=null;
                     }
                     now=clock();checkedAny=true;
                     if(reply==null){failedBatch=true;result.Message="暂时无法检查回复，请稍后重试。";}
@@ -239,35 +232,27 @@ namespace AtkBattery {
                 var request=new FeedbackSupplementRequest {Number=number,ReplyKey=record.ReplyKey,RequestId=saved.RequestId,Description=saved.Description,Diagnostics=saved.Diagnostics,AppVersion=saved.AppVersion};
                 var result=new SupplementResult(SupplementKind.Unknown);
                 byte[] body=FeedbackProtocol.Json(request);
-                foreach(string address in FeedbackRelay.Addresses(relay)){
-                    bool canSwitch=address==FeedbackRelay.Url;
-                    result=new SupplementResult(SupplementKind.Unknown);
-                    try{
-                        token.ThrowIfCancellationRequested();
-                        using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
-                            timeout.CancelAfter(FeedbackRelay.Deadline(address,timeoutMilliseconds));
-                            using(var response=http.Post(new Uri(FeedbackRelay.Endpoint(address).AbsoluteUri+"/supplement"),body,timeout.Token)){
-                                var retry=FeedbackProtocol.RetryAt(response.RetryAfter,clock());
-                                if((response.Status==429||response.Status==503)&&!retry.HasValue)retry=clock().AddMinutes(15);
-                                result=new SupplementResult(SupplementKind.Unknown,retry);
-                                var bytes=FeedbackProtocol.Read(response,16384,timeout.Token);
-                                if(response.Status==200||response.Status==201){
-                                    var receipt=UpdateJson.Read<FeedbackSupplementReceipt>(bytes);
-                                    if(receipt!=null&&receipt.Number==number&&FeedbackProtocol.ValidId(receipt.CommentId)&&receipt.Duplicate==(response.Status==200))result=new SupplementResult(SupplementKind.Success);
-                                }else{
-                                    var error=UpdateJson.Read<FeedbackError>(bytes);string code=error==null?null:error.Error;
-                                    result=new SupplementResult(response.Status==403&&code=="denied"?SupplementKind.Denied:response.Status==409&&code=="closed"?SupplementKind.Closed:
-                                        response.Status==429&&code=="rate_limited"?SupplementKind.RateLimited:response.Status==503&&(code=="disabled"||code=="unavailable")?SupplementKind.Unavailable:
-                                        response.Status==400&&code=="invalid"?SupplementKind.Invalid:response.Status==413&&code=="too_large"?SupplementKind.TooLarge:SupplementKind.Unknown,retry);
-                                    if(canSwitch&&FeedbackRelay.RejectedBeforeWrite(response.Status,code))continue;
-                                }
+                try{
+                    token.ThrowIfCancellationRequested();
+                    using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
+                        timeout.CancelAfter(timeoutMilliseconds);
+                        using(var response=http.Post(new Uri(FeedbackRelay.Endpoint(relay).AbsoluteUri+"/supplement"),body,timeout.Token)){
+                            var retry=FeedbackProtocol.RetryAt(response.RetryAfter,clock());
+                            if((response.Status==429||response.Status==503)&&!retry.HasValue)retry=clock().AddMinutes(15);
+                            result=new SupplementResult(SupplementKind.Unknown,retry);
+                            var bytes=FeedbackProtocol.Read(response,16384,timeout.Token);
+                            if(response.Status==200||response.Status==201){
+                                var receipt=UpdateJson.Read<FeedbackSupplementReceipt>(bytes);
+                                if(receipt!=null&&receipt.Number==number&&FeedbackProtocol.ValidId(receipt.CommentId)&&receipt.Duplicate==(response.Status==200))result=new SupplementResult(SupplementKind.Success);
+                            }else{
+                                var error=UpdateJson.Read<FeedbackError>(bytes);string code=error==null?null:error.Error;
+                                result=new SupplementResult(response.Status==403&&code=="denied"?SupplementKind.Denied:response.Status==409&&code=="closed"?SupplementKind.Closed:
+                                    response.Status==429&&code=="rate_limited"?SupplementKind.RateLimited:response.Status==503&&(code=="disabled"||code=="unavailable")?SupplementKind.Unavailable:
+                                    response.Status==400&&code=="invalid"?SupplementKind.Invalid:response.Status==413&&code=="too_large"?SupplementKind.TooLarge:SupplementKind.Unknown,retry);
                             }
                         }
-                    }catch(FeedbackNotSentException){
-                        token.ThrowIfCancellationRequested();if(canSwitch)continue;
-                    }catch(Exception){token.ThrowIfCancellationRequested();}
-                    break;
-                }
+                    }
+                }catch(Exception){token.ThrowIfCancellationRequested();}
                 try{Store.Change(delegate(FeedbackData data){
                     var target=data.Records.Find(delegate(FeedbackRecord r){return r.Number==number;});if(target==null||target.Pending==null||target.Pending.RequestId!=saved.RequestId)return;
                     if(result.Kind==SupplementKind.Success){target.Pending=null;target.LastActivityAt=clock();target.NextCheckAt=FeedbackSchedule.Next(target,clock(),random());}

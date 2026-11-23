@@ -74,6 +74,24 @@ def alternate_inventory(instance="synthetic-a", pid=0x1018):
             for index, ((page, usage), sizes) in enumerate(collections.items(), 1)]
 
 
+def v7_inventory():
+    parent = r"pnp:usb\vid_3837&pid_101d\v7-parent"
+    return [
+        dict(vendor_id=0x3837, product_id=0x101D, physical_id=parent,
+             path=b"v7-ff01", usage_page=0xFF01, usage=0x0001,
+             product_string="MCHOSE V7 Pro",
+             input_report_length=64, output_report_length=64,
+             input_report_sizes={"77": 64}, output_report_sizes={"77": 64},
+             input_report_proof="caps", output_report_proof="caps"),
+        dict(vendor_id=0x3837, product_id=0x101D, physical_id=parent,
+             path=b"v7-sibling", usage_page=0x0001, usage=0x0002,
+             product_string="",
+             input_report_length=64, output_report_length=64,
+             input_report_sizes={"77": 64}, output_report_sizes={"77": 64},
+             input_report_proof="caps", output_report_proof="caps"),
+    ]
+
+
 class FakeHid:
     def __init__(self, replies, fail=None):
         self.replies = list(replies)
@@ -122,6 +140,44 @@ def fixture(replies=(), infos=None, fail=None):
 
 
 class V3ProtocolTests(unittest.TestCase):
+    def test_101d_strict_parent_and_reply(self):
+        frame = edited(CHARGING, **{"10": 0x3E, "11": 0x40})
+        infos = v7_inventory()
+        with fixture([frame], infos) as bus:
+            device, = M.MchoseProvider().poll()
+            self.assertEqual((device.name, device.level, device.charging),
+                             ("MCHOSE V7 Pro", 85, True))
+            self.assertEqual(bus.opened, [b"v7-ff01"])
+            self.assertEqual(bus.sent, [REQUEST])
+
+    def test_101d_rejects_bad_responses_after_one_query(self):
+        for frame in (
+                edited(CHARGING, **{"8": 0x00}),
+                edited(CHARGING, **{"18": 0}),
+                edited(CHARGING, **{"19": 2}),
+                edited(CHARGING, **{"20": 0})):
+            with self.subTest(frame=frame), fixture([frame], v7_inventory()) as bus:
+                self.assertEqual(M.MchoseProvider().poll(), [])
+                self.assertEqual((bus.opened, bus.sent), ([b"v7-ff01"], [REQUEST]))
+
+    def test_101d_rejects_wrong_identity_or_proof_before_open(self):
+        candidate = v7_inventory()[0]
+        for infos in (
+                [dict(candidate, product_string="MCHOSE V7")],
+                [dict(candidate, physical_id="collection:orphan")],
+                [dict(candidate, physical_id="")],
+                [dict(candidate, input_report_sizes=None)],
+                [dict(candidate, output_report_sizes={"77": 63})],
+                [dict(candidate, report_descriptor_error="caps/descriptor disagreement")],
+                [dict(candidate, usage_page=0xFF0B, usage=0x00C4)],
+                [v7_inventory()[0], dict(v7_inventory()[0], path=b"v7-duplicate")],
+                [v7_inventory()[0],
+                 dict(v7_inventory()[1], physical_id="different-parent")],
+        ):
+            with self.subTest(infos=infos), fixture([CHARGING], infos) as bus:
+                self.assertEqual(M.MchoseProvider().poll(), [])
+                self.assertEqual((bus.opened, bus.sent), ([], []))
+
     def test_synthetic_1018_ff01_41_uses_unique_proven_ff0b_4d64(self):
         infos = alternate_inventory()
         with fixture([CHARGING], infos) as bus:

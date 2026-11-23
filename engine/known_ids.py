@@ -68,7 +68,8 @@ TABLES = {
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
 # Receiver IDs shared by unrelated device models.
 SHARED_UNINDEXED = frozenset({(0x05AC, 0x024F), (0x093A, 0x522C), (0x36B0, 0x3002)})
-HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "profiles", "razer_v4",
+HELPERS = {"__init__", "base", "hidlist", "blackshark", "blackshark2020", "blackshark_hyperspeed",
+           "profiles", "razer_v4",
            "aula_f99max"}
 
 
@@ -275,6 +276,18 @@ def build_index(root=None, *, engine_root=None):
                 partial[module] = "已收录部分固定 ID，但其余定义无法静态解析。"
             else:
                 unparsed.add(module)
+
+    # This exact receiver is owned by a dedicated control transport outside
+    # the ordinary Razer pack profiles. Read the selected snapshot in both modes.
+    headset_path = engine / "providers" / "razer_profiles.py"
+    if headset_path.is_file():
+        try:
+            headset = StaticSource(headset_path)
+            if "HYPERSPEED_RX_PID" in headset.values:
+                add("razer", headset.get("RAZER_VID"), headset.get("HYPERSPEED_RX_PID"),
+                    headset.get("HYPERSPEED_RX_NAME"), "headset")
+        except (KeyError, ValueError, TypeError, SyntaxError):
+            unparsed.add("blackshark_hyperspeed")
 
     for profile in catalog["nativeProfiles"]:
         add(profile["provider"], profile["match"]["vendorId"], profile["match"]["productId"],

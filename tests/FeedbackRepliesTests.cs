@@ -40,10 +40,8 @@ static class FeedbackRepliesTests {
     static FeedbackReplies ShippedService(FeedbackStore store,Http http,int timeout=20000){
         return new FeedbackReplies(store,http,null,delegate{return Start;},delegate{return 0.5;},delegate{return true;},timeout);
     }
-    static void CheckDirectEndpoints(Http http,string path){
-        Check(http.Uris.Count==2&&http.Uris[0].AbsoluteUri==FeedbackRelay.Url+path&&
-            http.Uris[1].AbsoluteUri==FeedbackRelay.DenoUrl+path,"exact Cloudflare then Deno endpoints for "+path);
-        Check(Convert.ToBase64String(http.Bodies[0])==Convert.ToBase64String(http.Bodies[1]),"same payload sent to the backup");
+    static void CheckDirectEndpoint(Http http,string path){
+        Check(http.Uris.Count==1&&http.Uris[0].AbsoluteUri==FeedbackRelay.Url+path,"single Cloudflare request for "+path);
     }
     static FeedbackReport Report(){return new FeedbackReport("fixture-version","fixture-windows",new[]{new WirelessDevice {Name="fixture-mouse",Kind="mouse",Percent=62}},new SuppressedDevice[0],new UnadaptedDevice[0],new ReaderHealth[0],new string[0]);}
     static Dictionary<string,object> Fields(byte[] bytes){return UpdateJson.Read<Dictionary<string,object>>(bytes,true);}
@@ -114,14 +112,19 @@ static class FeedbackRepliesTests {
             cancellation.Cancel();try{new FeedbackHttp().Post(new Uri(Relay+"/feedback"),new byte[0],cancellation.Token);}catch(FeedbackNotSentException){notSent=true;}
         }Check(notSent,"concrete transport identifies cancellation before any network I/O");
     }
-    static void ShippedCreationFailover(){
-        Check(FeedbackRelay.Deadline(FeedbackRelay.Url,20000)==5000&&FeedbackRelay.Deadline(FeedbackRelay.DenoUrl,20000)==20000,
-            "Cloudflare has a five-second deadline while Deno retains the original timeout");
+    static void ShippedCreationDirect(){
+        // A response taking just over five seconds is still inside the shipped twenty-second budget.
+        var slow=new Http {Reply=delegate(Uri uri,byte[] payload,CancellationToken token){
+            if(token.WaitHandle.WaitOne(5200))token.ThrowIfCancellationRequested();
+            return Created();
+        }};
+        var sent=new FeedbackClient(FeedbackRelay.Url,slow,new FeedbackSession(),20000,Store()).Submit("other","valid description",null,CancellationToken.None);
+        CheckDirectEndpoint(slow,"/feedback");
+        Check(sent.Kind==FeedbackResultKind.Success,"a slow direct Cloudflare receipt is accepted within the normal deadline");
         foreach(string failure in new[]{"connect","before-send-timeout","429","disabled"}){
             var store=Store();
             var http=new Http();
             http.Reply=delegate(Uri uri,byte[] body,CancellationToken token){
-                if(http.Bodies.Count>1)return Created();
                 if(failure=="connect")throw new FeedbackNotSentException(new WebException("offline fixture",WebExceptionStatus.ConnectFailure));
                 if(failure=="before-send-timeout"){
                     if(!token.WaitHandle.WaitOne(3000))throw new Exception("expected the attempt deadline");
@@ -130,11 +133,12 @@ static class FeedbackRepliesTests {
                 return failure=="429"?Response(429,"{\"error\":\"rate_limited\"}"):Response(503,"{\"error\":\"disabled\"}");
             };
             var result=new FeedbackClient(FeedbackRelay.Url,http,new FeedbackSession(),35,store).Submit("other","valid description",null,CancellationToken.None);
-            CheckDirectEndpoints(http,"/feedback");
-            Check(result.Kind==FeedbackResultKind.Success&&store.Snapshot().Records.Count==1&&
-                store.Find(42).ReplyKey==(string)Fields(http.Bodies[0])["replyKey"],"known unsent "+failure+" keeps one creation and one reply key");
+            CheckDirectEndpoint(http,"/feedback");
+            Check(result.Kind==(failure=="429"?FeedbackResultKind.RateLimited:FeedbackResultKind.Unavailable)&&store.Snapshot().Records.Count==0,
+                "confirmed pre-write rejection or pre-send failure clears the placeholder: "+failure);
+            if(failure=="disabled")Check(result.Failure==FeedbackFailure.Disabled,"explicit relay disable is distinct from a temporary outage");
         }
-        foreach(string failure in new[]{"500","503","sent-timeout","invalid-receipt"}){
+        foreach(string failure in new[]{"500","503","429","sent-timeout","invalid-receipt"}){
             var store=Store();
             var http=new Http {Reply=delegate{
                 if(failure=="sent-timeout")throw new WebException("ambiguous timeout",WebExceptionStatus.Timeout);
@@ -143,7 +147,7 @@ static class FeedbackRepliesTests {
             }};
             var result=new FeedbackClient(FeedbackRelay.Url,http,new FeedbackSession(),20000,store).Submit("other","valid description",null,CancellationToken.None);
             var records=store.Snapshot().Records;
-            Check(result.Kind==FeedbackResultKind.Unavailable&&http.Uris.Count==1&&records.Count==1&&
+            Check(result.Kind==(failure=="429"?FeedbackResultKind.RateLimited:FeedbackResultKind.Unavailable)&&http.Uris.Count==1&&records.Count==1&&
                 records[0].Number==0&&records[0].CreationId!=null,"ambiguous "+failure+" keeps the pending creation without a second POST");
         }
         using(var cancel=new CancellationTokenSource()){
@@ -155,15 +159,14 @@ static class FeedbackRepliesTests {
             bool cancelled=false;
             try{new FeedbackClient(FeedbackRelay.Url,http,new FeedbackSession(),20000,store).Submit("other","valid description",null,cancel.Token);}
             catch(OperationCanceledException){cancelled=true;}
-            Check(cancelled&&http.Uris.Count==1&&store.Snapshot().Records.Count==0,"user cancellation prevents backup and clears known unsent pending");
+            Check(cancelled&&http.Uris.Count==1&&store.Snapshot().Records.Count==0,"user cancellation ends the request and clears known unsent pending");
         }
     }
-    static void ShippedReadAndSupplementFailover(){
+    static void ShippedReadAndSupplementDirect(){
         foreach(string failure in new[]{"429","500","503","connect","timeout"}){
             var store=Store(Record());
             var http=new Http();
             http.Reply=delegate(Uri uri,byte[] body,CancellationToken token){
-                if(http.Bodies.Count>1)return Replies(Item(42,Comment("9")));
                 if(failure=="connect")throw new FeedbackNotSentException(new WebException("offline fixture",WebExceptionStatus.ConnectFailure));
                 if(failure=="timeout"){
                     if(!token.WaitHandle.WaitOne(3000))throw new Exception("expected the attempt deadline");
@@ -172,33 +175,31 @@ static class FeedbackRepliesTests {
                 return Response(Int32.Parse(failure),"{\"error\":\"unavailable\"}","3600");
             };
             ShippedService(store,http,35).Poll(false,null,CancellationToken.None);
-            CheckDirectEndpoints(http,"/feedback/replies");
-            Check(store.Snapshot().PollNotBefore==null&&store.Find(42).Failures==0&&
-                store.Find(42).Comments.Count==1,"read fallback succeeds after "+failure);
+            CheckDirectEndpoint(http,"/feedback/replies");
+            Check(store.Find(42).Failures==1&&store.Find(42).Comments.Count==0,"single failed poll preserves records and backs off: "+failure);
         }
         {
             var store=Store(Record());
             var http=new Http {Reply=delegate(Uri uri,byte[] body,CancellationToken token){
-                return uri.Host==new Uri(FeedbackRelay.Url).Host?Response(429,"{}","1800"):Response(503,"{}","3600");
+                return Response(429,"{}","1800");
             }};
             var service=ShippedService(store,http);
             service.Poll(false,null,CancellationToken.None);
             service.Poll(false,null,CancellationToken.None);
-            CheckDirectEndpoints(http,"/feedback/replies");
-            Check(store.Snapshot().PollNotBefore==Start.AddHours(1)&&store.Find(42).Failures==1,"terminal response sets backoff once");
+            CheckDirectEndpoint(http,"/feedback/replies");
+            Check(store.Snapshot().PollNotBefore==Start.AddMinutes(30)&&store.Find(42).Failures==1,"terminal response sets backoff once");
         }
         foreach(bool safe in new[]{true,false}){
             var store=Store(Record());
             var http=new Http();
             http.Reply=delegate{
-                if(http.Bodies.Count>1)return Response(201,"{\"number\":42,\"commentId\":\"123\",\"duplicate\":false}");
                 if(safe)return Response(503,"{\"error\":\"disabled\"}");
                 throw new WebException("ambiguous supplement",WebExceptionStatus.Timeout);
             };
             var result=ShippedService(store,http).Supplement(42,"valid supplement",null,CancellationToken.None);
             if(safe){
-                CheckDirectEndpoints(http,"/feedback/supplement");
-                Check(result.Kind==SupplementKind.Success&&store.Find(42).Pending==null,"confirmed rejection safely moves the same request ID");
+                CheckDirectEndpoint(http,"/feedback/supplement");
+                Check(result.Kind==SupplementKind.Unavailable&&store.Find(42).Pending!=null,"definite service pause retains the request ID for a later user retry");
             }else{
                 Check(result.Kind==SupplementKind.Unknown&&http.Uris.Count==1&&store.Find(42).Pending!=null,"uncertain supplement keeps its pending request ID");
             }
@@ -786,8 +787,8 @@ static class FeedbackRepliesTests {
         Run("empty history and fixed web entry",EmptyHistory);
         Run("pumped store refresh and handle recreation",HistoryStoreRefresh);
         Run("schema 2 creation and safe fallback",Creation);Run("creation placeholder retention",CreationRetention);Run("confirmed receipt cancellation",ConfirmedReceiptCancellation);Run("DPAPI persistence and recovery",Persistence);Run("scheduling and pause policy",Scheduler);Run("closed and idle scheduling regressions",ScheduleRegressions);Run("merge and notifications",Merging);Run("read and manual refresh notifications",NotificationRegressions);Run("reply validation and batching",ReplyBoundaries);Run("defaults and batch failure messages",DefaultsAndBatchFailures);Run("supplement idempotency and errors",Supplements);Run("settings, dialogs and balloon routing",SettingsAndUi);Run("history themes, adaptive rows and DPI",HistoryAppearance);Run("history and supplement layout",Layouts);Run("history with long real replies settles",HistoryLongReplies);Run("native balloon and unread routing",NativeBalloonRouting);
-        Run("shipped relay safe creation failover",ShippedCreationFailover);
-        Run("shipped relay read and supplement failover",ShippedReadAndSupplementFailover);
+        Run("shipped relay direct creation",ShippedCreationDirect);
+        Run("shipped relay direct read and supplement",ShippedReadAndSupplementDirect);
         Console.WriteLine(checks+" feedback reply checks, "+failures+" failed groups; fake transport only");return failures==0?0:1;
     }
 }

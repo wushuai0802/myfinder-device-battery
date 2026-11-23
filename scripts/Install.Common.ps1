@@ -191,7 +191,9 @@ function Assert-DeviceBatteryInstallDirectory([string]$Path,[string]$SourceRoot,
         if(-not (Get-Item -LiteralPath $full).PSIsContainer){throw 'The installation target must be a regular directory.'}
         if($full -ieq $SourceRoot.TrimEnd([char]92) -or @(Get-ChildItem -LiteralPath $full -Force).Count -gt 0) {
             $marker=Join-Path $full '.myfinder-device-battery-install.json'
-            if(-not (Test-Path -LiteralPath $marker -PathType Leaf)){throw 'The target contains unrelated files; nothing was overwritten.'}
+            if(-not (Test-Path -LiteralPath $marker -PathType Leaf)){
+                throw ("安装已停止，文件已保留。目标目录「{0}」已有文件，缺少本程序的安装标记。请在解压目录打开 PowerShell，运行 .\一键安装自启.bat -InstallDirectory 'D:\MyFinderBattery-App'，将示例路径替换为一个新的空目录。临时使用可双击「启动.bat」。" -f $full)
+            }
             $identity=Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
             if($identity.AppId -cne $script:DeviceBatteryAppId -or $identity.Schema -notin @(1,2) -or
                 [IO.Path]::GetFullPath($identity.InstallDirectory).TrimEnd([char]92) -ine $full){throw 'The target ownership marker is invalid.'}

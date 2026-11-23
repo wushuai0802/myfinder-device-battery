@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 import hid
 
-from . import blackshark, blackshark2020, hidlist, razer_v4
+from . import blackshark, blackshark2020, blackshark_hyperspeed, hidlist, razer_v4
 from .base import DeviceStatus, Provider, hexdump, log
 
 from .razer_profiles import RAZER_VID, KNOWN, KEYBOARD_INTERFACE
@@ -275,11 +275,15 @@ class RazerProvider(Provider):
 
         # group interfaces by device (PID + serial / location)
         groups: Dict[Tuple[int, str], List[dict]] = {}
+        hyperspeed_infos = []
         viper_infos = []
         for d in infos:
             pid = d["product_id"]
             if self.device_pack.is_disabled(self.name, RAZER_VID, pid):
                 self._diag.append(f"  disabled: razer {RAZER_VID:04x}:{pid:04x}")
+                continue
+            if pid == blackshark_hyperspeed.PID:
+                hyperspeed_infos.append(d)
                 continue
             if pid in razer_v4.PIDS:
                 viper_infos.append(d)
@@ -309,7 +313,8 @@ class RazerProvider(Provider):
             if gkey not in groups:
                 self._clear_foreign(gkey)
 
-        out = razer_v4.poll_devices(viper_infos, build_request)
+        out = blackshark_hyperspeed.poll_devices(hyperspeed_infos)
+        out.extend(razer_v4.poll_devices(viper_infos, build_request))
         for (pid, serial), ifaces in groups.items():
             pack_entry = self._pack_entries.get(pid)
             name, pref_tid = self._known.get(pid, (None, None))
@@ -397,7 +402,8 @@ class RazerProvider(Provider):
         return [replace(status, model_source="pack", pack_version=self.device_pack.version,
                         verification_level=entry.level, model_reference=entry.source,
                         dpi=None, dpi_target=None)
-                if (entry := self._pack_entries.get(int(status.key.split(":")[1], 16))) else status
+                if (int(status.key.split(":")[1], 16) != blackshark_hyperspeed.PID
+                    and (entry := self._pack_entries.get(int(status.key.split(":")[1], 16)))) else status
                 for status in out]
 
     def _clear_foreign(self, gkey):

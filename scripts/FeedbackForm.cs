@@ -13,16 +13,6 @@ using AtkBattery;
 namespace AtkBattery {
     internal static class FeedbackRelay {
         internal const string Url="https://myfinder-feedback-relay.wushuai591459380.workers.dev";
-        internal const string DenoUrl="https://myfinder-feedback-relay.wushuai0802.deno.net";
-        internal static string[] Addresses(string address) {
-            return address==Url?new[]{Url,DenoUrl}:new[]{address};
-        }
-        internal static int Deadline(string address,int timeout) {
-            return address==Url?Math.Min(5000,timeout):timeout;
-        }
-        internal static bool RejectedBeforeWrite(int status,string error) {
-            return (status==429&&error=="rate_limited")||(status==503&&error=="disabled");
-        }
         internal static void ValidateUri(Uri uri){
             if(uri==null||!uri.IsAbsoluteUri||uri.Scheme!=Uri.UriSchemeHttps||uri.UserInfo.Length!=0||uri.Query.Length!=0||uri.Fragment.Length!=0)throw new ArgumentException("Invalid feedback relay URL.");
         }
@@ -105,7 +95,7 @@ namespace AtkBattery {
         internal void MarkSuccess(){lock(gate)lastSuccess=clock();}
     }
     internal enum FeedbackResultKind {Success,RateLimited,Unavailable,Browser}
-    internal enum FeedbackFailure {Unspecified,Connection,Service}
+    internal enum FeedbackFailure {Unspecified,Connection,Service,Disabled}
     internal sealed class FeedbackResult {
         internal readonly FeedbackResultKind Kind;internal readonly long Number;internal readonly string Url;
         internal readonly FeedbackFailure Failure;
@@ -131,59 +121,56 @@ namespace AtkBattery {
             try{
                 string key=FeedbackProtocol.NewKey();
                 creation=store.BeginCreation(category,description,key,clock());
-                foreach(string address in FeedbackRelay.Addresses(relay)) {
-                    bool canSwitch=address==FeedbackRelay.Url;
-                    bool production=canSwitch||address==FeedbackRelay.DenoUrl;
-                    var endpoint=FeedbackRelay.Endpoint(address);
-                    token.ThrowIfCancellationRequested();
-                    try {
-                        using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
-                            timeout.CancelAfter(FeedbackRelay.Deadline(address,timeoutMilliseconds));
-                            var cancel=timeout.Token;
-                            for(int attempt=0;attempt<2;attempt++){
-                                var payload=FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null);
-                                cancel.ThrowIfCancellationRequested();
-                                mayHaveCreated=true;
-                                using(var response=http.Post(endpoint,payload,cancel)){
-                                    if(response.Status==400||response.Status==413||
-                                        !production&&(response.Status==429||response.Status==503))mayHaveCreated=false;
-                                    cancel.ThrowIfCancellationRequested();
-                                    if(production&&(response.Status==429||response.Status==503)){
-                                        if(response.Status==503)failure=FeedbackFailure.Service;
-                                        var rejection=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
-                                        // The relay returns these codes before it calls GitHub to create an issue.
-                                        // A generic upstream failure is ambiguous, even with a 503 status.
-                                        if(FeedbackRelay.RejectedBeforeWrite(response.Status,rejection==null?null:rejection.Error)){
-                                            mayHaveCreated=false;
-                                            if(canSwitch)break;
-                                        }
-                                    }
-                                    if(response.Status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
-                                    if(response.Status==400&&attempt==0){
-                                        var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
-                                        if(error!=null&&error.Error=="invalid")continue;
-                                    }
-                                    if(response.Status!=201){
-                                        if(response.Status==502||response.Status==503)failure=FeedbackFailure.Service;
-                                        return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
-                                    }
-                                    var receipt=readReceipt(FeedbackProtocol.Read(response,16384,cancel));
-                                    if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
-                                    session.MarkSuccess();
-                                    var result=new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,attempt==0&&receipt.ReplyAccess);
-                                    try{store.CompleteCreation(creation,result,clock());}catch(Exception){return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,result.ReplyAccess,false);}
-                                    return result;
+                var endpoint=FeedbackRelay.Endpoint(relay);
+                bool production=relay==FeedbackRelay.Url;
+                using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
+                    timeout.CancelAfter(timeoutMilliseconds);
+                    var cancel=timeout.Token;
+                    // A legacy custom relay may explicitly reject schema 2 before creating anything.
+                    int attempts=production?1:2;
+                    for(int attempt=0;attempt<attempts;attempt++){
+                        var payload=FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null);
+                        cancel.ThrowIfCancellationRequested();
+                        mayHaveCreated=true;
+                        using(var response=http.Post(endpoint,payload,cancel)){
+                            int status=response.Status;
+                            if(status==400||status==413||!production&&(status==429||status==503))mayHaveCreated=false;
+                            if(status>=500&&status<600)failure=FeedbackFailure.Service;
+                            cancel.ThrowIfCancellationRequested();
+                            if(status==429||status==503){
+                                // Only the relay's explicit pre-write rejection clears an uncertain creation.
+                                FeedbackError error=null;
+                                try{error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));}
+                                catch(Exception){cancel.ThrowIfCancellationRequested();}
+                                if(error!=null){
+                                    if(status==429&&error.Error=="rate_limited")mayHaveCreated=false;
+                                    if(status==503&&error.Error=="disabled"){mayHaveCreated=false;failure=FeedbackFailure.Disabled;}
                                 }
+                                if(status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
                             }
+                            if(status==400&&!production&&attempt==0){
+                                var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
+                                if(error!=null&&error.Error=="invalid")continue;
+                            }
+                            if(status!=201)return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
+                            var receipt=readReceipt(FeedbackProtocol.Read(response,16384,cancel));
+                            if(receipt==null||!IsIssueUrl(receipt.Number,receipt.Url))return new FeedbackResult(FeedbackResultKind.Unavailable);
+                            session.MarkSuccess();
+                            var result=new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,attempt==0&&receipt.ReplyAccess);
+                            try{store.CompleteCreation(creation,result,clock());}
+                            catch(Exception){return new FeedbackResult(FeedbackResultKind.Success,receipt.Number,receipt.Url,result.ReplyAccess,false);}
+                            return result;
                         }
-                    }catch(FeedbackNotSentException){
-                        mayHaveCreated=false;
-                        token.ThrowIfCancellationRequested();
-                        if(failure==FeedbackFailure.Unspecified)failure=FeedbackFailure.Connection;
-                        if(!canSwitch)throw;
                     }
                 }
                 return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
+            }catch(FeedbackNotSentException){
+                mayHaveCreated=false;
+                token.ThrowIfCancellationRequested();
+                return new FeedbackResult(FeedbackResultKind.Unavailable,failure:FeedbackFailure.Connection);
+            }catch(OperationCanceledException){
+                token.ThrowIfCancellationRequested();
+                return new FeedbackResult(FeedbackResultKind.Unavailable,failure:FeedbackFailure.Connection);
             }catch(WebException){
                 token.ThrowIfCancellationRequested();
                 if(failure==FeedbackFailure.Unspecified)failure=FeedbackFailure.Connection;
@@ -549,7 +536,8 @@ namespace AtkBatteryTray {
                 else{
                     string reason="暂时无法提交";
                     if(result.Failure==FeedbackFailure.Connection)reason="连不上反馈服务";
-                    else if(result.Failure==FeedbackFailure.Service)reason="反馈服务暂时停用";
+                    else if(result.Failure==FeedbackFailure.Disabled)reason="反馈服务已停用";
+                    else if(result.Failure==FeedbackFailure.Service)reason="反馈服务暂时不可用";
                     SetStatus("提交失败："+reason+"。可以改用浏览器提交，或复制报告发到群里。");
                 }
             }
