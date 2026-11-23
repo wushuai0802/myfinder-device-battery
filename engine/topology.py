@@ -666,6 +666,16 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete
+                    and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
+                    (0x05AC, 0x024F, 0xFF60, 0x0061)
+                    and info["product_string"] == "F108Pro Dongle"
+                    and caps.input == caps.output == 33):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and info.get("input_report_sizes") is None:
                 # Architecture v2: a declarative family asks for per-report
                 # proof only on its own identities and vendor-page collections.
