@@ -9,35 +9,79 @@ using AtkBattery;
 namespace AtkBatteryTray {
     internal sealed class MyFeedbackDialog:ThemedDialog {
         readonly FeedbackReplies replies;readonly FeedbackReport report;readonly Action<string> open;readonly Func<string,bool> confirm;
-        readonly RecordList records;readonly TextBox comments=new TextBox();readonly Label status,emptyRecords;readonly ThemedSection listCard;
+        const string EmptyText="还没有在程序里提交过反馈。通过浏览器提交的反馈不会出现在这里，可以在网页查看。";
+        const string IssuesUrl="https://github.com/wushuai0802/myfinder-device-battery/issues?q=is%3Aissue%20label%3Ain-app-feedback";
+        readonly RecordList records;readonly TextBox comments=new TextBox();readonly Label status,emptyRecords,warning;readonly ThemedSection listCard;
         readonly ThemedButton refresh,web,supplement,delete;CancellationTokenSource pending;bool busy,loading;
+        readonly object reloadGate=new object();bool watching,reloadRequested,reloadQueued;int reloadGeneration;
         internal MyFeedbackDialog(FeedbackReplies service,FeedbackReport snapshot,bool dark,Action<string> openLink=null,long selected=0,Func<string,bool> confirmation=null):base(dark){
             replies=service;report=snapshot;open=openLink??delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});};
             confirm=confirmation??delegate(string question){return ThemedMessage.Show(this,"删除本地记录",question,MessageBoxButtons.YesNo,MessageBoxDefaultButton.Button2)==DialogResult.Yes;};
             Text="我的反馈";ClientSize=new Size(600,580);ShowInTaskbar=false;FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=6,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            for(int i=0;i<6;i++)layout.RowStyles.Add(new RowStyle(i==3?SizeType.Percent:SizeType.AutoSize,i==3?100:0));
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=7,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            for(int i=0;i<7;i++)layout.RowStyles.Add(new RowStyle(i==4?SizeType.Percent:SizeType.AutoSize,i==4?100:0));
             var title=Caption("我的反馈",true);title.Name="FeedbackHistoryTitle";title.Dock=DockStyle.Fill;layout.Controls.Add(title,0,0);
             var notice=Caption("在程序里提交的反馈和维护者回复，补充资料会公开显示在对应 issue 里。",false,true);
             notice.Name="FeedbackHistoryNotice";notice.Dock=DockStyle.Fill;notice.Margin=new Padding(0,0,0,12);layout.Controls.Add(notice,0,1);
+            warning=Caption(replies.Store.LoadWarning);warning.Name="FeedbackHistoryWarning";warning.Dock=DockStyle.Fill;
+            warning.Margin=new Padding(0,0,0,12);warning.Visible=warning.Text.Length>0;layout.Controls.Add(warning,0,2);
             listCard=new ThemedSection(Theme) {Dock=DockStyle.Fill};records=new RecordList(Theme);
             records.Name="FeedbackRecords";records.AccessibleName="我的反馈列表";records.Dock=DockStyle.Fill;records.IntegralHeight=false;records.HorizontalScrollbar=true;
             records.BackColor=Theme.Card;records.ForeColor=Theme.Foreground;records.BorderStyle=BorderStyle.None;records.DisplayMember="Text";
             records.SelectedIndexChanged+=delegate{if(!loading)SelectRecord();};listCard.Controls.Add(records);
-            emptyRecords=Caption("还没有在程序里提交过反馈",false,true);emptyRecords.Name="FeedbackHistoryEmpty";emptyRecords.Dock=DockStyle.Fill;emptyRecords.TextAlign=ContentAlignment.MiddleLeft;
-            listCard.Controls.Add(emptyRecords);layout.Controls.Add(listCard,0,2);
+            emptyRecords=Caption(EmptyText,false,true);emptyRecords.Name="FeedbackHistoryEmpty";emptyRecords.Dock=DockStyle.Fill;emptyRecords.TextAlign=ContentAlignment.MiddleLeft;
+            listCard.Controls.Add(emptyRecords);layout.Controls.Add(listCard,0,3);
             comments.Name="FeedbackComments";comments.AccessibleName="反馈回复";comments.ReadOnly=true;comments.Multiline=true;comments.WordWrap=true;comments.ScrollBars=ScrollBars.Vertical;
-            var commentCard=new ThemedTextBox(Theme,comments) {Dock=DockStyle.Fill};layout.Controls.Add(commentCard,0,3);
-            status=Caption("",false,true);status.Name="FeedbackHistoryStatus";status.Dock=DockStyle.Fill;layout.Controls.Add(status,0,4);
+            var commentCard=new ThemedTextBox(Theme,comments) {Dock=DockStyle.Fill};layout.Controls.Add(commentCard,0,4);
+            status=Caption("",false,true);status.Name="FeedbackHistoryStatus";status.Dock=DockStyle.Fill;layout.Controls.Add(status,0,5);
             var buttons=new FlowLayoutPanel {WrapContents=true,FlowDirection=FlowDirection.RightToLeft,Margin=Padding.Empty};
             var close=Button("CloseFeedbackHistory","关闭",delegate{Close();});close.DialogResult=DialogResult.Cancel;
             refresh=Button("RefreshFeedbackReplies","刷新",RefreshReplies);web=Button("OpenFeedbackWeb","在网页查看",OpenWeb);
             supplement=Button("SupplementFeedback","补充资料",Supplement,ThemedButtonKind.Primary);delete=Button("DeleteFeedbackRecord","删除本地记录",Delete,ThemedButtonKind.Text);
             delete.Margin=new Padding(0,0,16,0);buttons.Controls.AddRange(new Control[]{close,refresh,web,supplement});
-            var buttonBar=new HistoryButtonBar(delete,buttons) {Dock=DockStyle.Fill,Margin=Padding.Empty};layout.Controls.Add(buttonBar,0,5);Controls.Add(layout);CancelButton=close;
-            ConfigureLayout(layout,buttonBar,delegate(int width){return title.GetPreferredSize(new Size(width,0)).Height+title.Margin.Vertical+notice.GetPreferredSize(new Size(width,0)).Height+notice.Margin.Vertical+listCard.Height+listCard.Margin.Vertical+commentCard.Padding.Vertical+commentCard.Margin.Vertical+5*comments.Font.Height+status.GetPreferredSize(new Size(width,0)).Height+status.Margin.Vertical;});
+            var buttonBar=new HistoryButtonBar(delete,buttons) {Dock=DockStyle.Fill,Margin=Padding.Empty};layout.Controls.Add(buttonBar,0,6);Controls.Add(layout);CancelButton=close;
+            ConfigureLayout(layout,buttonBar,delegate(int width){return title.GetPreferredSize(new Size(width,0)).Height+title.Margin.Vertical+notice.GetPreferredSize(new Size(width,0)).Height+notice.Margin.Vertical+(warning.Text.Length==0?0:warning.GetPreferredSize(new Size(width,0)).Height+warning.Margin.Vertical)+listCard.Height+listCard.Margin.Vertical+commentCard.Padding.Vertical+commentCard.Margin.Vertical+5*comments.Font.Height+status.GetPreferredSize(new Size(width,0)).Height+status.Margin.Vertical;});
             StartPosition=FormStartPosition.CenterParent;records.FontChanged+=delegate{SizeRecords();};records.ClientSizeChanged+=delegate{SizeRecords();};
-            FormClosing+=delegate{CancelPending();};Reload(selected);
+            FormClosing+=delegate{CancelPending();};FormClosed+=delegate{StopWatching();};
+            lock(reloadGate)watching=true;
+            replies.Store.Changed+=StoreChanged;
+            try{Reload(selected);}catch{StopWatching();throw;}
+        }
+        void StoreChanged(object sender,EventArgs e){
+            lock(reloadGate){if(!watching)return;reloadRequested=true;}
+            QueueStoreReload();
+        }
+        void QueueStoreReload(){
+            int generation;
+            lock(reloadGate){
+                if(!watching||!reloadRequested||reloadQueued||!IsHandleCreated)return;
+                reloadQueued=true;generation=reloadGeneration;
+            }
+            try{BeginInvoke((MethodInvoker)delegate{
+                lock(reloadGate){
+                    if(!watching||generation!=reloadGeneration)return;
+                    reloadQueued=false;if(!reloadRequested)return;reloadRequested=false;
+                }
+                if(!IsDisposed&&!Disposing)Reload();
+            });}catch(InvalidOperationException){
+                lock(reloadGate)if(generation==reloadGeneration)reloadQueued=false;
+            }
+        }
+        protected override void OnHandleCreated(EventArgs e){
+            base.OnHandleCreated(e);
+            lock(reloadGate)if(watching)reloadRequested=true;
+            QueueStoreReload();
+        }
+        protected override void OnHandleDestroyed(EventArgs e){
+            lock(reloadGate){reloadGeneration++;reloadQueued=false;if(watching)reloadRequested=true;}
+            base.OnHandleDestroyed(e);
+        }
+        void StopWatching(){
+            lock(reloadGate){
+                if(!watching)return;
+                watching=false;reloadRequested=false;reloadQueued=false;reloadGeneration++;
+            }
+            replies.Store.Changed-=StoreChanged;
         }
         sealed class Entry {internal FeedbackRecord Record;public string Text {get{return Record.ListText;}}}
         // Measure the wrapping actions at their actual remaining width. An autosized
@@ -86,6 +130,7 @@ namespace AtkBatteryTray {
             int extent=0;foreach(var item in records.Items)extent=Math.Max(extent,TextRenderer.MeasureText(records.GetItemText(item),records.Font,Size.Empty,TextFormatFlags.SingleLine|TextFormatFlags.NoPrefix|TextFormatFlags.NoPadding).Width);
             records.HorizontalExtent=extent+(int)Math.Round(28*DialogDpi.Scale(records));
             int height=Math.Max(2,Math.Min(6,records.Items.Count))*records.ItemHeight;
+            if(records.Items.Count==0)height=Math.Max(height,emptyRecords.GetPreferredSize(new Size(Math.Max(1,records.ClientSize.Width),0)).Height);
             if(records.HorizontalExtent>records.ClientSize.Width)height+=SystemInformation.HorizontalScrollBarHeight;
             listCard.Height=height+listCard.Padding.Vertical;
         }
@@ -100,15 +145,16 @@ namespace AtkBatteryTray {
             emptyRecords.Visible=records.Items.Count==0;if(emptyRecords.Visible)emptyRecords.BringToFront();SizeRecords();SelectRecord();
         }
         void SelectRecord(){
-            var record=Selected;comments.Text=record==null?"还没有在程序里提交过反馈":FeedbackText.Comments(record);
+            var record=Selected;comments.Text=record==null?EmptyText:FeedbackText.Comments(record);
             if(record!=null&&record.Unread>0)try{
-                replies.Store.MarkRead(record.Number);var entry=(Entry)records.SelectedItem;entry.Record=replies.Store.Find(record.Number);
-                loading=true;int index=records.SelectedIndex;records.Items[index]=entry;records.SelectedIndex=index;loading=false;
-            }catch(Exception){loading=false;status.Text="未能保存已读状态，请稍后重试。";}
+                replies.Store.MarkRead(record.Number);var entry=records.SelectedItem as Entry;var saved=replies.Store.Find(record.Number);
+                if(entry!=null&&saved!=null&&entry.Record.Number==record.Number)entry.Record=saved;
+                records.Invalidate();
+            }catch(Exception){status.Text="未能保存已读状态，请稍后重试。";}
             Buttons();
         }
-        void Buttons(){var record=Selected;refresh.Enabled=!busy&&records.Items.Count>0;web.Enabled=record!=null;delete.Enabled=!busy&&record!=null;supplement.Enabled=!busy&&record!=null&&record.MaySupplement;}
-        void OpenWeb(){var record=Selected;if(record==null)return;try{open(FeedbackClient.IssueUrl(record.Number));}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}}
+        void Buttons(){var record=Selected;refresh.Enabled=!busy&&records.Items.Count>0;web.Enabled=true;delete.Enabled=!busy&&record!=null;supplement.Enabled=!busy&&record!=null&&record.MaySupplement;}
+        void OpenWeb(){var record=Selected;try{open(record==null?IssuesUrl:FeedbackClient.IssueUrl(record.Number));}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}}
         void Delete(){var record=Selected;if(record==null||busy||!confirm("仅删除此电脑上的反馈记录和补充凭证，不会删除 GitHub 上的 issue。确定删除吗？"))return;
             try{replies.Store.Delete(record.Number);status.Text="本地记录已删除。";Reload();}catch(Exception){status.Text="无法删除本地记录，请稍后重试。";}
         }
@@ -121,7 +167,7 @@ namespace AtkBatteryTray {
             });
         }
         void CancelPending(){if(pending!=null)try{pending.Cancel();}catch(ObjectDisposedException){}}
-        protected override void Dispose(bool disposing){if(disposing)CancelPending();base.Dispose(disposing);}
+        protected override void Dispose(bool disposing){if(disposing){StopWatching();CancelPending();}base.Dispose(disposing);}
     }
     internal sealed class FeedbackSupplementDialog:ThemedDialog {
         readonly FeedbackReplies replies;readonly long number;readonly FeedbackReport report;

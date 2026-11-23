@@ -81,7 +81,8 @@ namespace AtkBattery {
     internal sealed class FeedbackStore {
         static readonly Lazy<FeedbackStore> current=new Lazy<FeedbackStore>(delegate{return new FeedbackStore(Path.Combine(DeviceSettings.DataDirectory,"feedback-v1.dat"));});
         static readonly byte[] entropy=Encoding.UTF8.GetBytes("MyFinderDeviceBattery/feedback-v1");
-        readonly object gate=new object();readonly string path;FeedbackData data;bool writable=true;
+        readonly object gate=new object();readonly string path;FeedbackData data;bool writable=true,unreadable,backedUp;string resetReason;
+        internal event EventHandler Changed;
         internal static FeedbackStore Current {get{return current.Value;}}
         // A null path is an isolated, in-memory store for injected/offline callers.
         internal FeedbackStore(string file,Func<DateTime> now=null){path=file;data=Load((now??delegate{return DateTime.UtcNow;})());}
@@ -90,11 +91,46 @@ namespace AtkBattery {
         internal FeedbackRecord Find(long number){return Snapshot().Records.Find(delegate(FeedbackRecord r){return r.Number==number&&number>0;});}
         internal int Unread {get{lock(gate){int count=0;foreach(var r in data.Records)if(r.Number>0)count+=r.Unread;return count;}}}
         internal string MenuText {get{int count=Unread;return "我的反馈"+(count>0?"（"+count+"）":"");}}
+        internal bool Unreadable {get{lock(gate)return unreadable;}}
+        internal bool Writable {get{lock(gate)return writable;}}
+        internal bool BackedUp {get{lock(gate)return backedUp;}}
+        internal string ResetReason {get{lock(gate)return resetReason;}}
+        internal string LoadWarning {get{lock(gate){
+            if(!unreadable)return "";
+            return backedUp?"之前的反馈记录无法读取，已另存为备份。已提交的反馈仍可在网页查看。":"之前的反馈记录无法读取，未能另存为备份。暂时无法保存本地记录。已提交的反馈仍可在网页查看。";
+        }}}
+        internal string Diagnostic {get{lock(gate){
+            int count=0;foreach(var record in data.Records)if(record.Number>0)count++;
+            string state=!writable?"不可写":resetReason==null?"正常":"已重置（"+resetReason+"）";
+            return "反馈记录："+count.ToString(CultureInfo.InvariantCulture)+" 条 | 存储："+state;
+        }}}
         internal void Change(Action<FeedbackData> change){lock(gate){
             if(!writable)throw new IOException("Feedback storage is unavailable.");
-            var next=Clone(data);change(next);Validate(next);Trim(next);Save(next);data=next;
-        }}
-        internal void MarkRead(long number){Change(delegate(FeedbackData next){var record=next.Records.Find(delegate(FeedbackRecord r){return r.Number==number;});if(record!=null)foreach(var c in record.Comments){if(!record.ReadIds.Contains(c.Id))record.ReadIds.Add(c.Id);if(!record.NotifiedIds.Contains(c.Id))record.NotifiedIds.Add(c.Id);}});}
+            var next=Clone(data);change(next);Commit(next);
+        }NotifyChanged();}
+        void Commit(FeedbackData next){
+            Validate(next);Trim(next);
+            try{Save(next);}catch(Exception){writable=false;throw new IOException("Feedback storage is unavailable.");}
+            data=next;
+        }
+        void NotifyChanged(){
+            var handlers=Changed;if(handlers==null)return;
+            foreach(EventHandler handler in handlers.GetInvocationList())try{handler(this,EventArgs.Empty);}catch(Exception){}
+        }
+        internal void MarkRead(long number){
+            lock(gate){
+                var record=data.Records.Find(delegate(FeedbackRecord r){return r.Number==number;});
+                if(record==null||!record.Comments.Exists(delegate(FeedbackComment c){return !record.ReadIds.Contains(c.Id)||!record.NotifiedIds.Contains(c.Id);}))return;
+                if(!writable)throw new IOException("Feedback storage is unavailable.");
+                var next=Clone(data);record=next.Records.Find(delegate(FeedbackRecord r){return r.Number==number;});
+                foreach(var c in record.Comments){
+                    if(!record.ReadIds.Contains(c.Id))record.ReadIds.Add(c.Id);
+                    if(!record.NotifiedIds.Contains(c.Id))record.NotifiedIds.Add(c.Id);
+                }
+                Commit(next);
+            }
+            NotifyChanged();
+        }
         internal void Delete(long number){Change(delegate(FeedbackData next){next.Records.RemoveAll(delegate(FeedbackRecord r){return r.Number==number;});});}
         internal string BeginCreation(string category,string description,string key,DateTime now){
             string id=Guid.NewGuid().ToString("D");string summary=FeedbackText.Plain(description.Trim()).Replace('\n',' ').Replace('\t',' ');
@@ -109,17 +145,30 @@ namespace AtkBattery {
         });}
         FeedbackData Load(DateTime now){
             if(path==null)return new FeedbackData();
+            byte[] encrypted;
             try{
-                if(!File.Exists(path))return new FeedbackData();
-                byte[] encrypted=UpdateJson.ReadBytes(path,128*1024*1024);
-                var value=UpdateJson.Read<FeedbackData>(ProtectedData.Unprotect(encrypted,entropy,DataProtectionScope.CurrentUser));Validate(value);
+                encrypted=UpdateJson.ReadBytes(path,128*1024*1024);
+            }catch(FileNotFoundException){return new FeedbackData();}
+            catch(DirectoryNotFoundException){return new FeedbackData();}
+            catch(InvalidDataException){return Recover("format");}
+            catch(Exception){return Recover("io");}
+            byte[] serialized;
+            try{serialized=ProtectedData.Unprotect(encrypted,entropy,DataProtectionScope.CurrentUser);}
+            catch(Exception){return Recover("decrypt");}
+            try{
+                var value=UpdateJson.Read<FeedbackData>(serialized);Validate(value);
                 value.Records.RemoveAll(delegate(FeedbackRecord r){return r.Number==0&&now-r.CreatedAt>TimeSpan.FromHours(24);});Trim(value);return value;
-            }catch(Exception){
-                // Do not overwrite unreadable data if preserving it also failed.
-                try{if(File.Exists(path)){string bad=path+".bad";if(File.Exists(bad))bad=path+"."+Guid.NewGuid().ToString("N")+".bad";File.Move(path,bad);}}
-                catch(Exception){writable=false;}
-                return new FeedbackData();
-            }
+            }catch(Exception){return Recover("format");}
+        }
+        FeedbackData Recover(string reason){
+            unreadable=true;
+            // Only a completed move establishes a backup and a reset. An input
+            // that could not be preserved must never be overwritten.
+            try{
+                string bad=path+".bad";if(File.Exists(bad))bad=path+"."+Guid.NewGuid().ToString("N")+".bad";
+                File.Move(path,bad);backedUp=true;resetReason=reason;
+            }catch(Exception){writable=false;}
+            return new FeedbackData();
         }
         void Save(FeedbackData value){
             if(path==null)return;
