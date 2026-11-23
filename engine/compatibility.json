@@ -102,6 +102,7 @@
     {"provider":"astro","name":"Astro A50 Gen 5","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/astro.py"},
     {"provider":"corsair","name":"Corsair 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/corsair.py"},
     {"provider":"lamzu","name":"LAMZU Maya X","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/lamzu.py"},
+    {"provider":"ajazz_aj179_nlp","name":"AJAZZ AJ179 NLP 2.4G (NearLink)","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/ajazz_aj179_nlp.py","matchScope":"仅7768:642E / FFB2:0001；要求原生pnp:usb父设备、匹配VID/PID的MI_01路径和接口1，先计数再验证，每个父设备唯一目标集合；仅接受IN/OUT均唯一编号06且含报告ID恰64字节的描述符证明。排空旧输入后每接收器每轮仅一次64字节06 05查询；有界等待状态或电池通知，离线状态清除当前百分比；不使用Feature。公开上游协议与合成测试候选，本项目未实机验证；五格显示不作为实测百分比证据，排除有线6D2E、FFB1 DFU及其他型号","reference":"engine/upstream-protocols.md#ajazz-aj179-nlp-7768642e"},
     {"provider":"am_infinity","name":"Angry Miao AM Infinity 8K","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/am_infinity.py"},
     {"provider":"steelseries_elite","name":"SteelSeries Arctis Nova Elite","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/steelseries_elite.py"},
     {"provider":"logitech_centurion","name":"Logitech G PRO X 2 LIGHTSPEED","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/logitech_centurion.py"},

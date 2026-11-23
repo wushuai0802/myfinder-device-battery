@@ -4,6 +4,45 @@ How each device's battery level is read - one section per device, linked from th
 the [README](../README.md#supported-devices). These are the implementation notes: what is sent,
 what comes back, and where each protocol was taken from.
 
+## AJAZZ AJ179 NLP (7768:642E)
+
+Issue #1064, candidate evidence level C. Independently implemented from public
+[protocol notes](https://github.com/RamonDantasPolicarpo/ajazz-suite/blob/9028eefff6d51bde532f37521c95f62f82061529/docs/protocol/mouse_protocol.md)
+and [mouse.rs](https://github.com/RamonDantasPolicarpo/ajazz-suite/blob/9028eefff6d51bde532f37521c95f62f82061529/crates/ajazz-protocol/src/mouse.rs)
+at the pinned revision; no vendor implementation or assets are included.
+The issue's five-bar display is not hardware confirmation of a percentage.
+The public upstream parses a percentage; this project has synthetic evidence only.
+
+Scope is the 7768:642E NearLink 2.4G receiver, interface 1, FFB2:0001,
+with a matching MI_01 HID path and resolved native `pnp:usb` parent VID/PID.
+Count target collections before checking paths or report proof. Duplicate target
+collections block that receiver; any unresolved target parent blocks the poll
+because its relationship to the resolved receivers is unknown.
+Wired 6D2E, FFB1 DFU, and other identities are excluded.
+
+Windows report sizes use the existing scoped HidP/descriptor helpers. Only
+numbered report 06 as the sole IN and OUT report, each exactly 64 bytes including
+the report ID, is accepted. Unsupported layouts and an implicit unnumbered
+format are conservatively ignored. No Feature report is used.
+
+Before sending, discard already queued input using at most 16 nonblocking reads
+and a 40 ms deadline. Failure to observe an empty queue means no send.
+Each eligible receiver receives at most one output per poll:
+`06 05` followed by 62 zero bytes. A successful full 64-byte write is required;
+there is no retry, reset, configuration, firmware command, or additional write.
+Reply processing is bounded to 16 reads and 120 ms.
+
+A 64-byte `06 05` status requires at least one nonzero firmware byte at offsets
+9 and 10. Offset 12 nonzero means online; offset 13 is 0..100 percent and
+offset 14 must be 0 or 1 for a known charging flag. Offline status invalidates
+the current percentage, including any pending notification.
+During the wait, `06 FA` notifications qualify only when offset 5 is 03,
+offset 6 is 1..100, and offset 7 is 0 or 1. Notification zero and other async
+messages are ignored. Notifications remain pending while awaiting a preferred
+status response. The protocol provides no transaction token; draining excludes
+already queued packets, but cannot distinguish an old packet still in flight.
+No value is retained across polls.
+
 ## Headsets
 
 ### ATK N9 headsets (373B:1262, 12D6 and deferred 1204)
