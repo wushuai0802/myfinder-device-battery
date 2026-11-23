@@ -245,9 +245,6 @@ def build_index(root=None, *, engine_root=None):
             # branch of aula_keyboard. Its shared 05AC:024F identity stays out
             # of the generic triage index so other keyboards with that PID are
             # never presented as supported by static enumeration.
-            if module == "razer" and path.with_name("blackshark_hyperspeed.py").is_file():
-                dedicated = StaticSource(path.with_name("blackshark_hyperspeed.py"))
-                add(module, dedicated.get("VID"), dedicated.get("PID"), dedicated.get("NAME"), "headset")
             if module in SINGLE:
                 vid = next(iter(vendors[module]))
                 name = (readers[module]["name"] if module == "barracuda" else source.get("NAME"))
@@ -279,6 +276,18 @@ def build_index(root=None, *, engine_root=None):
                 partial[module] = "已收录部分固定 ID，但其余定义无法静态解析。"
             else:
                 unparsed.add(module)
+
+    # This exact receiver is owned by a dedicated control transport outside
+    # the ordinary Razer pack profiles. Read the selected snapshot in both modes.
+    headset_path = engine / "providers" / "razer_profiles.py"
+    if headset_path.is_file():
+        try:
+            headset = StaticSource(headset_path)
+            if "HYPERSPEED_RX_PID" in headset.values:
+                add("razer", headset.get("RAZER_VID"), headset.get("HYPERSPEED_RX_PID"),
+                    headset.get("HYPERSPEED_RX_NAME"), "headset")
+        except (KeyError, ValueError, TypeError, SyntaxError):
+            unparsed.add("blackshark_hyperspeed")
 
     for profile in catalog["nativeProfiles"]:
         add(profile["provider"], profile["match"]["vendorId"], profile["match"]["productId"],

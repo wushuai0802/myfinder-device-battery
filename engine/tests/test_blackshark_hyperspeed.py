@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _hidstub  # noqa: F401
@@ -156,3 +156,24 @@ class BlackSharkHyperSpeedTests(unittest.TestCase):
 
         self.assertEqual([item.level for item in result], [10, 90])
         self.assertEqual([frame[2] & 0x1F for frame in sent], [0, 1])
+
+    def test_windows_output_boundary_sends_only_the_fixed_battery_query(self):
+        from ctypes import wintypes
+        kernel, hid_dll = Mock(), Mock()
+        kernel.CreateFileW.return_value = 123
+        calls = []
+        def send(handle, buffer, length):
+            calls.append((handle, bytes(buffer), length))
+            return 1
+        hid_dll.HidD_SetOutputReport.side_effect = send
+        path = receiver()["path"]
+        frame = helper.build_request(17)
+        with patch.object(helper.os, "name", "nt"), patch.object(
+                helper.ctypes, "WinDLL", side_effect=[kernel, hid_dll], create=True):
+            self.assertFalse(helper._set_output_report(path, bytes(64)))
+            self.assertTrue(helper._set_output_report(path, frame))
+        self.assertEqual(kernel.CreateFileW.call_args.args,
+                         (path.decode(), 0x40000000, 3, None, 3, 0x80, None))
+        self.assertEqual(calls, [(123, frame, 64)])
+        self.assertEqual(hid_dll.HidD_SetOutputReport.argtypes[-1], wintypes.ULONG)
+        kernel.CloseHandle.assert_called_once_with(123)

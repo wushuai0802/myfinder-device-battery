@@ -13,6 +13,9 @@ RAZER_VID = 0x1532
 # copy of that OpenRazer list and checks this table against it.
 # The Viper V3 Pro SE pair below additionally follows OpenRazer's mouse driver
 # IDs and charge-level cases; see upstream-protocols.md for the source facts.
+HYPERSPEED_RX_PID = 0x0565
+HYPERSPEED_RX_NAME = "Razer BlackShark V2 HS 2.4"
+
 KNOWN = {
     0x0528: ("Razer BlackShark V2 Pro (2020)", 0x3F),
     0x0555: ("Razer BlackShark V2 Pro (2023)", 0x3F),
@@ -146,4 +149,4 @@ for _pid, (_name, _tid) in KNOWN.items():
 
 # Barracuda's own PA reader, the 2020 charging cable, and intentional exclusions
 # (Bluetooth Orochi / wired-only Basilisk) must not become generic pack targets.
-reserve_ids((RAZER_VID, pid) for pid in (0x053A, 0x052E, 0x0095, 0x00CB, 0x0565))
+reserve_ids((RAZER_VID, pid) for pid in (0x053A, 0x052E, 0x0095, 0x00CB, HYPERSPEED_RX_PID))

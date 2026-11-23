@@ -12,10 +12,9 @@ from typing import Callable, Iterable, Mapping, Optional
 import hid
 
 from .base import DeviceStatus
+from .razer_profiles import HYPERSPEED_RX_PID as PID, HYPERSPEED_RX_NAME as NAME
 
 VID = 0x1532
-PID = 0x0565
-NAME = "Razer BlackShark V2 HS 2.4"
 USAGE_PAGE = 0xFF14
 USAGE = 0x0001
 INTERFACE = 3
@@ -124,7 +123,7 @@ def device_path(info: Mapping[str, object]) -> Optional[bytes]:
 
 
 def _set_output_report(path: bytes, frame: bytes) -> bool:
-    if os.name != "nt" or len(frame) != REPORT_LENGTH:
+    if os.name != "nt" or len(frame) != REPORT_LENGTH or frame != build_request(frame[2] & 0x1F):
         return False
 
     try:
