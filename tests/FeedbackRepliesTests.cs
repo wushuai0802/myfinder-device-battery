@@ -326,7 +326,7 @@ static class FeedbackRepliesTests {
         Check(File.Exists(blockedPath)&&Convert.ToBase64String(File.ReadAllBytes(blockedPath))==Convert.ToBase64String(original)&&
             Directory.GetFiles(output,Path.GetFileName(blockedPath)+"*.bad").Length==0,
             "failed quarantine leaves the original file untouched");
-        Check(blocked.Unreadable&&!blocked.Writable&&!blocked.BackedUp&&blocked.ResetReason==null&&
+        Check(blocked.Unreadable&&!blocked.Writable&&!blocked.BackedUp&&blocked.ResetReason==null&&blocked.LoadFailureKind=="io"&&
             blocked.Diagnostic=="反馈记录：0 条 | 存储：不可写"&&blocked.LoadWarning==UnbackedWarning,
             "failed quarantine reports unreadable and non-writable without claiming a reset or backup");
         using(var dialog=new MyFeedbackDialog(Service(blocked,new Http()),Report(),false,delegate{})){

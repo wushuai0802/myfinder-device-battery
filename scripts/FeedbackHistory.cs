@@ -94,7 +94,8 @@ namespace AtkBattery {
         internal bool Unreadable {get{lock(gate)return unreadable;}}
         internal bool Writable {get{lock(gate)return writable;}}
         internal bool BackedUp {get{lock(gate)return backedUp;}}
-        internal string ResetReason {get{lock(gate)return resetReason;}}
+        internal string ResetReason {get{lock(gate)return backedUp?resetReason:null;}}
+        internal string LoadFailureKind {get{lock(gate)return resetReason;}}
         internal string LoadWarning {get{lock(gate){
             if(!unreadable)return "";
             return backedUp?"之前的反馈记录无法读取，已另存为备份。已提交的反馈仍可在网页查看。":"之前的反馈记录无法读取，未能另存为备份。暂时无法保存本地记录。已提交的反馈仍可在网页查看。";
@@ -161,12 +162,12 @@ namespace AtkBattery {
             }catch(Exception){return Recover("format");}
         }
         FeedbackData Recover(string reason){
-            unreadable=true;
+            unreadable=true;resetReason=reason;
             // Only a completed move establishes a backup and a reset. An input
             // that could not be preserved must never be overwritten.
             try{
                 string bad=path+".bad";if(File.Exists(bad))bad=path+"."+Guid.NewGuid().ToString("N")+".bad";
-                File.Move(path,bad);backedUp=true;resetReason=reason;
+                File.Move(path,bad);backedUp=true;
             }catch(Exception){writable=false;}
             return new FeedbackData();
         }
