@@ -18,7 +18,7 @@ static class FeedbackFormTests {
     const string Submitted="已提交，编号 #42。";
     const string GenericFailure="提交失败：暂时无法提交。可以改用浏览器提交，或复制报告发到群里。";
     const string ConnectionFailure="提交失败：连不上反馈服务。可以改用浏览器提交，或复制报告发到群里。";
-    const string ServiceFailure="提交失败：反馈服务暂时停用。可以改用浏览器提交，或复制报告发到群里。";
+    const string ServiceFailure="提交失败：反馈服务暂时不可用。可以改用浏览器提交，或复制报告发到群里。";
     const string RateLimit="提交太频繁，请过一会儿再试。";
     static int checks,failures;
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window,IntPtr insertAfter,int x,int y,int width,int height,uint flags);
@@ -186,7 +186,7 @@ static class FeedbackFormTests {
         }
         http=new FakeHttp {Reply=delegate{return Response(500);}};
         using(var form=Form(http,Relay,delegate(string value){copied=value;},delegate(string value){opened=value;})){
-            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==GenericFailure;});
+            Show(form);Find<Button>(form,"SubmitFeedback").PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==ServiceFailure;});
             var fallback=Find<Button>(form,"BrowserFallback");Check(fallback.Visible&&fallback.Text=="改用浏览器提交"&&Find<TextBox>(form,"Description").Enabled,"failure offers browser and restores inputs");
             fallback.PerformClick();Check(http.Calls==1&&copied.Contains("设备连接后没有显示电量")&&Decode(opened).Contains("设备连接后没有显示电量"),"explicit fallback copies and opens without a second POST");form.Close();
         }
@@ -223,11 +223,11 @@ static class FeedbackFormTests {
         }
         int calls=0;
         var fallbackFailure=new FakeHttp {Reply=delegate{
-            if(++calls==1)return Response(503,"{\"error\":\"disabled\"}");
-            throw new FeedbackNotSentException(new WebException("fixture"));
+            calls++;
+            return Response(503,"{\"error\":\"unavailable\"}");
         }};
         var failed=Submit(fallbackFailure,FeedbackRelay.Url);
-        Check(failed.Kind==FeedbackResultKind.Unavailable&&failed.Failure==FeedbackFailure.Service&&calls==2,"the known primary pause survives an unreachable fallback");
+        Check(failed.Kind==FeedbackResultKind.Unavailable&&failed.Failure==FeedbackFailure.Service&&calls==1,"temporary upstream failure is reported without replay");
     }
     static void SuccessAndRepeat(){
         DateTime now=new DateTime(2026,11,3,0,0,0,DateTimeKind.Utc);var session=new FeedbackSession(delegate{return now;});var http=new FakeHttp();string opened=null;
@@ -288,7 +288,7 @@ static class FeedbackFormTests {
                                         return;
                                     }
                                 }
-                                if(state!="draft"&&Find<Label>(form,"FeedbackStatus").Text!=(succeeded?Submitted:GenericFailure))return;
+                                if(state!="draft"&&Find<Label>(form,"FeedbackStatus").Text!=(succeeded?Submitted:ServiceFailure))return;
                                 var list=Find<ListBox>(history,"FeedbackRecords");
                                 if(succeeded&&list.Items.Count!=2)return;
                                 Check(mine.Enabled&&mine.Text==(succeeded?"查看我的反馈":"我的反馈"),
@@ -363,7 +363,7 @@ static class FeedbackFormTests {
                 form.Scale(new SizeF(2,2));form.Font=new Font("Microsoft YaHei UI",24,FontStyle.Regular,GraphicsUnit.Pixel);Show(form);
                 if(state!="browser"){
                     Find<Button>(form,"SubmitFeedback").PerformClick();
-                    Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?GenericFailure:Submitted);});
+                    Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?ServiceFailure:Submitted);});
                 }
                 Check(area.Contains(form.Bounds),state+": entire feedback window fits (window="+form.Bounds+", client="+form.ClientSize+", work area="+area+")");
                 var notice=Find<Label>(form,"FeedbackNotice");
@@ -404,7 +404,7 @@ static class FeedbackFormTests {
             var browser=Find<Button>(form,"BrowserFallback");
             var copy=Find<Button>(form,"CopyFeedbackReport");
             submit.PerformClick();
-            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==GenericFailure;});
+            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==ServiceFailure;});
 
             int oneRowWidth=0;
             foreach(Button button in new[]{submit,cancel,browser,copy})
@@ -438,7 +438,7 @@ static class FeedbackFormTests {
             Check(SetWindowPos(form.Handle,IntPtr.Zero,initial.Left+17,initial.Top+23,form.Width,form.Height,0x0004|0x0010),"native move delivered");
             Check(area.Contains(form.Bounds),state+": late same-monitor move remains inside work area ("+form.Bounds+")");
             Find<Button>(form,"SubmitFeedback").PerformClick();
-            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?GenericFailure:Submitted);});
+            Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==(state=="failure"?ServiceFailure:Submitted);});
             Check(area.Contains(form.Bounds),state+": result-state layout retains the native bounds constraint");
             Check(SetWindowPos(form.Handle,IntPtr.Zero,area.Left-11,area.Top-13,form.Width+40,form.Height+32,0x0004|0x0010),"result-state native bounds delivered");
             Check(area.Contains(form.Bounds),state+": result-state native move and size remain inside work area ("+form.Bounds+")");
