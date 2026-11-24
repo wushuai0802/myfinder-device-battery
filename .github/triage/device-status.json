@@ -3,8 +3,32 @@
   "devices": {
     "1532:0577": {
       "status": "beta",
-      "version": "1.4.0-beta.3",
-      "note": "雷蛇 BlackShark V3 Pro 2.4G 仅被动接收百分比，充电状态未知，待实机核对。",
+      "version": "1.4.0-beta.5",
+      "note": "雷蛇 BlackShark V3 Pro 2.4G 优先被动接收，静默时节流查询电量，充电状态未知，待实机核对。",
+      "reports": 1
+    },
+    "046D:C54F": {
+      "status": "beta",
+      "version": "1.4.0-beta.5",
+      "note": "罗技 PRO X3 SUPERSTRIKE 2.4G 接收器电量候选，待实机核对。",
+      "reports": 1
+    },
+    "260D:1156": {
+      "status": "beta",
+      "version": "1.4.0-beta.5",
+      "note": "达尔优 2.4G 鼠标接收器（CM610 V2 MAX 等）电量与充电候选，待实机核对。",
+      "reports": 1
+    },
+    "3837:1014": {
+      "status": "beta",
+      "version": "1.4.0-beta.5",
+      "note": "迈从 A7 V3 Ultra+（1014）2.4G 接收器电量与充电候选，待实机核对。",
+      "reports": 1
+    },
+    "36F9:C001": {
+      "status": "beta",
+      "version": "1.4.0-beta.5",
+      "note": "西伯利亚 K03S（C001）2.4G 接收器电量候选，待实机核对。",
       "reports": 1
     },
     "320F:226F": {
@@ -264,8 +288,8 @@
     "36F9:F001": {
       "reports": 0,
       "status": "beta",
-      "version": "1.4.0-beta.3",
-      "note": "西伯利亚 T10 2.4G 增加型号专属电量查询，保留旧读法，待实机核对。"
+      "version": "1.4.0-beta.5",
+      "note": "西伯利亚 T10 2.4G 修复常量输出门禁，保留旧读法，待实机核对。"
     }
   }
 }
