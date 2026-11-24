@@ -142,6 +142,8 @@ V3_REPORT_ID, V3_REPORT_LEN = 0x4D, 64  # includes the report ID; body is 63 byt
 V3_CMD_POWER = 0x0900
 V3_TIMEOUT_MS = 1500                  # upstream observed deferred replies at ~1 s
 V3_MAX_READS = 32
+V3_BUSY_RETRIES = 2                   # M HUB mcReadWithRetry: bounded retry only on explicit 0xFF busy
+V3_BUSY_RETRY_DELAY_S = 0.03          # M HUB sleep(30) between busy retries
 
 # model ids seen in the 0x06 reply (the receiver's own PID does not identify the mouse:
 # 0x1020 is used by the M7 Ultra and by the L7 Pro)
@@ -374,6 +376,43 @@ def parse_v7(resp) -> Optional[Tuple[int, bool]]:
     if power is None or not power[0] or resp[19] not in (0, 1):
         return None
     return power
+
+
+def _classify_v3_rejection(resp, *, require_v7: bool = False) -> str:
+    """Return a fixed non-private reason why a frame was not accepted as a V3/V7 power reply."""
+    if not resp or len(resp) != V3_REPORT_LEN:
+        return "unrelated"
+    r = bytes(resp)
+    if r[:2] != bytes([V3_REPORT_ID, 1]) or int.from_bytes(r[4:6], "little") != V3_CMD_POWER:
+        return "unrelated"
+    if r[2] not in (0, 1):
+        return "flags"
+    size = r[3]
+    end = 8 + size
+    if end + (r[2] == 1) > len(r):
+        return "short payload"
+    if r[2] == 1:
+        checksum = 0
+        for value in r[2:end]:
+            checksum ^= value
+        if r[end] != checksum:
+            return "checksum"
+    if size >= 1 and r[8] == 0xFF:
+        return "busy"
+    if size < 14:
+        return "short payload"
+    data = r[8:end]
+    if int.from_bytes(data[:2], "little") != V3_VID:
+        return "vid mismatch"
+    if data[10] == 0:
+        return "disconnected"
+    if data[12] > 100:
+        return "level range"
+    if require_v7 and data[12] == 0:
+        return "zero level"
+    if require_v7 and r[19] not in (0, 1):
+        return "charge status"
+    return "rejected"
 
 
 def _a5v2_path(path):
@@ -798,8 +837,8 @@ class MchoseProvider(Provider):
             return None
         return info if info.get("path") else None
 
-    def _read_v3(self, path: bytes, parse_power=parse_v3) -> Optional[Tuple[int, bool]]:
-        """One power query per poll; ignore unrelated input within a bounded wait."""
+    def _read_v3(self, path: bytes, parse_power=parse_v3, *, retry_busy: bool = False) -> Optional[Tuple[int, bool]]:
+        """Read power once per poll; V7 Pro may retry boundedly only on explicit M HUB 0xFF busy frames."""
         dev = hid.device()
         try:
             dev.open_path(path)
@@ -807,6 +846,10 @@ class MchoseProvider(Provider):
                 self._note_v3("V3 power query write failed or short; no retry")
                 return None
             deadline = time.monotonic() + V3_TIMEOUT_MS / 1000
+            frames_seen = 0
+            last_0900_reason = None
+            busy_retries = 0
+            require_v7 = parse_power is parse_v7
             for _ in range(V3_MAX_READS):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -814,11 +857,27 @@ class MchoseProvider(Provider):
                 resp = dev.read(V3_REPORT_LEN, max(1, int(remaining * 1000)))
                 if not resp:
                     break
+                frames_seen += 1
                 got = parse_power(resp)
                 if got is not None:
                     self._note_v3("V3 valid power reply")
                     return got
-            self._note_v3("no valid V3 power reply; no legacy fallback")
+                reason = _classify_v3_rejection(resp, require_v7=require_v7)
+                if reason != "unrelated":
+                    last_0900_reason = reason
+                if (retry_busy and reason == "busy" and busy_retries < V3_BUSY_RETRIES):
+                    if deadline - time.monotonic() <= V3_BUSY_RETRY_DELAY_S:
+                        break
+                    busy_retries += 1
+                    time.sleep(V3_BUSY_RETRY_DELAY_S)
+                    if time.monotonic() >= deadline:
+                        break
+                    if dev.write(make_v3_request()) != V3_REPORT_LEN:
+                        self._note_v3("V3 power query write failed or short; no retry")
+                        return None
+            detail = (last_0900_reason if last_0900_reason is not None
+                      else ("silent" if frames_seen == 0 else "unrelated frames"))
+            self._note_v3(f"no valid V3 power reply; reason={detail}; no legacy fallback")
         except (OSError, ValueError):
             self._note_v3("V3 power I/O failed; no legacy fallback")
         finally:
@@ -889,7 +948,7 @@ class MchoseProvider(Provider):
                 if info is None:
                     self._last.pop(key, None)
                     continue
-                got_v7 = self._read_v3(info["path"], parse_v7)
+                got_v7 = self._read_v3(info["path"], parse_v7, retry_busy=True)
                 if got_v7 is not None:
                     found.setdefault(key, []).append((got_v7[0], got_v7[1], pid, 0))
                 continue
