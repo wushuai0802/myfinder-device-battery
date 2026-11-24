@@ -194,9 +194,58 @@ static class WirelessTests {
             }
             bool exited=false;for(int i=0;i<30&&!exited;i++){try{using(var process=Process.GetProcessById(pid))exited=process.HasExited;}catch(ArgumentException){exited=true;}if(!exited)Thread.Sleep(20);}
             Check(exited,"closing the widget worker leaves no background process");
+            ShutdownChecks(fake);
             Console.WriteLine("PASS "+checks+" universal battery checks; hardware access replaced with fixtures");Console.WriteLine("Universal UI previews: "+output);return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{VisualDesign.HighContrastOverride=null;if(owner!=null)owner.ExitThread();current.SetValue(null,previous);}
+    }
+    static void ShutdownChecks(string fakeWorkerRoot) {
+        bool osShuttingDown=true;
+        using(var worker=new GenericBatteryWorker(fakeWorkerRoot,false,5000,null,null,0,delegate{return osShuttingDown;})) {
+            var snap=worker.Poll(true);
+            Check(!String.IsNullOrEmpty(snap.Error),"worker poll refuses to start during OS shutdown");
+            var proc=(Process)typeof(GenericBatteryWorker).GetField("process",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(worker);
+            Check(proc==null,"no python child process is spawned while OS is shutting down");
+        }
+        osShuttingDown=false;
+        int stopPid;
+        using(var worker=new GenericBatteryWorker(fakeWorkerRoot,false,5000,null,null,0,delegate{return osShuttingDown;})) {
+            var ok=worker.Poll(true);
+            Check(ok.Error==null,"worker polls normally before shutdown");
+            var proc=(Process)typeof(GenericBatteryWorker).GetField("process",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(worker);
+            Check(proc!=null&&!proc.HasExited,"worker child process runs before shutdown");
+            stopPid=proc.Id;
+            worker.BeginShutdown();
+            var after=worker.Poll(true);
+            Check(!String.IsNullOrEmpty(after.Error),"worker refuses to respawn after BeginShutdown");
+            var procAfter=(Process)typeof(GenericBatteryWorker).GetField("process",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(worker);
+            Check(procAfter==null,"no new python process spawned after BeginShutdown");
+            worker.CancelShutdown();
+            var resumed=worker.Poll(true);
+            Check(resumed.Error==null,"cancelling shutdown allows worker polling to resume");
+        }
+        bool stopped=false;for(int i=0;i<30&&!stopped;i++){try{using(var p=Process.GetProcessById(stopPid))stopped=p.HasExited;}catch(ArgumentException){stopped=true;}if(!stopped)Thread.Sleep(20);}
+        Check(stopped,"BeginShutdown terminates the existing python child process");
+        using(var audio=new AudioBrokerClient(Assembly.GetExecutingAssembly().Location,2000,delegate{return true;})) {
+            var reading=audio.Query(new AudioCommand {Operation="read"});
+            Check(!String.IsNullOrEmpty(reading.Error),"audio broker refuses to spawn during OS shutdown");
+            var proc=(Process)typeof(AudioBrokerClient).GetField("process",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(audio);
+            Check(proc==null,"no audio broker child process spawned while OS is shutting down");
+        }
+        int endingCount=0;bool? endSessionArg=null;
+        using(var win=new DeviceEventsWindow(delegate{},null,null,null,delegate{endingCount++;},delegate(bool ending){endSessionArg=ending;})) {
+            var wndProc=typeof(DeviceEventsWindow).GetMethod("WndProc",BindingFlags.Instance|BindingFlags.NonPublic);
+            var qMsg=Message.Create(win.Handle,0x0011,IntPtr.Zero,IntPtr.Zero);
+            object[] qArgs=new object[]{qMsg};wndProc.Invoke(win,qArgs);
+            qMsg=(Message)qArgs[0];
+            Check(endingCount==1&&qMsg.Result==new IntPtr(1),"WM_QUERYENDSESSION invokes sessionEnding and allows shutdown");
+            var eMsg=Message.Create(win.Handle,0x0016,IntPtr.Zero,IntPtr.Zero);
+            object[] eArgs=new object[]{eMsg};wndProc.Invoke(win,eArgs);
+            Check(endSessionArg.HasValue&&!endSessionArg.Value,"WM_ENDSESSION(0) reports cancelled shutdown");
+            var eMsg2=Message.Create(win.Handle,0x0016,new IntPtr(1),IntPtr.Zero);
+            object[] eArgs2=new object[]{eMsg2};wndProc.Invoke(win,eArgs2);
+            Check(endSessionArg.HasValue&&endSessionArg.Value,"WM_ENDSESSION(1) reports confirmed shutdown");
+        }
     }
     static void AccessibilityChecks() {
         using(var host=new Form {Location=new Point(42,57),ClientSize=new Size(520,300),AccessibleName="设备电量"}) {

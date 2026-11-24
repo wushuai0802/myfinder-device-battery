@@ -248,12 +248,14 @@ namespace AtkBattery {
         readonly bool smoke;
         readonly int queryBudget;
         readonly Func<Process,bool> terminate;
+        readonly Func<bool> isSystemShuttingDown;
         readonly object lifecycle=new object();
         readonly object query=new object();
         int generation;long sequence;
         Process process;
         IntPtr job;
         bool disposed,quarantined;
+        volatile bool shuttingDown;
         DevicePackManager packManager;
         FamilyMemoryStore familyMemory;
         Func<bool> probeFamiliesReader;
@@ -262,7 +264,12 @@ namespace AtkBattery {
         long loadedPackVersion;int failedPackGeneration=-1;
         sealed class DpiLease {internal string Token,Provider;internal int Current;internal int[] Stages;internal DateTime Checked;internal int Generation;}
         readonly Dictionary<string,DpiLease> dpiLeases=new Dictionary<string,DpiLease>(StringComparer.Ordinal);
-        internal GenericBatteryWorker(string engineRoot=null,bool packageSmoke=false,int timeoutMilliseconds=45000,Func<Process,bool> terminateProcess=null,string devicePackPath=null,long devicePackVersion=0){root=engineRoot??Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","engine"));smoke=packageSmoke;queryBudget=Math.Max(100,Math.Min(45000,timeoutMilliseconds));terminate=terminateProcess??TryTerminate;explicitPackPath=devicePackPath;explicitPackVersion=devicePackVersion;}
+        internal GenericBatteryWorker(string engineRoot=null,bool packageSmoke=false,int timeoutMilliseconds=45000,Func<Process,bool> terminateProcess=null,string devicePackPath=null,long devicePackVersion=0,Func<bool> shutdownCheck=null){root=engineRoot??Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","engine"));smoke=packageSmoke;queryBudget=Math.Max(100,Math.Min(45000,timeoutMilliseconds));terminate=terminateProcess??TryTerminate;isSystemShuttingDown=shutdownCheck??new Func<bool>(delegate{return SystemShutdown.IsShuttingDown;});explicitPackPath=devicePackPath;explicitPackVersion=devicePackVersion;}
+        bool ShuttingDown {get{return disposed||shuttingDown||isSystemShuttingDown();}}
+        internal void MarkShuttingDown(){shuttingDown=true;}
+        internal void StopIfShuttingDown(){lock(lifecycle){if(shuttingDown)Stop();}}
+        internal void BeginShutdown(){lock(lifecycle){shuttingDown=true;Stop();}}
+        internal void CancelShutdown(){lock(lifecycle){if(!disposed)shuttingDown=false;}}
         internal void UseDevicePacks(DevicePackManager manager){lock(query){if(process!=null)throw new InvalidOperationException("Attach device packs before starting the worker.");packManager=manager;}}
         internal void UseFamilyMemory(FamilyMemoryStore store){lock(query){if(process!=null)throw new InvalidOperationException("Attach family memory before starting the worker.");familyMemory=store;}}
         internal void UseProbeFamilies(Func<bool> reader){lock(query){probeFamiliesReader=reader;}}
@@ -279,12 +286,14 @@ namespace AtkBattery {
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
         Process Start() {lock(lifecycle){
             if(disposed)throw new ObjectDisposedException("GenericBatteryWorker");
+            if(ShuttingDown)throw new OperationCanceledException("System is shutting down.");
             if(quarantined&&!Stop())throw new IOException("上次设备读取进程仍未退出，控制暂时停用。");
             if(process!=null&&!process.HasExited)return process;
             if(process!=null)ReportPackFailure();
             if(!Stop())throw new IOException("上次设备读取进程仍未退出，控制暂时停用。");
             if(!Available)throw new IOException("请使用带设备读取组件的完整发行包。");
             for(int attempt=0;attempt<3;attempt++)using(var lease=packManager==null?null:packManager.OpenForStart()){
+            if(ShuttingDown)throw new OperationCanceledException("System is shutting down.");
             string packPath=lease==null?explicitPackPath:lease.Path;
             loadedPackVersion=lease==null?explicitPackVersion:lease.Record.Version;
             var info=new ProcessStartInfo(Path.Combine(root,"runtime","python.exe"),"-I -B -u \""+Path.Combine(root,"server.py")+"\""+(smoke?" --package-smoke":"")+(packPath==null?"":" --device-pack "+UpdateProcess.Quote(packPath))+" --probe-families "+(CurrentProbeFamilies()?"on":"off")) {
@@ -299,7 +308,7 @@ namespace AtkBattery {
             generation++;
             if(lease!=null){
                 try{var ready=ReadyCore(process,loadedPackVersion,20000,CancellationToken.None);packManager.SetLoaded(loadedPackVersion,ready.DevicePack.Disabled==null?0:ready.DevicePack.Disabled.Length);}
-                catch(Exception){long rejected=loadedPackVersion;if(!Stop())throw new IOException("pack_engine_stop_failed");packManager.StartupRejected(rejected);continue;}
+                catch(Exception){long rejected=loadedPackVersion;if(!Stop())throw new IOException("pack_engine_stop_failed");if(ShuttingDown)throw new OperationCanceledException("System is shutting down.");packManager.StartupRejected(rejected);continue;}
             }
             if(familyMemory!=null&&familyMemory.HasEntries){
                 var restore=SendFamilyMemoryCore(process,generation,"set",null,null,familyMemory.GetFamilyMemoryJson(),Math.Min(20000,queryBudget));
@@ -319,15 +328,16 @@ namespace AtkBattery {
         }
         internal bool ActivatePack(string staging,long version,Func<string> promote,CancellationToken token){lock(query){
             token.ThrowIfCancellationRequested();if(disposed)throw new ObjectDisposedException("GenericBatteryWorker");
+            if(ShuttingDown)throw new OperationCanceledException("System is shutting down.");
             using(var lease=packManager==null?null:packManager.LockTrial(staging))
-            using(var trial=new GenericBatteryWorker(root,smoke,20000,null,staging,version)){
+            using(var trial=new GenericBatteryWorker(root,smoke,20000,null,staging,version,isSystemShuttingDown)){
                 trial.Ready(version,20000,token);if(!trial.Stop())throw new IOException("pack_trial_stop_failed");
-                token.ThrowIfCancellationRequested();promote();
+                token.ThrowIfCancellationRequested();if(ShuttingDown)throw new OperationCanceledException("System is shutting down.");promote();
             }
             if(!Stop())throw new IOException("pack_engine_stop_failed");
             Start();return loadedPackVersion==version;
         }}
-        void ReportPackFailure(){if(!disposed&&packManager!=null&&loadedPackVersion>0&&failedPackGeneration!=generation){failedPackGeneration=generation;packManager.EngineFailed(loadedPackVersion,DateTime.UtcNow);}}
+        void ReportPackFailure(){lock(lifecycle){if(!ShuttingDown&&packManager!=null&&loadedPackVersion>0&&failedPackGeneration!=generation){failedPackGeneration=generation;packManager.EngineFailed(loadedPackVersion,DateTime.UtcNow);}}}
         internal FamilyMemoryResult DisableFamilyDevice(string deviceId){
             if(!Regex.IsMatch(deviceId??"",@"\Adevice-[a-f0-9]{24}\z"))return new FamilyMemoryResult {Ok=false,ErrorCode="unknown_device"};
             lock(query){
@@ -349,7 +359,7 @@ namespace AtkBattery {
         internal bool RestartForProbeFamilies(bool enabled){
             lock(query){
                 probeFamiliesOverride=enabled;
-                if(disposed||!Available)return false;
+                if(ShuttingDown||!Available)return false;
                 if(!Stop())return false;
                 try{
                     var child=Start();int currentGeneration;lock(lifecycle)currentGeneration=generation;
@@ -435,11 +445,13 @@ namespace AtkBattery {
         }
         internal WirelessSnapshot Poll(bool force=false,string deviceId=null,Action<WirelessSnapshot> progress=null,bool parkEmptyReaders=false,string physicalId=null) {lock(query){
             try {
+                if(ShuttingDown)return new WirelessSnapshot {Error="系统正在关机，已停止设备读取。"};
                 if(deviceId!=null&&physicalId!=null||deviceId!=null&&!Regex.IsMatch(deviceId,@"^device-[a-f0-9]{24}$")||physicalId!=null&&!Regex.IsMatch(physicalId,@"^device-[a-f0-9]{24}$"))return new WirelessSnapshot {Error="无效或冲突的设备刷新目标。"};
                 var child=Start();int currentGeneration=generation;long request=Interlocked.Increment(ref sequence);
                 child.StandardInput.WriteLine("{\"command\":\"poll\",\"requestId\":"+request+",\"generation\":"+currentGeneration+",\"force\":"+(force?"true":"false")+",\"parkEmptyReaders\":"+(parkEmptyReaders?"true":"false")+(deviceId==null?"":",\"deviceId\":\""+deviceId+"\"")+(physicalId==null?"":",\"physicalId\":\""+physicalId+"\"")+"}");child.StandardInput.Flush();
                 var result=Receive(child,request,currentGeneration,progress,null);if(!String.IsNullOrEmpty(result.Error))ReportPackFailure();return result;
-            }catch(Exception){Stop();ReportPackFailure();return new WirelessSnapshot {Error="设备读取组件暂不可用，保留最近数据。"};}
+            }catch(OperationCanceledException){Stop();return new WirelessSnapshot {Error="系统正在关机，已停止设备读取。"};}
+            catch(Exception){Stop();if(!ShuttingDown)ReportPackFailure();return new WirelessSnapshot {Error="设备读取组件暂不可用，保留最近数据。"};}
         }}
         internal WirelessSnapshot SetDpi(string deviceId,string targetToken,int dpi,int expectedDpi) {
             int submittedGeneration;lock(lifecycle)submittedGeneration=generation;
