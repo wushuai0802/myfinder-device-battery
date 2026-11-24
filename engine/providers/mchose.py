@@ -129,6 +129,13 @@ V3_PIDS = {
     0x1016: "MCHOSE V3 1K 接收器",
     0x101D: "MCHOSE V7 Pro",
 }
+# The Ultra+ may enumerate with the 1014 receiver PID instead of the 1018 one and
+# then reconstructs the same 4D/64 Windows descriptor as its 1018 sibling: two
+# 63-byte Input items (127 with the report id) while HidP reports 64. Reported on
+# hardware 2026-11-22: a 3837:1014 "MCHOSE A7 V3 Ultra+" with that descriptor shape
+# answered the read-only 4D power query (40 %, not charging). Only this exact model
+# name and declaration may use the Windows report confirmation.
+V3_WINDOWS_REPORT_PIDS = (V3_PID, 0x1014)
 V3_USAGE = (0xFF01, 0x0001)
 V3_ALTERNATE_USAGE = (0xFF0B, 0x00C4)  # 1018 only; actual #493 placement unknown.
 V3_REPORT_ID, V3_REPORT_LEN = 0x4D, 64  # includes the report ID; body is 63 bytes
@@ -302,7 +309,8 @@ def make_v3_request() -> bytes:
 
 def v3_ultra_windows_report_candidate(info):
     """Match the supported Ultra+/Pro layout whose reconstructed descriptor repeats Input 4D."""
-    if ((info.get("vendor_id"), info.get("product_id")) != (V3_VID, V3_PID)
+    if ((info.get("vendor_id"), info.get("product_id"))
+            not in tuple((V3_VID, pid) for pid in V3_WINDOWS_REPORT_PIDS)
             or (info.get("usage_page"), info.get("usage")) != V3_USAGE
             or info.get("interface_number") != 2
             or (info.get("product_string") or "").strip()

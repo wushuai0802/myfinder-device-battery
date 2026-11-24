@@ -116,11 +116,11 @@ class ProofFallback2Tests(unittest.TestCase):
                     self.assertIn("proof=descriptor" if failed else "proof=caps", diagnostic)
 
     def _ultra_windows_case(self, product, *, denied_direction=None,
-                            report_lengths=(64, 64)):
-        """Configure the shared 1018 Windows collection for one probe."""
-        path = r"\\?\hid#vid_3837&pid_1018&mi_02&col02#ultra-test"
-        self.configure(pid=0x1018)
-        self.case.identities[path] = (0x3837, 0x1018)
+                            report_lengths=(64, 64), pid=0x1018):
+        """Configure the shared 1018/1014 Windows collection for one probe."""
+        path = rf"\\?\hid#vid_3837&pid_{pid:04x}&mi_02&col02#ultra-test"
+        self.configure(pid=pid)
+        self.case.identities[path] = (0x3837, pid)
         self.case.products[path] = product
         self.dev.get_report_descriptor.return_value = ULTRA_1018_DESCRIPTOR
 
@@ -167,6 +167,42 @@ class ProofFallback2Tests(unittest.TestCase):
         info = self.scan(path)
         initialize.assert_not_called()
         self.assert_reader([info])
+
+    def test_ultra_1014_recovers_reconstructed_input_after_windows_confirms_both_directions(self):
+        path, initialize = self._ultra_windows_case("MCHOSE A7 V3 Ultra+", pid=0x1014)
+        for denied_direction in (0, 1, None):
+            with self.subTest(denied_direction=denied_direction):
+                self.case.cache.clear()
+                initialize.reset_mock()
+                initialize.side_effect = lambda direction, *_: (
+                    0xC0110010 if direction == denied_direction else 0x00110000)
+                info = self.scan(path)
+                accepted = denied_direction is None
+                self.assertEqual(info["declared_report_sizes"]["input"]["77"], 127)
+                self.assertEqual(info["declared_report_sizes"]["output"]["77"], 64)
+                self.assertEqual(info.get("v3_windows_report_confirmed", False), accepted)
+                self.assertEqual(path in self.case.cache, accepted)
+                self.assertEqual([(args[0], args[1], len(args[3]), args[4])
+                                  for args, _ in initialize.call_args_list],
+                                 [(0, 0x4D, 64, 64)] if denied_direction == 0
+                                 else [(0, 0x4D, 64, 64), (1, 0x4D, 64, 64)])
+                decoded = json.loads(json.dumps(info, default=wire_encode), object_hook=wire_decode)
+                diagnostic = self.assert_reader([decoded], accepted=accepted)
+                self.assertIn("Windows input/output report 4D/64 confirmed" if accepted
+                              else "length unproven", diagnostic)
+        # Other 1014 product names and non-eligible PIDs (e.g. 1016) never invoke the exception.
+        self.case.cache.clear()
+        self.case.products[path] = "MCHOSE A7 V3 Pro+"
+        initialize.reset_mock()
+        info = self.scan(path)
+        initialize.assert_not_called()
+        self.assert_reader([info])
+
+        path_1016, initialize_1016 = self._ultra_windows_case("MCHOSE A7 V3 Ultra+", pid=0x1016)
+        info_1016 = self.scan(path_1016)
+        initialize_1016.assert_not_called()
+        self.assertFalse(info_1016.get("v3_windows_report_confirmed", False))
+        self.assert_reader([info_1016])
 
     def test_pro_1018_recovers_reconstructed_input_after_windows_confirms_both_directions(self):
         path, initialize = self._ultra_windows_case("MCHOSE A7 V3 Pro")

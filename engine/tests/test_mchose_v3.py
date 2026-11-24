@@ -369,6 +369,47 @@ class V3ProtocolTests(unittest.TestCase):
                 else:
                     self.assertEqual(result, [])
 
+    def test_1014_ultra_plus_uses_the_same_windows_report_confirmation(self):
+        # Hardware 2026-11-22: a 3837:1014 "MCHOSE A7 V3 Ultra+" whose reconstructed
+        # descriptor repeats Input 4D (127 bytes with the id) answered the read-only
+        # power query. topology confirms 4D/64 in memory first; without that proof the
+        # provider must keep refusing, and no other id or name may qualify.
+        info = dict(vendor_id=0x3837, product_id=0x1014, interface_number=2,
+                    path=b"ultra-ff01", usage_page=0xFF01, usage=1,
+                    product_string="MCHOSE A7 V3 Ultra+",
+                    input_report_length=64, output_report_length=64,
+                    input_report_sizes=None, output_report_sizes=None,
+                    input_report_proof="failed", output_report_proof="failed",
+                    report_descriptor_error="collection maximum mismatch",
+                    declared_report_sizes={"input": {"17": 41, "77": 127, "19": 21},
+                                           "output": {"77": 64, "19": 41}},
+                    v3_windows_report_confirmed=True)
+        self.assertTrue(M.v3_ultra_windows_report_candidate(info))
+        self.assertTrue(M.v3_ultra_windows_report_candidate(
+            dict(info, product_string="MCHOSE A7 V3 Pro")))
+        for other in (dict(info, product_string="MCHOSE A7 V3 Pro+"),
+                      dict(info, product_string="MCHOSE K7 V2 Ultra+"),
+                      dict(info, product_id=0x1016),
+                      dict(info, product_id=0x101D),
+                      dict(info, interface_number=1),
+                      dict(info, output_report_length=41),
+                      dict(info, declared_report_sizes={"input": {"77": 127},
+                                                        "output": {"77": 41}})):
+            with self.subTest(other=other):
+                self.assertFalse(M.v3_ultra_windows_report_candidate(other))
+
+        with fixture([ULTRA_42], [info]) as bus:
+            device, = M.MchoseProvider().poll()
+            self.assertEqual((device.name, device.level, device.charging),
+                             ("MCHOSE A7 V3 Ultra+", 42, False))
+            self.assertEqual(bus.opened, [b"ultra-ff01"])
+            self.assertEqual(bus.sent, [REQUEST])
+
+        unconfirmed = {k: v for k, v in info.items() if k != "v3_windows_report_confirmed"}
+        with fixture([ULTRA_42], [unconfirmed]) as bus:
+            self.assertEqual(M.MchoseProvider().poll(), [])
+            self.assertEqual((bus.opened, bus.sent), ([], []))
+
     def test_1016_reads_proven_ff01_and_uses_usb_name_or_1k_fallback(self):
         primary = dict(next(d for d in inventory(0x1016) if d["usage_page"] == 0xFF01),
                        path=b"1k-ff01")
