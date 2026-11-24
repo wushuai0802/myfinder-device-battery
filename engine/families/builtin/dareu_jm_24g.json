@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "id": "dareu_jm_24g",
+  "name": "Dareu 2.4G 鼠标（匠盟协议）",
+  "kind": "mouse",
+  "verificationLevel": "C",
+  "source": {
+    "project": "DAREU All in one WEB official web driver",
+    "url": "https://dr.dareu.com/",
+    "revision": "v1.3.26; index.html SHA256 456f65e7b6bad6e45b941a8b9e0bbb2327a5abe09db3288f4116e5b368f22f50; jmdevice.js SHA256 38e7374ae10107134000b12c455732ea4cbf804e2fe7f54cffadebbf04f400b8",
+    "license": "Proprietary official web driver; protocol facts only; no code redistributed.",
+    "file": "js/device/jmdevice.js; products/1156/1156.json; pages/subpage/jm/energy.html",
+    "origin": "1156.json SHA256 a672665a188d60fc6c095805b3765676c86c69872e37e0a8f47e17fb31a90357; energy.html SHA256 1cfc577c3706f0138108e733e664d1d294e24d6a2b8df4ed12e1dd569c87adfe",
+    "evidence": "#1092: 260D:1156 \"2.4G Wireless Receiver\" (CM610 V2 MAX / CM610 MAX / A950 LCD). Official 1156.json sets Type=2, FwType=2 (JM); ParseDevices opens FF02:0002 with ReportId=08 (17B). JmHidDevice CheckActive writes 08 03 ... 4A (CompX sum=55), online at raw[6]=01; GetBatteryStatus writes 08 04 ... 49, percent raw[6] 0..100, charging raw[7] in {01,02} per jm/energy.html (00 discharging). Enforce CompX 0x55 sum checksum on gate and reply; no config/mode writes. Grade C."
+  },
+  "devices": [
+    {
+      "vendorId": "260D",
+      "productId": "1156",
+      "name": "Dareu 2.4G 鼠标",
+      "productString": "2.4G Wireless Receiver"
+    }
+  ],
+  "collections": [
+    {"usagePage": "FF02", "usage": "0002"}
+  ],
+  "reports": {
+    "input": {"id": "08", "length": 17},
+    "output": {"id": "08", "length": 17}
+  },
+  "reads": [
+    {
+      "name": "battery",
+      "transport": "output",
+      "request": "08 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 49",
+      "timeoutMs": 600,
+      "maxReads": 8,
+      "gate": {
+        "request": "08 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 4A",
+        "length": 17,
+        "match": [
+          {"at": 0, "eq": "08"},
+          {"at": 1, "eq": "03"}
+        ],
+        "checksum": {"sum": [0, 17], "equals": "55"},
+        "online": {"at": 6, "eq": "01"},
+        "offline": {"at": 6, "eq": "00"}
+      },
+      "reply": {
+        "length": 17,
+        "match": [
+          {"at": 0, "eq": "08"},
+          {"at": 1, "eq": "04"}
+        ],
+        "checksum": {"sum": [0, 17], "equals": "55"},
+        "variants": [
+          {
+            "when": {"at": 7, "eq": "01"},
+            "percent": {"at": 6, "min": 0, "max": 100},
+            "chargingAlways": true
+          },
+          {
+            "when": {"at": 7, "eq": "02"},
+            "percent": {"at": 6, "min": 0, "max": 100},
+            "chargingAlways": true
+          },
+          {
+            "when": {"at": 7, "eq": "00"},
+            "percent": {"at": 6, "min": 0, "max": 100},
+            "charging": {"at": 7, "eq": "01"}
+          }
+        ]
+      }
+    }
+  ]
+}
