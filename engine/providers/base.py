@@ -46,6 +46,7 @@ class DeviceStatus:
     model_reference: str = ""      # pack's issue/evidence reference, not a command
     level_unavailable: bool = False  # explicit reply invalidates any old percentage
     unconfirmed: bool = False    # the reported battery field still needs hardware validation
+    family_probe: bool = False   # families: matched via probeVendorIds, not an exact devices row
 
 
 class Provider:

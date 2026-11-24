@@ -78,6 +78,9 @@ class FamiliesProvider(Provider):
             self._diag.append(f"{family.id}: vendor software running; stepping aside")
             return None
         unit = families.memory_key(physical)
+        # device_for returns the listed row itself for an exact match and a generic
+        # row for a whole-vendor probe match.
+        probed = all(device is not listed for listed in family.devices)
         reads = {r.name: r for r in family.reads}
         if family.id == "xiberia":
             # Keep the legacy read/index and memory keys. Only the exact listed
@@ -126,7 +129,8 @@ class FamiliesProvider(Provider):
                         ((info.get("product_string") or "").strip() or device.name) if family.prefer_product_name else device.name, outcome.level, outcome.charging, True, NAME,
                         kind=family.kind, physical_id=physical, connection_known=True,
                         charging_known=outcome.charging_known, verification_level=family.level,
-                        model_source="family:" + family.id, dpi=dpi, dpi_target=dpi_target)
+                        model_source="family:" + family.id, dpi=dpi, dpi_target=dpi_target,
+                        family_probe=probed)
                 if outcome.kind in ("asleep", "anomaly"):
                     break
                 if family.id == "xiberia" and name == "t10_status" and outcome.kind != "silent":
