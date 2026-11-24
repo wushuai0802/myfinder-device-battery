@@ -119,9 +119,12 @@ namespace AtkBattery {
         }
         public static string SettingsPath {get{return Path.Combine(DataDirectory,"audio-settings.json");}}
         public static AudioBindings Current {
-            get {lock(Gate){if(current==null){try{current=LoadBindings(SettingsPath);}
+            get {bool ignored;return ReadSnapshot(out ignored);}
+        }
+        internal static AudioBindings ReadSnapshot(out bool defaults) {
+            lock(Gate){if(current==null){try{current=LoadBindings(SettingsPath);}
                 catch(InvalidDataException){UseDefaults();}catch(IOException){UseDefaults();}catch(UnauthorizedAccessException){UseDefaults();}catch(SerializationException){UseDefaults();}catch(ArgumentException){UseDefaults();}}
-                return current.Clone();}}
+                defaults=usingDefaults;return current.Clone();}
         }
         static void UseDefaults(){current=new AudioBindings {VolumeCollapsed=false};usingDefaults=true;}
         static void PreserveUnreadSettings(){if(usingDefaults&&File.Exists(SettingsPath)&&!File.Exists(SettingsPath+".unread.bak"))File.Copy(SettingsPath,SettingsPath+".unread.bak");}
@@ -161,6 +164,9 @@ namespace AtkBattery {
         }
         public static void SaveConfiguration(AudioBindings settings) {
             lock(Gate){var next=settings.Clone();Validate(next);PreserveUnreadSettings();SaveBindings(SettingsPath,next);current=next;usingDefaults=false;}
+        }
+        internal static bool SaveConfigurationIfLoaded(AudioBindings settings) {
+            lock(Gate){if(current==null||usingDefaults)return false;var next=settings.Clone();Validate(next);SaveBindings(SettingsPath,next);current=next;return true;}
         }
         internal static void SetDeviceHidden(AudioBindings settings,string deviceId,bool hidden) {
             ValidateDeviceId(deviceId);if(settings.HiddenDeviceIds==null)settings.HiddenDeviceIds=new List<string>();
@@ -225,7 +231,17 @@ namespace AtkBattery {
             if(!File.Exists(path))return new AudioBindings();
             var info=new FileInfo(path);
             if(info.Length>65536)throw new InvalidDataException("Audio settings file is too large");
-            using(var input=File.OpenRead(path)) {
+            byte[] raw;
+            using(var file=File.OpenRead(path))using(var buffer=new MemoryStream()) {
+                byte[] chunk=new byte[8192];int read;
+                while((read=file.Read(chunk,0,chunk.Length))>0) {
+                    if(buffer.Length+read>65536)throw new InvalidDataException("Audio settings file is too large");
+                    buffer.Write(chunk,0,read);
+                }
+                raw=buffer.ToArray();
+            }
+            int start=raw.Length>=3&&raw[0]==0xEF&&raw[1]==0xBB&&raw[2]==0xBF?3:0;
+            using(var input=new MemoryStream(raw,start,raw.Length-start,false)) {
                 var serializer=new DataContractJsonSerializer(typeof(AudioBindings));
                 var document=new XmlDocument {XmlResolver=null};
                 try{using(var reader=JsonReaderWriterFactory.CreateJsonReader(input,XmlDictionaryReaderQuotas.Max))document.Load(reader);}
