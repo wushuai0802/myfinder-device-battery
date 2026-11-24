@@ -57,7 +57,7 @@ _PARENT = re.compile(
     r"pnp:usb\\vid_0e8d&pid_0703(?:&rev_[0-9a-f]{4})?\\[^\\\x00\s]+",
     re.I,
 )
-_HARDWARE = re.compile(r"vid_0e8d&pid_0703", re.I)
+_HARDWARE = re.compile(r"(?:^|[#\\&])vid_0e8d&pid_0703(?:$|[#\\&])", re.I)
 
 
 def make_request():
@@ -165,29 +165,31 @@ class AmInfinity97Provider(Provider):
         self._paths = {}     # physical -> paths seen for this identity
 
     def _drain(self, dev):
+        """Drain queued interrupt reports; returns (ok, use_interrupt).
+
+        Airoha RACE collections on Windows may expose IN report 07 only via
+        HidD_GetInputReport (matching AM Master and audeze.py) without an
+        interrupt-IN pipe. If dev.read raises OSError/ValueError, proceed with
+        get_input_report instead of aborting before the query is sent.
+        """
         deadline = time.monotonic() + DRAIN_TIMEOUT_MS / 1000
         for _ in range(MAX_DRAIN_READS):
             if time.monotonic() >= deadline:
                 break
-            # Positive timeout also bounds bindings where zero selects blocking read.
-            if not dev.read(REPORT_BYTES, 1):
-                return True
+            try:
+                # Positive timeout also bounds bindings where zero selects blocking read.
+                raw = dev.read(REPORT_BYTES, 1)
+            except (OSError, ValueError):
+                return True, False
+            if not raw:
+                return True, True
         self._diag.append("input queue did not drain within bounds: nothing sent")
-        return False
-
-    @staticmethod
-    def _next_report(dev):
-        raw = dev.read(REPORT_BYTES, READ_GAP_MS)
-        if raw:
-            return raw
-        try:
-            return dev.get_input_report(INPUT_REPORT_ID, REPORT_BYTES)
-        except (OSError, ValueError):
-            return None
+        return False, True
 
     def _query(self, dev):
         """(level, charging, present) from one bounded exchange, else None."""
-        if not self._drain(dev):
+        ok, use_interrupt = self._drain(dev)
+        if not ok:
             return None
         request = make_request()
         written = dev.write(request)
@@ -195,11 +197,42 @@ class AmInfinity97Provider(Provider):
             self._diag.append("short/failed battery query write; no retry")
             return None
         stream = bytearray()
+        last_get_raw = None
         deadline = time.monotonic() + RESPONSE_TIMEOUT_MS / 1000
         for _ in range(MAX_READS):
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
-            payload = report_payload(self._next_report(dev))
+            raw = None
+            from_get = False
+            if use_interrupt:
+                try:
+                    raw = dev.read(
+                        REPORT_BYTES,
+                        min(READ_GAP_MS, max(1, int(remaining * 1000))),
+                    )
+                except (OSError, ValueError):
+                    use_interrupt = False
+            if not use_interrupt:
+                gap = min(READ_GAP_MS / 1000, remaining)
+                if gap > 0:
+                    time.sleep(gap)
+                if time.monotonic() >= deadline:
+                    break
+                raw = dev.get_input_report(INPUT_REPORT_ID, REPORT_BYTES)
+                from_get = True
+            elif not raw:
+                try:
+                    raw = dev.get_input_report(INPUT_REPORT_ID, REPORT_BYTES)
+                    from_get = True
+                except (OSError, ValueError):
+                    raw = None
+            if from_get and raw:
+                snapshot = bytes(raw) if _is_report(raw) else None
+                if snapshot is not None and snapshot == last_get_raw:
+                    continue
+                last_get_raw = snapshot
+            payload = report_payload(raw)
             if payload is None:
                 continue
             if len(stream) + len(payload) > MAX_RX_BYTES:

@@ -50,10 +50,15 @@ class Clock:
     def __init__(self, step=0.0001):
         self.value = 0
         self.step = step
+        self.sleeps = []
 
     def monotonic(self):
         self.value += self.step
         return self.value
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.value += seconds
 
 
 class FakeHid:
@@ -129,11 +134,12 @@ class FakeHid:
 def fixture(replies=(), inventory=None, clock_step=0.0001, provider=None, **kwargs):
     bus = FakeHid(replies, **kwargs)
     clock = Clock(clock_step)
+    bus.sleeps = clock.sleeps
     with patch.object(A, "hid", bus), patch.object(
         A.hidlist, "enumerate",
         return_value=[entry()] if inventory is None else inventory,
     ) as enumeration, patch.object(
-        A, "time", SimpleNamespace(monotonic=clock.monotonic),
+        A, "time", SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep),
     ):
         yield bus
         enumeration.assert_called_once_with(0x0E8D)
@@ -312,12 +318,36 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual((reading.level, reading.charging), (58, True))
         self.assertEqual(bus.gets, [(7, 62)] * 2)
 
+    def test_get_input_report_works_when_interrupt_in_is_absent(self):
+        for fail_phase in ("drain", "read"):
+            with self.subTest(fail_phase=fail_phase):
+                reports = [report(ACK), report(ACK), report(answer(67, 1))]
+                with fixture([], fail=fail_phase, input_reports=reports) as bus:
+                    reading, = P().poll()
+                self.assertEqual((reading.level, reading.charging), (67, True))
+                self.assertEqual(len(bus.writes), 1)
+                self.assertEqual(bus.gets, [(7, 62)] * 3)
+                self.assertTrue(all(0 < s <= A.READ_GAP_MS / 1000 for s in bus.sleeps))
+
+    def test_duplicate_get_input_report_partial_frame_is_deduplicated(self):
+        part = answer(49, 0)
+        reports = [report(part[:6]), report(part[:6]), report(part[6:])]
+        with fixture([], fail="drain", input_reports=reports) as bus:
+            reading, = P().poll()
+        self.assertEqual((reading.level, reading.charging), (49, False))
+        self.assertEqual(len(bus.gets), 3)
+
     def test_get_input_report_failure_is_not_fatal(self):
         with fixture([report(answer(59))], no_input_report=True):
             reading, = P().poll()
         self.assertEqual(reading.level, 59)
         with fixture([], no_input_report=True):
             self.assertEqual(P().poll(), [])
+        with fixture([], fail="drain", no_input_report=True) as bus:
+            provider = P()
+            self.assertEqual(provider.poll(), [])
+        self.assertNotIn("private-path", " ".join(provider.diagnostics()))
+        self.assertEqual(bus.closed, [PATH])
 
     def test_stale_queue_is_drained_before_the_single_write(self):
         stale = [report(answer(11)), report(answer(12))]
@@ -461,7 +491,9 @@ class FailClosedTests(unittest.TestCase):
 
     def test_path_must_be_text_naming_the_identity(self):
         for path in (None, b"", "", 5, b"\\\\?\\hid#vid_3151&pid_0703#x",
-                     b"\\\\?\\hid#vid_0e8d&pid_0704#x", b"vid_0e8d&pid_0703\x00"):
+                     b"\\\\?\\hid#vid_0e8d&pid_0704#x",
+                     b"\\\\?\\hid#vid_0e8d&pid_07030#x",
+                     b"vid_0e8d&pid_0703\x00"):
             with self.subTest(path=path):
                 self.assert_no_io([entry(path=path)])
 

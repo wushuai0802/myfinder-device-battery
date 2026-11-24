@@ -30,9 +30,12 @@ string, path or report proof is checked: a duplicate or unresolved parent means
 no I/O. Only the descriptor-proven layout is accepted: output report `06` and
 input report `07`, each exactly 62 bytes including the report ID.
 
-Before sending, queued input is discarded with at most 16 reads in 40 ms;
-failure to see an empty queue means no send. Each eligible receiver then gets
-one write per poll, no retry:
+Before sending, queued interrupt input is discarded with at most 16 reads in
+40 ms; failure to see an empty interrupt queue means no send. When the
+collection has no interrupt-IN pipe (`dev.read` raises `OSError`/`ValueError`),
+the reader proceeds directly to `get_input_report(07, 62)` polling (matching AM
+Master `ConnectionManager.read` and `audeze.py`). Each eligible receiver then
+gets one write per poll, no retry:
 
     06 06 80 05 5A 02 00 CF 30 + 53 zero bytes   (62 bytes)
 
@@ -40,8 +43,9 @@ one write per poll, no retry:
 RACE read of mouse battery command `0x30CF`. FOTA, configuration, RGB, DPI and
 the dongle's own battery commands are never sent.
 
-Input reports are read for at most 800 ms / 25 reads (20 ms per read; if the
-interrupt queue is empty `get_input_report(07, 62)` is tried). A report counts
+Input reports are read for at most 800 ms / 25 reads (20 ms per interrupt read
+or 20 ms gap before `get_input_report(07, 62)`; consecutive identical
+`get_input_report` snapshots are deduplicated). A report counts
 only if byte 0 is `07` and `len = b1 | b2 << 8` satisfies `0 < len <= 59`; its
 `len` payload bytes are appended to a stream of at most 4096 bytes. Frames in
 the stream are `<05|15> <5B|5D> <len lo> <len hi> <len bytes>` (leading
