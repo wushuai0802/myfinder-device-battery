@@ -1081,9 +1081,12 @@ namespace AtkBatteryTray {
             bool close=trayPressPending?trayPressCloses:target!=null&&!target.IsDisposed;
             trayPressPending=false;trayPressCloses=false;trayPressTarget=null;
             if(close){if(target!=null&&!target.IsDisposed&&OwnsDetails(target))target.CloseAnimated();return;}
-            var point=CursorPosition();var preferences=DeviceSettings.Current;
-            preferences.LastTrayIconPosition=TrayIconPosition.Capture(point,Screen.FromPoint(point).Bounds);
-            try{saveConfiguration(preferences);}catch(Exception){SafeDiagnostic.Transition("tray_position","save_failed");}
+            var point=CursorPosition();bool defaults;var preferences=DeviceSettings.ReadSnapshot(out defaults);
+            if(!defaults){
+                preferences.LastTrayIconPosition=TrayIconPosition.Capture(point,Screen.FromPoint(point).Bounds);
+                try{if(saveConfiguration==(Action<AudioBindings>)DeviceSettings.SaveConfiguration)DeviceSettings.SaveConfigurationIfLoaded(preferences);else saveConfiguration(preferences);}
+                catch(Exception){SafeDiagnostic.Transition("tray_position","save_failed");}
+            }
             if(details!=null&&!details.IsDisposed){details.Reveal();return;}
             details=new Details(this);details.OpenFromTray(point);
         }

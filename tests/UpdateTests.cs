@@ -385,6 +385,25 @@ static class UpdateTests {
             var pref=new AudioBindings();Check(pref.AutoCheckUpdates&&pref.Clone().AutoCheckUpdates,"auto checks default enabled and cloned");
             string settings=Path.Combine(root,"old-settings.json");File.WriteAllText(settings,"{\"SchemaVersion\":1}");Check(DeviceSettings.LoadBindings(settings).AutoCheckUpdates,"old configuration defaults enabled");
             pref.AutoCheckUpdates=false;DeviceSettings.SaveBindings(settings,pref);Check(!DeviceSettings.LoadBindings(settings).AutoCheckUpdates,"disabled configuration persists");
+            string betaSettings=Path.Combine(root,"beta-optout.json");
+            File.WriteAllText(betaSettings,"{\"SchemaVersion\":1,\"IncludeBetaUpdates\":false,\"FontSize\":\"normal\"}",new UTF8Encoding(true));
+            var betaOptOut=DeviceSettings.LoadBindings(betaSettings);
+            Check(!betaOptOut.IncludeBetaUpdates&&!betaOptOut.Clone().IncludeBetaUpdates,"explicit IncludeBetaUpdates=false survives legacy v1.3.10 UTF-8 BOM load and clone");
+            DeviceSettings.SaveBindings(betaSettings,betaOptOut);
+            Check(!DeviceSettings.LoadBindings(betaSettings).IncludeBetaUpdates,"explicit IncludeBetaUpdates=false survives save and reload");
+            File.WriteAllText(betaSettings,"{\"PanelLayout\":\"bar\",\"IncludeBetaUpdates\":false,\"SchemaVersion\":1}",new UTF8Encoding(false));
+            Check(!DeviceSettings.LoadBindings(betaSettings).IncludeBetaUpdates,"out-of-order JSON preserves IncludeBetaUpdates=false");
+            var savedSettings=DeviceSettings.Current;
+            try{
+                typeof(DeviceSettings).GetMethod("UseDefaults",System.Reflection.BindingFlags.Static|System.Reflection.BindingFlags.NonPublic).Invoke(null,null);
+                var includeBetaMethod=typeof(UpdateController).GetMethod("IncludeBetaPreference",System.Reflection.BindingFlags.Static|System.Reflection.BindingFlags.NonPublic);
+                Check(!(bool)includeBetaMethod.Invoke(null,null),"unreadable-settings fallback never opts into beta updates");
+                Check(!DeviceSettings.SaveConfigurationIfLoaded(new AudioBindings {IncludeBetaUpdates=true})&&DeviceSettings.UsingDefaults,"atomic conditional save refuses to overwrite while using defaults");
+                DeviceSettings.UseTransientConfiguration(new AudioBindings {IncludeBetaUpdates=false});
+                Check(!(bool)includeBetaMethod.Invoke(null,null),"explicit opt-out disables beta preference");
+                DeviceSettings.UseTransientConfiguration(new AudioBindings {IncludeBetaUpdates=true});
+                Check((bool)includeBetaMethod.Invoke(null,null),"explicit opt-in enables beta preference");
+            }finally{DeviceSettings.UseTransientConfiguration(savedSettings);}
             using(var key=new RSACryptoServiceProvider(2048))using(var other=new RSACryptoServiceProvider(2048)){
                 key.PersistKeyInCsp=false;other.PersistKeyInCsp=false;
                 byte[] zip=Zip("1.3.6"),sums=Encoding.UTF8.GetBytes(Hash(zip)+"  "+UpdateTrust.ZipName("1.3.6")+"\r\n"),sig=key.SignData(sums,CryptoConfig.MapNameToOID("SHA256"));

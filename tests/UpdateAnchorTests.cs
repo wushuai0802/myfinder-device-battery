@@ -312,6 +312,14 @@ static class UpdateAnchorTests {
             owner.HandleTrayMouseDown(MouseButtons.Left);owner.HandleTrayMouseUp(MouseButtons.Left);Check(saves==2,"closing a panel does not record another opening");
             popup.Close();owner.RequestUpdatedPanel();popup=(Details)Field(owner,"details");
             Check(((TrayPanelAnchor)Field(popup,"updatedAnchor")).Point==fixedPoint&&saves==2,"updated request reads the saved click without rewriting it");
+            popup.Close();
+            var savedSettings=DeviceSettings.Current;
+            try{
+                typeof(DeviceSettings).GetMethod("UseDefaults",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,null);
+                owner.HandleTrayMouseUp(MouseButtons.Left);popup=(Details)Field(owner,"details");
+                Check(saves==2&&DeviceSettings.UsingDefaults,"tray click does not overwrite unreadable settings with defaults");
+                popup.Close();
+            }finally{DeviceSettings.UseTransientConfiguration(savedSettings);}
             }
             owner.ExitThread();
         }

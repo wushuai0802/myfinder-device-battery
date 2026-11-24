@@ -125,16 +125,17 @@ namespace AtkBatteryTray {
         }
         internal bool Available {get{return available!=null;}}
         internal string Version {get{return available==null?null:available.Version;}}
-        internal bool BadgeVisible {get{return Available&&checker!=null&&checker.BadgeVisible(DeviceSettings.Current.ShowUpdateBadge,DeviceSettings.Current.AutoCheckUpdates);}}
+        static bool IncludeBetaPreference(){bool defaults;var pref=DeviceSettings.ReadSnapshot(out defaults);return !defaults&&pref.IncludeBetaUpdates;}
+        internal bool BadgeVisible {get{bool defaults;var pref=DeviceSettings.ReadSnapshot(out defaults);return !defaults&&Available&&checker!=null&&checker.BadgeVisible(pref.ShowUpdateBadge,pref.AutoCheckUpdates);}}
         internal UpdateController(Control control,Action refresh,Action<string,string,bool> notify,IUpdateTransport transport=null,string dataDirectory=null,string executablePath=null,bool runTimer=true){
-            dispatch=control;changed=refresh;balloon=notify;data=dataDirectory??DeviceSettings.DataDirectory;betaChoice=DeviceSettings.Current.IncludeBetaUpdates;
+            dispatch=control;changed=refresh;balloon=notify;data=dataDirectory??DeviceSettings.DataDirectory;betaChoice=IncludeBetaPreference();
             installer=new UpdateProcess(executablePath??Application.ExecutablePath,data);http=transport??new UpdateHttp(AppRuntime.Version);
             timer=new System.Threading.Timer(delegate{Check(true);},null,runTimer?0:Timeout.Infinite,60000);
         }
         void Post(Action action){if(disposed)return;try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});}catch(InvalidOperationException){}}
         void Initialize(){
             if(checker!=null)return;
-            checker=new UpdateChecker(http,Path.Combine(data,"update-state.json"),AppRuntime.Version,started) {IncludeBeta=delegate{return DeviceSettings.Current.IncludeBetaUpdates;}};
+            checker=new UpdateChecker(http,Path.Combine(data,"update-state.json"),AppRuntime.Version,started) {IncludeBeta=IncludeBetaPreference};
             var cached=checker.CachedRelease;if(cached!=null)Post(delegate{available=cached;availableCached=true;changed();});
             try{UpdateDownload.CleanStale(Path.Combine(data,"updates"),DateTime.UtcNow);}catch(Exception){SafeDiagnostic.Transition("updates","update_cleanup_failed");}
             string path=Path.Combine(data,"update-result.json");
@@ -153,7 +154,8 @@ namespace AtkBatteryTray {
             ThreadPool.QueueUserWorkItem(delegate{
                 try{
                     Initialize();if(disposed)return;
-                    bool enabled=DeviceSettings.Current.AutoCheckUpdates&&!DeviceSettings.UsingDefaults;
+                    bool defaults;var pref=DeviceSettings.ReadSnapshot(out defaults);
+                    bool enabled=!defaults&&pref.AutoCheckUpdates;
                     var release=checker.Check(automatic,enabled,DateTime.UtcNow,cancellation.Token);
                     if(checker.ErrorCode!=null&&checker.ErrorCode!="update_waiting_catalog")SafeDiagnostic.Transition("updates",checker.ErrorCode);
                     if(release!=null){
@@ -166,7 +168,7 @@ namespace AtkBatteryTray {
                 finally{lock(gate){if(checkCancel==cancellation)checkCancel=null;}cancellation.Dispose();Interlocked.Exchange(ref checking,0);Post(changed);}
             });
         }
-        internal void ConfigurationChanged(){lock(gate){if(!DeviceSettings.Current.AutoCheckUpdates&&automaticInFlight&&checkCancel!=null)checkCancel.Cancel();}var current=checker;bool betas=DeviceSettings.Current.IncludeBetaUpdates;
+        internal void ConfigurationChanged(){lock(gate){if(!DeviceSettings.Current.AutoCheckUpdates&&automaticInFlight&&checkCancel!=null)checkCancel.Cancel();}var current=checker;bool betas=IncludeBetaPreference();
             if(current!=null){available=current.CachedRelease;if(betaChoice.HasValue&&betaChoice.Value!=betas){current.ForgetLastCheck();betaChoice=betas;Check(true);}}betaChoice=betas;changed();}
         internal void Open(){if(available!=null)ShowAvailable(true);else Check(false);}
         void Viewed(UpdateDialog form,bool userInitiated){
@@ -254,7 +256,7 @@ namespace AtkBatteryTray {
             ThreadPool.QueueUserWorkItem(delegate{
                 try{
                     cancellation.Token.ThrowIfCancellationRequested();DateTime checkTime=DateTime.UtcNow;var wait=checker.Backoff(UpdateBackoffScope.Asset,checkTime);if(wait.Waiting(checkTime)){Post(delegate{if(!form.IsDisposed)form.Finished(DownloadWait(wait,DateTime.UtcNow));});return;}
-                    var download=new UpdateDownload(http,installer,AppRuntime.Version,installer.InstallDirectory,Path.Combine(data,"updates")) {AllowBeta=DeviceSettings.Current.IncludeBetaUpdates};
+                    var download=new UpdateDownload(http,installer,AppRuntime.Version,installer.InstallDirectory,Path.Combine(data,"updates")) {AllowBeta=IncludeBetaPreference()};
                     long lastProgress=0;
                     download.Install(release,cancellation.Token,delegate(long bytes,long total){long now=Stopwatch.GetTimestamp();if(now-lastProgress<Stopwatch.Frequency/5&&bytes!=total)return;lastProgress=now;Post(delegate{if(!form.IsDisposed)form.Progress(bytes,total);});},delegate{
                         if(disposed)throw new OperationCanceledException();
