@@ -46,6 +46,7 @@ PROVIDERS = (
     ("am_infinity_97", "AmInfinity97Provider"),
     ("ninjutso_legacy", "NinjutsoLegacyProvider"),
     ("flydigi", "FlydigiProvider"),
+    ("betop", "BetopProvider"),
     ("mchose_qhw_keyboard", "MchoseQhwKeyboardProvider"),
     ("mchose_glw_keyboard", "MchoseGlwKeyboardProvider"),
     ("mchose_k99v3", "MchoseK99V3Provider"), ("mchose_v9pro2", "MchoseV9Pro2Provider"),
@@ -84,6 +85,7 @@ PROVIDER_VIDS = {
     "sony_inzone": (0x054C,),
     "zhuaudio": (0x3654,),
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
+    "betop": (0x20BC, 0x20DD),
     "eweadn_s9pro": (0x372E,),
     "vgn_keyboard": (0x320F,),
     "cherry": (0x046A,),
@@ -131,7 +133,7 @@ IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
 IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "fa6x_passive", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"families", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "rapoo_mt560", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_beiying", "rapoo", "rapoo_mt560", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -807,7 +809,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                 "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
-    if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
+    if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if (d.get("vendor_id"), d.get("product_id")) in module.PIDS})
     pids = set()
@@ -1065,7 +1067,7 @@ class BatteryEngine:
         for status in statuses:
             # Accept only the exact APEX5 reader and read-only system readers;
             # the reporting provider and source must agree.
-            if status.kind == "gamepad" and (name not in ("flydigi", "bluetooth", "xinput") or status.source != name):
+            if status.kind == "gamepad" and (name not in ("flydigi", "betop", "bluetooth", "xinput") or status.source != name):
                 continue
             if name == "families" and self._family_stopped(status):
                 continue   # the user stopped this device; a poll already in flight must not revive it
