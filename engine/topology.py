@@ -621,6 +621,17 @@ def discover(paths, excluded=(), *, full=False):
                 if (attrs.vendor, attrs.product) == (0x372E, 0x1026):
                     _descriptor_fallback(info, caps, ("feature",))
                 caps_complete = info["feature_report_sizes"] is not None
+            if caps_complete and attrs.vendor == 0x374A:
+                from providers.valkyrie import matches_collection
+                if matches_collection({"vendor_id": attrs.vendor, "product_id": attrs.product,
+                                       "usage_page": caps.page, "usage": caps.usage}):
+                    # Valkyrie VK mice: Feature 03/64 proof on FF00/FF06:0001 only,
+                    # caps first, then the strict raw-descriptor fallback.
+                    from battery_hid import byte_report_sizes
+                    info.update(feature_report_length=caps.feature,
+                                feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
+                    _descriptor_fallback(info, caps, ("feature",))
+                    caps_complete = info["feature_report_sizes"] is not None
             if (caps_complete and attrs.vendor == 0x1532 and attrs.product in (0x00E5, 0x00E6)
                     and (info["interface_number"], caps.page, caps.usage) == (3, 0x000C, 1)):
                 from battery_hid import byte_report_sizes
@@ -700,6 +711,15 @@ def discover(paths, excluded=(), *, full=False):
                 info.update(battery_caps(hid, data, caps))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete
+                    and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
+                    (0x320F, 0x5055, 0xFF1C, 0x0092)):
+                from providers.vgn_keyboard_wired import product_allowed
+                if product_allowed(info.get("product_string")):
+                    from battery_hid import battery_caps
+                    info.update(battery_caps(hid, data, caps))
+                    caps_complete = all(info.get(key) is not None
+                                        for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete
                     and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
                     (0x05AC, 0x024F, 0xFF60, 0x0061)
