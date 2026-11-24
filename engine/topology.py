@@ -706,6 +706,9 @@ def discover(paths, excluded=(), *, full=False):
                     info.update(battery_caps(hid, data, caps))
                     info.update(feature_report_length=caps.feature,
                                 feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
+                    if (caps.output > 0 and caps.ob == 0 and caps.ov == 0
+                            and info.get("output_report_sizes") is None):
+                        info["output_constant_only"] = True
             if caps_complete and info["product_string"] and len(_descriptor_cache) < 512:
                 _descriptor_cache[path] = dict(info)
             inventory.append(info)

@@ -354,8 +354,9 @@ class IntegrationTests(unittest.TestCase):
 
     def test_topology_asks_for_report_sizes_only_on_family_collections(self):
         self.assertTrue(families.wants_caps(0x36F9, 0xF016, 0xFF90, 0x0001))
+        self.assertTrue(families.wants_caps(0x36F9, 0xC001, 0xFF90, 0x0001))
         self.assertFalse(families.wants_caps(0x36F9, 0xF016, 0x0001, 0x0006))
-        self.assertFalse(families.wants_caps(0x36F9, 0xC001, 0xFF90, 0x0001))
+        self.assertFalse(families.wants_caps(0x36F9, 0xC002, 0xFF90, 0x0001))
 
     def test_family_devices_do_not_overlap_other_readers(self):
         from known_ids import build_index
