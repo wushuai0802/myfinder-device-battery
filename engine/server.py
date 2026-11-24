@@ -466,6 +466,26 @@ def unadapted_devices(inventory, previous):
                                         [(c["usagePage"], c["usage"]) for c in item["collections"]]))[:16]
 
 
+STDIN_LINE_LIMIT = 262144   # UTF-8 bytes per command line; a full 256-entry familyMemory is ~40 KiB
+
+
+def stdin_lines(stream, limit):
+    """Yield command lines; an over-limit line is drained and yielded as None."""
+    while True:
+        line = stream.readline(limit + 1)
+        if not line:
+            return
+        if not line.endswith("\n") and len(line) > limit:
+            while line and not line.endswith("\n"):
+                line = stream.readline(65536)    # discard the rest of the oversized line
+            yield None
+            continue
+        if len(line.rstrip("\r\n").encode("utf-8", "replace")) > limit:
+            yield None
+        else:
+            yield line
+
+
 def valid_public_target(value):
     return value is None or isinstance(value, str) and re.fullmatch(r"device-[a-f0-9]{24}", value) is not None
 
@@ -587,6 +607,7 @@ def normalise(status, previous, now, cached=False):
         "charging": charging, "chargingKnown": charging is not None,
         "online": online, "connectionState": ("connected" if online else "disconnected") if connection_known else "unconfirmed",
         "fresh": fresh, "approximate": bool(status.approx), "provider": status.source or "unknown",
+        "familyProbe": bool(getattr(status, "family_probe", False)), "canDisable": False,
         **({"unconfirmed": True} if status.unconfirmed or not acquired and old.get("unconfirmed") else {}),
         "transport": "Bluetooth" if status.via == "bluetooth" or system and status.source != "xinput" else "USB / 2.4G",
         "confirmedAtUtc": confirmed, "measuredAtUtc": measured if not system else None,
@@ -901,9 +922,15 @@ class BatteryEngine:
         enable   -> resume a device by memoryKey (a disabled device has no card)"""
         result = {}
         if op == "set":
+            if not isinstance(snapshot, dict) or len(snapshot) > 4 * self.FAMILY_MEMORY_LIMIT:
+                return {"ok": False, "error": "invalid_snapshot"}   # keep the memory we already hold
             self.family_memory, self._family_user_disabled = {}, {}
             self._merge_family_memory(snapshot)
             self._family_user_disabled = {k: True for k, v in self.family_memory.items() if v.get("disabled")}
+            for unit_key in self._family_user_disabled:
+                family_id, _, device_key = unit_key.partition("|")
+                if family_id and device_key:
+                    self._forget_family_unit((family_id, device_key))
         elif op in ("disable", "enable"):
             if op == "disable":
                 unit = self._family_units.get(device_id)
@@ -919,10 +946,31 @@ class BatteryEngine:
             self.family_memory = memory.snapshot()
             result["memoryKey"] = unit[0] + "|" + unit[1]
             self._family_user_disabled[result["memoryKey"]] = op == "disable"
+            if op == "disable":
+                self._forget_family_unit(unit)
         elif op != "get":
             return {"ok": False, "error": "invalid_op"}
         result.update(ok=True, familyMemory=dict(self.family_memory), probeFamilies=self.probe_families)
         return result
+
+    def _family_stopped(self, status):
+        source = getattr(status, "model_source", "") or ""
+        if not source.startswith("family:") or not status.physical_id:
+            return False
+        from families import memory_key
+        unit_key = source[len("family:"):] + "|" + memory_key(status.physical_id)
+        return (self._family_user_disabled.get(unit_key) is True
+                or (self.family_memory.get(unit_key) or {}).get("disabled") is True)
+
+    def _forget_family_unit(self, unit):
+        """Drop every trace of a stopped family device so no zombie card survives."""
+        ids = {key for key, value in self._family_units.items() if value == tuple(unit)}
+        for group in self.by_provider.values():
+            for key in ids:
+                group.pop(key, None)
+        for table in (self.previous, self.dpi_targets, self.physical_by_id, self.provider_by_id):
+            for key in ids:
+                table.pop(key, None)
 
     def _snapshot(self, request_id=0, generation=0, complete=True, unadapted_inventory=None):
         live = {}
@@ -1014,6 +1062,8 @@ class BatteryEngine:
             # the reporting provider and source must agree.
             if status.kind == "gamepad" and (name not in ("flydigi", "bluetooth", "xinput") or status.source != name):
                 continue
+            if name == "families" and self._family_stopped(status):
+                continue   # the user stopped this device; a poll already in flight must not revive it
             status = replace(status, name=inventory_safe_name(status.name, self._inventory_groups.get(physical, [])))
             key = public_id(status.key)
             if name in self._ambiguous_providers:
@@ -1029,6 +1079,7 @@ class BatteryEngine:
             if name == "families" and source.startswith("family:") and status.physical_id:
                 from families import memory_key
                 self._family_units[key] = (source[len("family:"):], memory_key(status.physical_id))
+                group[key]["canDisable"] = True
             self.physical_by_id[key] = physical
         self.by_provider[reader_key] = group
         if name == "bluetooth":
@@ -1674,9 +1725,12 @@ def main():
         if args.once:
             print(json.dumps(engine.poll(wait_bluetooth=True), ensure_ascii=True), flush=True)
             return
-        for line in sys.stdin:
-            if len(line) > 4096:
-                break
+        for line in stdin_lines(sys.stdin, STDIN_LINE_LIMIT):
+            if line is None:
+                # Too large to parse; answer and keep serving instead of exiting.
+                print(json.dumps({"reply": "family_memory", "requestId": 0, "ok": False,
+                                  "error": "payload_too_large"}, ensure_ascii=True), flush=True)
+                continue
             try:
                 # Some Windows .NET hosts prefix redirected UTF-8 stdin with
                 # a BOM. It is stream metadata, not part of the JSON command.
@@ -1693,6 +1747,9 @@ def main():
                     result = engine.family_memory_command(command.get("op"), command.get("deviceId"),
                                                           command.get("memoryKey"), command.get("familyMemory"))
                     result.update(reply="family_memory", requestId=request_id)
+                    echo = command.get("generation")
+                    if type(echo) is int and echo >= 0:
+                        result["generation"] = echo
                     print(json.dumps(result, ensure_ascii=True), flush=True)
                     continue
                 if action not in ("poll", "set_dpi", "ready"):

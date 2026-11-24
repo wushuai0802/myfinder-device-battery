@@ -588,8 +588,10 @@ class HostControlTests(unittest.TestCase):
                                                             "silentPolls": 0, "relearned": False, "disabled": True}})
         many = {f"xiberia|unit-{i:024x}": {} for i in range(engine.FAMILY_MEMORY_LIMIT + 10)}
         self.assertEqual(len(engine.family_memory_command("set", snapshot=many)["familyMemory"]), engine.FAMILY_MEMORY_LIMIT)
-        self.assertTrue(engine.family_memory_command("set", snapshot=["not", "a", "dict"])["ok"])
-        self.assertEqual(engine.family_memory, {})
+        kept = dict(engine.family_memory)
+        self.assertEqual(engine.family_memory_command("set", snapshot=["not", "a", "dict"]),
+                         {"ok": False, "error": "invalid_snapshot"})
+        self.assertEqual(engine.family_memory, kept)   # a bad set no longer wipes valid memory
 
     def test_stdin_family_memory_command(self):
         import io
@@ -968,6 +970,206 @@ class DpiAdapterTests(unittest.TestCase):
             forged = dict(target, family="xiberia")
             self.assertEqual(provider_module.set_device_dpi([collection()], forged, 1600, 800, token)["error"],
                              "dpi_invalid_target")
+
+
+class FamilyUiFixTests(unittest.TestCase):
+    """UI-01 PR 1: stdin limit, disable lifecycle, familyProbe and canDisable."""
+    PHYSICAL = r"pnp:usb\vid_36f9&pid_f016\receiver"
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+        families.set_probe_enabled(False)
+        self.addCleanup(families.set_probe_enabled, False)
+        self.addCleanup(families.set_pack_families, ())
+
+    def engine(self, **kwargs):
+        import server
+        from test_engine_reliability import FakePool
+        engine = server.BatteryEngine(process_factory=FakePool().factory, **kwargs)
+        self.addCleanup(engine.close)
+        return engine
+
+    def status(self, physical=None, **changes):
+        from providers.base import DeviceStatus
+        physical = physical or self.PHYSICAL
+        fields = dict(kind="headset", physical_id=physical, model_source="family:xiberia")
+        fields.update(changes)
+        return DeviceStatus(f"families:xiberia:{physical}", "XIBERIA K03S", 60, False, True, "families", **fields)
+
+    def accept(self, engine, status, physical=None):
+        physical = physical or self.PHYSICAL
+        engine._accept("families|" + physical, "families", [status], "2026-11-21T00:00:00Z", physical)
+
+    def run_stdin(self, text):
+        import io
+        import server
+        engine = self.engine(probe_families=False)
+        with patch.object(server, "BatteryEngine", return_value=engine), \
+                patch.object(server.sys, "argv", ["server.py", "--probe-families", "off"]), \
+                patch.object(server.sys, "stdin", io.StringIO(text)), \
+                patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+            server.main()
+        return engine, [json.loads(line) for line in output.getvalue().splitlines()]
+
+    @staticmethod
+    def snapshot_of(count):
+        return {f"xiberia|unit-{i:024x}": {"working": "battery", "rounds": 3, "retired": ["t10_status"],
+                                           "silentPolls": 2, "relearned": False, "disabled": i % 2 == 0}
+                for i in range(count)}
+
+    def test_stdin_set_accepts_empty_through_full_snapshots(self):
+        import server
+        for count in (0, 1, 35, 256):
+            memory = self.snapshot_of(count)
+            line = json.dumps({"command": "family_memory", "op": "set", "requestId": 7,
+                               "generation": 3, "familyMemory": memory})
+            if count == 256:
+                self.assertGreater(len(line.encode()), 4096)
+            with self.subTest(count=count):
+                engine, replies = self.run_stdin(line + "\n" + json.dumps(
+                    {"command": "family_memory", "op": "get", "requestId": 8}) + "\n")
+                self.assertEqual(len(replies), 2)   # the engine survived the long line
+                self.assertTrue(replies[0]["ok"])
+                self.assertEqual((replies[0]["requestId"], replies[0]["generation"]), (7, 3))
+                self.assertNotIn("generation", replies[1])
+                self.assertEqual(len(replies[1]["familyMemory"]), count)
+                self.assertEqual(replies[1]["familyMemory"], replies[0]["familyMemory"])
+        self.assertEqual(server.STDIN_LINE_LIMIT, 262144)
+
+    def test_generation_is_echoed_only_when_a_non_negative_integer(self):
+        lines = "".join(json.dumps({"command": "family_memory", "op": "get", "requestId": i, "generation": g}) + "\n"
+                        for i, g in enumerate((0, 5, -1, "7", True, 1.5, None)))
+        _, replies = self.run_stdin(lines)
+        self.assertEqual([r.get("generation") for r in replies], [0, 5, None, None, None, None, None])
+        self.assertEqual(len(replies), 7)
+
+    def test_oversized_line_is_refused_without_exiting(self):
+        import server
+        huge = json.dumps({"command": "family_memory", "op": "set", "requestId": 1,
+                           "familyMemory": {"xiberia|unit-" + "0" * 24: {"pad": "x" * server.STDIN_LINE_LIMIT}}})
+        self.assertGreater(len(huge.encode()), server.STDIN_LINE_LIMIT)
+        # The limit counts UTF-8 bytes, not characters: 90k three-byte characters exceed it.
+        wide = json.dumps({"command": "family_memory", "op": "get", "requestId": 3, "pad": "\u4e2d" * 90000},
+                          ensure_ascii=False)
+        self.assertLess(len(wide), server.STDIN_LINE_LIMIT)
+        self.assertGreater(len(wide.encode("utf-8")), server.STDIN_LINE_LIMIT)
+        ok = json.dumps({"command": "family_memory", "op": "get", "requestId": 2})
+        engine, replies = self.run_stdin(huge + "\n" + wide + "\n" + ok + "\n")
+        self.assertEqual(replies[:2], [{"reply": "family_memory", "requestId": 0, "ok": False,
+                                        "error": "payload_too_large"}] * 2)
+        self.assertEqual((replies[2]["requestId"], replies[2]["ok"]), (2, True))   # still serving
+        self.assertEqual(len(replies), 3)
+
+    def test_oversized_final_line_without_newline_then_eof(self):
+        import server
+        _, replies = self.run_stdin("x" * (server.STDIN_LINE_LIMIT + 5))
+        self.assertEqual([r["error"] for r in replies], ["payload_too_large"])
+
+    def test_invalid_set_keeps_valid_memory_and_user_choices(self):
+        engine = self.engine()
+        unit = "xiberia|" + families.memory_key(self.PHYSICAL)
+        engine.family_memory_command("set", snapshot={unit: {"disabled": True, "working": "battery"}})
+        before, disabled = dict(engine.family_memory), dict(engine._family_user_disabled)
+        self.assertTrue(before[unit]["disabled"])
+        for bad in (None, [], ["x"], "text", 7, True, {f"k{i}": {} for i in range(4 * engine.FAMILY_MEMORY_LIMIT + 1)}):
+            with self.subTest(bad=type(bad).__name__):
+                self.assertEqual(engine.family_memory_command("set", snapshot=bad),
+                                 {"ok": False, "error": "invalid_snapshot"})
+                self.assertEqual(engine.family_memory, before)
+                self.assertEqual(engine._family_user_disabled, disabled)
+        _, replies = self.run_stdin(json.dumps({"command": "family_memory", "op": "set", "requestId": 9,
+                                                "familyMemory": "oops"}) + "\n")
+        self.assertEqual(replies, [{"ok": False, "error": "invalid_snapshot", "reply": "family_memory", "requestId": 9}])
+
+    def test_disable_removes_card_everywhere_and_is_idempotent(self):
+        from server import public_id
+        engine = self.engine()
+        status = self.status(dpi={"supported": True}, dpi_target={"family": "xiberia"})
+        self.accept(engine, status)
+        device_id = public_id(status.key)
+        engine.dpi_targets[device_id] = {"family": "xiberia"}   # a writable-DPI card would hold a target
+        self.assertEqual([d["id"] for d in engine._snapshot()["devices"]], [device_id])
+        self.assertIn(device_id, engine.previous)
+
+        first = engine.family_memory_command("disable", device_id)
+        self.assertTrue(first["ok"])
+        self.assertEqual(engine._snapshot()["devices"], [])
+        for table in (engine.previous, engine.dpi_targets, engine.physical_by_id, engine.provider_by_id):
+            self.assertNotIn(device_id, table)
+        self.assertTrue(all(device_id not in group for group in engine.by_provider.values()))
+
+        again = engine.family_memory_command("disable", device_id)   # the card is gone, the id is still known
+        self.assertEqual((again["ok"], again["memoryKey"]), (True, first["memoryKey"]))
+        self.assertEqual(engine._snapshot()["devices"], [])
+        self.assertEqual(engine.family_memory_command("disable", "device-" + "0" * 24),
+                         {"ok": False, "error": "unknown_device"})
+
+        engine.family_memory_command("enable", memory_key=first["memoryKey"])
+        self.accept(engine, status)
+        self.assertEqual([d["id"] for d in engine._snapshot()["devices"]], [device_id])
+
+    def test_disable_keeps_other_family_devices(self):
+        from server import public_id
+        other = r"pnp:usb\vid_36f9&pid_f016\other"
+        engine = self.engine()
+        first, second = self.status(), self.status(other)
+        self.accept(engine, first)
+        self.accept(engine, second, other)
+        engine.family_memory_command("disable", public_id(first.key))
+        self.assertEqual([d["id"] for d in engine._snapshot()["devices"]], [public_id(second.key)])
+
+    def test_in_flight_result_cannot_revive_a_stopped_device(self):
+        from server import public_id
+        engine = self.engine()
+        status = self.status()
+        self.accept(engine, status)
+        device_id = public_id(status.key)
+        engine.family_memory_command("disable", device_id)
+        self.accept(engine, status)          # a poll that started before the click finishes late
+        self.assertEqual(engine._snapshot()["devices"], [])
+        self.assertNotIn(device_id, engine.by_provider["families|" + self.PHYSICAL])
+        # The persisted flag alone (restored at startup, no user click yet) also stops it.
+        fresh = self.engine()
+        fresh.family_memory_command("set", snapshot={"xiberia|" + families.memory_key(self.PHYSICAL): {"disabled": True}})
+        fresh._family_user_disabled.clear()
+        self.accept(fresh, status)
+        self.assertEqual(fresh._snapshot()["devices"], [])
+        # Other providers and other units are untouched.
+        self.accept(fresh, self.status(r"pnp:usb\vid_36f9&pid_f016\elsewhere"), r"pnp:usb\vid_36f9&pid_f016\elsewhere")
+        self.assertEqual(len(fresh._snapshot()["devices"]), 1)
+
+    def test_can_disable_and_family_probe_fields_in_snapshot(self):
+        from providers.base import DeviceStatus
+        engine = self.engine()
+        exact = self.status()
+        probed_physical = r"pnp:usb\vid_abcd&pid_0001\receiver"
+        probed = self.status(probed_physical, family_probe=True)
+        self.accept(engine, exact)
+        self.accept(engine, probed, probed_physical)
+        plain = DeviceStatus("razer:mouse", "Razer Mouse", 50, False, True, "razer", kind="mouse")
+        engine._accept("razer", "razer", [plain], "2026-11-21T00:00:00Z", "")
+        self.assertFalse(DeviceStatus("k", "n", 1, False, True, "s").family_probe)
+        devices = {d["provider"] + ":" + str(d["familyProbe"]): d for d in engine._snapshot()["devices"]}
+        self.assertEqual(set(devices), {"families:False", "families:True", "razer:False"})
+        self.assertIs(devices["families:False"]["canDisable"], True)
+        self.assertIs(devices["families:True"]["canDisable"], True)    # whole-brand trials can be stopped too
+        self.assertIs(devices["razer:False"]["canDisable"], False)
+        self.assertTrue(all(type(d["canDisable"]) is bool and type(d["familyProbe"]) is bool
+                            for d in devices.values()))
+
+    def test_provider_marks_probe_matches_but_not_exact_devices(self):
+        exact, _ = poll([collection()], FakeDevice([frame("55 65 00 3c")]))
+        self.assertEqual([s.family_probe for s in exact], [False])
+
+        document = copy.deepcopy(XIBERIA)
+        document.update(id="probe_test", devices=[], probeVendorIds=["ABCD"])
+        families.set_pack_families([spec.parse_family(document)])
+        families.set_probe_enabled(True)
+        row = collection(vendor_id=0xABCD, product_id=0x0001, product_string="Mystery",
+                         physical_id=r"pnp:usb\vid_abcd&pid_0001\receiver", path=b"probe-ff90")
+        statuses, _ = poll([row], FakeDevice([frame("55 65 00 3c")]))
+        self.assertEqual([(s.model_source, s.family_probe) for s in statuses], [("family:probe_test", True)])
+
 
 
 if __name__ == "__main__":
