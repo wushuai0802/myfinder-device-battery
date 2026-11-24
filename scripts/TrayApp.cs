@@ -971,7 +971,8 @@ namespace AtkBatteryTray {
         bool applyingPhysicalSnapshot;
         string activityListenerState="not_started";
         AudioControl.NotificationListener audioEvents;
-        bool sessionLocked,audioNeedsReconcile;
+        Microsoft.Win32.SessionEndingEventHandler sessionEndingHandler;
+        bool sessionLocked,audioNeedsReconcile,systemShuttingDown;
         string trayDeviceKey;
         string activePhysicalId;
         bool activeNative;
@@ -1049,7 +1050,9 @@ namespace AtkBatteryTray {
             FeedbackReplies=new FeedbackReplies(FeedbackStore.Current,new FeedbackHttp());
             feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);tray.ShowBalloonTip(5000,balloon.Title,balloon.Text,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
-            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();});
+            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed&&!systemShuttingDown){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else if(!systemShuttingDown){deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();},HandleSessionEnding,HandleEndSession);
+            sessionEndingHandler=delegate{SystemShutdown.NotifySessionEnding();if(genericWorker!=null)genericWorker.MarkShuttingDown();};
+            Microsoft.Win32.SystemEvents.SessionEnding+=sessionEndingHandler;
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
             audioDebounce.Interval=200;audioDebounce.Tick+=delegate{audioDebounce.Stop();RequestAudioRead(true);};
             ThreadPool.QueueUserWorkItem(delegate{try{var listener=AudioControl.Listen(delegate{try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed){audioDebounce.Stop();audioDebounce.Start();}});}catch(InvalidOperationException){}});if(disposed)listener.Dispose();else audioEvents=listener;}catch(Exception){SafeDiagnostic.Transition("audio_notifications","unavailable");}});
@@ -1558,7 +1561,7 @@ namespace AtkBatteryTray {
             });
         }
         void RequestWirelessRead(bool force,string deviceId=null,string physicalId=null) {
-            if(disposed||genericWorker==null)return;
+            if(disposed||systemShuttingDown||SystemShutdown.IsShuttingDown||genericWorker==null)return;
             if(clearingHistory){genericQueued=true;genericQueuedTarget=null;return;}
             if(!genericWorker.Available){GenericError="请使用完整发行包以启用通用设备识别。";return;}
             if(genericBusy!=0){if(force){genericQueuedTarget=genericQueued&&genericQueuedTarget!=deviceId?null:deviceId;genericQueued=true;}return;}
@@ -1699,7 +1702,7 @@ namespace AtkBatteryTray {
             });
         }
         void RequestAudioRead(bool force) {
-            if(disposed||readAudio==null)return;
+            if(disposed||systemShuttingDown||SystemShutdown.IsShuttingDown||readAudio==null)return;
             if(audioBusy!=0){if(force)pendingAudioRefresh=true;return;}
             if(!force&&(DateTime.UtcNow-audioCheckedUtc).TotalSeconds<(panelOpen?(audioEvents!=null&&audioEvents.Ready?10:2):60))return;
             RunAudioOperation(readAudio);
@@ -1864,7 +1867,25 @@ namespace AtkBatteryTray {
                 });}catch(ObjectDisposedException){}catch(InvalidOperationException){}
             });
         }
+        void HandleSessionEnding() {
+            systemShuttingDown=true;
+            SystemShutdown.NotifySessionEnding();
+            if(disposed)return;
+            activityTimer.Stop();refresh.Stop();liveSync.Stop();deviceDebounce.Stop();audioDebounce.Stop();
+            if(genericWorker!=null){var worker=genericWorker;worker.MarkShuttingDown();ThreadPool.QueueUserWorkItem(delegate{worker.StopIfShuttingDown();});}
+            if(persistStatus)AudioBrokerClient.BeginShutdown();
+        }
+        void HandleEndSession(bool ending) {
+            if(ending){HandleSessionEnding();if(!disposed)ExitThread();return;}
+            systemShuttingDown=false;
+            SystemShutdown.ClearSessionEnding();
+            if(disposed)return;
+            if(genericWorker!=null)genericWorker.CancelShutdown();
+            if(persistStatus)AudioBrokerClient.CancelShutdown();
+            refresh.Start();
+        }
         protected override void ExitThreadCore() {
+            if(sessionEndingHandler!=null){try{Microsoft.Win32.SystemEvents.SessionEnding-=sessionEndingHandler;}catch(Exception){}sessionEndingHandler=null;}
             if(updates!=null)updates.Dispose();
             if(feedbackChecks!=null)feedbackChecks.Dispose();if(feedbackDialog!=null&&!feedbackDialog.IsDisposed)feedbackDialog.Close();
             if(devicePackChecks!=null)devicePackChecks.Dispose();

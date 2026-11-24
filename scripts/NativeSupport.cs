@@ -44,15 +44,26 @@ namespace AtkBatteryTray {
         readonly Action changed;
         readonly Action appearance;readonly Action<bool> session;
         readonly Action taskbarCreated;
+        readonly Action sessionEnding;readonly Action<bool> endSession;
         [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int RegisterWindowMessage(string message);
         internal static readonly int TaskbarCreated=RegisterWindowMessage("TaskbarCreated");
         [DllImport("wtsapi32.dll")] static extern bool WTSRegisterSessionNotification(IntPtr hwnd,int flags);
         [DllImport("wtsapi32.dll")] static extern bool WTSUnRegisterSessionNotification(IntPtr hwnd);
-        public DeviceEventsWindow(Action callback,Action appearanceChanged=null,Action<bool> sessionChanged=null,Action trayRecreated=null) {
-            changed=callback;appearance=appearanceChanged;session=sessionChanged;taskbarCreated=trayRecreated;CreateHandle(new CreateParams {Caption="MyFinder Device Battery Events"});
+        public DeviceEventsWindow(Action callback,Action appearanceChanged=null,Action<bool> sessionChanged=null,Action trayRecreated=null,Action onSessionEnding=null,Action<bool> onEndSession=null) {
+            changed=callback;appearance=appearanceChanged;session=sessionChanged;taskbarCreated=trayRecreated;sessionEnding=onSessionEnding;endSession=onEndSession;CreateHandle(new CreateParams {Caption="MyFinder Device Battery Events"});
             if(session!=null)try{WTSRegisterSessionNotification(Handle,0);}catch(DllNotFoundException){}
         }
         protected override void WndProc(ref Message message) {
+            if(message.Msg==0x0011){
+                if(sessionEnding!=null)sessionEnding();
+                message.Result=new IntPtr(1);
+                return;
+            }
+            if(message.Msg==0x0016){
+                if(endSession!=null)endSession(message.WParam!=IntPtr.Zero);
+                message.Result=IntPtr.Zero;
+                return;
+            }
             int value=message.WParam.ToInt32();
             if(message.Msg==0x219&&(value==7||value==0x8000||value==0x8004)||
                 message.Msg==0x218&&(value==7||value==18))changed();

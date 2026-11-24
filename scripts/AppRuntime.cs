@@ -11,6 +11,21 @@ namespace AtkBattery {
         public static string Version {get{var values=Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute),false);return values.Length>0?((AssemblyInformationalVersionAttribute)values[0]).InformationalVersion:"unknown";}}
         internal static string ReadLineBounded(StreamReader reader,int limit){var result=new StringBuilder();for(;;){int c=reader.Read();if(c<0)return result.Length==0?null:result.ToString();if(c=='\n')return result.ToString();if(c=='\r')continue;if(result.Length>=limit)throw new InvalidDataException("Reader response exceeds its limit.");result.Append((char)c);}}
     }
+    internal static class SystemShutdown {
+        const int SmShuttingDown=0x2000;
+        [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+        static volatile bool sessionEnding;
+        internal static bool IsShuttingDown {
+            get {
+                if(sessionEnding||Environment.HasShutdownStarted)return true;
+                try{return GetSystemMetrics(SmShuttingDown)!=0;}
+                catch(DllNotFoundException){return false;}
+                catch(EntryPointNotFoundException){return false;}
+            }
+        }
+        internal static void NotifySessionEnding(){sessionEnding=true;}
+        internal static void ClearSessionEnding(){sessionEnding=false;}
+    }
     internal sealed class ChildProcessJob:IDisposable {
         IntPtr handle;
         [StructLayout(LayoutKind.Sequential)] struct BasicLimits {public long ProcessTime,JobTime;public uint Flags;public UIntPtr MinWorking,MaxWorking;public uint ActiveLimit;public UIntPtr Affinity;public uint Priority,Scheduling;}

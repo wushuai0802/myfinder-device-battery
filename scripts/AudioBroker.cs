@@ -25,23 +25,28 @@ namespace AtkBattery {
         static readonly AudioBrokerClient shared=new AudioBrokerClient();
         readonly object gate=new object();readonly string executable;
         readonly int testBudget;
-        Process process;ChildProcessJob job;long sequence;volatile bool disposed;bool quarantined;
-        internal AudioBrokerClient(string executablePath=null,int timeoutMilliseconds=0){executable=executablePath??System.Reflection.Assembly.GetExecutingAssembly().Location;testBudget=timeoutMilliseconds;}
+        readonly Func<bool> isSystemShuttingDown;
+        Process process;ChildProcessJob job;long sequence;volatile bool disposed,shuttingDown;bool quarantined;
+        internal AudioBrokerClient(string executablePath=null,int timeoutMilliseconds=0,Func<bool> shutdownCheck=null){executable=executablePath??System.Reflection.Assembly.GetExecutingAssembly().Location;testBudget=timeoutMilliseconds;isSystemShuttingDown=shutdownCheck??new Func<bool>(delegate{return SystemShutdown.IsShuttingDown;});}
         internal static AudioReading Read(){return shared.Query(new AudioCommand {Operation="read"});}
         internal static AudioReading Switch(string target){return shared.Query(new AudioCommand {Operation="output",Target=target});}
         internal static AudioReading Mute(bool value){return shared.Query(new AudioCommand {Operation="mute",Mute=value});}
         internal static AudioReading Volume(string endpoint,int value){return shared.Query(new AudioCommand {Operation="volume",Endpoint=endpoint,Percent=value});}
         internal static AudioReading Execute(AudioCommand command){return shared.Query(command);}
+        internal static void BeginShutdown(){shared.shuttingDown=true;var owned=Interlocked.Exchange(ref shared.job,null);if(owned!=null)owned.Dispose();ThreadPool.QueueUserWorkItem(delegate{shared.StopForShutdown();});}
+        internal static void CancelShutdown(){lock(shared.gate){if(!shared.disposed)shared.shuttingDown=false;}}
         internal static void Shutdown(){shared.disposed=true;var owned=Interlocked.Exchange(ref shared.job,null);if(owned!=null)owned.Dispose();ThreadPool.QueueUserWorkItem(delegate{shared.Dispose();});}
+        void StopForShutdown(){lock(gate){if(shuttingDown)Stop();}}
         internal AudioReading Query(AudioCommand command){
             // Capture before waiting for the broker lock or starting its process.
             // A settings change must never retarget an operation already submitted.
             if(command==null)return Unknown("无效的音频请求。",false);
+            if(disposed||shuttingDown||isSystemShuttingDown())return Unknown("音频组件已退出。",false);
             var bindings=command.Settings??DeviceSettings.Current;
             var captured=new AudioBindings {SpeakerEndpointId=bindings.SpeakerEndpointId,HeadsetEndpointId=bindings.HeadsetEndpointId,MicrophoneEndpointId=bindings.MicrophoneEndpointId,ExplicitAudioBindingsOnly=bindings.ExplicitAudioBindingsOnly};
             command=new AudioCommand {Operation=command.Operation,Target=command.Target,Endpoint=command.Endpoint,Percent=command.Percent,Mute=command.Mute,Settings=captured};
             lock(gate){
-            if(disposed)return Unknown("音频组件已退出。",false);
+            if(disposed||shuttingDown||isSystemShuttingDown())return Unknown("音频组件已退出。",false);
             try{
                 if(quarantined&&!Stop())return Unknown("上次音频进程仍未退出，控制继续停用。",true);
                 if(process!=null&&process.HasExited){process.Dispose();process=null;if(job!=null){job.Dispose();job=null;}}
