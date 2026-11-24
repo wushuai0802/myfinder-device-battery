@@ -319,6 +319,7 @@ def suppress_bluetooth_xinput(devices):
 # (WirelessLayout.NativeWiredTwins), not here.
 CHARGING_TWINS = {
     (0x088D, 0x062E): (0x089D, 0x062F),   # EWEADN mouse: cable / receiver
+    (0x3554, 0xF58F): (0x373B, 0x1085),   # ATK VXE R1 SE+: cable / receiver (#1090)
 }
 
 
