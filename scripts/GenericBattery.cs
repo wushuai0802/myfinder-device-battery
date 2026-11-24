@@ -151,6 +151,8 @@ namespace AtkBattery {
         [DataMember(Name="provider")] public string Provider;
         [DataMember(Name="transport")] public string Transport;
         [DataMember(Name="modelSource",EmitDefaultValue=false)] public string ModelSource;
+        [DataMember(Name="familyProbe",EmitDefaultValue=false)] public bool FamilyProbe;
+        [DataMember(Name="canDisable",EmitDefaultValue=false)] public bool CanDisable;
         [DataMember(Name="confirmedAtUtc")] public string ConfirmedAtUtc;
         [DataMember(Name="measuredAtUtc")] public string MeasuredAtUtc;
         [DataMember(Name="connectionCheckedAtUtc")] public string ConnectionCheckedAtUtc;
@@ -167,7 +169,7 @@ namespace AtkBattery {
         public DateTime QueryTime {get{DateTime value;return DateTime.TryParse(QueriedAtUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out value)?value.ToUniversalTime():DateTime.MinValue;}}
         internal bool SameCacheIdentity(WirelessDevice other){return other!=null&&Id==other.Id&&Kind==other.Kind&&Provider==other.Provider;}
         internal WirelessDevice BatteryCacheCopy(){var copy=(WirelessDevice)MemberwiseClone();copy.Dpi=null;return copy;}
-        public string Key {get{return Id+"|"+PhysicalId+"|"+Name+"|"+Percent+"|"+Charging+"|"+Online+"|"+Fresh+"|"+Approximate+"|"+Unconfirmed+"|"+ConfirmedAtUtc+"|"+SourceQuality+"|"+QueriedAtUtc+"|"+(Dpi==null?"":Dpi.Key);}}
+        public string Key {get{return Id+"|"+PhysicalId+"|"+Name+"|"+Percent+"|"+Charging+"|"+Online+"|"+Fresh+"|"+Approximate+"|"+Unconfirmed+"|"+ConfirmedAtUtc+"|"+SourceQuality+"|"+QueriedAtUtc+"|"+FamilyProbe+"|"+CanDisable+"|"+(Dpi==null?"":Dpi.Key);}}
     }
     [DataContract] public sealed class ReaderHealth {
         [DataMember(Name="physicalId",EmitDefaultValue=false)] public string PhysicalId;
@@ -231,6 +233,15 @@ namespace AtkBattery {
         [DataMember(Name="error")] public string Error;
         [DataMember(Name="checkedAtUtc")] public string CheckedAtUtc;
         [DataMember(Name="dpiResult",EmitDefaultValue=false)] public WirelessDpiResult DpiResult;
+        [DataMember(Name="probeFamilies",EmitDefaultValue=false)] public bool? ProbeFamilies;
+        public string FamilyMemoryJson;
+    }
+    internal sealed class FamilyMemoryResult {
+        internal bool Ok;
+        internal string MemoryKey;
+        internal string FamilyMemoryJson;
+        internal string ErrorCode;
+        internal bool? ProbeFamilies;
     }
     internal sealed class GenericBatteryWorker:IDisposable {
         readonly string root;
@@ -244,12 +255,18 @@ namespace AtkBattery {
         IntPtr job;
         bool disposed,quarantined;
         DevicePackManager packManager;
+        FamilyMemoryStore familyMemory;
+        Func<bool> probeFamiliesReader;
+        bool? probeFamiliesOverride;
         readonly string explicitPackPath;readonly long explicitPackVersion;
         long loadedPackVersion;int failedPackGeneration=-1;
         sealed class DpiLease {internal string Token,Provider;internal int Current;internal int[] Stages;internal DateTime Checked;internal int Generation;}
         readonly Dictionary<string,DpiLease> dpiLeases=new Dictionary<string,DpiLease>(StringComparer.Ordinal);
         internal GenericBatteryWorker(string engineRoot=null,bool packageSmoke=false,int timeoutMilliseconds=45000,Func<Process,bool> terminateProcess=null,string devicePackPath=null,long devicePackVersion=0){root=engineRoot??Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","engine"));smoke=packageSmoke;queryBudget=Math.Max(100,Math.Min(45000,timeoutMilliseconds));terminate=terminateProcess??TryTerminate;explicitPackPath=devicePackPath;explicitPackVersion=devicePackVersion;}
         internal void UseDevicePacks(DevicePackManager manager){lock(query){if(process!=null)throw new InvalidOperationException("Attach device packs before starting the worker.");packManager=manager;}}
+        internal void UseFamilyMemory(FamilyMemoryStore store){lock(query){if(process!=null)throw new InvalidOperationException("Attach family memory before starting the worker.");familyMemory=store;}}
+        internal void UseProbeFamilies(Func<bool> reader){lock(query){probeFamiliesReader=reader;}}
+        bool CurrentProbeFamilies(){if(probeFamiliesOverride.HasValue)return probeFamiliesOverride.Value;if(probeFamiliesReader!=null)return probeFamiliesReader();return DeviceSettings.Current.AutoDetectMoreDevices;}
         internal bool Available {get{return File.Exists(Path.Combine(root,"runtime","python.exe"))&&File.Exists(Path.Combine(root,"server.py"));}}
         [StructLayout(LayoutKind.Sequential)] struct BasicLimits {
             public long PerProcess,PerJob;public uint Flags;public UIntPtr MinWorking,MaxWorking;public uint ActiveLimit;public UIntPtr Affinity;public uint Priority,Scheduling;
@@ -270,7 +287,7 @@ namespace AtkBattery {
             for(int attempt=0;attempt<3;attempt++)using(var lease=packManager==null?null:packManager.OpenForStart()){
             string packPath=lease==null?explicitPackPath:lease.Path;
             loadedPackVersion=lease==null?explicitPackVersion:lease.Record.Version;
-            var info=new ProcessStartInfo(Path.Combine(root,"runtime","python.exe"),"-I -B -u \""+Path.Combine(root,"server.py")+"\""+(smoke?" --package-smoke":"")+(packPath==null?"":" --device-pack "+UpdateProcess.Quote(packPath))) {
+            var info=new ProcessStartInfo(Path.Combine(root,"runtime","python.exe"),"-I -B -u \""+Path.Combine(root,"server.py")+"\""+(smoke?" --package-smoke":"")+(packPath==null?"":" --device-pack "+UpdateProcess.Quote(packPath))+" --probe-families "+(CurrentProbeFamilies()?"on":"off")) {
                 WorkingDirectory=root,UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,
                 RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8
             };
@@ -283,6 +300,10 @@ namespace AtkBattery {
             if(lease!=null){
                 try{var ready=ReadyCore(process,loadedPackVersion,20000,CancellationToken.None);packManager.SetLoaded(loadedPackVersion,ready.DevicePack.Disabled==null?0:ready.DevicePack.Disabled.Length);}
                 catch(Exception){long rejected=loadedPackVersion;if(!Stop())throw new IOException("pack_engine_stop_failed");packManager.StartupRejected(rejected);continue;}
+            }
+            if(familyMemory!=null&&familyMemory.HasEntries){
+                var restore=SendFamilyMemoryCore(process,generation,"set",null,null,familyMemory.GetFamilyMemoryJson(),Math.Min(20000,queryBudget));
+                if(!restore.Ok){Stop();throw new IOException("family_memory_restore_failed:"+(restore.ErrorCode??"unknown"));}
             }
             return process;
             }
@@ -307,6 +328,111 @@ namespace AtkBattery {
             Start();return loadedPackVersion==version;
         }}
         void ReportPackFailure(){if(!disposed&&packManager!=null&&loadedPackVersion>0&&failedPackGeneration!=generation){failedPackGeneration=generation;packManager.EngineFailed(loadedPackVersion,DateTime.UtcNow);}}
+        internal FamilyMemoryResult DisableFamilyDevice(string deviceId){
+            if(!Regex.IsMatch(deviceId??"",@"\Adevice-[a-f0-9]{24}\z"))return new FamilyMemoryResult {Ok=false,ErrorCode="unknown_device"};
+            lock(query){
+                Process child;int currentGeneration;
+                lock(lifecycle){child=process;currentGeneration=generation;if(disposed||quarantined||child==null||child.HasExited)return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};}
+                try{return SendFamilyMemoryCore(child,currentGeneration,"disable",deviceId,null,null);}
+                catch(Exception){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};}
+            }
+        }
+        internal FamilyMemoryResult EnableFamilyDevice(string memoryKey){
+            if(!FamilyMemoryJson.IsValidMemoryKey(memoryKey))return new FamilyMemoryResult {Ok=false,ErrorCode="invalid_memory_key"};
+            lock(query){
+                try{
+                    var child=Start();int currentGeneration;lock(lifecycle)currentGeneration=generation;
+                    return SendFamilyMemoryCore(child,currentGeneration,"enable",null,memoryKey,null);
+                }catch(Exception){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};}
+            }
+        }
+        internal bool RestartForProbeFamilies(bool enabled){
+            lock(query){
+                probeFamiliesOverride=enabled;
+                if(disposed||!Available)return false;
+                if(!Stop())return false;
+                try{
+                    var child=Start();int currentGeneration;lock(lifecycle)currentGeneration=generation;
+                    var check=SendFamilyMemoryCore(child,currentGeneration,"get",null,null,null,Math.Min(20000,queryBudget));
+                    if(!check.Ok){Stop();return false;}
+                    return true;
+                }catch(Exception){Stop();return false;}
+            }
+        }
+        FamilyMemoryResult SendFamilyMemoryCore(Process child,int currentGeneration,string op,string deviceId,string memoryKey,string memoryJson,int timeoutMilliseconds=0){
+            long request=Interlocked.Increment(ref sequence);
+            var cmd=new StringBuilder("{\"command\":\"family_memory\",\"op\":");
+            FamilyMemoryJson.WriteString(cmd,op);
+            cmd.Append(",\"requestId\":").Append(request).Append(",\"generation\":").Append(currentGeneration);
+            if(deviceId!=null){cmd.Append(",\"deviceId\":");FamilyMemoryJson.WriteString(cmd,deviceId);}
+            if(memoryKey!=null){cmd.Append(",\"memoryKey\":");FamilyMemoryJson.WriteString(cmd,memoryKey);}
+            if(memoryJson!=null){cmd.Append(",\"familyMemory\":").Append(memoryJson);}
+            cmd.Append('}');
+            string line=cmd.ToString();
+            if(Encoding.UTF8.GetByteCount(line)>FamilyMemoryJson.MaxFileBytes)return new FamilyMemoryResult {Ok=false,ErrorCode="payload_too_large"};
+            child.StandardInput.WriteLine(line);child.StandardInput.Flush();
+            return ReceiveFamilyMemory(child,request,currentGeneration,timeoutMilliseconds);
+        }
+        FamilyMemoryResult ReceiveFamilyMemory(Process child,long request,int currentGeneration,int timeoutMilliseconds=0){
+            int budget=timeoutMilliseconds>0?timeoutMilliseconds:queryBudget;
+            var clock=Stopwatch.StartNew();var reader=child.StandardOutput;
+            for(int frames=0;frames<128;frames++){
+                int remaining=Math.Max(1,budget-(int)clock.ElapsedMilliseconds);
+                var line=Task.Factory.StartNew(delegate{return AppRuntime.ReadLineBounded(reader,524288);});
+                if(!line.Wait(remaining)){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="timeout"};}
+                if(line.Result==null){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};}
+                FamilyMemoryResult parsed;bool matches;
+                if(!TryParseFamilyMemoryReply(line.Result,request,currentGeneration,out parsed,out matches)||!matches){
+                    if(clock.ElapsedMilliseconds>=budget)break;
+                    continue;
+                }
+                lock(lifecycle)if(disposed||process!=child||generation!=currentGeneration)return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};
+                return parsed;
+            }
+            Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="timeout"};
+        }
+        static bool TryParseFamilyMemoryReply(string json,long expectedRequest,int expectedGeneration,out FamilyMemoryResult result,out bool matches){
+            result=null;matches=false;
+            if(String.IsNullOrEmpty(json)||json.Length>524288)return false;
+            Dictionary<string,object> obj;
+            try{obj=PackJson.Parse(Encoding.UTF8.GetBytes(json)) as Dictionary<string,object>;}
+            catch(InvalidDataException){return false;}
+            if(obj==null)return false;
+            object replyObj;if(!obj.TryGetValue("reply",out replyObj)||!String.Equals(replyObj as string,"family_memory",StringComparison.Ordinal))return false;
+            object reqObj;long reqId=-1;
+            if(!obj.TryGetValue("requestId",out reqObj))return false;
+            try{reqId=PackJson.Integer(reqObj);}catch(InvalidDataException){return false;}
+            object errObj;string error=obj.TryGetValue("error",out errObj)?errObj as string:null;
+            if(reqId==0&&String.Equals(error,"payload_too_large",StringComparison.Ordinal)){
+                matches=true;result=new FamilyMemoryResult {Ok=false,ErrorCode="payload_too_large"};return true;
+            }
+            object genObj;long gen=-1;
+            if(!obj.TryGetValue("generation",out genObj))return false;
+            try{gen=PackJson.Integer(genObj);}catch(InvalidDataException){return false;}
+            if(reqId!=expectedRequest||gen!=expectedGeneration)return false;
+            matches=true;
+            object okObj;bool ok=obj.TryGetValue("ok",out okObj)&&okObj is bool&&(bool)okObj;
+            object keyObj;string memKey=obj.TryGetValue("memoryKey",out keyObj)?keyObj as string:null;
+            if(memKey!=null&&!FamilyMemoryJson.IsValidMemoryKey(memKey))memKey=null;
+            object probeObj;bool? probeFamilies=obj.TryGetValue("probeFamilies",out probeObj)&&probeObj is bool?(bool?)probeObj:null;
+            string memJson=null;
+            object memObj;
+            if(obj.TryGetValue("familyMemory",out memObj)&&memObj!=null){
+                try{memJson=FamilyMemoryJson.SerializeMemoryMap(FamilyMemoryJson.ParseMemoryMapObject(memObj));}
+                catch(InvalidDataException){
+                    result=new FamilyMemoryResult {Ok=false,ErrorCode="invalid_snapshot"};return true;
+                }
+            }
+            result=new FamilyMemoryResult {
+                Ok=ok,MemoryKey=memKey,FamilyMemoryJson=memJson,
+                ErrorCode=CleanErrorCode(error),ProbeFamilies=probeFamilies
+            };
+            return true;
+        }
+        static string CleanErrorCode(string value){
+            if(String.IsNullOrEmpty(value))return null;
+            return Regex.IsMatch(value,@"\A[a-z0-9_]{1,48}\z")?value:"unknown_error";
+        }
         internal WirelessSnapshot Poll(bool force=false,string deviceId=null,Action<WirelessSnapshot> progress=null,bool parkEmptyReaders=false,string physicalId=null) {lock(query){
             try {
                 if(deviceId!=null&&physicalId!=null||deviceId!=null&&!Regex.IsMatch(deviceId,@"^device-[a-f0-9]{24}$")||physicalId!=null&&!Regex.IsMatch(physicalId,@"^device-[a-f0-9]{24}$"))return new WirelessSnapshot {Error="无效或冲突的设备刷新目标。"};
@@ -382,7 +508,7 @@ namespace AtkBattery {
                 if(!Regex.IsMatch(value.LegacyId??"",@"^device-[a-f0-9]{24}$"))value.LegacyId=null;
                 if(!Regex.IsMatch(value.PhysicalId??"",@"^device-[a-f0-9]{24}$"))value.PhysicalId=null;
                 value.Name=Clean(value.Name,80,"无线设备");value.Provider=Clean(value.Provider,48,"");value.Transport=Clean(value.Transport,32,"");
-                value.ModelSource=value.ModelSource=="pack"?"pack":null;
+                value.ModelSource=IsAllowedModelSource(value.ModelSource)?value.ModelSource:null;
                 if(!value.VendorId.HasValue||!value.ProductId.HasValue||!UnadaptedDevice.Word(value.VendorId.Value)||!UnadaptedDevice.Word(value.ProductId.Value)){value.VendorId=null;value.ProductId=null;}
                 if(value.Kind!="mouse"&&value.Kind!="headset"&&value.Kind!="keyboard"&&value.Kind!="gamepad")value.Kind="device";
                 if(value.Percent<0||value.Percent>100)value.Percent=null;
@@ -434,8 +560,16 @@ namespace AtkBattery {
                 if(result.ConfirmedDpi.HasValue&&!WirelessDpi.ValidValue(result.ConfirmedDpi.Value))result.ConfirmedDpi=null;
                 if(result.DeviceId==null||result.TargetToken==null||!WirelessDpi.ValidValue(result.RequestedDpi)||result.Success&&(result.OutcomeUnknown||!String.IsNullOrEmpty(result.Error)||result.ConfirmedDpi!=result.RequestedDpi)){result.Success=false;result.OutcomeUnknown=true;result.Error="DPI操作返回内容未通过核对。";}
             }
+            if(snapshot.Complete){
+                string memorySlice=FamilyMemoryJson.ExtractTopLevelField(json,"familyMemory");
+                if(memorySlice!=null){
+                    try{snapshot.FamilyMemoryJson=FamilyMemoryJson.SerializeMemoryMap(FamilyMemoryJson.ParseMemoryMapJson(memorySlice));}
+                    catch(InvalidDataException){snapshot.FamilyMemoryJson=null;}
+                }
+            }else snapshot.FamilyMemoryJson=null;
             snapshot.Devices=devices.ToArray();return snapshot;
         }
+        static bool IsAllowedModelSource(string source){return source=="pack"||source!=null&&Regex.IsMatch(source,@"\Afamily:[a-z0-9_-]{1,48}\z");}
         static string Clean(string value,int max,string fallback){var result=new StringBuilder();foreach(char c in value??"")if(!Char.IsControl(c)&&result.Length<max)result.Append(c);return result.Length==0?fallback:result.ToString();}
         internal void Reset(){lock(lifecycle){failedPackGeneration=generation;Stop();}}
         static bool TryTerminate(Process value){

@@ -71,8 +71,9 @@ namespace AtkBattery {
         [DataMember(Order=28)] public bool IncludeBetaUpdates = true;
         [DataMember(Order=29)] public string FontSize = "normal";
         [DataMember(Order=30)] public string PanelLayout = "ring";
+        [DataMember(Order=31)] public bool AutoDetectMoreDevices = true;
         [OnDeserializing] void Defaults(StreamingContext context) {
-            Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;
+            Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;AutoDetectMoreDevices=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
@@ -83,7 +84,7 @@ namespace AtkBattery {
             var copy=new AudioBindings { SchemaVersion=SchemaVersion,
                 SpeakerEndpointId=SpeakerEndpointId, HeadsetEndpointId=HeadsetEndpointId,
                 MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,TrayDeviceId=TrayDeviceId,
-                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ThemeStyle=ThemeStyle,FontSize=FontSize,PanelLayout=PanelLayout,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,ShowUpdateBadge=ShowUpdateBadge,CheckFeedbackReplies=CheckFeedbackReplies,IncludeBetaUpdates=IncludeBetaUpdates,
+                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ThemeStyle=ThemeStyle,FontSize=FontSize,PanelLayout=PanelLayout,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,ShowUpdateBadge=ShowUpdateBadge,CheckFeedbackReplies=CheckFeedbackReplies,IncludeBetaUpdates=IncludeBetaUpdates,AutoDetectMoreDevices=AutoDetectMoreDevices,
                 RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
                 HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases),
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };
@@ -232,6 +233,7 @@ namespace AtkBattery {
                 catch(XmlException error){throw new SerializationException("Invalid audio settings JSON",error);}
                 // A malformed layout value must not discard the other settings.
                 while(document.DocumentElement["PanelLayout"]!=null&&document.DocumentElement["PanelLayout"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["PanelLayout"]);
+                while(document.DocumentElement["AutoDetectMoreDevices"]!=null&&document.DocumentElement["AutoDetectMoreDevices"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["AutoDetectMoreDevices"]);
                 var fields=new AudioBindings();TrayConfiguration.ReadFields(document.DocumentElement,fields);
                 AudioBindings settings;
                 using(var reader=new XmlNodeReader(document))settings=serializer.ReadObject(reader) as AudioBindings;

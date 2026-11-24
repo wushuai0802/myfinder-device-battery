@@ -105,7 +105,7 @@ static class UiMenusTests {
     }
     static void PreferenceOrder(){
         using(var f=new Fixture()){
-            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preferences include theme style, layout, font size and the requested noninteractive groups");
+            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|设备识别|自动识别更多设备|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preferences include theme style, layout, font size and the requested noninteractive groups");
             f.Page(PopupPage.Preferences);var toggle=f.Find("自动检查反馈回复");Check(toggle.Id==226&&toggle.Checked,"feedback checking defaults on in the settings page");f.Activate(toggle);
             Check(!DeviceSettings.Current.CheckFeedbackReplies&&f.Saves==1,"feedback checking toggle uses the existing configuration writer");
             var beta=f.Find("提醒测试版更新");Check(beta.Id==227&&beta.Checked,"beta update reminders default on in the settings page");f.Activate(beta);
