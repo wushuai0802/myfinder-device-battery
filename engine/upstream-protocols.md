@@ -2092,6 +2092,32 @@ Still needs Windows wired/dongle caps, all six tiers, charging/unplugging,
 sleep/wake, removal/reconnect, official-software coexistence and cross-firmware
 comparison. Source-reported wired/dongle success is not this project's acceptance.
 
+### BETOP gamepads (20BC / 20DD)
+
+**C — public-protocol candidate, pending hardware validation (#1101).** `providers/betop.py`
+follows BrimDeck `src/BrimDeck.Core/Brands/Betop.cs` (Apache-2.0), cross-checked against the MIT
+`oitsukiii/betop-battery`, HaloBattery `beitong.py`, `vigil-watt` and BETOP client 2.6.2
+(`JoypadConnHelper`). Only the exact VID:PID rows in `PIDS` (vendors `20BC` and `20DD`) are eligible;
+there is no wildcard. The collection is the vendor usage `0003` on page `00FF` (Windows) or `FF00`
+(HID order). Usage 2/5/6 are never opened. Each USB parent needs exactly one such collection, and
+input and output report `02` must each be proven by the runtime descriptor with the same 5..64 byte
+size including the report ID; otherwise nothing is sent.
+
+Firmware generations differ. Scrambled-only PIDs (`5126 5128 5145 5146 5154 5155 515D 515E 5169 516A`)
+get the scrambled request, both-mode PIDs (`5125 5127`) get scrambled first and plain once if silent,
+and plain-only PIDs get the plain request. The scramble maps the high nibble through
+`0,A,6,F,1,C,2,9,E,3,7,D,4,B,5,8` and xors the low nibble with `8` (`15` becomes `AD`).
+
+Requests, zero-padded to the proven output length, are `02 15 00…` (plain) and `02 AD 00…`
+(scrambled). Replies must have exactly the proven input length. Plain: `02 15 LL 00 5S`
+with `1 <= LL <= 100`; scrambled: the same after unscrambling bytes 1..4, byte 0 staying `02`. `S != 0`
+means charging. Level `0` (not-ready placeholder), the request echo and any other state nibble or
+report ID are rejected. No mode, profile, vibration, reset, pairing or firmware command is sent.
+The reader keeps the last reading as cached/offline while the receiver stays in the USB tree.
+
+Still needs: real captures per PID, which PIDs use which firmware generation, charging and sleep
+behaviour, and comparison with the BETOP client.
+
 ### 8BitDo Pro 2, Pro 3, SN30 Pro, SF30 Pro in D-input mode
 
 **Connection:** Bluetooth (2DC8:6006 and the other ids in `providers/eightbitdo.py`) or USB

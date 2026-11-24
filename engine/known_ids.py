@@ -34,6 +34,7 @@ from providers.profiles import profiles, registered_ids
 TABLES = {
     "atk_headset": ("PIDS",),
     "ajazz_aj179_nlp": ("PIDS",),
+    "betop": ("PIDS",),
     "astro": ("PIDS",), "asus": ("KNOWN",), "asus_omni": ("PIDS",), "asus_headset": ("PIDS",), "audeze": ("KNOWN",),
     "corsair": ("PIDS", "BRAGI_PIDS"), "gwolves": ("WIRED", "MODELS"),
     "hyperx": ("PIDS",), "hyperx_cloud3": ("PIDS",),
@@ -201,7 +202,7 @@ def build_index(root=None, *, engine_root=None):
                 if module == "pulsar" and table == "NANO_PIDS" and table not in source.values:
                     continue  # Older external snapshots predate the BITMOUSE reader.
                 # Each table has an explicit VID relation, not a cross product.
-                if module in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying"):
+                if module in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop"):
                     for key, value in source.table(table):
                         identity = source.literal(key)
                         # Older snapshots used one VID and integer PID keys.
