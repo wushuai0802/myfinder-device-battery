@@ -702,6 +702,15 @@ def discover(paths, excluded=(), *, full=False):
                                     for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete
                     and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
+                    (0x320F, 0x5055, 0xFF1C, 0x0092)):
+                from providers.vgn_keyboard_wired import product_allowed
+                if product_allowed(info["product_string"]):
+                    from battery_hid import battery_caps
+                    info.update(battery_caps(hid, data, caps))
+                    caps_complete = all(info.get(key) is not None
+                                        for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete
+                    and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
                     (0x05AC, 0x024F, 0xFF60, 0x0061)
                     and info["product_string"] == "F108Pro Dongle"
                     and caps.input == caps.output == 33):

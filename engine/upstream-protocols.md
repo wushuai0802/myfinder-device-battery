@@ -4544,3 +4544,34 @@ Grade C candidate for [#1092](https://github.com/wushuai0802/myfinder-device-bat
 `1156.json` declares `Type: 2` (2.4G receiver) and `FwType: 2` (JM firmware), and `JM_WIRELESS_MAP` pairs `PID 4438` (`0x1156`) with CM610 V2 MAX (`1165`/`1181`), CM610 MAX (`1155`/`1168`), and A950 LCD (`1182`). `ParseDevices` opens `FF02:0002` with report ID `0x08` (`HidUsbDeviceBase`: `ReportId = 8`, `REPORT_SIZE = 16`, so 17-byte numbered input and output reports on hidapi). `JmHidDevice.CheckActive` sends `08 03` padded to 17 bytes with checksum `0x4A` (`sum(bytes[0..16]) & 0xFF == 0x55`) and requires input `08 03` with `raw[6] == 0x01` (`raw[6] == 0x00` indicates offline/asleep). Only when active does `GetBatteryStatus` send `08 04` padded to 17 bytes with checksum `0x49`; input `08 04` carries percentage `raw[6]` (`0..100`) and status `raw[7]` (`0x01`/`0x02` charging per `jm/energy.html`, `0x00` discharging). Push events with `raw[1] == 0x0A` are skipped; both gate and battery replies are additionally guarded by the CompX `sum(bytes[0..16]) & 0xFF == 0x55` checksum (matching `lofree_flow.json` and `pulsar.py`).
 
 The declarative family `engine/families/builtin/dareu_jm_24g.json` requires exact `260D:1156`, product string `"2.4G Wireless Receiver"`, resolved USB receiver parent, unique `FF02:0002`, and descriptor-proven 17-byte Input/Output report `08`. No mode, pairing, or configuration writes are sent. Hardware confirmation in MyFinder is pending.
+
+### ATK / VGN / VXE wired keyboards (320F:5055)
+
+**Project verification: C — read-only candidate for #1091 (VGN S99) and #1085 (VXE V87); no device reply yet.**
+Static analysis only of the official ATK HUB bundle, chunks `keyboard-info.util-BIIiAZ5K.js` and
+`base-hid-device-LO0Bgz6G.js`; no vendor code was executed or copied. `DEVICE_PATHS["0x320f"]["0x5055"]` lists
+the supported models by whitespace-free lower-case product name: `atkv75x`, `vxev75x`, `vgnvxe75v2`, `vgnvxe75`,
+`vxev87`, `vxev87rgb`, `kokomikeyboard108`, `acheronkeyboard108`, `acheronkeyboard87`, `shenhekeyboard108`,
+`kafka87`, `kafka108`, `vgnv98prov2`, `vgnv98pro`, `vxev75pro`, `vgns99`, `s99`, `vgnn75pro`.
+
+`320F:5055` is shared with models outside that table (Rainy75, WOB). The separate `providers/vgn_keyboard_wired.py`
+therefore requires the product string, with all whitespace removed and lower-cased, to be an exact member of the
+list above. A missing, empty or unlisted name never opens a handle and sends nothing. The `320F:5088` reader
+(`providers/vgn_keyboard.py`, grade A) is untouched and does not share this identity table.
+
+Only `FF1C:0092` qualifies, on a resolved `pnp:usb\vid_320f&pid_5055` parent with exactly one such collection
+(counted before the product and report gates), and `topology.py` collects the byte-array caps for it like for
+`320F:5088`. Runtime caps must prove input and output report `04` as the only report, 64 bytes each including
+the ID; unknown, partial or ambiguous proofs send nothing.
+
+ATK HUB's `K` class writes Report ID 4, a 16-bit request code `0x0001` (little-endian at bytes 1..2) and the
+power-info command `Y.power_info = 26` (`0x1A`) at byte 3, zero padded to 64 bytes. The only request, sent once
+per poll without retry, is `04 01 00 1A 00` plus 59 zeros. A reply must be exactly 64 bytes with prefix
+`04 01 00`, command `1A` at byte 3 and a percentage at byte 8 in 0..100; an exact request echo is ignored.
+`Ge.createBattery` treats byte 9 equal to 2 as charging and everything else as discharging, so `charging_known`
+is true. A `0%` frame that is not charging is rejected as an uninitialised placeholder. Byte 3 equal to `FF`
+(`04 01 00 FF ...`) is a no-reading/sleeping reply: it is neither published nor an error.
+
+Not verified: real replies, the 0% and full-charge behaviour, the meaning of byte 9 values other than 2,
+sleep/wake and cold start, official-software coexistence and whether wireless dongles on `320F:5055` exist.
+This candidate covers the wired keyboard only; VGN HUB lists `320F:5088` as the 2.4 GHz dongle of some of these models, which stays with the existing reader.
