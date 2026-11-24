@@ -14,6 +14,45 @@ what comes back, and where each protocol was taken from.
 
 These are independent implementations based on protocol facts. BrimDeck identifies its source under Apache-2.0 and openrazer-win under GPL-2.0. MyFinder ships no vendor driver or upstream executable for these readers. The three candidates have synthetic test coverage and await hardware confirmation in MyFinder.
 
+## Angry Miao AM Infinity .97 (0E8D:0703)
+
+Issue #1102, candidate evidence level C. Taken from static analysis of the
+vendor's AM Master 1.3.9 installer (PyInstaller, Python 3.7 bytecode; archive
+SHA-256 `d59cf1f09c263c22848a8e13f527e21e007087dd206220ce03bf50776d402382`) and its
+web driver bundle `app.25de4883.js`. No vendor binary was executed and no vendor
+code is included. This project has no hardware capture of the exchange.
+
+Scope is the `0E8D:0703` 2.4G receiver (`AM35_D`) whose product string trims to
+`AM Infinity .97`, on its `FF13:0001` collection only. The `FF14:0001` and
+`FF15:0001` collections are never opened. A resolved native `pnp:usb` parent is
+required, and target collections are counted per parent before the product
+string, path or report proof is checked: a duplicate or unresolved parent means
+no I/O. Only the descriptor-proven layout is accepted: output report `06` and
+input report `07`, each exactly 62 bytes including the report ID.
+
+Before sending, queued input is discarded with at most 16 reads in 40 ms;
+failure to see an empty queue means no send. Each eligible receiver then gets
+one write per poll, no retry:
+
+    06 06 80 05 5A 02 00 CF 30 + 53 zero bytes   (62 bytes)
+
+`80` addresses the mouse behind the dongle; `05 5A 02 00 CF 30` is the Airoha
+RACE read of mouse battery command `0x30CF`. FOTA, configuration, RGB, DPI and
+the dongle's own battery commands are never sent.
+
+Input reports are read for at most 800 ms / 25 reads (20 ms per read; if the
+interrupt queue is empty `get_input_report(07, 62)` is tried). A report counts
+only if byte 0 is `07` and `len = b1 | b2 << 8` satisfies `0 < len <= 59`; its
+`len` payload bytes are appended to a stream of at most 4096 bytes. Frames in
+the stream are `<05|15> <5B|5D> <len lo> <len hi> <len bytes>` (leading
+non-matching bytes are dropped; `len >= 2`). Frames whose bytes 4..5 are
+`CF 30` answer the query. A short ACK (`5B`, `len == 3`) is skipped. A full
+answer has at least 11 bytes: byte 7 charging (`0` or `1`, otherwise rejected),
+byte 8 percent (`0..100`, otherwise rejected), byte 9 health (not shown), byte
+10 mouse present. Byte 10 equal to `0` means no mouse is reachable (asleep or
+off): no percentage is published, the last reading is shown as cached while the
+receiver stays in the USB tree, and it is dropped once the receiver is gone.
+
 ## AJAZZ AJ179 NLP (7768:642E)
 
 Issue #1064, candidate evidence level C. Independently implemented from public
