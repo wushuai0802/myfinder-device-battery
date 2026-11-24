@@ -34,6 +34,7 @@ from providers.profiles import profiles, registered_ids
 TABLES = {
     "atk_headset": ("PIDS",),
     "ajazz_aj179_nlp": ("PIDS",),
+    "am_infinity_97": ("PIDS",),
     "astro": ("PIDS",), "asus": ("KNOWN",), "asus_omni": ("PIDS",), "asus_headset": ("PIDS",), "audeze": ("KNOWN",),
     "corsair": ("PIDS", "BRAGI_PIDS"), "gwolves": ("WIRED", "MODELS"),
     "hyperx": ("PIDS",), "hyperx_cloud3": ("PIDS",),
