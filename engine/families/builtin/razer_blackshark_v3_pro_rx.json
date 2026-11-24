@@ -9,8 +9,8 @@
     "url": "https://github.com/MoFeng2223/BrimDeck/blob/f1510d09677492a13a31d26bc37c3509da1b818f/src/BrimDeck.Core/Brands/RazerBlackSharkV3.cs",
     "revision": "f1510d09677492a13a31d26bc37c3509da1b818f",
     "license": "Apache-2.0 (BrimDeck); GPL-2.0 (OpenRazer); independently restated protocol facts, no third-party code copied",
-    "origin": "OpenRazer #2794: 3d48ab3d1101f9b65f824ac2d2376d78449427c3/driver/razerkraken_driver.c; RiskRunner0/blackshark-linux@a340f6de87641c6dfead121028aea61ff7a93f0a independently identifies exact 1532:0577; user #1023 independently confirms Windows report shape.",
-    "evidence": "Exact 1532:0577, MI_05, FF14:0001, report 02 input/output 64 are identity gates. Battery inputs use class 21, sub 01 reply or 02 push, argc 1..49, percent at 13 <=100; header 02 02 60 and XOR bytes 0..62 ==0. OpenRazer's private Linux receive endpoint does not prove standard Windows HID delivery: hardware-dependent C candidate. Repeated active reads may disrupt wireless. Only bounded standard vendor HID listening is used; quiet receivers yield no reading. No charging inference."
+    "origin": "OpenRazer #2794: 3d48ab3d1101f9b65f824ac2d2376d78449427c3/driver/razerkraken_driver.c; RiskRunner0/blackshark-linux@a340f6de87641c6dfead121028aea61ff7a93f0a identifies 1532:0577; user #1023 USBPcap + Windows 11 test.",
+    "evidence": "1532:0577 MI_05 FF14:0001 report 02 in/out 64B. Tries bounded passive listen first; if silent, sends one read-only 0x21 query (02 00 60 .. 04 .. 80 21 .. C7 00), throttled to >=60s per receiver to protect wireless audio. Reply 02 02 60 .. 80 21 01 count percent, XOR 0..62 ==0, percent 0..100 (0xFF asleep/off). #1023 hardware test got 74% with 60s polling. No charging inference; C candidate."
   },
   "devices": [
     {"vendorId": "1532", "productId": "0577", "name": "Razer BlackShark V3 Pro 2.4G Receiver"}
@@ -45,6 +45,33 @@
           },
           {
             "when": [{"at": 11, "eq": "02"}],
+            "percent": {"at": 13, "min": 0, "max": 100}
+          }
+        ]
+      }
+    },
+    {
+      "name": "battery-query",
+      "transport": "output",
+      "request": "02 00 60 00 00 00 04 00 00 80 21 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C7 00",
+      "timeoutMs": 500,
+      "maxReads": 8,
+      "reply": {
+        "length": 64,
+        "match": [
+          {"at": 0, "eq": "02"},
+          {"at": 1, "eq": "02"},
+          {"at": 2, "eq": "60"},
+          {"at": 9, "eq": "80"},
+          {"at": 10, "eq": "21"},
+          {"at": 11, "eq": "01"}
+        ],
+        "spans": [{"at": 12, "count": 1, "min": "01", "max": "31"}],
+        "checksum": {"xor": [0, 63], "equals": "00"},
+        "asleep": [{"at": 13, "eq": "FF"}],
+        "variants": [
+          {
+            "when": [{"at": 11, "eq": "01"}],
             "percent": {"at": 13, "min": 0, "max": 100}
           }
         ]

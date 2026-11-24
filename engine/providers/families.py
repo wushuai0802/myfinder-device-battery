@@ -8,6 +8,8 @@ otherwise). It sends nothing to a collection no family selected.
 """
 from __future__ import annotations
 
+import time
+
 import families
 from families import dpi as dpi_framework, processes, runner
 from families.memory import ReadMemory
@@ -22,6 +24,10 @@ except ImportError:          # pragma: no cover
 
 NAME = "families"
 DPI_MAX_FAILURES = 3   # consecutive failed DPI reads before DPI is left alone for this device
+# Minimum interval between active queries for radios sensitive to rapid polling.
+_ACTIVE_COOLDOWN_SECONDS = {
+    ("razer_blackshark_v3_pro_rx", "battery-query"): 60.0,
+}
 
 
 class FamiliesProvider(Provider):
@@ -34,6 +40,7 @@ class FamiliesProvider(Provider):
         self._clock = clock
         self.candidate_count = 0
         self._dpi_failures = {}
+        self._active_cooldown = {}
 
     def _inventory(self):
         rows = []
@@ -84,6 +91,13 @@ class FamiliesProvider(Provider):
         if not plan:
             self._diag.append(f"{family.id}: no read left to try for this device; nothing sent")
             return None
+        now = self._clock() if self._clock else time.monotonic()
+        if len(plan) == 1:
+            cooldown = _ACTIVE_COOLDOWN_SECONDS.get((family.id, plan[0]))
+            last_at = self._active_cooldown.get((family.id, unit, plan[0]))
+            if cooldown is not None and last_at is not None and (now - last_at) < cooldown:
+                self._diag.append(f"{family.id}.{plan[0]}: throttled (<{int(cooldown)}s)")
+                return None
         dev = hid.device()
         try:
             dev.open_path(info["path"])
@@ -92,6 +106,15 @@ class FamiliesProvider(Provider):
             return None
         try:
             for name in plan:
+                cooldown = _ACTIVE_COOLDOWN_SECONDS.get((family.id, name))
+                last_at = self._active_cooldown.get((family.id, unit, name))
+                if cooldown is not None and last_at is not None and (now - last_at) < cooldown:
+                    self._diag.append(f"{family.id}.{name}: throttled (<{int(cooldown)}s)")
+                    return None
+                if cooldown is not None:
+                    # Arm cooldown immediately before the write so timeouts/errors/asleep
+                    # all honor the minimum interval.
+                    self._active_cooldown[(family.id, unit, name)] = now
                 kwargs = {"clock": self._clock} if self._clock else {}
                 outcome = runner.run(dev, family, reads[name], **kwargs)
                 self.memory.record(family.id, unit, name, outcome.kind)

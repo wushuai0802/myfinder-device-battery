@@ -24,11 +24,18 @@ def seal(data):
     return data
 
 
-def battery_frame(percent=73, sub=1, argc=1):
+def battery_frame(percent=73, sub=1, argc=1, status_flag=0x80):
     data = [0] * 64
     data[:3] = [0x02, 0x02, 0x60]
+    data[6] = min(255, 4 + argc)
+    data[9] = status_flag
     data[10:14] = [0x21, sub, argc, percent]
     return seal(data)
+
+
+QUERY_REQUEST = bytes(seal(
+    [0x02, 0x00, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x80, 0x21] + [0] * 53
+))
 
 
 def receiver(**changes):
@@ -93,13 +100,19 @@ class BlackSharkPassiveTests(unittest.TestCase):
         self.assertIsNone(self.family.feature_report)
         self.assertIsNone(self.family.dpi)
         self.assertEqual(self.family.stand_aside_for, ())
-        self.assertEqual(len(self.family.reads), 1)
+        self.assertEqual([r.name for r in self.family.reads], ["battery-listen", "battery-query"])
         self.assertEqual(self.read.transport, "listen")
         self.assertEqual(self.read.request, b"")
         self.assertIsNone(self.read.gate)
         self.assertGreaterEqual(self.read.timeout_ms, 120)
         self.assertLessEqual(self.read.timeout_ms, 250)
         self.assertEqual(self.read.max_reads, 8)
+        query = self.family.reads[1]
+        self.assertEqual(query.transport, "output")
+        self.assertEqual(query.request, QUERY_REQUEST)
+        self.assertEqual(len(query.request), 64)
+        self.assertEqual(query.request[62], 0xC7)
+        self.assertIsNone(query.gate)
 
     def test_reply_and_push_accept_percent_boundaries_without_charging(self):
         # Published V3-family layout sample from BrimDeck. PID 0577 hardware validation is pending.
@@ -176,10 +189,97 @@ class BlackSharkPassiveTests(unittest.TestCase):
         self.assertFalse(result.charging_known)
         self.assertEqual(device.read_calls, [(64, self.read.timeout_ms)])
         self.assert_receive_only(device)
-        device = ObservedDevice()
-        readings, _ = poll([receiver()], device)
-        self.assertFalse(readings)
-        self.assert_receive_only(device)
+
+    def test_passive_silence_falls_back_to_throttled_active_query_issue_1023(self):
+        # Poll 1 (t=100): passive listen returns empty -> sends one 0x21 query -> 74%.
+        # Poll 2 (t=120, within 60s): throttled -> zero opens, zero writes, cached 74%.
+        # Poll 3 (t=165, >=60s): sends one 0x21 query -> refreshed 72%.
+        now = [100.0]
+        provider = provider_module.FamiliesProvider(running=lambda names: False, clock=lambda: now[0])
+
+        class QueryDevice(ObservedDevice):
+            def __init__(self, reply):
+                super().__init__([])
+                self._reply = reply
+
+            def write(self, data):
+                self.writes.append(bytes(data))
+                if self._reply is not None:
+                    self.replies.append(self._reply)
+                return len(data)
+
+        dev1 = QueryDevice(battery_frame(percent=74, sub=1, argc=1))
+        readings1, _ = poll([receiver()], dev1, provider=provider)
+        self.assertEqual(len(readings1), 1)
+        self.assertEqual((readings1[0].level, readings1[0].charging_known, readings1[0].verification_level),
+                         (74, False, "C"))
+        self.assertEqual(dev1.writes, [QUERY_REQUEST])
+
+        # Within 60s cooldown: zero opens, zero writes, and returns no fresh reading
+        # so server.py preserves the prior reading as cached without faking freshness.
+        now[0] = 120.0
+        dev2 = QueryDevice(battery_frame(percent=70, sub=1, argc=1))
+        readings2, _ = poll([receiver()], dev2, provider=provider)
+        self.assertEqual(readings2, [])
+        self.assertEqual(dev2.opened, [])
+        self.assertEqual(dev2.writes, [])
+        self.assertTrue(any("throttled" in line for line in provider.diagnostics()))
+
+        # After 60s cooldown: sends one single 0x21 query and refreshes.
+        now[0] = 165.0
+        dev3 = QueryDevice(battery_frame(percent=72, sub=1, argc=1))
+        readings3, _ = poll([receiver()], dev3, provider=provider)
+        self.assertEqual(len(readings3), 1)
+        self.assertEqual(readings3[0].level, 72)
+        self.assertEqual(dev3.writes, [QUERY_REQUEST])
+
+    def test_active_query_rejects_direct_request_echo_and_arms_cooldown_on_write_error(self):
+        # Direct echo of the request must never become a reading.
+        query = self.family.reads[1]
+        self.assertEqual(runner.parse(query.reply, QUERY_REQUEST).kind, "rejected")
+
+        # Write error arms cooldown immediately.
+        now = [300.0]
+        provider = provider_module.FamiliesProvider(running=lambda names: False, clock=lambda: now[0])
+
+        class FailingWrite(ObservedDevice):
+            def write(self, data):
+                self.writes.append(bytes(data))
+                raise OSError("write failed")
+
+        dev1 = FailingWrite()
+        readings1, _ = poll([receiver()], dev1, provider=provider)
+        self.assertEqual(readings1, [])
+        self.assertEqual(dev1.writes, [QUERY_REQUEST])
+
+        now[0] = 320.0
+        dev2 = FailingWrite()
+        readings2, _ = poll([receiver()], dev2, provider=provider)
+        self.assertEqual(readings2, [])
+        self.assertEqual(dev2.writes, [])
+
+    def test_active_query_ff_percent_is_asleep_and_still_throttled(self):
+        now = [200.0]
+        provider = provider_module.FamiliesProvider(running=lambda names: False, clock=lambda: now[0])
+
+        class AsleepDevice(ObservedDevice):
+            def write(self, data):
+                self.writes.append(bytes(data))
+                self.replies.append(battery_frame(percent=0xFF, sub=1, argc=1))
+                return len(data)
+
+        dev1 = AsleepDevice()
+        readings1, _ = poll([receiver()], dev1, provider=provider)
+        self.assertEqual(readings1, [])
+        self.assertEqual(dev1.writes, [QUERY_REQUEST])
+        self.assertTrue(any("asleep" in line for line in provider.diagnostics()))
+
+        # Still throttled within 60s when asleep (protects wireless link).
+        now[0] = 220.0
+        dev2 = AsleepDevice()
+        readings2, _ = poll([receiver()], dev2, provider=provider)
+        self.assertEqual(readings2, [])
+        self.assertEqual(dev2.writes, [])
 
     def test_continuous_unrelated_frames_hit_read_bound(self):
         device = ObservedDevice([battery_frame(sub=3)] * 32)
