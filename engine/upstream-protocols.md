@@ -14,6 +14,49 @@ what comes back, and where each protocol was taken from.
 
 These are independent implementations based on protocol facts. BrimDeck identifies its source under Apache-2.0 and openrazer-win under GPL-2.0. MyFinder ships no vendor driver or upstream executable for these readers. The three candidates have synthetic test coverage and await hardware confirmation in MyFinder.
 
+## Angry Miao AM Infinity .97 (0E8D:0703)
+
+Issue #1102, candidate evidence level C. Taken from static analysis of the
+vendor's AM Master 1.3.9 installer (PyInstaller, Python 3.7 bytecode; archive
+SHA-256 `d59cf1f09c263c22848a8e13f527e21e007087dd206220ce03bf50776d402382`) and its
+web driver bundle `app.25de4883.js`. No vendor binary was executed and no vendor
+code is included. This project has no hardware capture of the exchange.
+
+Scope is the `0E8D:0703` 2.4G receiver (`AM35_D`) whose product string trims to
+`AM Infinity .97`, on its `FF13:0001` collection only. The `FF14:0001` and
+`FF15:0001` collections are never opened. A resolved native `pnp:usb` parent is
+required, and target collections are counted per parent before the product
+string, path or report proof is checked: a duplicate or unresolved parent means
+no I/O. Only the descriptor-proven layout is accepted: output report `06` and
+input report `07`, each exactly 62 bytes including the report ID.
+
+Before sending, queued interrupt input is discarded with at most 16 reads in
+40 ms; failure to see an empty interrupt queue means no send. When the
+collection has no interrupt-IN pipe (`dev.read` raises `OSError`/`ValueError`),
+the reader proceeds directly to `get_input_report(07, 62)` polling (matching AM
+Master `ConnectionManager.read` and `audeze.py`). Each eligible receiver then
+gets one write per poll, no retry:
+
+    06 06 80 05 5A 02 00 CF 30 + 53 zero bytes   (62 bytes)
+
+`80` addresses the mouse behind the dongle; `05 5A 02 00 CF 30` is the Airoha
+RACE read of mouse battery command `0x30CF`. FOTA, configuration, RGB, DPI and
+the dongle's own battery commands are never sent.
+
+Input reports are read for at most 800 ms / 25 reads (20 ms per interrupt read
+or 20 ms gap before `get_input_report(07, 62)`; consecutive identical
+`get_input_report` snapshots are deduplicated). A report counts
+only if byte 0 is `07` and `len = b1 | b2 << 8` satisfies `0 < len <= 59`; its
+`len` payload bytes are appended to a stream of at most 4096 bytes. Frames in
+the stream are `<05|15> <5B|5D> <len lo> <len hi> <len bytes>` (leading
+non-matching bytes are dropped; `len >= 2`). Frames whose bytes 4..5 are
+`CF 30` answer the query. A short ACK (`5B`, `len == 3`) is skipped. A full
+answer has at least 11 bytes: byte 7 charging (`0` or `1`, otherwise rejected),
+byte 8 percent (`0..100`, otherwise rejected), byte 9 health (not shown), byte
+10 mouse present. Byte 10 equal to `0` means no mouse is reachable (asleep or
+off): no percentage is published, the last reading is shown as cached while the
+receiver stays in the USB tree, and it is dropped once the receiver is gone.
+
 ## AJAZZ AJ179 NLP (7768:642E)
 
 Issue #1064, candidate evidence level C. Independently implemented from public
@@ -2091,6 +2134,36 @@ independently implemented; MIT/CC0 are compatible with this project's AGPL.
 Still needs Windows wired/dongle caps, all six tiers, charging/unplugging,
 sleep/wake, removal/reconnect, official-software coexistence and cross-firmware
 comparison. Source-reported wired/dongle success is not this project's acceptance.
+
+### BETOP gamepads (20BC / 20DD)
+
+**C — public-protocol candidate, pending hardware validation (#1101).** `providers/betop.py`
+follows BrimDeck `src/BrimDeck.Core/Brands/Betop.cs` (Apache-2.0), cross-checked against the MIT
+`oitsukiii/betop-battery`, HaloBattery `beitong.py`, `vigil-watt` and BETOP client 2.6.2
+(`JoypadConnHelper`). Only the exact VID:PID rows in `PIDS` (vendors `20BC` and `20DD`) are eligible;
+there is no wildcard. The collection is the vendor usage `0003` on page `00FF` (Windows) or `FF00`
+(HID order). Usage 2/5/6 are never opened. Each USB parent needs exactly one such collection, and
+input and output report `02` must each be proven by the runtime descriptor (each
+matching its direction's maximum length in 5..64 bytes including the report ID);
+otherwise nothing is sent.
+
+Firmware generations differ. Scrambled-only PIDs (`5126 5128 5145 5146 5154 5155 515D 515E 5169 516A`)
+get the scrambled request, both-mode PIDs (`5125 5127`) get scrambled first and plain once if silent,
+and plain-only PIDs get the plain request. The scramble maps the high nibble through
+`0,A,6,F,1,C,2,9,E,3,7,D,4,B,5,8` and xors the low nibble with `8` (`15` becomes `AD`).
+
+Requests, zero-padded to the proven output length, are `02 15 00…` (plain) and `02 AD 00…`
+(scrambled). Replies must have exactly the proven input length. Plain: `02 15 LL 00 5S`
+with `1 <= LL <= 100` (`S != 0` means charging). Scrambled: after unscrambling bytes 1..4
+(byte 0 staying `02`), requires command `15`, byte 3 equal to `00`, `1 <= LL <= 100`, and uses
+`unscramble(raw[4]) & 0x0F != 0` for charging (matching BrimDeck `Betop.cs`: KP20 reads state
+unmasked while an echoed request unscrambles to `02 15 08 08 08` and is rejected by byte 3).
+Level `0` (not-ready placeholder), the request echo and any invalid report ID or plain high nibble
+are rejected. No mode, profile, vibration, reset, pairing or firmware command is sent.
+The reader keeps the last reading as cached/offline while the receiver stays in the USB tree.
+
+Still needs: real captures per PID, which PIDs use which firmware generation, charging and sleep
+behaviour, and comparison with the BETOP client.
 
 ### 8BitDo Pro 2, Pro 3, SN30 Pro, SF30 Pro in D-input mode
 

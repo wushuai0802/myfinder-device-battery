@@ -160,6 +160,89 @@ class V3ProtocolTests(unittest.TestCase):
                 self.assertEqual(M.MchoseProvider().poll(), [])
                 self.assertEqual((bus.opened, bus.sent), ([b"v7-ff01"], [REQUEST]))
 
+    def test_101d_retries_bounded_only_on_explicit_busy_and_classifies_rejections(self):
+        valid = edited(CHARGING, **{"10": 0x3E, "11": 0x40})
+        # Explicit 0xFF busy reply triggers bounded M HUB mcReadWithRetry and succeeds.
+        with fixture([BUSY, valid], v7_inventory()) as bus, \
+                patch.object(M.time, "sleep") as sleep_mock:
+            provider = M.MchoseProvider()
+            device, = provider.poll()
+            self.assertEqual((device.name, device.level, device.charging),
+                             ("MCHOSE V7 Pro", 85, True))
+            self.assertEqual(bus.sent, [REQUEST, REQUEST])
+            sleep_mock.assert_called_once_with(M.V3_BUSY_RETRY_DELAY_S)
+
+        # Persistent busy stops after 1 + V3_BUSY_RETRIES attempts and reports "busy".
+        with fixture([BUSY] * 10, v7_inventory()) as bus, \
+                patch.object(M.time, "sleep") as sleep_mock:
+            provider = M.MchoseProvider()
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(bus.sent), 1 + M.V3_BUSY_RETRIES)
+            self.assertEqual(sleep_mock.call_count, M.V3_BUSY_RETRIES)
+            self.assertIn("no valid V3 power reply; reason=busy; no legacy fallback",
+                          provider.reader_diagnostics())
+
+        # Malformed busy-looking frames (bad checksum, invalid flags, bad size, >64B) never retry.
+        busy_bad_checksum = bytearray(BUSY)
+        busy_bad_checksum[9] ^= 1
+        busy_bad_flags = bytearray(BUSY)
+        busy_bad_flags[2] = 2
+        busy_bad_size = bytearray(BUSY)
+        busy_bad_size[3] = 60
+        for bad_busy, expected_reason in (
+            (bytes(busy_bad_checksum), "checksum"),
+            (bytes(busy_bad_flags), "flags"),
+            (bytes(busy_bad_size), "short payload"),
+            (BUSY + b"\x00", "unrelated frames"),
+        ):
+            with self.subTest(malformed_busy=expected_reason), \
+                    fixture([bad_busy], v7_inventory()) as bus, \
+                    patch.object(M.time, "sleep") as sleep_mock:
+                provider = M.MchoseProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(bus.sent, [REQUEST])
+                sleep_mock.assert_not_called()
+                self.assertIn(f"no valid V3 power reply; reason={expected_reason}; no legacy fallback",
+                              provider.reader_diagnostics())
+
+        # Deadline guards: <= 30ms remaining skips sleep/retry; post-sleep expiry skips write.
+        with fixture([BUSY, valid], v7_inventory()) as bus, \
+                patch.object(M.time, "monotonic", side_effect=[0.0, 1.475, 1.475, 1.51]), \
+                patch.object(M.time, "sleep") as sleep_mock:
+            self.assertEqual(M.MchoseProvider().poll(), [])
+            self.assertEqual(bus.sent, [REQUEST])
+            sleep_mock.assert_not_called()
+
+        with fixture([BUSY, valid], v7_inventory()) as bus, \
+                patch.object(M.time, "monotonic", side_effect=[0.0, 1.40, 1.40, 1.51, 1.51]), \
+                patch.object(M.time, "sleep") as sleep_mock:
+            self.assertEqual(M.MchoseProvider().poll(), [])
+            self.assertEqual(bus.sent, [REQUEST])
+            sleep_mock.assert_called_once_with(M.V3_BUSY_RETRY_DELAY_S)
+
+        # Non-busy rejections never retry and record exact fixed diagnostic reasons.
+        bad_checksum = bytearray(valid)
+        bad_checksum[22] ^= 1
+        cases = [
+            ([], "silent"),
+            ([bytes(64)], "unrelated frames"),
+            ([edited(valid, **{"8": 0x00})], "vid mismatch"),
+            ([edited(valid, **{"18": 0})], "disconnected"),
+            ([edited(valid, **{"19": 2})], "charge status"),
+            ([edited(valid, **{"20": 0})], "zero level"),
+            ([bytes(bad_checksum)], "checksum"),
+        ]
+        for replies, expected_reason in cases:
+            with self.subTest(expected_reason=expected_reason), \
+                    fixture(replies, v7_inventory()) as bus, \
+                    patch.object(M.time, "sleep") as sleep_mock:
+                provider = M.MchoseProvider()
+                self.assertEqual(provider.poll(), [])
+                self.assertEqual(bus.sent, [REQUEST])
+                sleep_mock.assert_not_called()
+                self.assertIn(f"no valid V3 power reply; reason={expected_reason}; no legacy fallback",
+                              provider.reader_diagnostics())
+
     def test_101d_rejects_wrong_identity_or_proof_before_open(self):
         candidate = v7_inventory()[0]
         for infos in (

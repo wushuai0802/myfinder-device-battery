@@ -366,6 +366,28 @@ def discover(paths, excluded=(), *, full=False):
                     _descriptor_fallback(info, caps, ("input", "output"))
                     # Retain collections whose report proof failed: the reader
                     # must count duplicates before deciding whether it may query.
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x0E8D, 0x0703, 0xFF13, 0x0001):
+                from providers.am_infinity_97 import matches_collection
+                if matches_collection(info):
+                    from battery_hid import battery_caps
+                    info.update(input_report_length=caps.input,
+                                output_report_length=caps.output)
+                    info.update(battery_caps(hid, data, caps))
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                    # Retain collections whose report proof failed: the reader
+                    # must count duplicates before deciding whether it may query.
+            if (caps_complete and attrs.vendor in (0x20BC, 0x20DD)
+                    and (caps.page, caps.usage) in ((0x00FF, 0x0003), (0xFF00, 0x0003))):
+                from providers.betop import matches_collection
+                if matches_collection({"vendor_id": attrs.vendor, "product_id": attrs.product,
+                                       "usage_page": caps.page, "usage": caps.usage}):
+                    from battery_hid import battery_caps
+                    info.update(input_report_length=caps.input,
+                                output_report_length=caps.output)
+                    info.update(battery_caps(hid, data, caps))
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                    # Retained when the proof fails: the reader counts duplicates first.
             if caps_complete and attrs.vendor == 0x391D and (caps.page, caps.usage) == (0xFFFF, 0x0002):
                 from providers.vgn_ry_ms import matches_collection
                 if matches_collection(info):
