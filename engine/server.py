@@ -1613,7 +1613,7 @@ class BatteryEngine:
                                 vids = {d.get("vendor_id") for d in infos}
                                 if provider_name != "standard_hid" and not vids.intersection(self._provider_vids(provider_name)):
                                     continue
-                                if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset",
+                                if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset", "valkyrie",
                                                       "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth")
                                         and not recognized_candidate_count(provider_name, infos)):
                                     continue

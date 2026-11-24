@@ -24,7 +24,7 @@ PIDS = {
 COLLECTIONS = {(0xFF00, 0x0001), (0xFF06, 0x0001)}
 REPORT_ID = 0x03
 REPORT_BYTES = 64
-_PARENT = re.compile(r"pnp:usb\\vid_374a&pid_([0-9a-f]{4})(?:&rev_[0-9a-f]{4})?\\[^\\\s]+", re.I)
+_PARENT = re.compile(r"pnp:usb\\vid_374a&pid_([0-9a-f]{4})(?:&rev_[0-9a-f]{4})?\\[^\\\x00\s]+", re.I)
 
 
 def make_request():
@@ -93,7 +93,7 @@ class ValkyrieProvider(BatteryHidProvider):
             self._diag.append("missing or ambiguous proven Feature 03 collection; not opened; nothing sent")
             return None
         info = candidates[0]
-        if not info.get("path") or not _usb_parent(info):
+        if not isinstance(info.get("path"), (bytes, str)) or not info["path"] or not _usb_parent(info):
             self._diag.append("collection path/USB physical parent unresolved; not opened; nothing sent")
             return None
         self._diag.append("selected unique Feature 03/64 collection"

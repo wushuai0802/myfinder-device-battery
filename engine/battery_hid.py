@@ -398,7 +398,7 @@ class BatteryHidProvider(Provider):
         groups = {}
         for info in inventory:
             physical = info.get("physical_id", "")
-            if physical.startswith("collection:"):
+            if not isinstance(physical, str) or physical.startswith("collection:"):
                 self._diag.append("physical parent unresolved; uniqueness unknown: nothing sent")
                 continue
             groups.setdefault(physical, []).append(info)
