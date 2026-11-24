@@ -93,8 +93,16 @@ RECEIVERS = {
     0xC52F, 0xC518, 0xC51A, 0xC51B, 0xC521, 0xC525, 0xC526,  # Nano
     0xC52E, 0xC531, 0xC534, 0xC535, 0xC537,
     0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547,  # Lightspeed
-    0xC54D,
+    0xC54D, 0xC54F,
 }
+
+# HID++ 2.0-only passthrough Lightspeed dongles (Solaar PR #3352 @ cbeaca92):
+# expose FF43:0301 (short 0x10 / 7B) and FF43:0302 (long 0x11 / 20B) rather
+# than FF00:0001/0002, reject HID++ 1.0 registers, and address the single paired
+# mouse on index 1 (the dongle itself answers on 0xFF).
+PASSTHROUGH_RECEIVERS = {0xC54F}
+PASSTHROUGH_COLLECTIONS = {(0xFF43, 0x0301): 1, (0xFF43, 0x0302): 2}
+PASSTHROUGH_REPORTS = {1: ("16", 7), 2: ("17", 20)}
 
 # headsets with HID++ battery (feature 0x1F20), from HeadsetControl's device list.
 # The value is the name to show when the headset does not report one.
@@ -577,7 +585,7 @@ class LogitechProvider(Provider):
               instance: str = "", multi: bool = False, paths=None) -> Optional[DeviceStatus]:
         slot = (pid, instance, idx)
         if not self._ping(ch, slot):
-            if ch.error and ch.error_code == ERR_OLD_PROTOCOL:
+            if ch.error and ch.error_code == ERR_OLD_PROTOCOL and pid not in PASSTHROUGH_RECEIVERS:
                 # HID++ 1.0: no feature table, but the old battery registers
                 st = self._register_battery(ch, slot, pid, idx, instance, multi)
                 if st is None:
@@ -643,9 +651,10 @@ class LogitechProvider(Provider):
                                     queried_at_utc=battery_time if dpi is not None else None)
         # nothing from the 2.0 features: an older device may answer its
         # registers instead (it has no feature table at all)
-        st = self._register_battery(ch, slot, pid, idx, instance, multi)
-        if st is not None:
-            return st
+        if pid not in PASSTHROUGH_RECEIVERS:
+            st = self._register_battery(ch, slot, pid, idx, instance, multi)
+            if st is not None:
+                return st
         self._diag.append(f"  idx={idx} '{name}': no battery reading")
         return None
 
@@ -679,21 +688,62 @@ class LogitechProvider(Provider):
         return None
 
     @staticmethod
+    def _passthrough_proven(d: dict, slot_kind: int) -> bool:
+        report_id, length = PASSTHROUGH_REPORTS[slot_kind]
+        in_sizes, out_sizes = d.get("input_report_sizes"), d.get("output_report_sizes")
+        return (d.get("vendor_id") == LOGITECH_VID
+                and d.get("product_id") in PASSTHROUGH_RECEIVERS
+                and bool(d.get("path"))
+                and bool(_instance(d))
+                and type(d.get("input_report_length")) is int
+                and type(d.get("output_report_length")) is int
+                and d["input_report_length"] == length
+                and d["output_report_length"] == length
+                and isinstance(in_sizes, dict) and in_sizes.get(report_id) == length
+                and isinstance(out_sizes, dict) and out_sizes.get(report_id) == length)
+
+    @staticmethod
     def _collections(infos: List[dict]) -> Dict[Tuple[int, str], Dict[int, bytes]]:
         """The HID++ collections of each device: (pid, instance) -> {1: short, 2: long path}.
         Keyed by the receiver's instance too: the product id alone merges two receivers of
         the same kind (any two Unifying receivers are 0xC52B). A headset has only a long path."""
         groups: Dict[Tuple[int, str], Dict[int, bytes]] = {}
         headset: Dict[Tuple[int, str], bytes] = {}
+        passthrough: Dict[Tuple[int, str], Dict[int, List[dict]]] = {}
         for d in infos:
+            vid = d.get("vendor_id", LOGITECH_VID)
+            if vid != LOGITECH_VID:
+                continue
             pid, page, usage = d["product_id"], d.get("usage_page"), d.get("usage")
-            key = (pid, _instance(d))
+            inst = _instance(d)
+            key = (pid, inst)
             if page == 0xFF00 and usage in (1, 2):
                 groups.setdefault(key, {})[usage] = d["path"]
+            elif pid in PASSTHROUGH_RECEIVERS and (page, usage) in PASSTHROUGH_COLLECTIONS:
+                if not inst:
+                    continue
+                slot_kind = PASSTHROUGH_COLLECTIONS[(page, usage)]
+                passthrough.setdefault(key, {}).setdefault(slot_kind, []).append(d)
             elif pid in HEADSETS and (page, usage) == HEADSET_COLLECTION.get(pid, (0xFF43, 0x0202)):
                 # only the headsets in the list: other devices never got a request on
                 # these collections, and must not get one now
                 headset[key] = d["path"]
+        # the ff00 collections win; passthrough FF43:0301/0302 requires unique proven reports
+        for key, by_slot in passthrough.items():
+            if 2 in groups.get(key, {}):
+                continue
+            long_rows = by_slot.get(2, [])
+            short_rows = by_slot.get(1, [])
+            if len(long_rows) != 1 or len(short_rows) > 1:
+                continue
+            if not LogitechProvider._passthrough_proven(long_rows[0], 2):
+                continue
+            entry = {2: long_rows[0]["path"]}
+            if len(short_rows) == 1:
+                if not LogitechProvider._passthrough_proven(short_rows[0], 1):
+                    continue
+                entry[1] = short_rows[0]["path"]
+            groups.setdefault(key, {}).update(entry)
         # the ff00 collections win; the headset collection is used only without them
         for key, path in headset.items():
             if 2 not in groups.get(key, {}):
@@ -726,7 +776,9 @@ class LogitechProvider(Provider):
                 self._diag.append(f"  open: {e}")
                 continue
             try:
-                for idx in (range(1, 7) if receiver else (0xFF,)):
+                slots = ((1,) if pid in PASSTHROUGH_RECEIVERS
+                         else range(1, 7) if receiver else (0xFF,))
+                for idx in slots:
                     st = self._read(ch, pid, idx, inst, pid in repeats, paths)
                     # the same device on the cable and through the receiver: charging wins
                     if st and (st.key not in found or st.charging):

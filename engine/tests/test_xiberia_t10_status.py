@@ -279,3 +279,77 @@ class T10StatusTests(unittest.TestCase):
                 self.assertEqual(statuses, [])
                 self.assertEqual(dev.opened, [])
                 self.assertEqual(dev.writes, [])
+
+    def test_t10_constant_output_ff90_matches_issue_1070_inventory(self):
+        # #1070: real Windows HidP exposes Input 0x55 (64B) + OutputReportByteLength=64
+        # with zero output value/button caps (output_constant_only=True) on FF90:0001,
+        # while FF82:0001 exposes report 0x41 (64B).
+        ff90 = t10_collection(usage_page=0xFF90, path=b"t10-ff90",
+                              input_report_sizes={"85": 64},
+                              output_report_sizes=None, output_constant_only=True)
+        ff82 = t10_collection(usage_page=0xFF82, path=b"t10-ff82",
+                              input_report_sizes={"65": 64}, output_report_sizes={"65": 64})
+        for rows in ([ff90, ff82], [ff82, ff90]):
+            with self.subTest(first=rows[0]["path"]):
+                dev = FakeDevice([status_frame(percent=56, state=1)])
+                statuses, _ = poll(rows, dev)
+                self.assertEqual(len(statuses), 1)
+                self.assertEqual(statuses[0].level, 56)
+                self.assertEqual(dev.opened, [b"t10-ff90"])
+                self.assertEqual(dev.writes, [STATUS_REQUEST])
+
+    def test_k03s_c001_constant_output_ff90_matches_issue_1035_inventory(self):
+        # #1035: real Windows inventory for 36F9:C001 "XIBERIA K03S Wireless 7.1".
+        parent = r"pnp:usb\vid_36f9&pid_c001\receiver"
+        base = dict(vendor_id=0x36F9, product_id=0xC001,
+                    product_string="XIBERIA K03S Wireless 7.1", physical_id=parent)
+        ff90 = collection(**base, usage_page=0xFF90, usage=1, path=b"c001-ff90",
+                          input_report_length=64, output_report_length=64,
+                          input_report_sizes={"85": 64}, output_report_sizes=None,
+                          output_constant_only=True)
+        ff82 = collection(**base, usage_page=0xFF82, usage=1, path=b"c001-ff82",
+                          input_report_length=64, output_report_length=64,
+                          input_report_sizes={"65": 64}, output_report_sizes={"65": 64})
+        ff22 = collection(**base, usage_page=0xFF22, usage=1, path=b"c001-ff22",
+                          input_report_length=0, output_report_length=0,
+                          input_report_sizes=None, output_report_sizes=None)
+        dev = FakeDevice([frame("55 65 00 47")])  # 0x47 = 71%
+        statuses, _ = poll([ff22, ff82, ff90], dev)
+        self.assertEqual(len(statuses), 1)
+        self.assertEqual((statuses[0].name, statuses[0].level, statuses[0].verification_level),
+                         ("XIBERIA K03S", 71, "C"))
+        self.assertEqual(dev.opened, [b"c001-ff90"])
+        # K03S C001 uses legacy battery read only, never t10_status.
+        self.assertEqual(dev.writes, [LEGACY_REQUEST])
+
+    def test_constant_output_gate_is_strictly_fail_closed(self):
+        c001_parent = r"pnp:usb\vid_36f9&pid_c001\receiver"
+        c001 = collection(vendor_id=0x36F9, product_id=0xC001,
+                          product_string="XIBERIA K03S Wireless 7.1",
+                          physical_id=c001_parent, usage_page=0xFF90, usage=1,
+                          path=b"c001-ff90", input_report_sizes={"85": 64},
+                          output_report_sizes=None, output_constant_only=True)
+        t10_const = t10_collection(usage_page=0xFF90, path=b"t10-ff90",
+                                   input_report_sizes={"85": 64},
+                                   output_report_sizes=None, output_constant_only=True)
+        cases = (
+            ("ff82 cannot use constant output", [dict(t10_const, usage_page=0xFF82)]),
+            ("missing output_constant_only flag", [dict(t10_const, output_constant_only=False)]),
+            ("wrong output length", [dict(t10_const, output_report_length=63)]),
+            ("extra input report id", [dict(t10_const, input_report_sizes={"85": 64, "65": 64})]),
+            ("non-None wrong output sizes", [dict(t10_const, output_report_sizes={"65": 64})]),
+            ("duplicate t10 ff90 with unproved sibling", [
+                t10_const, t10_collection(usage_page=0xFF90, path=b"t10-ff90-dup",
+                                          input_report_sizes=None, output_report_sizes=None)]),
+            ("duplicate c001 ff90 with unproved sibling", [
+                c001, dict(c001, path=b"c001-ff90-dup", input_report_sizes=None, output_constant_only=False)]),
+            ("c001 wrong product string", [dict(c001, product_string="XIBERIA K03S")]),
+            ("c001 wrong parent", [dict(c001, physical_id=T10_PARENT)]),
+            ("c001 ff82 even if fully proved", [dict(c001, usage_page=0xFF82,
+                                                     output_report_sizes={"85": 64},
+                                                     output_constant_only=False)]),
+        )
+        for label, rows in cases:
+            with self.subTest(label):
+                self.assertEqual(families.select(rows)[0], [])
+                self.assert_not_opened(rows)

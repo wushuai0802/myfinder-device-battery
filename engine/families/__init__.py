@@ -25,9 +25,12 @@ _pack: Tuple[Family, ...] = ()
 _probe_enabled = False
 _RECEIVER_PARENTS = {
     ("xiberia", 0x36F9, 0xF001),
+    ("xiberia", 0x36F9, 0xC001),
     ("machenike_l7_air", 0x320F, 0x226F),
     ("razer_blackshark_v3_pro_rx", 0x1532, 0x0577),
+    ("dareu_jm_24g", 0x260D, 0x1156),
 }
+_XIBERIA_FF90_ONLY_PIDS = {0xF002, 0xC001}
 
 
 def load(directory: Path = BUILTIN) -> Dict[str, Family]:
@@ -136,10 +139,34 @@ def _proves(info: dict, direction: str, report) -> bool:
     return report.report_id != 0 or set(sizes) == {"0"}
 
 
-def proven(family: Family, info: dict) -> bool:
+def _xiberia_constant_output_proven(family: Family, info: dict) -> bool:
+    """Allow C-Media 36F9 FF90:0001 constant-only 0x55/64 output reports (#1035/#1070).
+
+    Windows HidP exposes Input 0x55 = 64B and OutputReportByteLength = 64 with zero
+    output value/button caps when firmware marks Output 0x55 as Constant, whereas
+    FF82:0001 exposes report 0x41 = 64B. Restricted strictly to listed xiberia FF90:0001.
+    """
+    if (family.id != "xiberia"
+            or (info.get("usage_page"), info.get("usage")) != (0xFF90, 0x0001)
+            or family.input_report is None or family.output_report is None
+            or (family.input_report.report_id, family.input_report.length) != (0x55, 64)
+            or (family.output_report.report_id, family.output_report.length) != (0x55, 64)):
+        return False
+    in_sizes = info.get("input_report_sizes")
     return (_proves(info, "input", family.input_report)
-            and _proves(info, "output", family.output_report)
+            and isinstance(in_sizes, dict) and set(in_sizes) == {"85"}
+            and info.get("output_report_sizes") is None
+            and info.get("output_constant_only") is True
+            and type(info.get("output_report_length")) is int
+            and info.get("output_report_length") == 64
             and _proves(info, "feature", family.feature_report))
+
+
+def proven(family: Family, info: dict) -> bool:
+    return ((_proves(info, "input", family.input_report)
+             and _proves(info, "output", family.output_report)
+             and _proves(info, "feature", family.feature_report))
+            or _xiberia_constant_output_proven(family, info))
 
 
 def select(infos: List[dict]):
@@ -150,7 +177,7 @@ def select(infos: List[dict]):
     sends nothing. Returns also human-readable reasons for diagnostics.
     """
     chosen, notes = [], []
-    k06s_ff90 = None
+    ff90_by_pid = {}
     for family in active():
         matches = []
         for info in infos:
@@ -166,21 +193,33 @@ def select(infos: List[dict]):
                 expected = rf"pnp:usb\\vid_{device.vendor_id:04x}&pid_{device.product_id:04x}(?:&rev_[0-9a-f]{{4}})?\\[^\\/\s\x00-\x1f]+"
                 if not isinstance(parent, str) or not re.fullmatch(expected, parent, re.I | re.ASCII):
                     continue
-            if family.id == "xiberia" and (device.vendor_id, device.product_id) == (0x36F9, 0xF002):
-                # #846 identifies FF90 as the K06S battery interface. Count all FF90
-                # rows on this receiver, even when a sibling's name or caps are missing.
-                if k06s_ff90 is None:
-                    k06s_ff90 = [row for row in infos
-                                 if (row.get("vendor_id"), row.get("product_id"),
-                                     row.get("usage_page"), row.get("usage")) == (0x36F9, 0xF002, 0xFF90, 1)]
-                    if len(k06s_ff90) != 1:
-                        notes.append(f"xiberia: {len(k06s_ff90)} K06S FF90 collections, expected one")
-                if len(k06s_ff90) != 1 or info is not k06s_ff90[0]:
+            if family.id == "xiberia" and device.vendor_id == 0x36F9 and device.product_id in _XIBERIA_FF90_ONLY_PIDS:
+                # #846 (K06S F002) and #1035 (K03S C001) identify FF90 as the battery
+                # interface. Count all FF90 rows on this receiver, even without name/caps.
+                pid = device.product_id
+                if pid not in ff90_by_pid:
+                    ff90_by_pid[pid] = [
+                        row for row in infos
+                        if (row.get("vendor_id"), row.get("product_id"),
+                            row.get("usage_page"), row.get("usage")) == (0x36F9, pid, 0xFF90, 1)
+                    ]
+                    if len(ff90_by_pid[pid]) != 1:
+                        notes.append(f"xiberia: {len(ff90_by_pid[pid])} {pid:04X} FF90 collections, expected one")
+                if len(ff90_by_pid[pid]) != 1 or info is not ff90_by_pid[pid][0]:
                     continue
             matches.append((device, info))
         if not matches:
             continue
         proved = [(d, i) for d, i in matches if proven(family, i) and i.get("path")]
+        if (len(proved) == 1 and family.id == "xiberia"
+                and _xiberia_constant_output_proven(family, proved[0][1])):
+            pid = proved[0][0].product_id
+            ff90_rows = [row for row in infos
+                         if (row.get("vendor_id"), row.get("product_id"),
+                             row.get("usage_page"), row.get("usage")) == (0x36F9, pid, 0xFF90, 1)]
+            if len(ff90_rows) != 1:
+                notes.append(f"xiberia: {len(ff90_rows)} {pid:04X} FF90 collections, expected one")
+                continue
         if len(proved) != 1:
             notes.append(f"{family.id}: {len(matches)} candidate collection(s), {len(proved)} with report proof; nothing sent")
             continue

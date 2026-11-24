@@ -4452,3 +4452,22 @@ A HUB independently dispatches BB input reports. The BA control path is not used
 The separate `rapoo_mt560` provider requires exact `24AE:1872`, a resolved physical USB parent, and one `FF00:000E` candidate. Duplicate candidates count before report proof; an unparented candidate or a conflicting VID/PID path blocks opening. Windows report-size discovery is scoped to this exact collection and input reports only. Input ID 187 must have descriptor-proven length, and every accepted raw report must equal that length; no 64-byte size is assumed. VT Input 07, other PIDs, and `25A7:2410` are excluded.
 
 The provider inherits the existing passive handle lifecycle: bounded initial listening, retained handles, bounded draining to the newest valid queued reading, and historical status on silence or proof loss until receiver removal. It performs no output, feature request, activation, or BA exchange. Synthetic fixtures cover parsing, descriptor proof, ambiguity, identity exclusions, lifecycle, and VT separation. Report timing, native Windows topology execution, and real MT560 behavior remain unverified.
+
+
+## Logitech PRO X3 SUPERSTRIKE Receiver (`046D:C54F`)
+
+- **Issues**: `#1087` (`1.4.0-beta.4` diagnostic: `046D:C54F "USB Receiver" 0001:0002 0001:0006 000C:0001 FF43:0301 FF43:0302`).
+- **Upstream sources**:
+  - `pwr-Solaar/Solaar` PR `#3352` (`cbeaca92783016452974a2f4c7095ab9cba080ab`, hardware-tested): `046D:C54F` is a HID++ 2.0-only passthrough LIGHTSPEED dongle for the PRO X3 Superstrike (WPID `40BE`); HID++ 1.0 registers return HID++ 2.0 errors, the dongle itself answers on `0xFF`, and the single paired mouse answers on index `1`.
+  - `Lken-cmd/SuperLightBattery` issue `#3`: Windows 11 `HidP_GetCaps` confirms `MI_02&COL01` (`FF43:0301`, 7-byte input/output) and `MI_02&COL02` (`FF43:0302`, 20-byte input/output).
+- **Reader gate (`engine/providers/logitech.py`, `engine/topology.py`)**:
+  - Exact `046D:C54F`, unique `FF43:0302` with runtime per-report descriptor proof of report `0x11` (`"17"`) = 20 bytes in both directions (and optional unique `FF43:0301` with report `0x10` (`"16"`) = 7 bytes in both directions; unproven or duplicated -> do not open).
+  - Polls only HID++ 2.0 index `1`, skips HID++ 1.0 register reads, and does not enable GPW DPI writes. Verification grade **C** (pending hardware verification in MyFinder).
+
+## Dareu 2.4G JM mouse receiver (260D:1156)
+
+Grade C candidate for [#1092](https://github.com/wushuai0802/myfinder-device-battery/issues/1092), based on the official DAREU All in one WEB driver (`https://dr.dareu.com/`, v1.3.26): `index.html` (SHA256 `456f65e7b6bad6e45b941a8b9e0bbb2327a5abe09db3288f4116e5b368f22f50`), `js/global.js` (`7667a603f78a98de4bf3e0dd3303ecdaade5b15dda75ba43239fae70b48d4b65`), `js/device/jmdevice.js` (`38e7374ae10107134000b12c455732ea4cbf804e2fe7f54cffadebbf04f400b8`), `products/1156/1156.json` (`a672665a188d60fc6c095805b3765676c86c69872e37e0a8f47e17fb31a90357`), and `pages/subpage/jm/energy.html` (`1cfc577c3706f0138108e733e664d1d294e24d6a2b8df4ed12e1dd569c87adfe`).
+
+`1156.json` declares `Type: 2` (2.4G receiver) and `FwType: 2` (JM firmware), and `JM_WIRELESS_MAP` pairs `PID 4438` (`0x1156`) with CM610 V2 MAX (`1165`/`1181`), CM610 MAX (`1155`/`1168`), and A950 LCD (`1182`). `ParseDevices` opens `FF02:0002` with report ID `0x08` (`HidUsbDeviceBase`: `ReportId = 8`, `REPORT_SIZE = 16`, so 17-byte numbered input and output reports on hidapi). `JmHidDevice.CheckActive` sends `08 03` padded to 17 bytes with checksum `0x4A` (`sum(bytes[0..16]) & 0xFF == 0x55`) and requires input `08 03` with `raw[6] == 0x01` (`raw[6] == 0x00` indicates offline/asleep). Only when active does `GetBatteryStatus` send `08 04` padded to 17 bytes with checksum `0x49`; input `08 04` carries percentage `raw[6]` (`0..100`) and status `raw[7]` (`0x01`/`0x02` charging per `jm/energy.html`, `0x00` discharging). Push events with `raw[1] == 0x0A` are skipped; both gate and battery replies are additionally guarded by the CompX `sum(bytes[0..16]) & 0xFF == 0x55` checksum (matching `lofree_flow.json` and `pulsar.py`).
+
+The declarative family `engine/families/builtin/dareu_jm_24g.json` requires exact `260D:1156`, product string `"2.4G Wireless Receiver"`, resolved USB receiver parent, unique `FF02:0002`, and descriptor-proven 17-byte Input/Output report `08`. No mode, pairing, or configuration writes are sent. Hardware confirmation in MyFinder is pending.
