@@ -84,18 +84,6 @@ class VgnKeyboardWiredProvider(BatteryHidProvider):
     make_request = staticmethod(make_request)
     parse_reply = staticmethod(parse_reply)
 
-    def poll(self):
-        from battery_hid import hidlist
-        original = hidlist.enumerate
-        hidlist.enumerate = lambda vid=0: [
-            info if isinstance(info.get("physical_id"), str) else dict(info, physical_id="")
-            for info in original(vid)
-        ]
-        try:
-            return super().poll()
-        finally:
-            hidlist.enumerate = original
-
     def _pick(self, infos):
         # Count the whole parent's eligible collections before the identity
         # gates: a second collection is never discarded to make a write possible.

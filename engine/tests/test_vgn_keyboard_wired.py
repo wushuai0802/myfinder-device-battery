@@ -330,7 +330,7 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual(source.count("(0x320F, 0x5055, 0xFF1C, 0x0092)"), 1)
         self.assertEqual(source.count("(0x320F, 0x5088, 0xFF1C, 0x0092)"), 1)
         self.assertIn("from providers.vgn_keyboard_wired import product_allowed", source)
-        self.assertIn('if product_allowed(info["product_string"]):', source)
+        self.assertIn('if product_allowed(info.get("product_string")):', source)
 
     def test_catalog_row_is_grade_c_and_scoped(self):
         rows = [r for r in catalog.load_catalog()["readers"] if r["provider"] == "vgn_keyboard_wired"]
