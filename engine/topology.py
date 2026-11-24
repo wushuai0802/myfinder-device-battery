@@ -687,6 +687,14 @@ def discover(paths, excluded=(), *, full=False):
                 _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete
+                    and (attrs.vendor, attrs.product) == (0x046D, 0xC54F)
+                    and (caps.page, caps.usage) in ((0xFF43, 0x0301), (0xFF43, 0x0302))):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = all(info.get(key) is not None
+                                    for key in ("input_report_sizes", "output_report_sizes"))
             if caps_complete and info.get("input_report_sizes") is None:
                 # Architecture v2: a declarative family asks for per-report
                 # proof only on its own identities and vendor-page collections.

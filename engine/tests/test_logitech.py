@@ -426,6 +426,85 @@ class SafetyTests(LogitechTestCase):
             L.LogitechProvider().poll()
             self.assertEqual({path for path, _ in bus.writes}, {b"long"})
 
+    def _c54f_entries(self, pid=0xC54F, *, long_proven=True, short_proven=True, include_short=True,
+                      long_page=0xFF43, long_usage=0x0302):
+        inst = r"\\?\hid#vid_046d&pid_{:04x}&mi_02#7&1&0&".format(pid)
+        long_row = {
+            "vendor_id": L.LOGITECH_VID, "product_id": pid, "product_string": "USB Receiver",
+            "usage_page": long_page, "usage": long_usage, "path": (inst + "0002").encode(),
+            "input_report_length": 20, "output_report_length": 20,
+        }
+        if long_proven:
+            long_row["input_report_sizes"] = {"17": 20}
+            long_row["output_report_sizes"] = {"17": 20}
+        rows = [long_row]
+        if include_short:
+            short_row = {
+                "vendor_id": L.LOGITECH_VID, "product_id": pid, "product_string": "USB Receiver",
+                "usage_page": 0xFF43, "usage": 0x0301, "path": (inst + "0001").encode(),
+                "input_report_length": 7, "output_report_length": 7,
+            }
+            if short_proven:
+                short_row["input_report_sizes"] = {"16": 7}
+                short_row["output_report_sizes"] = {"16": 7}
+            rows.insert(0, short_row)
+        return rows
+
+    def test_c54f_passthrough_reads_slot_1_only_and_skips_registers_and_dpi(self):
+        rows = self._c54f_entries()
+        long_path = rows[1]["path"]
+        short_path = rows[0]["path"]
+        mouse = FakeHidpp({
+            L.F_UNIFIED: (5, {1: [84, 8, 0]}),
+            L.F_NAME: (3, {2: [3]}),
+            L.F_INFO: (2, {0: [3, 0x40, 0xBE, 0x11, 0x22]}),
+        }, name="PRO X3 Superstrike")
+        bus = self.use(rows, {long_path: ({1: mouse}, short_path)})
+        [st] = L.LogitechProvider().poll()
+        self.assertEqual((st.name, st.level, st.charging, st.kind, st.key),
+                         ("PRO X3 Superstrike", 84, False, "mouse", "logitech:40BE1122"))
+        self.assertIsNone(st.dpi)
+        self.assertIsNone(st.dpi_target)
+        # Only slot 1 is probed — never slots 2..6 or 0xFF
+        probed_slots = {w[1] for _, w in bus.writes}
+        self.assertEqual(probed_slots, {1})
+        # Never sends HID++ 1.0 register reads on short collection
+        self.assertFalse(any(p == short_path for p, _ in bus.writes))
+
+    def test_c54f_no_battery_feature_never_falls_back_to_hidpp10_registers(self):
+        rows = self._c54f_entries()
+        long_path, short_path = rows[1]["path"], rows[0]["path"]
+        dev = FakeHidpp({L.F_NAME: (3, {2: [3]})}, name="PRO X3 Superstrike",
+                        registers={0x0D: [77, 0, 0x30]})
+        bus = self.use(rows, {long_path: ({1: dev}, short_path)})
+        self.assertEqual(L.LogitechProvider().poll(), [])
+        self.assertFalse(any(w[0] == 0x10 and len(w) > 2 and w[2] == 0x81 for _, w in bus.writes))
+
+    def test_c54f_fail_closed_when_unproven_duplicated_or_wrong_pid(self):
+        dup = self._c54f_entries(include_short=False)
+        dup.append(dict(dup[0], path=dup[0]["path"] + b"b"))
+        bad_len = self._c54f_entries(include_short=False)
+        bad_len[0]["output_report_sizes"] = {"17": 19}
+        bad_id = self._c54f_entries(include_short=False)
+        bad_id[0]["input_report_sizes"] = {"16": 20}
+        cases = (
+            ("unproven long", self._c54f_entries(long_proven=False)),
+            ("unproven short", self._c54f_entries(short_proven=False)),
+            ("duplicate long", dup),
+            ("wrong output length", bad_len),
+            ("wrong report id", bad_id),
+            ("wrong pid on ff43:0302", self._c54f_entries(pid=0xC54E)),
+            ("wrong vendor on c54f", [dict(r, vendor_id=0x1234) for r in self._c54f_entries(include_short=False)]),
+            ("malformed path without instance", [dict(r, path=b"plain-path") for r in self._c54f_entries(include_short=False)]),
+            ("headset ff43:0202 on c54f", self._c54f_entries(include_short=False, long_usage=0x0202)),
+        )
+        for label, rows in cases:
+            with self.subTest(label):
+                long_path = rows[-1]["path"]
+                bus = self.use(rows, {long_path: ({1: g502()}, None)})
+                self.assertEqual(L.LogitechProvider().poll(), [])
+                self.assertEqual(bus.writes, [])
+
 
 # ------------------------------------------------------------------ reply parsing
 class ParseTests(unittest.TestCase):

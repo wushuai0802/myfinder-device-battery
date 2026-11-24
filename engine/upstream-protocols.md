@@ -4452,3 +4452,14 @@ A HUB independently dispatches BB input reports. The BA control path is not used
 The separate `rapoo_mt560` provider requires exact `24AE:1872`, a resolved physical USB parent, and one `FF00:000E` candidate. Duplicate candidates count before report proof; an unparented candidate or a conflicting VID/PID path blocks opening. Windows report-size discovery is scoped to this exact collection and input reports only. Input ID 187 must have descriptor-proven length, and every accepted raw report must equal that length; no 64-byte size is assumed. VT Input 07, other PIDs, and `25A7:2410` are excluded.
 
 The provider inherits the existing passive handle lifecycle: bounded initial listening, retained handles, bounded draining to the newest valid queued reading, and historical status on silence or proof loss until receiver removal. It performs no output, feature request, activation, or BA exchange. Synthetic fixtures cover parsing, descriptor proof, ambiguity, identity exclusions, lifecycle, and VT separation. Report timing, native Windows topology execution, and real MT560 behavior remain unverified.
+
+
+## Logitech PRO X3 SUPERSTRIKE Receiver (`046D:C54F`)
+
+- **Issues**: `#1087` (`1.4.0-beta.4` diagnostic: `046D:C54F "USB Receiver" 0001:0002 0001:0006 000C:0001 FF43:0301 FF43:0302`).
+- **Upstream sources**:
+  - `pwr-Solaar/Solaar` PR `#3352` (`cbeaca92783016452974a2f4c7095ab9cba080ab`, hardware-tested): `046D:C54F` is a HID++ 2.0-only passthrough LIGHTSPEED dongle for the PRO X3 Superstrike (WPID `40BE`); HID++ 1.0 registers return HID++ 2.0 errors, the dongle itself answers on `0xFF`, and the single paired mouse answers on index `1`.
+  - `Lken-cmd/SuperLightBattery` issue `#3`: Windows 11 `HidP_GetCaps` confirms `MI_02&COL01` (`FF43:0301`, 7-byte input/output) and `MI_02&COL02` (`FF43:0302`, 20-byte input/output).
+- **Reader gate (`engine/providers/logitech.py`, `engine/topology.py`)**:
+  - Exact `046D:C54F`, unique `FF43:0302` with runtime per-report descriptor proof of report `0x11` (`"17"`) = 20 bytes in both directions (and optional unique `FF43:0301` with report `0x10` (`"16"`) = 7 bytes in both directions; unproven or duplicated -> do not open).
+  - Polls only HID++ 2.0 index `1`, skips HID++ 1.0 register reads, and does not enable GPW DPI writes. Verification grade **C** (pending hardware verification in MyFinder).
