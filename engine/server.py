@@ -36,6 +36,7 @@ PROVIDERS = (
     ("zhuaudio", "ZhuAudioProvider"),
     ("g3m", "G3mProvider"), ("eweadn", "EweadnProvider"),
     ("eweadn_s9pro", "EweadnS9ProProvider"),
+    ("valkyrie", "ValkyrieProvider"),
     ("vgn_keyboard", "VgnKeyboardProvider"),
     ("vgn_keyboard_wired", "VgnKeyboardWiredProvider"),
     ("cherry", "CherryProvider"),
@@ -88,6 +89,7 @@ PROVIDER_VIDS = {
     "g3m": (0x320F,), "eweadn": (0x089D,), "flydigi": (0x37D7,),
     "betop": (0x20BC, 0x20DD),
     "eweadn_s9pro": (0x372E,),
+    "valkyrie": (0x374A,),
     "vgn_keyboard": (0x320F,), "vgn_keyboard_wired": (0x320F,),
     "cherry": (0x046A,),
     "lingbao": (0x088D,),
@@ -134,7 +136,7 @@ IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
 IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "fa6x_passive", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "moondrop", "mchose", "eweadn_s9pro", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "cherry", "lingbao", "zhuaudio", "asus_omni"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -811,7 +813,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS
                     and module.product_allowed(d.get("product_string"))})
-    if name in ("moondrop", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
+    if name in ("moondrop", "valkyrie", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
                 "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
@@ -1617,7 +1619,7 @@ class BatteryEngine:
                                 vids = {d.get("vendor_id") for d in infos}
                                 if provider_name != "standard_hid" and not vids.intersection(self._provider_vids(provider_name)):
                                     continue
-                                if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset",
+                                if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset", "valkyrie",
                                                       "vgn_keyboard_wired", "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth")
                                         and not recognized_candidate_count(provider_name, infos)):
                                     continue

@@ -34,7 +34,7 @@ BRAND_PROVIDERS = frozenset((
     "cherry",
     "aula_mouse", "aula_keyboard", "weikav_nut75", "veekos_shine60",
     "lingbao",
-    "g3m", "mchose_g3v2", "eweadn", "eweadn_s9pro", "eweadn_x23", "eweadn_x87", "flydigi", "betop",
+    "g3m", "mchose_g3v2", "eweadn", "eweadn_s9pro", "valkyrie", "eweadn_x23", "eweadn_x87", "flydigi", "betop",
     "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying",
     "vgn_dragonfly3", "ninjutso_legacy",
     "dareu", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97",

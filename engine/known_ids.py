@@ -51,6 +51,7 @@ TABLES = {
     "zhuaudio": ("PIDS",),
     "g3m": ("PIDS",), "eweadn": ("PIDS",), "flydigi": ("PIDS",),
     "eweadn_s9pro": ("PIDS",),
+    "valkyrie": ("PIDS",),
     "vgn_keyboard": ("PIDS",), "vgn_keyboard_wired": ("PIDS",),
     "cherry": ("PIDS",),
     "asus_azoth": ("PIDS",), "mchose_g3v2": ("PIDS",),

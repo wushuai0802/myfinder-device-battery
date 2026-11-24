@@ -4575,3 +4575,17 @@ is true. A `0%` frame that is not charging is rejected as an uninitialised place
 Not verified: real replies, the 0% and full-charge behaviour, the meaning of byte 9 values other than 2,
 sleep/wake and cold start, official-software coexistence and whether wireless dongles on `320F:5055` exist.
 This candidate covers the wired keyboard only; VGN HUB lists `320F:5088` as the 2.4 GHz dongle of some of these models, which stays with the existing reader.
+
+## Valkyrie VK wireless mice (374A)
+
+Grade C candidate for [#1093](https://github.com/wushuai0802/myfinder-device-battery/issues/1093) (VK M2 `374A:A305`) and its siblings, from static analysis of the official `ValkyrieVK1.0.4.5.exe`: its `config.xml` PID table and the `DeviceDriver.exe` disassembly. No vendor binary or script was executed, and no hardware or network was accessed.
+
+Exact identities (`config.xml`, no wildcards, VID `374A`): `A301` / `A302` M1 PRO (USB / 2.4G), `A304` / `A305` M2, `A307` / `A308` M2 Pro, `A312` / `A313` M3, `A315` / `A316` M3 PRO, `A324` / `A325` / `A327` M5 PRO (`A325` and `A327` are both 2.4G). The Rongyuan family receivers on `374A` (`A205`, `A311`, `A329`, ...) and VK keyboards are different identities and stay with their own readers.
+
+Collections: `DeviceDriver.exe` (`0x4538ad`, `0x4539c7`) accepts `FF00:0001` or `FF06:0001`, as for the EWEADN S9 PRO. `topology.py` therefore requests Feature (report type 2) per-ID proof for exactly these PIDs and collections: HidP caps first, then the strict raw-descriptor fallback. The reader opens a collection only when it proves Feature `03` as 64 bytes (ID plus 63) and is the single proven one across both pages of a resolved `pnp:usb\vid_374a&pid_<same PID>\...` parent. Zero or several proven matches, an unresolved parent or a missing path cause no open and no send.
+
+Request (`0x4542e3..0x454303`, `0x454790..0x4547b1`): one `SET_FEATURE` of `03 22 50 00 02 4F 81` plus 57 zeros, where byte 1 is `(0x50 + 0x00 + 0x02 + 0x4F + 0x81) & 0xFF = 0x22`. After 100 ms, one `GET_FEATURE(03, 64)`. There is no retry.
+
+Reply (`0x454887`, `0x454892`, `GetMouseData` `0x4103ac..0x410438`): 64 integer bytes 0..255, byte 0 `03`, byte 2 `00` (ACK, EC_SUCCESS), byte 4 `02`, not an echo of the request. Byte 6 low seven bits are the percentage, bit 7 is charging. Percentages above 100 and `0%` while not charging (the offline/sleep placeholder) never produce a reading. No reply checksum is established, so none is imposed.
+
+Never sent: configuration, DPI, lighting, macro, pairing, reset and firmware commands. Silence or an invalid reply keeps the engine's unconfirmed history behaviour. Cards are marked C and unconfirmed. Real replies, descriptors, charging transitions, sleep behaviour and coexistence with the official driver are unverified.

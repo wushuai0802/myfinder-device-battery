@@ -621,6 +621,17 @@ def discover(paths, excluded=(), *, full=False):
                 if (attrs.vendor, attrs.product) == (0x372E, 0x1026):
                     _descriptor_fallback(info, caps, ("feature",))
                 caps_complete = info["feature_report_sizes"] is not None
+            if caps_complete and attrs.vendor == 0x374A:
+                from providers.valkyrie import matches_collection
+                if matches_collection({"vendor_id": attrs.vendor, "product_id": attrs.product,
+                                       "usage_page": caps.page, "usage": caps.usage}):
+                    # Valkyrie VK mice: Feature 03/64 proof on FF00/FF06:0001 only,
+                    # caps first, then the strict raw-descriptor fallback.
+                    from battery_hid import byte_report_sizes
+                    info.update(feature_report_length=caps.feature,
+                                feature_report_sizes=byte_report_sizes(hid, data, caps, 2))
+                    _descriptor_fallback(info, caps, ("feature",))
+                    caps_complete = info["feature_report_sizes"] is not None
             if (caps_complete and attrs.vendor == 0x1532 and attrs.product in (0x00E5, 0x00E6)
                     and (info["interface_number"], caps.page, caps.usage) == (3, 0x000C, 1)):
                 from battery_hid import byte_report_sizes
