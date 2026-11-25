@@ -103,7 +103,7 @@ PROVIDER_VIDS = {
     "mchose_v9pro2": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
-    "pulsar": (0x3554, 0x373B, 0x3770, 0x3710), "jbl": (0x0ECB,),
+    "pulsar": (0x3554, 0x373B, 0x3770, 0x3710, 0x391D), "jbl": (0x0ECB,),
     "dareu": (0x260D,),
     "delux": (0x3554,),
     "rapoo": (0x24AE,),
