@@ -26,6 +26,9 @@ and the MD200.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import json
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -131,8 +134,230 @@ def parse_reply(r: List[int], scale: int) -> Optional[Reading]:
     return raw, charging, ""
 
 
+# OpenMouse mouse-protocol 93c4cc601d448ea481eb59d7b785eec75ae16ec2,
+# src/asus/devices.ts, src/asus/index.ts, and src/drivers/asus/hid.ts.
+# pid -> (stage_count, min_dpi, max_dpi, dpi_step, dpi_xy)
+ASUS_DPI_MODELS: Dict[int, Tuple[int, int, int, int, bool]] = {
+    0x1A92: (4, 50, 36000, 50, True),  # ROG Harpe Ace Aim Lab Edition (wired)
+    0x1A94: (4, 50, 36000, 50, True),  # ROG Harpe Ace Aim Lab Edition (wireless)
+}
+IDENTITY_KEYS = ("vendor_id", "product_id", "physical_id", "path", "serial_number")
+
+
+def _dpi_eligible(info: dict) -> bool:
+    return (
+        isinstance(info, dict)
+        and info.get("vendor_id") == ASUS_VID
+        and info.get("product_id") in ASUS_DPI_MODELS
+        and info.get("interface_number") == INTERFACE
+        and (info.get("usage_page") or 0) >= 0xFF00
+        and isinstance(info.get("physical_id"), str)
+        and bool(info["physical_id"])
+        and info.get("modelSource", info.get("model_source")) != "pack"
+        and bool(info.get("path"))
+    )
+
+
+def _dpi_token(target: dict) -> str:
+    identity = dict(target)
+    path = identity.get("path")
+    if isinstance(path, bytes):
+        identity["path"] = path.hex()
+    return hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _dpi_view(target: dict, active: int, error: Optional[str] = None) -> dict:
+    axes = target["stages"]
+    stages = [pair[0] for pair in axes]
+    writable = (
+        not error
+        and 1 <= len(stages) <= 8
+        and len(set(stages)) == len(stages)
+        and all(x == y for x, y in axes)
+        and 0 <= active < len(stages)
+    )
+    return {
+        "supported": True,
+        "canSet": writable,
+        "current": stages[active],
+        "stages": stages,
+        "stageSource": "onboard",
+        "checkedAtUtc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "targetToken": _dpi_token(target) if writable else None,
+        "error": error or (None if writable else "dpi_ambiguous_stages"),
+    }
+
+
+def _prefix_offset(r: List[int], prefix: Tuple[int, ...]) -> Optional[int]:
+    n = len(prefix)
+    if len(r) >= n and tuple(r[:n]) == prefix:
+        return 0
+    if len(r) >= n + 1 and r[0] == 0x00 and tuple(r[1:1 + n]) == prefix:
+        return 1
+    return None
+
+
+def _asus_read_reply(dev, prefix: Tuple[int, ...]) -> Tuple[List[int], int]:
+    for _ in range(READ_ATTEMPTS):
+        r = list(dev.read(PACKET_LENGTH, READ_TIMEOUT_MS) or [])
+        if not r:
+            break
+        if is_error(r) or not any(r):
+            raise ValueError("dpi_read_failed")
+        m = _prefix_offset(r, prefix)
+        if m is not None:
+            return r, m
+    raise ValueError("dpi_read_failed")
+
+
+def _asus_exchange(dev, request_head: List[int], echo_prefix: Tuple[int, ...]) -> Tuple[List[int], int]:
+    frame = request_head + [0x00] * (PACKET_LENGTH - len(request_head))
+    written = dev.write(frame)
+    if written not in (None, PACKET_LENGTH):
+        raise ValueError("dpi_write_failed")
+    return _asus_read_reply(dev, echo_prefix)
+
+
+def _dpi_state(dev, info: dict) -> Tuple[dict, dict, int]:
+    count, min_dpi, max_dpi, step, dpi_xy = ASUS_DPI_MODELS[info["product_id"]]
+    r_prof, m_prof = _asus_exchange(dev, [0x00, 0x12, 0x00], (0x12, 0x00, 0x00))
+    if len(r_prof) < m_prof + 12:
+        raise ValueError("dpi_invalid_profile")
+    profile = r_prof[m_prof + 10] + 1
+    stage_raw = r_prof[m_prof + 11]
+    if not 1 <= stage_raw <= count:
+        raise ValueError("dpi_invalid_active_stage")
+    active = stage_raw - 1
+    axes: List[List[int]] = []
+    if dpi_xy:
+        r_dpi, m_dpi = _asus_exchange(dev, [0x00, 0x12, 0x04, 0x02], (0x12, 0x04, 0x02))
+        if len(r_dpi) < m_dpi + 4 + count * 4:
+            raise ValueError("dpi_invalid_stages")
+        for i in range(count):
+            base = m_dpi + 4 + i * 4
+            x_raw = r_dpi[base] | (r_dpi[base + 1] << 8)
+            y_raw = r_dpi[base + 2] | (r_dpi[base + 3] << 8)
+            x_dpi = x_raw * step + min_dpi
+            y_dpi = y_raw * step + min_dpi
+            if not (min_dpi <= x_dpi <= max_dpi and min_dpi <= y_dpi <= max_dpi):
+                raise ValueError("dpi_invalid_stage")
+            axes.append([x_dpi, y_dpi])
+    else:
+        r_dpi, m_dpi = _asus_exchange(dev, [0x00, 0x12, 0x04, 0x00], (0x12, 0x04, 0x00))
+        if len(r_dpi) < m_dpi + 4 + count * 2:
+            raise ValueError("dpi_invalid_stages")
+        for i in range(count):
+            base = m_dpi + 4 + i * 2
+            raw_val = r_dpi[base] | (r_dpi[base + 1] << 8)
+            val = raw_val * step + min_dpi
+            if not (min_dpi <= val <= max_dpi):
+                raise ValueError("dpi_invalid_stage")
+            axes.append([val, val])
+    target = {key: info.get(key) for key in IDENTITY_KEYS}
+    target.update(provider="asus", profile=profile, stages=axes)
+    return _dpi_view(target, active), target, active
+
+
+def _capture_dpi(info: Optional[dict]) -> Tuple[Optional[dict], Optional[dict]]:
+    if not info or not _dpi_eligible(info):
+        return None, None
+    dev = None
+    try:
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, target, _ = _dpi_state(dev, info)
+        return view, target if view["canSet"] else None
+    except Exception:
+        return None, None
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token):
+    """Switch one existing stage via 51 31 09 00 <stage> without flash save; never retry."""
+    view, dev, attempted = None, None, False
+
+    def result(error=None, success=False, unknown=False):
+        answer = dict(view) if view else None
+        if answer and error:
+            answer.update(canSet=False, targetToken=None, error=error)
+        if answer and unknown:
+            answer.update(current=None, checkedAtUtc=None)
+        return {
+            "dpi": answer,
+            "success": success,
+            "outcomeUnknown": unknown,
+            "error": error,
+            "confirmedDpi": answer["current"] if answer and not unknown else None,
+        }
+
+    try:
+        if (not isinstance(target, dict)
+                or target.get("provider") != "asus"
+                or not isinstance(inventory, (list, tuple))
+                or not isinstance(target.get("stages"), list)):
+            return result("dpi_invalid_target")
+        if not isinstance(target_token, str) or _dpi_token(target) != target_token:
+            return result("dpi_stale_target")
+        if type(value) is not int or type(expected_dpi) is not int:
+            return result("dpi_invalid_value")
+        offered = [pair[0] for pair in target["stages"] if isinstance(pair, (list, tuple)) and len(pair) == 2]
+        if value not in offered or expected_dpi not in offered:
+            return result("dpi_unsupported_value")
+        matches = [
+            info for info in inventory
+            if isinstance(info, dict)
+            and _dpi_eligible(info)
+            and all(info.get(key) == target.get(key) for key in IDENTITY_KEYS)
+        ]
+        if len(matches) != 1:
+            return result("dpi_target_changed")
+        info = matches[0]
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, fresh, _ = _dpi_state(dev, info)
+        if not view["canSet"] or view["targetToken"] != target_token:
+            return result("dpi_target_changed")
+        if view["current"] != expected_dpi:
+            return result("dpi_current_changed")
+        index = offered.index(value)
+        if value == expected_dpi:
+            return result(success=True)
+        frame = [0x00, 0x51, 0x31, 0x09, 0x00, index + 1] + [0x00] * (PACKET_LENGTH - 6)
+        attempted = True
+        written = dev.write(frame)
+        if written not in (None, PACKET_LENGTH):
+            return result("dpi_readback_unconfirmed", unknown=True)
+        _asus_read_reply(dev, (0x51, 0x31, 0x09))
+        after_view, after_target, after_active = _dpi_state(dev, info)
+        if (after_target["stages"] != fresh["stages"]
+                or after_target["profile"] != fresh["profile"]
+                or after_active != index):
+            view = after_view
+            return result("dpi_readback_mismatch", unknown=True)
+        view = after_view
+        return result(success=True)
+    except Exception:
+        return result("dpi_readback_unconfirmed" if attempted else "dpi_read_failed", unknown=attempted)
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+
 class AsusProvider(Provider):
     name = "asus"
+
+    def set_device_dpi(self, inventory, target, value, expected_dpi, target_token):
+        return set_device_dpi(inventory, target, value, expected_dpi, target_token)
 
     def __init__(self):
         self._diag: List[str] = []
@@ -196,7 +421,7 @@ class AsusProvider(Provider):
             log.warning("hid.enumerate(asus): %s", e)
             return []
 
-        found: Dict[str, Reading] = {}
+        found: Dict[str, Tuple[Reading, dict]] = {}
         for d in infos:
             pid = d["product_id"]
             if pid not in KNOWN:
@@ -211,13 +436,15 @@ class AsusProvider(Provider):
                 continue
             self._diag.append(f"  -> {res[2] or str(res[0]) + '%'}{' charging' if res[1] else ''}")
             # the same mouse on the cable and on the receiver: keep the charging reading
-            if name not in found or (res[1] and not found[name][1]):
-                found[name] = res
+            if name not in found or (res[1] and not found[name][0][1]):
+                found[name] = (res, d)
 
         out: List[DeviceStatus] = []
-        for name, (level, charging, text) in found.items():
+        for name, ((level, charging, text), winning_info) in found.items():
             key = "asus:" + name.lower().replace(" ", "-")
-            out.append(DeviceStatus(key, name, level, charging, True, "asus", text, kind="mouse"))
+            dpi, dpi_target = _capture_dpi(winning_info)
+            out.append(DeviceStatus(key, name, level, charging, True, "asus", text, kind="mouse",
+                                    dpi=dpi, dpi_target=dpi_target))
         return out
 
     def diagnostics(self) -> List[str]:

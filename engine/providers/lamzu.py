@@ -29,7 +29,13 @@ except ImportError:              # pragma: no cover
 
 from . import hidlist
 from .base import DeviceStatus, Provider, hexdump, log
-from .wlmouse import QUERY, parse_feature
+from .wlmouse import (
+    QUERY,
+    _dpi_token,
+    compx_dpi_state,
+    compx_set_device_dpi,
+    parse_feature,
+)
 
 LAMZU_VID = 0x373E
 DONGLE = 0x001E
@@ -54,8 +60,53 @@ def vendor_collection(ifaces: List[dict]) -> Optional[dict]:
     return None
 
 
+def _dpi_eligible(info: dict) -> bool:
+    return (
+        isinstance(info, dict)
+        and info.get("vendor_id") == LAMZU_VID
+        and info.get("product_id") in PIDS
+        and info.get("interface_number") == INTERFACE
+        and info.get("usage_page") == USAGE_PAGE
+        and isinstance(info.get("physical_id"), str)
+        and bool(info["physical_id"])
+        and info.get("modelSource", info.get("model_source")) != "pack"
+        and info.get("feature_report_length") in (None, 65)
+        and bool(info.get("path"))
+    )
+
+
+def _capture_dpi(info: Optional[dict]) -> Tuple[Optional[dict], Optional[dict]]:
+    if not info or not _dpi_eligible(info) or hid is None:
+        return None, None
+    dev = None
+    try:
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, target, _ = compx_dpi_state(dev, info, "lamzu")
+        return view, target if view["canSet"] else None
+    except Exception:
+        return None, None
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token):
+    return compx_set_device_dpi(
+        inventory, target, value, expected_dpi, target_token,
+        provider_name="lamzu", eligible_fn=_dpi_eligible,
+        open_device_fn=(lambda: hid.device()) if hid is not None else None,
+    )
+
+
 class LamzuProvider(Provider):
     name = "lamzu"
+
+    def set_device_dpi(self, inventory, target, value, expected_dpi, target_token):
+        return set_device_dpi(inventory, target, value, expected_dpi, target_token)
 
     def __init__(self):
         self._diag: List[str] = []
@@ -109,6 +160,7 @@ class LamzuProvider(Provider):
             return []
 
         readings: List[Reading] = []
+        winning_info: Optional[dict] = None
         # the cable first: it charges, and the dongle has nothing to add then
         for pid in sorted(groups, key=lambda p: p != WIRED):
             self._diag.append(f"[Lamzu] pid={pid:04x} ({PIDS[pid]}) "
@@ -123,13 +175,16 @@ class LamzuProvider(Provider):
             res = self._read(d["path"])
             if res is not None:
                 readings.append(res)
+                winning_info = d
                 break
 
         key = "lamzu"
         if readings:
             batt, chg = readings[0]
             self._last = (batt, chg, time.time())
-            return [DeviceStatus(key, NAME, batt, chg, True, "lamzu", kind="mouse")]
+            dpi, dpi_target = _capture_dpi(winning_info)
+            return [DeviceStatus(key, NAME, batt, chg, True, "lamzu", kind="mouse",
+                                 dpi=dpi, dpi_target=dpi_target)]
         if self._last and time.time() - self._last[2] < ASLEEP_KEEP:
             return [DeviceStatus(key, NAME, self._last[0], self._last[1], False, "lamzu",
                                  kind="mouse")]

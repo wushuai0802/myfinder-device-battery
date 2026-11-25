@@ -81,6 +81,9 @@ in every reading so far).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import json
 import re
 import time
 from typing import Dict, List, Optional, Tuple
@@ -457,8 +460,356 @@ def parse_a5v2(resp, length):
     return payload
 
 
+# OpenMouse mouse-protocol 93c4cc601d448ea481eb59d7b785eec75ae16ec2,
+# src/mchose/index.ts, src/drivers/mchose/hid.ts (V2 Feature 0x12 cmd 0x67 / 0x57)
+# and src/mchose/a5-gen1.ts, src/drivers/mchose/a5-gen1-hid.ts (A5 Gen1 Feature 0x00).
+V2_CMD_CONFIG = 0x67
+V2_CMD_WRITE_CONFIG = 0x57
+V2_CONFIG_REPORT_LEN = 65
+V2_MAX_STAGES = 6
+V2_MIN_DPI = 50
+V2_MAX_DPI = 42000
+V2_DPI_STEP = 50
+V2_POLL_DELAY_S = 0.09
+V2_WRITE_SETTLE_S = 0.4
+V2_WIRED_PIDS = frozenset({
+    0x0031, 0x00B0, 0x1011, 0x4015, 0x4018, 0x4019, 0x4021, 0x4022, 0x4023,
+})
+
+A5_CMD_ACTIVE_PROFILE = 0x85
+A5_PAGE_DPI = 0x01
+A5_CMD_READ_STAGES = 0x81
+A5_CMD_READ_ACTIVE_STAGE = 0x82
+A5_CMD_SET_ACTIVE_STAGE = 0x02
+A5_MAX_STAGES = 6
+A5_MIN_DPI = 50
+A5_MAX_DPI = 26000
+A5_DPI_STEP = 50
+
+IDENTITY_KEYS = ("vendor_id", "product_id", "physical_id", "path", "serial_number")
+
+
+def _dpi_token(target: dict) -> str:
+    identity = dict(target)
+    path = identity.get("path")
+    if isinstance(path, bytes):
+        identity["path"] = path.hex()
+    return hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _dpi_view(target: dict, active: int, error: Optional[str] = None) -> dict:
+    axes = target["stages"]
+    stages = [pair[0] for pair in axes]
+    writable = (
+        not error
+        and 1 <= len(stages) <= 8
+        and len(set(stages)) == len(stages)
+        and all(x == y for x, y in axes)
+        and 0 <= active < len(stages)
+    )
+    return {
+        "supported": True,
+        "canSet": writable,
+        "current": stages[active],
+        "stages": stages,
+        "stageSource": "onboard",
+        "checkedAtUtc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "targetToken": _dpi_token(target) if writable else None,
+        "error": error or (None if writable else "dpi_ambiguous_stages"),
+    }
+
+
+def _v2_dpi_eligible(info: dict) -> bool:
+    if not isinstance(info, dict):
+        return False
+    vid, pid = info.get("vendor_id"), info.get("product_id")
+    if not (vid == MEASURED_VID or (vid == 0x3837 and pid in LEGACY_3837_PIDS)):
+        return False
+    if (info.get("usage_page"), info.get("usage")) != (CONFIG_PAGE, 1):
+        return False
+    if not (isinstance(info.get("physical_id"), str) and bool(info["physical_id"])):
+        return False
+    if info.get("modelSource", info.get("model_source")) == "pack":
+        return False
+    feat_len = info.get("feature_report_length")
+    if feat_len not in (None, V2_CONFIG_REPORT_LEN):
+        return False
+    sizes = info.get("feature_report_sizes")
+    if sizes is not None and (not isinstance(sizes, dict) or sizes.get("18") != V2_CONFIG_REPORT_LEN):
+        return False
+    return bool(info.get("path"))
+
+
+def _a5_dpi_eligible(info: dict) -> bool:
+    if not isinstance(info, dict):
+        return False
+    if info.get("vendor_id") != A5_VID or info.get("product_id") not in A5_PIDS:
+        return False
+    if info.get("usage_page") != A5_USAGE_PAGE:
+        return False
+    if not (isinstance(info.get("physical_id"), str) and bool(info["physical_id"])):
+        return False
+    if info.get("modelSource", info.get("model_source")) == "pack":
+        return False
+    feat_len = info.get("feature_report_length")
+    if feat_len not in (None, 65):
+        return False
+    return bool(info.get("path"))
+
+
+def _dpi_eligible(info: dict) -> bool:
+    return _v2_dpi_eligible(info) or _a5_dpi_eligible(info)
+
+
+def parse_v2_config(resp, pid: int) -> Optional[Tuple[List[List[int]], int, bytes]]:
+    """Decode a 65-byte report 0x12 reply to command 0x67 -> (axes, active_index, payload63)."""
+    if not resp or len(resp) < V2_CONFIG_REPORT_LEN:
+        return None
+    raw = bytes(resp[:V2_CONFIG_REPORT_LEN])
+    if raw[0] != LONG_REPORT or raw[1] != (V2_CMD_CONFIG ^ 0xFF):
+        return None
+    payload = _invert(raw[2:V2_CONFIG_REPORT_LEN])
+    if len(payload) != 63 or not any(payload[:20]):
+        return None
+    count = payload[16]
+    if not 1 <= count <= V2_MAX_STAGES:
+        return None
+    axes: List[List[int]] = []
+    for i in range(count):
+        val = int.from_bytes(payload[4 + i * 2:6 + i * 2], "little")
+        if not (V2_MIN_DPI <= val <= V2_MAX_DPI and val % V2_DPI_STEP == 0):
+            return None
+        axes.append([val, val])
+    idx_byte = 1 if pid in V2_WIRED_PIDS else 2
+    active = payload[idx_byte] & 0x0F
+    if not 0 <= active < count:
+        return None
+    return axes, active, payload
+
+
+def make_v2_config_write(payload63: bytes, pid: int, active_index: int) -> bytes:
+    if len(payload63) != 63 or not 0 <= active_index < V2_MAX_STAGES:
+        raise ValueError("v2_invalid_config_write")
+    idx_byte = 1 if pid in V2_WIRED_PIDS else 2
+    mutated = bytearray(payload63)
+    mutated[idx_byte] = (mutated[idx_byte] & 0xF0) | (active_index & 0x0F)
+    return bytes([LONG_REPORT]) + _invert(bytes([V2_CMD_WRITE_CONFIG]) + bytes(mutated))
+
+
+def _v2_read_config(dev, pid: int) -> Tuple[List[List[int]], int, bytes]:
+    req = make_request(V2_CMD_CONFIG, report=LONG_REPORT, length=LONG_LEN)
+    for _ in range(ATTEMPTS):
+        written = dev.send_feature_report(req)
+        if written is not None and (type(written) is not int or written != V2_CONFIG_REPORT_LEN):
+            raise ValueError("dpi_write_failed")
+        time.sleep(V2_POLL_DELAY_S)
+        resp = dev.get_feature_report(LONG_REPORT, V2_CONFIG_REPORT_LEN)
+        parsed = parse_v2_config(resp, pid)
+        if parsed is not None:
+            return parsed
+    raise ValueError("dpi_read_failed")
+
+
+def make_a5_dpi_request(length: int, page: int, command: int, data: Tuple[int, ...] = ()) -> List[int]:
+    head = [A5_REPORT_ID, 0x00, 0x00, A5_ROUTE, length & 0xFF, page & 0xFF, command & 0xFF, *(b & 0xFF for b in data)]
+    return head + [0x00] * (65 - len(head))
+
+
+def parse_a5_dpi_reply(resp, page: int, command: int) -> Optional[bytes]:
+    if not resp or len(resp) < 8:
+        return None
+    r = bytes(resp)
+    at = 0 if r[0] == 0xA1 else (1 if len(r) > 1 and r[1] == 0xA1 else None)
+    if at is None or len(r) < at + 8:
+        return None
+    if r[at + 4] != page or r[at + 5] != command:
+        return None
+    return r[at:min(len(r), at + 64)]
+
+
+def _a5_exchange(dev, length: int, page: int, command: int, data: Tuple[int, ...] = ()) -> bytes:
+    req = make_a5_dpi_request(length, page, command, data)
+    written = dev.send_feature_report(req)
+    if written is not None and (type(written) is not int or written not in (64, 65)):
+        raise ValueError("dpi_write_failed")
+    time.sleep(A5_WRITE_PAUSE)
+    for _ in range(A5_READS):
+        resp = dev.get_feature_report(A5_REPORT_ID, 65)
+        parsed = parse_a5_dpi_reply(resp, page, command)
+        if parsed is not None:
+            return parsed
+        if parse_a5(resp) is not None:
+            # Battery reply echoed instead of DPI frame (or unmocked fixture).
+            break
+        time.sleep(A5_READ_GAP)
+    raise ValueError("dpi_read_failed")
+
+
+def _dpi_state(dev, info: dict) -> Tuple[dict, dict, int, Optional[bytes]]:
+    if _v2_dpi_eligible(info):
+        axes, active, payload63 = _v2_read_config(dev, info["product_id"])
+        target = {key: info.get(key) for key in IDENTITY_KEYS}
+        target.update(provider="mchose", protocol="v2", stages=axes)
+        return _dpi_view(target, active), target, active, payload63
+    if _a5_dpi_eligible(info):
+        prof_frame = _a5_exchange(dev, 1, A5_PAGE, A5_CMD_ACTIVE_PROFILE)
+        profile = prof_frame[6] if 1 <= prof_frame[6] <= 3 else 1
+        stg_frame = _a5_exchange(dev, 10, A5_PAGE_DPI, A5_CMD_READ_STAGES, (profile, A5_MAX_STAGES))
+        if len(stg_frame) < 8 or stg_frame[6] != profile:
+            raise ValueError("dpi_invalid_stages")
+        count = stg_frame[7]
+        if not 1 <= count <= A5_MAX_STAGES or len(stg_frame) < 8 + count * 4:
+            raise ValueError("dpi_invalid_stages")
+        axes = []
+        for i in range(count):
+            off = 8 + i * 4
+            x = (stg_frame[off] << 8) | stg_frame[off + 1]
+            y = (stg_frame[off + 2] << 8) | stg_frame[off + 3]
+            if y == 0:
+                y = x
+            if not (A5_MIN_DPI <= x <= A5_MAX_DPI and x % A5_DPI_STEP == 0
+                    and A5_MIN_DPI <= y <= A5_MAX_DPI and y % A5_DPI_STEP == 0):
+                raise ValueError("dpi_invalid_stage")
+            axes.append([x, y])
+        act_frame = _a5_exchange(dev, 2, A5_PAGE_DPI, A5_CMD_READ_ACTIVE_STAGE, (profile,))
+        if len(act_frame) < 8 or act_frame[6] != profile or not 1 <= act_frame[7] <= count:
+            raise ValueError("dpi_invalid_active_stage")
+        active = act_frame[7] - 1
+        target = {key: info.get(key) for key in IDENTITY_KEYS}
+        target.update(provider="mchose", protocol="a5_gen1", profile=profile, stages=axes)
+        return _dpi_view(target, active), target, active, None
+    raise ValueError("dpi_unsupported_device")
+
+
+def _capture_dpi(info: Optional[dict]) -> Tuple[Optional[dict], Optional[dict]]:
+    if not info or not _dpi_eligible(info):
+        return None, None
+    dev = None
+    try:
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, target, _, _ = _dpi_state(dev, info)
+        return view, target if view["canSet"] else None
+    except Exception:
+        return None, None
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token):
+    """Switch one existing onboard stage on MCHOSE V2 (0x12/0x57) or A5 Gen1 (0x00/0x02); never retry."""
+    view, dev, attempted = None, None, False
+
+    def result(error=None, success=False, unknown=False):
+        answer = dict(view) if view else None
+        if answer and error:
+            answer.update(canSet=False, targetToken=None, error=error)
+        if answer and unknown:
+            answer.update(current=None, checkedAtUtc=None)
+        return {
+            "dpi": answer,
+            "success": success,
+            "outcomeUnknown": unknown,
+            "error": error,
+            "confirmedDpi": answer["current"] if answer and not unknown else None,
+        }
+
+    try:
+        if (not isinstance(target, dict)
+                or target.get("provider") != "mchose"
+                or not isinstance(inventory, (list, tuple))
+                or not isinstance(target.get("stages"), list)):
+            return result("dpi_invalid_target")
+        if not isinstance(target_token, str) or _dpi_token(target) != target_token:
+            return result("dpi_stale_target")
+        if type(value) is not int or type(expected_dpi) is not int:
+            return result("dpi_invalid_value")
+        offered = [pair[0] for pair in target["stages"] if isinstance(pair, (list, tuple)) and len(pair) == 2]
+        if value not in offered or expected_dpi not in offered:
+            return result("dpi_unsupported_value")
+        matches = [
+            info for info in inventory
+            if isinstance(info, dict)
+            and _dpi_eligible(info)
+            and all(info.get(key) == target.get(key) for key in IDENTITY_KEYS)
+        ]
+        if len(matches) != 1:
+            return result("dpi_target_changed")
+        info = matches[0]
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, fresh, _, payload63 = _dpi_state(dev, info)
+        if not view["canSet"] or view["targetToken"] != target_token:
+            return result("dpi_target_changed")
+        if view["current"] != expected_dpi:
+            return result("dpi_current_changed")
+        index = offered.index(value)
+        if value == expected_dpi:
+            return result(success=True)
+        if fresh.get("protocol") == "v2":
+            if payload63 is None:
+                return result("dpi_read_failed")
+            frame = make_v2_config_write(payload63, info["product_id"], index)
+            attempted = True
+            written = dev.send_feature_report(frame)
+            if written not in (None, V2_CONFIG_REPORT_LEN):
+                return result("dpi_readback_unconfirmed", unknown=True)
+            time.sleep(V2_WRITE_SETTLE_S)
+        elif fresh.get("protocol") == "a5_gen1":
+            profile = fresh["profile"]
+            req = make_a5_dpi_request(2, A5_PAGE_DPI, A5_CMD_SET_ACTIVE_STAGE, (profile, index + 1))
+            attempted = True
+            written = dev.send_feature_report(req)
+            if written not in (None, 64, 65):
+                return result("dpi_readback_unconfirmed", unknown=True)
+            time.sleep(A5_WRITE_PAUSE)
+            ack = None
+            for _ in range(A5_READS):
+                resp = dev.get_feature_report(A5_REPORT_ID, 65)
+                ack = parse_a5_dpi_reply(resp, A5_PAGE_DPI, A5_CMD_SET_ACTIVE_STAGE)
+                if ack is not None:
+                    break
+                time.sleep(A5_READ_GAP)
+            if ack is None:
+                return result("dpi_readback_unconfirmed", unknown=True)
+        else:
+            return result("dpi_invalid_target")
+        after_view, after_target, after_active, after_payload63 = _dpi_state(dev, info)
+        if (after_target["stages"] != fresh["stages"]
+                or after_target.get("profile") != fresh.get("profile")
+                or after_active != index):
+            view = after_view
+            return result("dpi_readback_mismatch", unknown=True)
+        if fresh.get("protocol") == "v2" and after_payload63 is not None and payload63 is not None:
+            idx_byte = 1 if info["product_id"] in V2_WIRED_PIDS else 2
+            expected_pay = bytearray(payload63)
+            expected_pay[idx_byte] = (expected_pay[idx_byte] & 0xF0) | (index & 0x0F)
+            if after_payload63[:20] != bytes(expected_pay[:20]):
+                view = after_view
+                return result("dpi_readback_mismatch", unknown=True)
+        view = after_view
+        return result(success=True)
+    except Exception:
+        return result("dpi_readback_unconfirmed" if attempted else "dpi_read_failed", unknown=attempted)
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+
 class MchoseProvider(Provider):
     name = "mchose"
+
+    def set_device_dpi(self, inventory, target, value, expected_dpi, target_token):
+        return set_device_dpi(inventory, target, value, expected_dpi, target_token)
 
     def __init__(self):
         self._diag: List[str] = []
@@ -917,7 +1268,7 @@ class MchoseProvider(Provider):
                 identity = (A5V2_VID, A5V2_PID)
             groups.setdefault(identity, []).append(d)
 
-        found: Dict[str, List[Tuple[int, bool, int, int]]] = {}   # key -> readings
+        found: Dict[str, List[Tuple[int, bool, int, int, Optional[dict]]]] = {}   # key -> readings
         for (vid, pid), ifaces in groups.items():
             if (vid, pid) == (A5V2_VID, A5V2_PID):
                 key = device_key(A5V2_VID, A5V2_PID)
@@ -925,7 +1276,7 @@ class MchoseProvider(Provider):
                 info = self._pick_a5v2(ifaces)
                 got = self._read_a5v2(info) if info is not None else None
                 if got is not None:
-                    found.setdefault(key, []).append((got[0], got[1], A5V2_PID, 0))
+                    found.setdefault(key, []).append((got[0], got[1], A5V2_PID, 0, None))
                 continue  # Exclusive, including failure: no legacy/CFU/12.
             if (vid, pid) == (0x3837, 0x4245):
                 # The G-series receiver has its own reader, including when its report proof fails.
@@ -950,7 +1301,7 @@ class MchoseProvider(Provider):
                     continue
                 got_v7 = self._read_v3(info["path"], parse_v7, retry_busy=True)
                 if got_v7 is not None:
-                    found.setdefault(key, []).append((got_v7[0], got_v7[1], pid, 0))
+                    found.setdefault(key, []).append((got_v7[0], got_v7[1], pid, 0, None))
                 continue
             if vid == V3_VID and pid in V3_PIDS:
                 self._note_v3(f"[MCHOSE] 3837:{pid:04x} V3 power reader (C / 待实机验证)")
@@ -963,7 +1314,7 @@ class MchoseProvider(Provider):
                     continue
                 got_v3 = self._read_v3(info["path"])
                 if got_v3 is not None:
-                    found.setdefault(key, []).append((got_v3[0], got_v3[1], pid, 0))
+                    found.setdefault(key, []).append((got_v3[0], got_v3[1], pid, 0, None))
                 continue  # V3 never scans siblings or calls any legacy protocol.
             if vid == 0x3837 and pid not in LEGACY_3837_PIDS:
                 message = f"[MCHOSE] 3837:{pid:04x} 未列入旧协议白名单，未发送任何命令"
@@ -1012,16 +1363,16 @@ class MchoseProvider(Provider):
                 if vid == G7_VID:
                     got_g7 = self._read_g7(d["path"])
                     if got_g7:
-                        found.setdefault(key, []).append((got_g7[0], got_g7[1], pid, 0))
+                        found.setdefault(key, []).append((got_g7[0], got_g7[1], pid, 0, None))
                 elif vid == A5_VID:
                     got_a5 = self._read_a5(d["path"])
                     if got_a5:
-                        found.setdefault(key, []).append((got_a5[0], got_a5[1], pid, 0))
+                        found.setdefault(key, []).append((got_a5[0], got_a5[1], pid, 0, d))
                 else:
                     got = self._read_collection(d["path"])
                     if got:
                         self._models[key] = got[2]
-                        found.setdefault(key, []).append((got[0], bool(got[1]), pid, got[2]))
+                        found.setdefault(key, []).append((got[0], bool(got[1]), pid, got[2], d))
                 if found.get(key):
                     break
 
@@ -1030,14 +1381,15 @@ class MchoseProvider(Provider):
             # a wired mouse may be silent on the radio: prefer whichever source reports
             # charging, and one icon either way
             readings.sort(key=lambda r: (not r[1],))
-            level, charge, pid, model = readings[0]
+            level, charge, pid, model, winning_info = readings[0]
             if key != device_key(A5V2_VID, A5V2_PID):
                 self._diag.append(f"  -> {key} pid={pid:04x}"
                                   + (f" model=0x{model:04x}" if model else "")
                                   + f": {level}%{' (charging)' if charge else ''}")
             self._last[key] = (level, charge, time.time())
+            dpi, dpi_target = _capture_dpi(winning_info)
             out.append(DeviceStatus(key, self._display_name(key), level, charge, True,
-                                    "mchose", kind="mouse"))
+                                    "mchose", kind="mouse", dpi=dpi, dpi_target=dpi_target))
 
         # silent: a receiver cannot tell a switched-off mouse from one that went to sleep
         # a few seconds ago, so keep the last value greyed out for a while
