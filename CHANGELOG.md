@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.0-beta.7
+
+新增与改进多款设备的只读电量读取候选（均为 C 级，待设备用户使用本版实机核对）：
+
+- 怒喵 Angry Miao AM Infinity .97（`0E8D:0703`）：新增 2.4G 接收器电量与充电状态候选。
+- 北通 BETOP 2.4G / 有线手柄（鲲鹏系列，`20BC` / `20DD` 下已列明 PID，含鲲鹏 40）：新增手柄电量读取候选。
+- ATK / VGN / VXE 有线键盘（`320F:5055`）：新增精确产品名匹配的有线电量与充电候选（覆盖 VGN S99、VXE V87 / V87 RGB、ATK/VXE V75X、VGN VXE75/V2、V98 PRO/V2、VXE V75 PRO、VGN N75 PRO 等列表型号）。
+- 瓦尔基里 Valkyrie VK 系列无线鼠标（`374A` 下已列明 PID，覆盖 M1 PRO、M2、M2 Pro、M3、M3 PRO、M5 PRO）：新增 USB / 2.4G 电量与充电状态候选。
+- 迈从 V7 Pro 2.4G（`3837:101D`）：增加有界 busy 重试与拒绝诊断，改善偶发读不到电量的问题。
+
+程序修复：
+
+- 修复 Windows 关机或注销时 `python.exe` 读取子进程反复拉起导致 `0xc0000142` 报错弹窗以及误触发型号数据包隔离（`pack_quarantined`）的问题（#1085）。
+
 ## 1.4.0-beta.6
 
 - 设置与设备详情页新增实验性自动识别控制（UI-01）：
