@@ -232,7 +232,7 @@ namespace AtkBatteryTray {
                 int itemX = e.Item.Bounds.X;
                 int x1 = Math.Max(4, 12 - itemX);
                 int x2 = Math.Max(x1 + 8, menuW - 12 - itemX);
-                Color line = VisualDesign.HighContrast ? SystemColors.GrayText : Color.FromArgb(dark ? 68 : 60, pal.Border);
+                Color line = VisualDesign.HighContrast ? SystemColors.GrayText : Color.FromArgb(dark ? 110 : 60, pal.Border);
                 using (var pen = new Pen(line, 1f)) {
                     e.Graphics.DrawLine(pen, x1, y, x2, y);
                 }

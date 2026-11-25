@@ -58,7 +58,7 @@ static class TaskbarOverlayTests {
         var cfg = new TaskbarOverlaySettings { Enabled = true, ShowIcons = false, MaxDevices = 99, OffsetX = -9999 };
         cfg.Normalize();
         Check(cfg.MaxDevices == 3, "MaxDevices clamped upper to 3");
-        Check(cfg.OffsetX == -320, "OffsetX clamped lower to -320");
+        Check(cfg.OffsetX == -1200, "OffsetX clamped lower to -1200");
 
         cfg.MaxDevices = 0;
         cfg.OffsetX = 9999;
@@ -97,11 +97,49 @@ static class TaskbarOverlayTests {
         var r3Top = TaskbarOverlayEvaluator.Evaluate(s3Top, overlaySize, 0);
         Check(!r3Top.CanDisplay && r3Top.StatusCode == "non_bottom_taskbar", "top taskbar degrades cleanly");
 
-        // 4. Fullscreen obstruction
+        // 4. Fullscreen & game obstruction matrix
         var s4 = MakeValidBottomBar();
         s4.Obstruction = DisplayObstruction.Fullscreen;
         var r4 = TaskbarOverlayEvaluator.Evaluate(s4, overlaySize, 0);
         Check(!r4.CanDisplay && r4.StatusCode == "fullscreen_hidden", "fullscreen app hides overlay");
+
+        var s4Uncertain = MakeValidBottomBar();
+        s4Uncertain.Obstruction = DisplayObstruction.UncertainFullscreen;
+        var r4Uncertain = TaskbarOverlayEvaluator.Evaluate(s4Uncertain, overlaySize, 0);
+        Check(!r4Uncertain.CanDisplay && r4Uncertain.StatusCode == "fullscreen_hidden", "uncertain fullscreen (e.g. scaled/non-native game) hides overlay");
+
+        var s4Covered = MakeValidBottomBar();
+        s4Covered.Obstruction = DisplayObstruction.None;
+        s4Covered.TaskbarCoveredByFullscreen = true;
+        var r4Covered = TaskbarOverlayEvaluator.Evaluate(s4Covered, overlaySize, 0);
+        Check(!r4Covered.CanDisplay && r4Covered.StatusCode == "fullscreen_hidden", "unfocused borderless game covering taskbar hides overlay");
+
+        var s4D3d = MakeValidBottomBar();
+        s4D3d.Obstruction = DisplayObstruction.None;
+        s4D3d.NotificationState = 3; // QUNS_RUNNING_D3D_FULLSCREEN
+        var r4D3d = TaskbarOverlayEvaluator.Evaluate(s4D3d, overlaySize, 0);
+        Check(!r4D3d.CanDisplay && r4D3d.StatusCode == "fullscreen_hidden", "D3D exclusive fullscreen hides overlay");
+
+        var s4Pres = MakeValidBottomBar();
+        s4Pres.Obstruction = DisplayObstruction.None;
+        s4Pres.NotificationState = 4; // QUNS_PRESENTATION_MODE
+        var r4Pres = TaskbarOverlayEvaluator.Evaluate(s4Pres, overlaySize, 0);
+        Check(!r4Pres.CanDisplay && r4Pres.StatusCode == "fullscreen_hidden", "presentation mode hides overlay");
+
+        var s4Max = MakeValidBottomBar();
+        s4Max.Obstruction = DisplayObstruction.Maximized;
+        s4Max.TaskbarCoveredByFullscreen = false;
+        s4Max.NotificationState = 5;
+        var r4Max = TaskbarOverlayEvaluator.Evaluate(s4Max, overlaySize, 0);
+        Check(r4Max.CanDisplay && r4Max.StatusCode == "ready", "normal maximized window keeps overlay visible");
+
+        // Multi-monitor & taskbar intersection geometry checks
+        var mon1 = new Rectangle(0, 0, 1920, 1080);
+        var bar1 = new Rectangle(0, 1032, 1920, 48);
+        Check(TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(0, 0, 1920, 1080), mon1, bar1), "borderless game covering primary monitor covers taskbar");
+        Check(!TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(1920, 0, 1920, 1080), mon1, bar1), "fullscreen window on side-by-side secondary monitor does NOT cover primary taskbar");
+        Check(!TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(0, 0, 1920, 1032), mon1, bar1), "normal maximized window ending at taskbar top does NOT cover taskbar");
+        Check(!TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(1500, 1034, 160, 44), mon1, bar1), "third-party taskbar plugin does NOT count as fullscreen");
 
         // 5. Insufficient horizontal width
         var s5 = MakeValidBottomBar();
@@ -117,11 +155,50 @@ static class TaskbarOverlayTests {
         Check(r6.PhysicalLocation.X == 1680 - 10 - 220, "placed 10px left of TrayNotifyWnd");
         Check(r6.PhysicalLocation.Y == 1032 + (48 - 28) / 2, "vertically centered inside taskbar");
 
-        // 7. Offset clamping keeps overlay inside safe zone ([-320, 0])
+        // 7. Offset clamping keeps overlay inside safe zone ([-1200, 0] and safeMinX)
         var r7Left = TaskbarOverlayEvaluator.Evaluate(s6, overlaySize, -400);
-        Check(r7Left.CanDisplay && r7Left.PhysicalLocation.X == 1680 - 10 - 220 - 320, "negative offset shifts left and clamps at -320 within safe area");
+        Check(r7Left.CanDisplay && r7Left.PhysicalLocation.X == 1680 - 10 - 220 - 400, "negative offset -400 shifts left cleanly within 1920px safe area");
+        var r7SafeMin = TaskbarOverlayEvaluator.Evaluate(s6, overlaySize, -1500);
+        Check(r7SafeMin.CanDisplay && r7SafeMin.PhysicalLocation.X == 1920 / 3, "large negative offset clamps at safeMinX");
+
+        var s4k = MakeValidBottomBar();
+        s4k.TaskbarRect = new Rectangle(0, 2112, 3840, 48);
+        s4k.TrayNotifyRect = new Rectangle(3500, 2112, 340, 48);
+        s4k.PrimaryMonitorBounds = new Rectangle(0, 0, 3840, 2160);
+        var r7MinClamp = TaskbarOverlayEvaluator.Evaluate(s4k, overlaySize, -1500);
+        Check(r7MinClamp.CanDisplay && r7MinClamp.PhysicalLocation.X == 3500 - 10 - 220 - 1200, "4K taskbar clamps negative offset at -1200");
+
         var r7Right = TaskbarOverlayEvaluator.Evaluate(s6, overlaySize, 200);
         Check(r7Right.CanDisplay && r7Right.PhysicalLocation.X == 1680 - 10 - 220, "positive offset never overlaps TrayNotifyWnd");
+
+        // 8. Third-party plugin collision avoidance (5 scenarios)
+        var c1 = MakeValidBottomBar();
+        c1.OccupiedRects = new List<Rectangle> { new Rectangle(1500, 1034, 160, 44) };
+        var cr1 = TaskbarOverlayEvaluator.Evaluate(c1, overlaySize, 0);
+        Check(cr1.CanDisplay && cr1.StatusCode == "ready_avoided" && cr1.PhysicalLocation.X == 1500 - 8 - 220, "single overlapping plugin triggers left avoidance (ready_avoided)");
+
+        var c2 = MakeValidBottomBar();
+        c2.OccupiedRects = new List<Rectangle> {
+            new Rectangle(1500, 1034, 160, 44),
+            new Rectangle(1240, 1034, 180, 44)
+        };
+        var cr2 = TaskbarOverlayEvaluator.Evaluate(c2, overlaySize, 0);
+        Check(cr2.CanDisplay && cr2.StatusCode == "ready_avoided" && cr2.PhysicalLocation.X == 1240 - 8 - 220, "two plugins trigger chained left avoidance");
+
+        var c3 = MakeValidBottomBar();
+        c3.OccupiedRects = new List<Rectangle> { new Rectangle(800, 1034, 160, 44) };
+        var cr3 = TaskbarOverlayEvaluator.Evaluate(c3, overlaySize, 0);
+        Check(cr3.CanDisplay && cr3.StatusCode == "ready" && cr3.PhysicalLocation.X == 1680 - 10 - 220, "distant plugin does not trigger avoidance");
+
+        var c4 = MakeValidBottomBar();
+        c4.OccupiedRects = new List<Rectangle> { new Rectangle(750, 1034, 900, 44) };
+        var cr4 = TaskbarOverlayEvaluator.Evaluate(c4, overlaySize, 0);
+        Check(!cr4.CanDisplay && cr4.StatusCode == "plugin_conflict", "insufficient space after plugin avoidance degrades to plugin_conflict");
+
+        var c5 = MakeValidBottomBar();
+        c5.OccupiedRects = new List<Rectangle> { new Rectangle(1250, 1034, 150, 44) };
+        var cr5 = TaskbarOverlayEvaluator.Evaluate(c5, overlaySize, -200);
+        Check(cr5.CanDisplay && cr5.StatusCode == "ready_avoided" && cr5.PhysicalLocation.X == 1250 - 8 - 220, "manual negative offset still avoids overlapping plugin to the left");
     }
 
     static void LiveControllerLifecycleAndDegradation() {
@@ -146,9 +223,11 @@ static class TaskbarOverlayTests {
 
             // Use deterministic injected probe on a standalone controller
             bool autoHide = false;
+            bool gameFullscreen = false;
             using (var ctrl = new TaskbarBatteryOverlayController(owner, delegate {
                 var snap = MakeValidBottomBar();
                 snap.AutoHideEnabled = autoHide;
+                snap.TaskbarCoveredByFullscreen = gameFullscreen;
                 return snap;
             })) {
                 ctrl.ApplySettings();
@@ -159,6 +238,16 @@ static class TaskbarOverlayTests {
                 owner.SavePreferences(next);
                 ctrl.ApplySettings();
                 Check(ctrl.IsRunning && ctrl.StatusCode == "ready" && ctrl.ActiveForm.OverlayVisible, "controller creates and shows overlay when enabled on valid taskbar");
+
+                // Simulate entering fullscreen/borderless game covering taskbar
+                gameFullscreen = true;
+                ctrl.NotifyDataChanged();
+                Check(ctrl.StatusCode == "fullscreen_hidden" && !ctrl.ActiveForm.OverlayVisible, "controller automatically hides overlay during fullscreen game");
+
+                // Recover when leaving game
+                gameFullscreen = false;
+                ctrl.NotifyDataChanged();
+                Check(ctrl.StatusCode == "ready" && ctrl.ActiveForm.OverlayVisible, "controller restores overlay after exiting fullscreen game");
 
                 // Simulate system switching to auto-hide taskbar
                 autoHide = true;

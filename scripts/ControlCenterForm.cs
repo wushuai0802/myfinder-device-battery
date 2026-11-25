@@ -22,6 +22,28 @@ namespace AtkBatteryTray {
         internal const int InputHeight = 30;
         internal const int DividerInset = 20;
 
+        static double Luma(Color c) {
+            Func<int, double> f = delegate(int v) { double x = v / 255.0; return x <= 0.03928 ? x / 12.92 : Math.Pow((x + 0.055) / 1.055, 2.4); };
+            return 0.2126 * f(c.R) + 0.7152 * f(c.G) + 0.0722 * f(c.B);
+        }
+
+        internal static double Contrast(Color a, Color b) {
+            double x = Luma(a), y = Luma(b);
+            if (x < y) { double t = x; x = y; y = t; }
+            return (x + 0.05) / (y + 0.05);
+        }
+
+        // Secondary (caption) text: slightly lifted in dark mode and guaranteed >= 4.5:1 (WCAG AA) on every control-center surface.
+        internal static Color SecondaryText(ThemePalette p, bool dark) {
+            if (VisualDesign.HighContrast) return p.Muted;
+            Color c = dark ? ThemePalette.Blend(p.Muted, p.Foreground, 38) : p.Muted;
+            for (int i = 0; i < 14; i++) {
+                if (Contrast(c, p.Card) >= 4.6 && Contrast(c, p.WindowBackground) >= 4.6 && Contrast(c, p.RaisedSurface) >= 4.6) break;
+                c = ThemePalette.Blend(c, dark ? Color.White : Color.Black, 22);
+            }
+            return c;
+        }
+
         internal static string SymbolForKind(string kind) {
             if (kind == "mouse" || kind == "headset" || kind == "keyboard" || kind == "gamepad") return kind;
             return "power";
@@ -232,7 +254,7 @@ namespace AtkBatteryTray {
         }
     }
 
-    internal enum ControlCenterButtonVariant { Secondary, Primary, Danger }
+    internal enum ControlCenterButtonVariant { Secondary, Primary, Danger, Quiet, Segment }
 
     internal sealed class ControlCenterButton : Control {
         readonly ThemePalette palette;
@@ -241,6 +263,17 @@ namespace AtkBatteryTray {
         readonly string symbolName;
         readonly Font labelFont;
         bool hovered, pressed;
+        // Segment variant: the button paints its slice of a shared connected frame (see CreateTaskbarOffsetStepper).
+        internal Control FrameOwner;
+        internal bool SegmentLast;
+        internal bool StaticText;
+
+        internal void MakeStatic() {
+            StaticText = true;
+            TabStop = false;
+            Cursor = Cursors.Default;
+            AccessibleRole = AccessibleRole.StaticText;
+        }
 
         internal ControlCenterButton(string text, ThemePalette palette, bool dark, Font font, ControlCenterButtonVariant variant = ControlCenterButtonVariant.Secondary, string symbolName = null) {
             Text = text ?? "";
@@ -263,13 +296,13 @@ namespace AtkBatteryTray {
         }
 
         void Trigger() {
-            if (!Enabled) return;
+            if (!Enabled || StaticText) return;
             OnClick(EventArgs.Empty);
         }
 
-        protected override void OnMouseEnter(EventArgs e) { hovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseEnter(EventArgs e) { hovered = !StaticText; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hovered = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left && Enabled) { pressed = true; Invalidate(); } base.OnMouseDown(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left && Enabled && !StaticText) { pressed = true; Invalidate(); } base.OnMouseDown(e); }
         protected override void OnMouseUp(MouseEventArgs e) {
             bool fire = pressed && Enabled && ClientRectangle.Contains(e.Location);
             pressed = false;
@@ -291,6 +324,8 @@ namespace AtkBatteryTray {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
+            if (variant == ControlCenterButtonVariant.Segment) { PaintSegment(g); return; }
+            if (variant == ControlCenterButtonVariant.Quiet) { PaintQuiet(g, hostBg); return; }
             var rect = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
             Color fill, fg, border;
             if (VisualDesign.HighContrast) {
@@ -338,6 +373,51 @@ namespace AtkBatteryTray {
                 CompactRenderer.Outline(g, rect, palette.Accent, 1f);
             }
         }
+
+        float LabelPx { get { return labelFont.SizeInPoints * 1.33f; } }
+
+        void PaintSegment(Graphics g) {
+            Control frame = FrameOwner ?? Parent;
+            Color outer = frame != null && frame.Parent != null ? frame.Parent.BackColor : BackColor;
+            g.Clear(outer);
+            bool hc = VisualDesign.HighContrast;
+            bool active = Enabled && !StaticText && (hovered || pressed);
+            Color fill = hc ? SystemColors.Window : palette.RaisedSurface;
+            Color border = hc ? SystemColors.WindowText : palette.Border;
+            var shape = new RectangleF(-Left + 0.5f, -Top + 0.5f, (frame == null ? Width : frame.Width) - 1f, (frame == null ? Height : frame.Height) - 1f);
+            using (var path = VisualDesign.RoundRect(shape.X, shape.Y, shape.Width, shape.Height, ControlCenterTokens.RadiusControl)) {
+                using (var b = new SolidBrush(fill)) g.FillPath(b, path);
+                if (active) {
+                    var state = g.Save();
+                    g.SetClip(path, CombineMode.Intersect);
+                    Color ov = hc ? SystemColors.Highlight : ThemePalette.Blend(fill, palette.Interaction(pressed), palette.Interaction(pressed).A);
+                    using (var b = new SolidBrush(ov)) g.FillRectangle(b, 0, 0, Width, Height);
+                    g.Restore(state);
+                }
+                using (var pen = new Pen(border, 1f)) g.DrawPath(pen, path);
+            }
+            if (!SegmentLast) {
+                using (var pen = new Pen(hc ? SystemColors.WindowText : Color.FromArgb(150, palette.Border), 1f)) g.DrawLine(pen, Width - 0.5f, 6f, Width - 0.5f, Height - 6f);
+            }
+            Color fg = hc ? (!Enabled ? SystemColors.GrayText : (active ? SystemColors.HighlightText : SystemColors.WindowText))
+                : (!Enabled ? Color.FromArgb(125, palette.Muted) : palette.Foreground);
+            CompactRenderer.DrawLabel(g, Text, new RectangleF(4, 0, Math.Max(10f, Width - 8f), Height), LabelPx, false, fg, StringAlignment.Center);
+            if (Focused && ShowFocusCues && !StaticText) CompactRenderer.Outline(g, new RectangleF(2.5f, 2.5f, Width - 5f, Height - 5f), hc ? SystemColors.Highlight : palette.Accent, 1f);
+        }
+
+        void PaintQuiet(Graphics g, Color hostBg) {
+            bool hc = VisualDesign.HighContrast;
+            bool active = Enabled && (hovered || pressed);
+            var rect = new RectangleF(1f, 3f, Width - 2f, Height - 6f);
+            if (active) {
+                if (hc) CompactRenderer.Fill(g, rect, SystemColors.Highlight, ControlCenterTokens.RadiusControl);
+                else CompactRenderer.Fill(g, rect, palette.Interaction(pressed), ControlCenterTokens.RadiusControl);
+            }
+            Color fg = hc ? (!Enabled ? SystemColors.GrayText : (active ? SystemColors.HighlightText : SystemColors.WindowText))
+                : (!Enabled ? Color.FromArgb(125, palette.Muted) : palette.Foreground);
+            CompactRenderer.DrawLabel(g, Text, new RectangleF(4, 0, Math.Max(10f, Width - 8f), Height), LabelPx, false, fg, StringAlignment.Center);
+            if (Focused && ShowFocusCues) CompactRenderer.Outline(g, rect, hc ? SystemColors.Highlight : palette.Accent, 1f);
+        }
     }
 
     internal enum ControlCenterBadgeTone { Muted, Positive, Accent }
@@ -354,17 +434,19 @@ namespace AtkBatteryTray {
         readonly bool dark;
         readonly ControlCenterBadgeTone tone;
         readonly bool showDot;
+        readonly bool plain;
         readonly float fontPx;
         readonly float measuredTextWidth;
         internal Color? SurfaceColor;
 
-        internal ControlCenterBadge(string text, ThemePalette palette, bool dark, Font font, ControlCenterBadgeTone tone, bool showDot = false) {
+        internal ControlCenterBadge(string text, ThemePalette palette, bool dark, Font font, ControlCenterBadgeTone tone, bool showDot = false, bool plain = false) {
             Text = text ?? "";
             this.palette = palette;
             this.dark = dark;
             this.tone = tone;
-            this.showDot = showDot;
-            this.fontPx = VisualDesign.LargeFont ? 12f : 11f;
+            this.plain = plain;
+            this.showDot = showDot && !plain;
+            this.fontPx = plain ? (VisualDesign.LargeFont ? 13f : 12f) : (VisualDesign.LargeFont ? 12f : 11f);
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
             BackColor = palette.Card;
@@ -377,9 +459,10 @@ namespace AtkBatteryTray {
                 g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                 measuredTextWidth = (float)Math.Ceiling(g.MeasureString(Text, measureFont, Int32.MaxValue, sf).Width) + 2f;
             }
-            float dotBlock = showDot ? 11f : 0f;
+            float dotBlock = this.showDot ? 11f : 0f;
             int padX = 11;
-            Size = new Size(Math.Max(52, (int)Math.Ceiling(measuredTextWidth + dotBlock) + padX * 2), VisualDesign.LargeFont ? 24 : 22);
+            if (plain) Size = new Size((int)Math.Ceiling(measuredTextWidth) + 2, VisualDesign.LargeFont ? 24 : 22);
+            else Size = new Size(Math.Max(52, (int)Math.Ceiling(measuredTextWidth + dotBlock) + padX * 2), VisualDesign.LargeFont ? 24 : 22);
         }
 
         protected override void OnPaint(PaintEventArgs e) {
@@ -409,6 +492,17 @@ namespace AtkBatteryTray {
                 fg = palette.Muted;
             }
 
+            if (plain) {
+                // Pure typography: weight and colour carry the state, no pill and no dot.
+                if (!VisualDesign.HighContrast && tone == ControlCenterBadgeTone.Muted) fg = ControlCenterTokens.SecondaryText(palette, dark);
+                bool plainBold = tone != ControlCenterBadgeTone.Muted;
+                using (var plainFont = new Font("Microsoft YaHei UI", fontPx, plainBold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var plainBrush = new SolidBrush(fg))
+                using (var plainFormat = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap }) {
+                    g.DrawString(Text, plainFont, plainBrush, new RectangleF(0f, 0f, Math.Max(16f, Width), Height), plainFormat);
+                }
+                return;
+            }
             CompactRenderer.Fill(g, rect, fill, rect.Height / 2f);
             if (VisualDesign.HighContrast) {
                 using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, rect.Height / 2f))
@@ -985,7 +1079,8 @@ namespace AtkBatteryTray {
             var card = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
             Color fill = hovered && !VisualDesign.HighContrast ? hostPalette.RaisedSurface : hostPalette.Card;
             CompactRenderer.Fill(g, card, fill, 8f);
-            Color border = selected ? hostPalette.Foreground : hostPalette.Border;
+            // Only the chosen swatch keeps a crisp outline; the others fade to a hairline so five cards do not read as five boxes.
+            Color border = selected || VisualDesign.HighContrast ? hostPalette.Foreground : Color.FromArgb(dark ? 70 : 90, hostPalette.Border);
             using (var path = VisualDesign.RoundRect(card.X, card.Y, card.Width, card.Height, 8f))
             using (var pen = new Pen(border, selected ? 1.5f : 1f)) g.DrawPath(pen, path);
 
@@ -1008,8 +1103,8 @@ namespace AtkBatteryTray {
                 using (var pen = new Pen(hostPalette.Foreground, 1))
                 using (var path = VisualDesign.RoundRect(chips.X, chips.Y, chips.Width, chips.Height, 5f)) g.DrawPath(pen, path);
             }
-            string caption = isNew ? styleName + " · 新" : styleName;
-            CompactRenderer.DrawLabel(g, caption, new RectangleF(4, 46, Width - 8, 20), 11f, selected, selected ? hostPalette.Foreground : hostPalette.Muted, StringAlignment.Center);
+            string caption = styleName;
+            CompactRenderer.DrawLabel(g, caption, new RectangleF(4, 46, Width - 8, 20), 12f, selected, selected ? hostPalette.Foreground : ControlCenterTokens.SecondaryText(hostPalette, dark), StringAlignment.Center);
             if (Focused && ShowFocusCues) CompactRenderer.Outline(g, card, hostPalette.Accent, 1);
         }
     }
@@ -1051,16 +1146,21 @@ namespace AtkBatteryTray {
             float ox = Math.Max(8, (Width - drawW) / 2f);
             float oy = 8f;
             var frame = new RectangleF(ox - 5, oy - 5, drawW + 10, drawH + 10);
-            CompactRenderer.Fill(g, frame, palette.WindowBackground, ControlCenterTokens.RadiusCard);
-            using (var border = VisualDesign.RoundRect(frame.X, frame.Y, frame.Width, frame.Height, ControlCenterTokens.RadiusCard))
-            using (var pen = new Pen(palette.Border, 1)) g.DrawPath(pen, border);
+            // Frameless stage: a faint surface tint carries the real panel card, so the preview shows one outline instead of nested strokes.
+            if (VisualDesign.HighContrast) {
+                CompactRenderer.Fill(g, frame, palette.WindowBackground, ControlCenterTokens.RadiusCard);
+                using (var border = VisualDesign.RoundRect(frame.X, frame.Y, frame.Width, frame.Height, ControlCenterTokens.RadiusCard))
+                using (var pen = new Pen(palette.Border, 1)) g.DrawPath(pen, border);
+            } else {
+                CompactRenderer.Fill(g, frame, ThemePalette.Blend(palette.WindowBackground, palette.Foreground, dark ? 16 : 13), ControlCenterTokens.RadiusCard);
+            }
             var state = g.Save();
             g.TranslateTransform(ox, oy);
             g.ScaleTransform(scale, scale);
             try {
                 CompactRenderer.PaintWireless(g, owner, layout, dark, new PanelFeedback(), 1f);
             } catch (Exception) {
-                CompactRenderer.DrawLabel(g, "实时预览暂不可用", new RectangleF(0, 0, size.Width, 40), 12f, false, palette.Muted, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, "实时预览暂不可用", new RectangleF(0, 0, size.Width, 40), 12f, false, ControlCenterTokens.SecondaryText(palette, dark), StringAlignment.Center);
             }
             g.Restore(state);
         }
@@ -1286,7 +1386,7 @@ namespace AtkBatteryTray {
                     CompactRenderer.Fill(g, r, ThemePalette.Blend(palette.RaisedSurface, overlay, overlay.A), 5f);
                 }
                 Color fg = active ? palette.SelectedForeground : hov ? palette.Foreground : palette.Muted;
-                CompactRenderer.DrawLabel(g, labels[i], r, VisualDesign.LargeFont ? 12.5f : 11.5f, active, fg, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, labels[i], r, VisualDesign.LargeFont ? 13f : 12f, active, fg, StringAlignment.Center);
             }
         }
     }
@@ -1313,7 +1413,8 @@ namespace AtkBatteryTray {
         bool loadingBounds, closing, rebuilding, deferredDataRefresh;
         string lastDataSignature;
 
-        Font titleFont, headingFont, bodyFont, subFont, boldFont;
+        Font titleFont, headingFont, bodyFont, subFont, boldFont, subBoldFont;
+        Color secondary;
 
         internal ControlCenterForm(TrayContext owner, ControlCenterPage initialPage, Action<string> copyText, Action<string> openLink) {
             this.owner = owner;
@@ -1368,6 +1469,7 @@ namespace AtkBatteryTray {
             dark = Style.Dark;
             palette = ThemePalette.Current(dark);
             dialogTheme = new DialogTheme(dark);
+            secondary = ControlCenterTokens.SecondaryText(palette, dark);
         }
 
         void RebuildFonts() {
@@ -1376,12 +1478,15 @@ namespace AtkBatteryTray {
             if (bodyFont != null) bodyFont.Dispose();
             if (subFont != null) subFont.Dispose();
             if (boldFont != null) boldFont.Dispose();
+            if (subBoldFont != null) subBoldFont.Dispose();
             float scale = VisualDesign.LargeFont ? 1.12f : 1f;
             titleFont = new Font("Microsoft YaHei UI", 20f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             headingFont = new Font("Microsoft YaHei UI", 16f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             bodyFont = new Font("Microsoft YaHei UI", 13.5f * scale, FontStyle.Regular, GraphicsUnit.Pixel);
-            boldFont = new Font("Microsoft YaHei UI", 13f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+            // Three body tiers: heading 16 bold / body + label 13.5 (regular or bold) / caption 12 (regular or bold).
+            boldFont = new Font("Microsoft YaHei UI", 13.5f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             subFont = new Font("Microsoft YaHei UI", 12f * scale, FontStyle.Regular, GraphicsUnit.Pixel);
+            subBoldFont = new Font("Microsoft YaHei UI", 12f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
         }
 
         void ApplyChromeColors() {
@@ -1700,7 +1805,7 @@ namespace AtkBatteryTray {
             var lbl = new Label { Text = title, Font = titleFont, ForeColor = palette.Foreground, BackColor = palette.WindowBackground, AutoSize = true, Location = new Point(0, 2) };
             head.Controls.Add(lbl);
             if (!String.IsNullOrEmpty(subtitle)) {
-                var sub = new Label { Text = subtitle, Font = subFont, ForeColor = palette.Muted, BackColor = palette.WindowBackground, AutoSize = true, Location = new Point(1, 34) };
+                var sub = new Label { Text = subtitle, Font = subFont, ForeColor = secondary, BackColor = palette.WindowBackground, AutoSize = true, Location = new Point(1, 34) };
                 head.Controls.Add(sub);
             }
             if (headerRight != null) {
@@ -1717,8 +1822,8 @@ namespace AtkBatteryTray {
         Label CreateSectionHeading(string text, int topSpace = 14) {
             return new Label {
                 Text = text,
-                Font = subFont,
-                ForeColor = palette.Muted,
+                Font = subBoldFont,
+                ForeColor = secondary,
                 BackColor = palette.WindowBackground,
                 AutoSize = true,
                 Dock = DockStyle.Top,
@@ -1730,7 +1835,7 @@ namespace AtkBatteryTray {
             return new ControlCenterCard(palette, dark, pad);
         }
 
-        Panel CreateSettingRow(string title, string subtitle, Control rightControl, bool topBorder, bool preferStacked = false) {
+        Panel CreateSettingRow(string title, string subtitle, Control rightControl, bool topBorder, bool preferStacked = false, int minTextWidth = 185) {
             bool hoveredRow = false;
             int singleRowH = String.IsNullOrEmpty(subtitle) ? 54 : 64;
             var row = new Panel { Dock = DockStyle.Top, Height = singleRowH, BackColor = palette.Card, Padding = new Padding(0, 6, 0, 6) };
@@ -1742,7 +1847,8 @@ namespace AtkBatteryTray {
                     CompactRenderer.Fill(g, new RectangleF(4, 2, Math.Max(10, row.Width - 8), Math.Max(10, row.Height - 4)), Color.FromArgb(dark ? 10 : 8, palette.Foreground), 6f);
                 }
                 if (topBorder) {
-                    using (var pen = new Pen(Color.FromArgb(dark ? 45 : 35, palette.Border), 1)) {
+                    // Hairline, inset 10px on both sides: visible enough to group rows, quiet enough not to box them.
+                    using (var pen = new Pen(VisualDesign.HighContrast ? palette.Border : Color.FromArgb(dark ? 62 : 78, palette.Border), 1)) {
                         g.DrawLine(pen, 10, 0, Math.Max(10, row.Width - 10), 0);
                     }
                 }
@@ -1754,7 +1860,7 @@ namespace AtkBatteryTray {
             row.Controls.Add(titleLbl);
             Label subLbl = null;
             if (!String.IsNullOrEmpty(subtitle)) {
-                subLbl = new Label { Text = subtitle, Font = subFont, ForeColor = palette.Muted, BackColor = Color.Transparent, AutoSize = true, AutoEllipsis = true, Location = new Point(10, 34) };
+                subLbl = new Label { Text = subtitle, Font = subFont, ForeColor = secondary, BackColor = Color.Transparent, AutoSize = true, AutoEllipsis = true, Location = new Point(10, 34) };
                 row.Controls.Add(subLbl);
             }
             if (rightControl != null) {
@@ -1765,7 +1871,7 @@ namespace AtkBatteryTray {
                     int cw = row.ClientSize.Width;
                     if (cw <= 0) return;
                     int naturalW = segs != null ? segs.NaturalWidth : initialRightW;
-                    bool shouldStack = preferStacked || (cw - naturalW - 28 < 185 && naturalW > 130);
+                    bool shouldStack = preferStacked || (cw - naturalW - 28 < minTextWidth && naturalW > 130);
                     if (shouldStack) {
                         int maxW = Math.Max(120, cw - 20);
                         if (segs != null) segs.FitMaxWidth(maxW);
@@ -1802,7 +1908,7 @@ namespace AtkBatteryTray {
         }
 
         Control CreateSegmentedChoices(string[] labels, int selectedIndex, Action<int> onSelect) {
-            return new ControlCenterSegments(labels, selectedIndex, onSelect, palette, subFont, boldFont);
+            return new ControlCenterSegments(labels, selectedIndex, onSelect, palette, subFont, subBoldFont);
         }
 
         ControlCenterButton CreateActionButton(string text, EventHandler onClick, bool danger = false, bool primary = false, string symbolName = null) {
@@ -1863,7 +1969,7 @@ namespace AtkBatteryTray {
                 emptyCard.Controls.Add(new Label {
                     Text = "当前尚未检测到外设。连接无线接收器、蓝牙或有线设备后，点右上角“刷新电量”即可显示。",
                     Font = bodyFont,
-                    ForeColor = palette.Muted,
+                    ForeColor = secondary,
                     BackColor = palette.Card,
                     AutoSize = true
                 });
@@ -1928,8 +2034,7 @@ namespace AtkBatteryTray {
                     CompactRenderer.Fill(g, new RectangleF(1f, 2f, hdr.Width - 2f, hdr.Height - 4f), Color.FromArgb(dark ? 12 : 10, palette.Foreground), 6f);
                 }
                 string arrow = expanded ? "▾" : "▸";
-                Color muted = Color.FromArgb(dark ? 175 : 185, palette.Muted);
-                CompactRenderer.DrawLabel(g, arrow + "  其他未读到电量的设备 (" + count + ")", new RectangleF(8, 0, hdr.Width - 16, hdr.Height), 11.5f, false, hoveredExp ? palette.Foreground : muted, StringAlignment.Near);
+                CompactRenderer.DrawLabel(g, arrow + "  其他未读到电量的设备 (" + count + ")", new RectangleF(8, 0, hdr.Width - 16, hdr.Height), 12f, false, hoveredExp ? palette.Foreground : secondary, StringAlignment.Near);
             };
             hdr.Click += delegate {
                 showNoBatteryDevices = !showNoBatteryDevices;
@@ -1962,10 +2067,9 @@ namespace AtkBatteryTray {
                 } else if (hoveredRow && !VisualDesign.HighContrast) {
                     CompactRenderer.Fill(g, rect, Color.FromArgb(dark ? 12 : 10, palette.Foreground), 6f);
                 }
-                Color iconColor = Color.FromArgb(dark ? 140 : 155, palette.Muted);
-                CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(item.Kind), new RectangleF(12, 10, 14, 14), iconColor);
-                CompactRenderer.DrawLabel(g, item.Name, new RectangleF(32, 0, 154, row.Height), 11.5f, false, isSelected ? palette.Foreground : palette.Muted, StringAlignment.Near);
-                CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(190, 0, 78, row.Height), 10.5f, false, iconColor, StringAlignment.Far);
+                CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(item.Kind), new RectangleF(12, 10, 14, 14), secondary);
+                CompactRenderer.DrawLabel(g, item.Name, new RectangleF(32, 0, 154, row.Height), 12f, isSelected, isSelected ? palette.Foreground : secondary, StringAlignment.Near);
+                CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(190, 0, 78, row.Height), 12f, false, secondary, StringAlignment.Far);
             };
             row.Click += delegate {
                 if (selectedDeviceKey != item.Key) {
@@ -1979,8 +2083,8 @@ namespace AtkBatteryTray {
         Label CreateGroupHeading(string text) {
             return new Label {
                 Text = text,
-                Font = subFont,
-                ForeColor = palette.Muted,
+                Font = subBoldFont,
+                ForeColor = secondary,
                 BackColor = palette.WindowBackground,
                 AutoSize = true,
                 Margin = new Padding(6, 6, 0, 6)
@@ -2014,26 +2118,28 @@ namespace AtkBatteryTray {
                 }
 
                 var tile = new RectangleF(12, 12, 36, 36);
-                CompactRenderer.Fill(g, tile, palette.RaisedSurface, 8f);
+                // Light theme, unselected: no grey icon box, the line icon sits directly on the list surface.
+                bool frameless = !dark && !isSelected && !VisualDesign.HighContrast;
+                if (!frameless) CompactRenderer.Fill(g, tile, palette.RaisedSurface, 8f);
                 Color symColor = item.Battery != null && item.Battery.Fresh && ThemePalette.IsLow(item.Battery, DeviceSettings.Current.WarningThreshold)
                     ? ThemePalette.LevelColor(10, dark)
-                    : (isSelected ? palette.Foreground : palette.Muted);
+                    : (isSelected ? palette.Foreground : (frameless ? ThemePalette.Blend(secondary, palette.Foreground, 110) : secondary));
                 CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(item.Kind), new RectangleF(tile.X + 9, tile.Y + 9, 18, 18), symColor);
 
-                CompactRenderer.DrawLabel(g, item.Name, new RectangleF(58, 11, 134, 20), 13f, true, palette.Foreground, StringAlignment.Near);
-                CompactRenderer.DrawLabel(g, item.Transport, new RectangleF(58, 32, 134, 18), 11f, false, palette.Muted, StringAlignment.Near);
+                CompactRenderer.DrawLabel(g, item.Name, new RectangleF(58, 11, 134, 20), 13.5f, true, palette.Foreground, StringAlignment.Near);
+                CompactRenderer.DrawLabel(g, item.Transport, new RectangleF(58, 32, 134, 18), 12f, false, secondary, StringAlignment.Near);
 
                 if (item.Capability == DeviceBatteryCapability.NoBatteryPlaceholder) {
-                    CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(192, 19, 76, 20), 11f, false, palette.Muted, StringAlignment.Far);
+                    CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(192, 19, 76, 20), 12f, false, secondary, StringAlignment.Far);
                 } else if (item.Battery != null && item.Battery.Percent.HasValue) {
-                    Color level = item.Battery.Fresh ? ThemePalette.LevelColor(item.Battery.Percent, dark) : palette.Muted;
-                    CompactRenderer.DrawLabel(g, item.Battery.Percent.Value + "%", new RectangleF(196, 10, 70, 22), 15.5f, true, level, StringAlignment.Far);
+                    Color level = item.Battery.Fresh ? ThemePalette.LevelColor(item.Battery.Percent, dark) : secondary;
+                    CompactRenderer.DrawLabel(g, item.Battery.Percent.Value + "%", new RectangleF(196, 10, 70, 22), 16f, true, level, StringAlignment.Far);
                     var bar = new RectangleF(206, 38, 60, 3.5f);
                     CompactRenderer.Fill(g, bar, palette.Track, 1.75f);
                     float fw = bar.Width * Math.Max(0, Math.Min(100, item.Battery.Percent.Value)) / 100f;
                     if (fw > 0) CompactRenderer.Fill(g, new RectangleF(bar.X, bar.Y, fw, bar.Height), level, 1.75f);
                 } else {
-                    CompactRenderer.DrawLabel(g, "—", new RectangleF(196, 17, 70, 22), 14f, false, palette.Muted, StringAlignment.Far);
+                    CompactRenderer.DrawLabel(g, "—", new RectangleF(196, 17, 70, 22), 16f, false, secondary, StringAlignment.Far);
                 }
             };
             row.Click += delegate {
@@ -2055,12 +2161,12 @@ namespace AtkBatteryTray {
 
             var hName = new Label { Text = item.Name, Font = headingFont, ForeColor = palette.Foreground, BackColor = palette.Card, AutoSize = true, Location = new Point(116, 12) };
             string kindCn = item.Kind == "mouse" ? "鼠标" : item.Kind == "headset" ? "耳机" : item.Kind == "keyboard" ? "键盘" : item.Kind == "gamepad" ? "手柄" : "外设";
-            var hMeta = new Label { Text = kindCn + " · " + item.Transport, Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true, Location = new Point(116, 40) };
+            var hMeta = new Label { Text = kindCn + " · " + item.Transport, Font = subFont, ForeColor = secondary, BackColor = palette.Card, AutoSize = true, Location = new Point(116, 40) };
 
             bool isFresh = item.Battery != null && item.Battery.Fresh;
             bool isLow = isFresh && ThemePalette.IsLow(item.Battery, DeviceSettings.Current.WarningThreshold);
             var badgeTone = isLow ? ControlCenterBadgeTone.Accent : isFresh ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;
-            var stateBadge = new ControlCenterBadge(item.StateText, palette, dark, subFont, badgeTone, true) { Location = new Point(116, 66) };
+            var stateBadge = new ControlCenterBadge(item.StateText, palette, dark, subFont, badgeTone, false, true) { Location = new Point(116, 66) };
 
             hero.Controls.Add(hName);
             hero.Controls.Add(hMeta);
@@ -2120,7 +2226,7 @@ namespace AtkBatteryTray {
                 rows.Add(CreateSettingRow("固定为托盘图标", "主托盘图标始终显示这台设备的电量", pinToggle, true));
             }
 
-            var verBadge = new ControlCenterBadge(item.VerificationText, palette, dark, subFont, item.VerificationText.Contains("A 级") ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted, false);
+            var verBadge = new ControlCenterBadge(item.VerificationText, palette, dark, subFont, item.VerificationText.Contains("A 级") ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted, false, true);
             rows.Add(CreateSettingRow("适配验证", "设备电量协议的实机校验等级", verBadge, true));
 
             if (item.CanStopFamily) {
@@ -2205,7 +2311,7 @@ namespace AtkBatteryTray {
             leftCard.Controls.Add(swatchSection);
 
             var rightWrap = new Panel { Dock = DockStyle.Top, AutoSize = true, BackColor = palette.WindowBackground };
-            var previewLbl = new Label { Text = "实时预览（当前主面板）", Font = subFont, ForeColor = palette.Muted, BackColor = palette.WindowBackground, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(4, 0, 0, 8) };
+            var previewLbl = new Label { Text = "实时预览（当前主面板）", Font = subFont, ForeColor = secondary, BackColor = palette.WindowBackground, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(4, 0, 0, 8) };
             rightWrap.Controls.Add(preview);
             rightWrap.Controls.Add(previewLbl);
 
@@ -2322,10 +2428,11 @@ namespace AtkBatteryTray {
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TaskbarOverlay.MaxDevices = tbMaxOpts[idx]; });
                 }), true));
 
-                rows.Add(CreateSettingRow("水平偏移微调", "默认紧贴通知区左侧（避免遮挡时间与系统图标），按 20px 对称向左/向右微调", CreateTaskbarOffsetStepper(tb.OffsetX), true));
+                rows.Add(CreateSettingRow("水平偏移微调", "默认紧贴通知区左侧，也可在任务栏上直接水平拖动微调", CreateTaskbarOffsetStepper(tb.OffsetX), true, false, 300));
 
-                var statusTone = owner.TaskbarOverlayStatusCode == "ready" ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;
-                var diagBadge = new ControlCenterBadge(owner.TaskbarOverlayStatusCode == "ready" ? "环境就绪" : (tb.Enabled ? "已自动降级" : "未开启"), palette, dark, subFont, statusTone, true);
+                bool tbReady = owner.TaskbarOverlayStatusCode == "ready" || owner.TaskbarOverlayStatusCode == "ready_avoided";
+                var statusTone = tbReady ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;
+                var diagBadge = new ControlCenterBadge(tbReady ? "环境就绪" : (tb.Enabled ? "已自动降级" : "未开启"), palette, dark, subFont, statusTone, false, true);
                 rows.Add(CreateSettingRow("当前环境状态", owner.TaskbarOverlayStatusMessage, diagBadge, true));
             }
 
@@ -2347,48 +2454,52 @@ namespace AtkBatteryTray {
         }
 
         Control CreateTaskbarOffsetStepper(int initialOffset) {
-            int current = Math.Max(-320, Math.Min(0, initialOffset));
-            var panel = new Panel { Height = ControlCenterTokens.ButtonHeight, Width = 296, BackColor = palette.Card };
-            ControlCenterButton leftBtn = null, rightBtn = null, resetBtn = null;
-            Label valLbl = null;
+            int current = Math.Max(-1200, Math.Min(0, initialOffset));
+            // One connected control: shared rounded frame with inner dividers (each segment paints its own slice of the frame).
+            var frame = new Panel { Height = ControlCenterTokens.ButtonHeight, BackColor = palette.Card };
+            var panel = new Panel { Height = ControlCenterTokens.ButtonHeight, BackColor = palette.Card };
+            ControlCenterButton leftBtn = null, rightBtn = null, valBtn = null, resetBtn = null;
 
             Action syncUi = delegate {
-                if (valLbl != null) valLbl.Text = current == 0 ? "0 px (默认)" : ("左移 " + Math.Abs(current) + " px");
-                if (leftBtn != null) { leftBtn.Enabled = current > -320; leftBtn.Invalidate(); }
+                if (valBtn != null) {
+                    valBtn.Text = current == 0 ? "0 px (默认)" : ("左移 " + Math.Abs(current) + " px");
+                    valBtn.AccessibleName = valBtn.Text;
+                    valBtn.Invalidate();
+                }
+                if (leftBtn != null) { leftBtn.Enabled = current > -1200; leftBtn.Invalidate(); }
                 if (rightBtn != null) { rightBtn.Enabled = current < 0; rightBtn.Invalidate(); }
                 if (resetBtn != null) { resetBtn.Enabled = current != 0; resetBtn.Invalidate(); }
             };
             Action<int> applyOffset = delegate(int next) {
-                int clamped = Math.Max(-320, Math.Min(0, next));
+                int clamped = Math.Max(-1200, Math.Min(0, next));
                 if (clamped == current) return;
                 current = clamped;
                 syncUi();
                 UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TaskbarOverlay.OffsetX = current; });
             };
 
-            leftBtn = CreateActionButton("← 20px", delegate { applyOffset(current - 20); });
-            rightBtn = CreateActionButton("20px →", delegate { applyOffset(current + 20); });
-            resetBtn = CreateActionButton("重置", delegate { applyOffset(0); });
-            leftBtn.Width = 74;
-            rightBtn.Width = 74;
-            resetBtn.Width = 54;
-            valLbl = new Label {
-                Font = subFont,
-                ForeColor = palette.Foreground,
-                BackColor = palette.Card,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Width = 86,
-                Height = ControlCenterTokens.ButtonHeight
-            };
-
+            leftBtn = new ControlCenterButton("← 20px", palette, dark, subFont, ControlCenterButtonVariant.Segment);
+            valBtn = new ControlCenterButton("0 px (默认)", palette, dark, subFont, ControlCenterButtonVariant.Segment);
+            rightBtn = new ControlCenterButton("20px →", palette, dark, subFont, ControlCenterButtonVariant.Segment);
+            resetBtn = new ControlCenterButton("重置", palette, dark, subFont, ControlCenterButtonVariant.Quiet);
+            leftBtn.Click += delegate { applyOffset(current - 20); };
+            rightBtn.Click += delegate { applyOffset(current + 20); };
+            resetBtn.Click += delegate { applyOffset(0); };
+            valBtn.MakeStatic();
+            leftBtn.Width = 74; valBtn.Width = 100; rightBtn.Width = 74; resetBtn.Width = 48;
+            foreach (var seg in new[] { leftBtn, valBtn, rightBtn }) { seg.Height = ControlCenterTokens.ButtonHeight; seg.FrameOwner = frame; }
+            rightBtn.SegmentLast = true;
             leftBtn.Location = new Point(0, 0);
-            valLbl.Location = new Point(leftBtn.Right + 2, 0);
-            rightBtn.Location = new Point(valLbl.Right + 2, 0);
-            resetBtn.Location = new Point(rightBtn.Right + 4, 0);
+            valBtn.Location = new Point(leftBtn.Right, 0);
+            rightBtn.Location = new Point(valBtn.Right, 0);
+            frame.Width = rightBtn.Right;
+            frame.Controls.Add(leftBtn);
+            frame.Controls.Add(valBtn);
+            frame.Controls.Add(rightBtn);
+            frame.Location = new Point(0, 0);
+            resetBtn.Location = new Point(frame.Right + 6, 0);
             panel.Width = resetBtn.Right;
-            panel.Controls.Add(leftBtn);
-            panel.Controls.Add(valLbl);
-            panel.Controls.Add(rightBtn);
+            panel.Controls.Add(frame);
             panel.Controls.Add(resetBtn);
             syncUi();
             return panel;
@@ -2418,13 +2529,10 @@ namespace AtkBatteryTray {
                 }
                 using (var p = VisualDesign.RoundRect(r.X, r.Y, r.Width, r.Height, ControlCenterTokens.RadiusCard))
                 using (var pen = new Pen(active ? palette.Foreground : palette.Border, active ? 1.5f : 1f)) g.DrawPath(pen, p);
-                if (active) {
-                    using (var b = new SolidBrush(palette.Foreground)) g.FillEllipse(b, card.Width - 20f, 14f, 6f, 6f);
-                }
             };
             var lblT = new Label { Text = title, Font = boldFont, ForeColor = palette.Foreground, BackColor = Color.Transparent, AutoSize = true, Location = new Point(16, 14), Cursor = Cursors.Hand };
-            var lblD = new Label { Text = desc, Font = subFont, ForeColor = palette.Muted, BackColor = Color.Transparent, MaximumSize = new Size(216, 42), AutoSize = true, Location = new Point(16, 38), Cursor = Cursors.Hand };
-            var badge = new ControlCenterBadge(tag, palette, dark, subFont, tone, tone == ControlCenterBadgeTone.Positive) { Location = new Point(16, 86), Cursor = Cursors.Hand, SurfaceColor = palette.Card };
+            var lblD = new Label { Text = desc, Font = subFont, ForeColor = secondary, BackColor = Color.Transparent, MaximumSize = new Size(216, 42), AutoSize = true, Location = new Point(16, 38), Cursor = Cursors.Hand };
+            var badge = new ControlCenterBadge(tag, palette, dark, subFont, tone, false, true) { Location = new Point(16, 86), Cursor = Cursors.Hand, SurfaceColor = palette.Card };
             card.MouseEnter += delegate { badge.SurfaceColor = !active && !VisualDesign.HighContrast ? palette.RaisedSurface : palette.Card; badge.Invalidate(); };
             card.MouseLeave += delegate { badge.SurfaceColor = palette.Card; badge.Invalidate(); };
             EventHandler click = delegate {
@@ -2634,6 +2742,7 @@ namespace AtkBatteryTray {
                 if (bodyFont != null) bodyFont.Dispose();
                 if (subFont != null) subFont.Dispose();
                 if (boldFont != null) boldFont.Dispose();
+                if (subBoldFont != null) subBoldFont.Dispose();
                 if (ownsWindowIcon && windowIcon != null) windowIcon.Dispose();
             }
             base.Dispose(disposing);

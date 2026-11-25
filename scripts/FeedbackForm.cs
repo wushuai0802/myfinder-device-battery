@@ -311,7 +311,7 @@ namespace AtkBatteryTray {
             var descriptionCard=new ThemedSection(Theme) {Name="FeedbackDescriptionCard",Dock=DockStyle.Fill};
             var descriptionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};descriptionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<5;i++)descriptionLayout.RowStyles.Add(new RowStyle(i==2?SizeType.Percent:SizeType.AutoSize,i==2?100:0));
-            descriptionLayout.Controls.Add(Caption("描述（必填，5–2000 字）",false,false,true),0,0);
+            descriptionLayout.Controls.Add(Caption("描述",false,false,true),0,0);
             var hint=Caption("发生了什么？用的是什么设备、怎么连接的？",false,true);descriptionLayout.Controls.Add(hint,0,1);
             description.Name="Description";description.AccessibleName="描述";description.Multiline=true;description.AcceptsReturn=true;description.Dock=DockStyle.Fill;
             description.TextChanged+=delegate{InputChanged();};descriptionLayout.Controls.Add(new ThemedTextBox(Theme,description) {Dock=DockStyle.Fill,Margin=new Padding(0,5,0,4)},0,2);
@@ -343,7 +343,7 @@ namespace AtkBatteryTray {
                 string err;
                 imageStrip.TryAddFiles(files,out err);
             };
-            var comparisonPanel=new TableLayoutPanel {Name="FeedbackComparison",Dock=DockStyle.Fill,AutoSize=true,RowCount=2,ColumnCount=1,Margin=new Padding(0,6,0,0)};
+            var comparisonPanel=new TableLayoutPanel {Name="FeedbackComparison",Dock=DockStyle.Fill,AutoSize=true,RowCount=2,ColumnCount=1,Margin=new Padding(0,10,0,0)};
             comparisonPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             comparisonPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             comparisonPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -355,7 +355,7 @@ namespace AtkBatteryTray {
             difference.Dock=DockStyle.Fill;
             var differenceBox=new ThemedTextBox(Theme,difference) {Width=60,Height=difference.PreferredHeight+20,Margin=new Padding(4,0,0,0)};
             var percentLabel=Caption("%",false,true);
-            percentLabel.Margin=new Padding(0,4,0,0);
+            percentLabel.Margin=new Padding(2,Math.Max(0,(differenceBox.Height-percentLabel.PreferredHeight)/2),0,0);
             var comparisonRow=new TableLayoutPanel {
                 AutoSize=true,Dock=DockStyle.Fill,Margin=Padding.Empty,RowCount=1,ColumnCount=2
             };
@@ -574,7 +574,7 @@ namespace AtkBatteryTray {
         void UpdateValidation(){
             int length=description.Text.Trim().Length;
             int total=SubmittedDescription.Trim().Length;
-            remaining.Text=length<5?"还需输入 "+(5-length)+" 字；还可输入 "+(2000-total)+" 字":total>2000?"已超出 "+(total-2000)+" 字（最多 2000 字）":"还可输入 "+(2000-total)+" 字";
+            remaining.Text=length<5?"还需输入 "+(5-length)+" 字（必填 5–2000 字）；还可输入 "+(2000-total)+" 字":total>2000?"已超出 "+(total-2000)+" 字（最多 2000 字）":"必填，5–2000 字 · 还可输入 "+(2000-total)+" 字";
             if(comparison.SelectedIndex==2&&DifferenceValue==0)remaining.Text+="。相差请输入 1–100 的整数。";
             submit.Enabled=!busy;
             mine.Enabled=!busy&&openHistory!=null;

@@ -307,7 +307,7 @@ static class FamilyUiTests {
 
             // Open device A (familyProbe=true, canDisable=true)
             h.Nav.SelectedDeviceKey=IdA;h.Nav.SelectedDeviceName="ATK 烈空 X1";h.Page(PopupPage.Device);
-            Check(h.Controls().Exists(delegate(PopupControl r){return r.Information&&r.Text=="适配验证"&&r.Value=="自动识别（整品牌试读，待实机验证）";}),"familyProbe=true shows expected verification label");
+            Check(h.Controls().Exists(delegate(PopupControl r){return r.Information&&r.Text=="适配验证"&&r.Value=="自动试读 · 待实机验证";}),"familyProbe=true shows expected verification label");
             var stopEntry=h.FindById(PopupPages.StopReadingEntryId);
             Check(stopEntry!=null&&stopEntry.Text=="停止读取","canDisable=true shows 停止读取");
 
