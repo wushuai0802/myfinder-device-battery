@@ -212,7 +212,16 @@ ZHUAUDIO_DIAGNOSTICS = frozenset({
     "ZG4 parent unresolved", "ZG4 enumeration failed", "ZG4 battery I/O failed",
     "HID handle close failed",
 })
-DPI_PROVIDERS = {"logitech": (0x046D,), "pulsar": (0x3554, 0x373B)}
+DPI_PROVIDERS = {
+    "logitech": (0x046D,),
+    "pulsar": (0x3554, 0x373B, 0x3770, 0x3710),
+    "razer": (0x1532,),
+    "mchose": (0x5253, 0x3837, 0x2023),
+    "asus": (0x0B05,),
+    "wlmouse": (0x36A7,),
+    "lamzu": (0x373E,),
+    "gwolves": (0x33E4,),
+}
 # Architecture v2 (C4): families join only when a reviewed adapter is listed in
 # families.dpi.ADAPTERS; with none, the families write path does not exist.
 from families import dpi as _family_dpi  # noqa: E402
@@ -636,7 +645,7 @@ def normalise(status, previous, now, cached=False):
         "dpi": None if pack_model else normalise_dpi(getattr(status, "dpi", None) or old.get("dpi"),
                              usable=bool(getattr(status, "dpi", None)) and online and not cached
                              and status.source in DPI_PROVIDERS and kind_of(status) == "mouse"
-                             and (status.source != "pulsar" or status.dpi.get("stageSource") == "onboard")),
+                             and (status.source not in ("pulsar", "families") or status.dpi.get("stageSource") == "onboard")),
     }
 
 

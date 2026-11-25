@@ -172,7 +172,7 @@ def _exchange(dev, tid: int, cmd_class: int, cmd_id: int, size: int, args=(),
 
 
 def _dpi_xy(dev, tid: int) -> Tuple[Optional[int], Optional[Tuple[int, int]]]:
-    status, args = _exchange(dev, tid, 0x04, 0x85, 0x07, (DPI_STORAGE,))
+    status, args = _exchange(dev, tid, 0x04, 0x85, 0x07, (DPI_STORAGE,), resend=False)
     if status != STATUS_OK or args is None or len(args) < 5:
         return status, None
     x, y = (args[1] << 8) | args[2], (args[3] << 8) | args[4]
@@ -182,7 +182,7 @@ def _dpi_xy(dev, tid: int) -> Tuple[Optional[int], Optional[Tuple[int, int]]]:
 
 
 def _dpi_table(dev, tid: int) -> Tuple[Optional[int], List[Tuple[int, int]]]:
-    status, args = _exchange(dev, tid, 0x04, 0x86, 0x26, (0x00,))
+    status, args = _exchange(dev, tid, 0x04, 0x86, 0x26, (0x00,), resend=False)
     stages: List[Tuple[int, int]] = []
     if status == STATUS_OK and args is not None and len(args) >= 3 and 1 <= args[2] <= 5:
         count = args[2]

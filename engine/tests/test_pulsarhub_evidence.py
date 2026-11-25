@@ -223,8 +223,13 @@ class PulsarHubEvidenceTests(unittest.TestCase):
 
     def test_link8k_registered_in_server_and_index_as_level_c_battery_only(self):
         self.assertIn(0x3710, server.PROVIDER_VIDS["pulsar"])
-        self.assertNotIn(0x3710, server.DPI_PROVIDERS["pulsar"])
+        self.assertIn(0x3710, server.DPI_PROVIDERS["pulsar"])
         self.assertNotIn((0x3710, 0x5501), P.DPI_MODELS)
+        self.assertFalse(P._dpi_eligible({
+            "vendor_id": 0x3710, "product_id": 0x5501,
+            "usage_page": 0xFF02, "usage": 2,
+            "physical_id": r"pnp:usb\vid_3710&pid_5501\1",
+        }))
         bus = FakeBus(0x3710, 0x5501)
         self.assertEqual(server.recognized_candidate_count("pulsar", bus.enumerate(0x3710)), 1)
         entry, = [d for d in build_index()["devices"]
