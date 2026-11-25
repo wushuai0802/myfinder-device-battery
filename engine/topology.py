@@ -773,7 +773,7 @@ def discover(paths, excluded=(), *, full=False):
             if (caps_complete
                     and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
                     (0x05AC, 0x024F, 0xFF60, 0x0061)
-                    and info["product_string"] == "F108Pro Dongle"
+                    and info["product_string"] in ("F108Pro Dongle", "2.4G Dongle")
                     and caps.input == caps.output == 33):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))

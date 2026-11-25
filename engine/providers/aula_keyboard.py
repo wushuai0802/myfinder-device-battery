@@ -35,6 +35,11 @@ INTERFACE = 3
 F108_VID = 0x05AC
 F108_PID = 0x024F
 F108_PRODUCT = "F108Pro Dongle"
+# This receiver's product string is the generic "2.4G Dongle"; MI_03 and the
+# 33/33 FF60:0061 proof separate it from the 65-byte MI_04 sibling.
+F108_GENERIC = "2.4G Dongle"
+F108_PRODUCTS = {F108_PRODUCT: "AULA F108 Pro",
+                 F108_GENERIC: "AULA 2.4G 键盘接收器（05AC:024F）"}
 F108_REQUEST = [0x00, 0x20, 0x01] + [0] * 29 + [0x21]
 
 
@@ -80,7 +85,17 @@ class AulaF108ProProvider(BatteryHidProvider):
     make_request = staticmethod(make_f108_request)
     parse_reply = staticmethod(parse_f108_reply)
 
+    def device_name(self, info):
+        return F108_PRODUCTS.get(info.get("product_string"), "AULA F108 Pro")
+
     def _pick(self, infos):
+        # The generic 2.4G Dongle publishes a second FF60:0061 collection
+        # (65 bytes, another command set). Only the descriptor-proven 33/33
+        # one is eligible, and it must stay the only candidate.
+        if any(i.get("product_string") == F108_GENERIC for i in infos):
+            infos = [i for i in infos
+                     if i.get("input_report_sizes") == {"0": 33}
+                     and i.get("output_report_sizes") == {"0": 33}]
         info = super()._pick(infos)
         if info is None:
             return None
@@ -89,8 +104,12 @@ class AulaF108ProProvider(BatteryHidProvider):
                 or physical.startswith("collection:")):
             self._diag.append("physical parent unresolved; uniqueness unknown: nothing sent")
             return None
-        if info.get("product_string") != F108_PRODUCT:
+        product = info.get("product_string")
+        if product not in F108_PRODUCTS:
             self._diag.append("unverified AULA F108 product: nothing sent")
+            return None
+        if product == F108_GENERIC and info.get("interface_number") != INTERFACE:
+            self._diag.append("generic dongle outside MI_03: nothing sent")
             return None
         return info
 
@@ -118,7 +137,7 @@ class AulaKeyboardProvider(BatteryHidProvider):
             f99 = AulaF99MaxProvider()
             result.extend(f99.poll())
             self._diag.extend(f99.diagnostics())
-        if any(info.get("product_string") == F108_PRODUCT
+        if any(info.get("product_string") in F108_PRODUCTS
                for info in inventory):
             f108 = AulaF108ProProvider()
             result.extend(f108.poll())
