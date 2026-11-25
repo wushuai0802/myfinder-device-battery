@@ -1359,6 +1359,16 @@ class CompatibilityCatalogTests(unittest.TestCase):
         self.assertEqual(entry["match"]["vendorId"], "05AC")
         self.assertEqual(entry["capabilities"], [])
 
+    def test_xiberia_actions_10d6_4801_is_observed_unsupported(self):
+        entries = [e for e in load_catalog()["observedUnsupported"]
+                   if e["id"] == "xiberia_actions_10d6_4801_observed"]
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry["verificationLevel"], "D")
+        self.assertFalse(entry["compatible"])
+        self.assertEqual((entry["match"]["vendorId"], entry["match"]["productId"]), ("10D6", "4801"))
+        self.assertEqual(entry["capabilities"], [])
+
     def test_normalized_readings_carry_catalog_evidence(self):
         value = normalise(DeviceStatus("a", "A", 25, source="lofree"), None, utcnow())
         self.assertEqual(value["verificationLevel"], "C")

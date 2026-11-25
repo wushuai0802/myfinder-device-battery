@@ -114,10 +114,18 @@ class AtkNanoBridgeTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual((rows[0]["provider"], rows[0]["kind"], rows[0]["name"]),
                              ("pulsar", "mouse", "ATK / VXE NANO receiver"))
+            m1_rows = [row for row in build_index(engine_root=root)["devices"]
+                       if (row["vendorId"], row["productId"]) == (0x373B, 0x12F5)]
+            self.assertEqual(len(m1_rows), 1)
+            self.assertEqual((m1_rows[0]["provider"], m1_rows[0]["kind"], m1_rows[0]["name"]),
+                             ("pulsar", "mouse", "ATK 8K dongle-M1"))
         self.assertEqual(server.recognized_candidate_count("pulsar", [N.entry()]), 1)
+        self.assertEqual(server.recognized_candidate_count(
+            "pulsar", [N.entry(product_id=0x12F5, product_string="Wireless mouse 8k dongle-M1")]), 1)
         self.assertEqual(server.recognized_candidate_count(
             "pulsar", [N.entry(), N.entry(vendor_id=0x3554)]), 1)
         self.assertFalse(N.P._dpi_eligible(N.entry()))
+        self.assertFalse(N.P._dpi_eligible(N.entry(product_id=0x12F5)))
 
     def test_reader_child_preserves_runtime_input_proof_and_unknown_charging(self):
         for proven in (True, False):
