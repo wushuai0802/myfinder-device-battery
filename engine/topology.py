@@ -580,6 +580,15 @@ def discover(paths, excluded=(), *, full=False):
                 info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
                 _descriptor_fallback(info, caps, ("input",))
                 caps_complete = bool(info["input_report_sizes"] and "187" in info["input_report_sizes"])
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x36B0, 0x3071, 0xFF60, 0x0061),
+                    (0x36B0, 0x3075, 0xFF60, 0x0061)):
+                # WOB Rainy75 V2 passive input only: prove unnumbered 257-byte
+                # report from HidP caps first, then strict raw descriptor.
+                from battery_hid import byte_report_sizes
+                info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
+                _descriptor_fallback(info, caps, ("input",))
+                caps_complete = info["input_report_sizes"] == {"0": 257}
             if caps_complete and ((attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x1D57, 0xFA60, 0x000A, 0x0000),
                     (0x1D57, 0xFA65, 0xFF00, 0x0001))
