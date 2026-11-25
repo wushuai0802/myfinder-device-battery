@@ -121,6 +121,12 @@ namespace AtkBatteryTray {
                 a=Row(240,"系统输出音量");a.Slider=true;a.Enabled=audio!=null&&audio.OutputVolumePercent.HasValue&&!String.IsNullOrEmpty(audio.VolumeEndpointId);a.Value=a.Enabled?(nav.VolumePreview>=0?nav.VolumePreview:owner.DesiredVolume??audio.OutputVolumePercent.Value)+"%":"不可用";rows.Add(a);
                 a=Toggle(102,"Windows麦克风静音",audio!=null&&audio.MicrophoneMuted==true);a.Enabled=audio!=null&&audio.MicrophoneAvailable&&audio.MicrophoneMuted.HasValue;rows.Add(a);
                 rows.Add(Row(203,"更换按钮绑定",null,"settings"));
+                bool audioCardHidden=pref.HiddenDeviceIds.Contains("native:audio");
+                if(nav.AudioDeviceKey==null&&(audioCardHidden||(!VisualDesign.ShouldShowHeadset(owner.Headset)&&UiState.AudioCard(owner.Audio,pref,owner.Headset,owner.WirelessDevices)!=null))){
+                    var showAudioCard=Toggle(252,"在主界面显示耳机卡片",!audioCardHidden);
+                    showAudioCard.DeviceKey="native:audio";
+                    rows.Add(showAudioCard);
+                }
             }else if(nav.Page==PopupPage.Preferences) {
                 rows.Add(Section("显示"));
                 rows.Add(Row(210,"外观",pref.Theme=="auto"?"跟随系统":pref.Theme=="dark"?"深色":"浅色"));
@@ -297,7 +303,8 @@ namespace AtkBatteryTray {
                 string name=device==null?nav.SelectedDeviceName:device.Name;bool hidden=pref.HiddenDeviceIds.Contains(nav.SelectedDeviceKey);
                 rows.Add(Info("设备",name??"无线设备"));
                 var show=Toggle(252,"在主界面显示",!hidden);show.Enabled=!String.IsNullOrEmpty(nav.SelectedDeviceKey);rows.Add(show);
-                rows.Add(Info("显示状态",hidden?"已隐藏，仍继续读取":"显示中，隐藏不停止读取"));
+                bool isAudioOnly=nav.SelectedDeviceKey=="native:audio"||(device!=null&&device.AudioOnly);
+                rows.Add(Info("显示状态",isAudioOnly?(hidden?"已隐藏，仍可在音源与麦克风中使用":"显示中，隐藏后仍可控制音量"):(hidden?"已隐藏，仍继续读取":"显示中，隐藏不停止读取")));
                 int index=devices.FindIndex(delegate(WirelessCard card){return card.Id==nav.SelectedDeviceKey;});
                 var top=Row(253,"置顶");top.Enabled=index>0;rows.Add(top);var up=Row(254,"上移一位");up.Enabled=index>0;rows.Add(up);var down=Row(255,"下移一位");down.Enabled=index>=0&&index<devices.Count-1;rows.Add(down);
                 var detail=Row(256,"设备详情",null,"info");detail.Enabled=device!=null;rows.Add(detail);

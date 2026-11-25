@@ -166,6 +166,27 @@ static class ControlCenterTests {
             var familyKb = items.Find(delegate(ControlCenterDeviceItem it) { return it.Key == "dev-kb"; });
             Check(familyKb != null && familyKb.CanStopFamily && familyKb.VerificationText.Contains("自动识别"), "family probe device exposes stop-reading and experimental badge");
 
+            // #1141: Audio-only wired headset card (native:audio) is hideable in Control Center without affecting wireless devices
+            var audioItem = items.Find(delegate(ControlCenterDeviceItem it) { return it.Key == "native:audio"; });
+            Check(audioItem != null && audioItem.IsAudioOnly && audioItem.CanHide && !audioItem.CanPinTray && !audioItem.Hidden, "wired audio-only card exposes CanHide=true in Control Center");
+            Check(!unadapted.CanHide, "unadapted USB placeholder never exposes CanHide");
+            var hidePref = DeviceSettings.Current;
+            DeviceSettings.SetDeviceHidden(hidePref, "native:audio", true);
+            f.Owner.SavePreferences(hidePref);
+            f.Owner.ConfigurationChanged(false);
+            var mainVisible = WirelessLayout.Build(f.Owner, 0, 1000, false).All;
+            Check(!mainVisible.Exists(delegate(WirelessCard c) { return c.Id == "native:audio"; }), "hiding native:audio removes wired headset card from main popup panel");
+            Check(mainVisible.Exists(delegate(WirelessCard c) { return c.Id == "native:mouse"; }) && mainVisible.Exists(delegate(WirelessCard c) { return c.Id == "dev-headset"; }), "hiding native:audio never removes wireless battery devices");
+            var tbItems = TaskbarOverlayRenderer.CollectItems(f.Owner, 3);
+            Check(tbItems.Count == 3 && !tbItems.Exists(delegate(TaskbarOverlayRenderer.Item t) { return t.Id == "native:audio"; }), "taskbar overlay keeps wireless battery devices unaffected when native:audio is hidden");
+            var itemsAfterHide = form.BuildDeviceItems();
+            var hiddenAudio = itemsAfterHide.Find(delegate(ControlCenterDeviceItem it) { return it.Key == "native:audio"; });
+            Check(hiddenAudio != null && hiddenAudio.Hidden && hiddenAudio.CanHide && hiddenAudio.NoBatteryReason == "已隐藏", "hidden native:audio remains reachable in Control Center to restore");
+            hidePref = DeviceSettings.Current;
+            DeviceSettings.SetDeviceHidden(hidePref, "native:audio", false);
+            f.Owner.SavePreferences(hidePref);
+            f.Owner.ConfigurationChanged(false);
+
             // Switching native mouse DPI stage updates Control Center signature and displayed active stage
             f.Owner.Dpi.ActiveStage = 1;
             form.RefreshData();

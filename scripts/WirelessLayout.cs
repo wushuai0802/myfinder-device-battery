@@ -80,8 +80,9 @@ namespace AtkBatteryTray {
             }
             var hidden=new HashSet<string>(pref.HiddenDeviceIds,StringComparer.Ordinal);
             if(includeHidden)foreach(string id in pref.HiddenDeviceIds)if(!layout.All.Exists(delegate(WirelessCard card){return card.Id==id;})) {
-                string alias;string name=id=="native:mouse"?pref.MouseAlias:id=="native:headset"?pref.HeadsetAlias:id=="native:audio"?"耳机":pref.DeviceAliases.TryGetValue(id,out alias)?alias:"已隐藏设备";
-                layout.All.Add(new WirelessCard {Id=id,Name=name,Kind="device",Battery=new BatteryView {Name=name},Subtitle="设备未连接"});
+                bool isAudio=id=="native:audio";
+                string alias;string name=id=="native:mouse"?pref.MouseAlias:id=="native:headset"?pref.HeadsetAlias:isAudio?"耳机":pref.DeviceAliases.TryGetValue(id,out alias)?alias:"已隐藏设备";
+                layout.All.Add(new WirelessCard {Id=id,Name=name,Kind=isAudio?"headset":"device",AudioOnly=isAudio,Battery=isAudio?null:new BatteryView {Name=name},Subtitle=isAudio?"音频设备未连接":"设备未连接"});
             }
             var discovered=new List<WirelessCard>(layout.All);layout.All.Clear();var added=new HashSet<string>(StringComparer.Ordinal);
             Action<WirelessCard> add=delegate(WirelessCard card){if(card==null||!added.Add(card.Id))return;card.Hidden=hidden.Contains(card.Id);if(includeHidden||!card.Hidden)layout.All.Add(card);};
