@@ -450,21 +450,23 @@ namespace AtkBatteryTray {
         }
 
         static void PaintCapsule(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark) {
-            PaintSurface(g, size, size.Height / 2f, palette, dark);
+            PaintSurface(g, size, Math.Max(2f, size.Height / 2f), palette, dark);
+            if (size.Width < 36f || size.Height < 16f) return;
             if (entries.Count == 0) {
-                CompactRenderer.DrawLabel(g, "无设备", new RectangleF(6, 0, size.Width - 12, size.Height), 12f, false, palette.Muted, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, "无设备", new RectangleF(6, 0, Math.Max(4f, size.Width - 12), size.Height), 12f, false, palette.Muted, StringAlignment.Center);
                 return;
             }
             float padX = 10f;
             float itemW = (size.Width - padX * 2f) / entries.Count;
+            if (itemW < 12f) return;
             for (int i = 0; i < entries.Count; i++) {
                 var e = entries[i];
                 float x = padX + i * itemW;
                 if (i > 0) {
-                    using (var pen = new Pen(Color.FromArgb(dark ? 55 : 45, palette.Border), 1f)) g.DrawLine(pen, x, 8f, x, size.Height - 8f);
+                    using (var pen = new Pen(Color.FromArgb(dark ? 55 : 45, palette.Border), 1f)) g.DrawLine(pen, x, 8f, x, Math.Max(9f, size.Height - 8f));
                 }
                 Color level = e.Percent.HasValue && e.Fresh ? ThemePalette.LevelColor(e.Percent, dark) : palette.Muted;
-                float ringSize = VisualDesign.LargeFont ? 22f : 20f;
+                float ringSize = Math.Min(VisualDesign.LargeFont ? 22f : 20f, Math.Max(6f, size.Height - 8f));
                 var ring = new RectangleF(x + 4f, (size.Height - ringSize) / 2f, ringSize, ringSize);
                 using (var trackPen = new Pen(palette.Track, 2.2f)) g.DrawEllipse(trackPen, ring);
                 if (e.Percent.HasValue) {
@@ -473,16 +475,17 @@ namespace AtkBatteryTray {
                         using (var arcPen = new Pen(level, 2.2f) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawArc(arcPen, ring, -90f, sweep);
                     }
                 }
-                float symSize = VisualDesign.LargeFont ? 11f : 10f;
+                float symSize = Math.Min(VisualDesign.LargeFont ? 11f : 10f, Math.Max(4f, ringSize * 0.5f));
                 CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(e.Kind), new RectangleF(ring.X + (ring.Width - symSize) / 2f, ring.Y + (ring.Height - symSize) / 2f, symSize, symSize), e.Low ? level : palette.Foreground);
 
                 string txt = e.Percent.HasValue ? (e.Charging ? e.Percent.Value + "%+" : e.Percent.Value + "%") : "--";
-                CompactRenderer.DrawLabel(g, txt, new RectangleF(ring.Right + 3f, 0, Math.Max(22f, itemW - ringSize - 8f), size.Height), VisualDesign.LargeFont ? 13f : 12f, true, e.Low ? level : palette.Foreground, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, txt, new RectangleF(ring.Right + 3f, 0, Math.Max(12f, itemW - ringSize - 8f), size.Height), VisualDesign.LargeFont ? 13f : 12f, true, e.Low ? level : palette.Foreground, StringAlignment.Center);
             }
         }
 
         static void PaintRings(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark) {
             PaintSurface(g, size, 12f, palette, dark);
+            if (size.Width < 28f || size.Height < 20f) return;
             if (entries.Count == 0) {
                 CompactRenderer.DrawLabel(g, "—", new RectangleF(0, 0, size.Width, size.Height), 13f, false, palette.Muted, StringAlignment.Center);
                 return;
@@ -490,6 +493,8 @@ namespace AtkBatteryTray {
             float pad = 8f;
             float cell = (size.Width - pad * 2f) / entries.Count;
             float ringSize = Math.Min(size.Height - 10f, cell - 4f);
+            // Guard mid-animation morph frames where width/height is temporarily narrower than ring diameter
+            if (cell <= 6f || ringSize < 8f) return;
             for (int i = 0; i < entries.Count; i++) {
                 var e = entries[i];
                 float cx = pad + i * cell + (cell - ringSize) / 2f;
@@ -509,43 +514,46 @@ namespace AtkBatteryTray {
         }
 
         static void PaintStrip(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark) {
-            PaintSurface(g, size, size.Height / 2f, palette, dark);
+            PaintSurface(g, size, Math.Max(2f, size.Height / 2f), palette, dark);
+            if (size.Width < 36f || size.Height < 14f) return;
             if (entries.Count == 0) {
-                CompactRenderer.DrawLabel(g, "MyFinder", new RectangleF(6, 0, size.Width - 12, size.Height), 11f, false, palette.Muted, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, "MyFinder", new RectangleF(6, 0, Math.Max(4f, size.Width - 12), size.Height), 11f, false, palette.Muted, StringAlignment.Center);
                 return;
             }
             float padX = 8f;
             float itemW = (size.Width - padX * 2f) / entries.Count;
+            if (itemW < 14f) return;
             for (int i = 0; i < entries.Count; i++) {
                 var e = entries[i];
                 float x = padX + i * itemW;
                 if (i > 0) {
-                    using (var sep = new Pen(Color.FromArgb(dark ? 50 : 40, palette.Border), 1f)) g.DrawLine(sep, x - 2f, 6f, x - 2f, size.Height - 6f);
+                    using (var sep = new Pen(Color.FromArgb(dark ? 50 : 40, palette.Border), 1f)) g.DrawLine(sep, x - 2f, 6f, x - 2f, Math.Max(7f, size.Height - 6f));
                 }
                 Color level = e.Percent.HasValue && e.Fresh ? ThemePalette.LevelColor(e.Percent, dark) : palette.Muted;
                 CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(e.Kind), new RectangleF(x + 2f, (size.Height - 12f) / 2f, 12f, 12f), level);
                 string txt = e.Percent.HasValue ? (e.Charging ? e.Percent.Value + "%+" : e.Percent.Value + "%") : "--";
-                CompactRenderer.DrawLabel(g, txt, new RectangleF(x + 16f, 0, Math.Max(22f, itemW - 18f), size.Height), VisualDesign.LargeFont ? 12f : 11f, true, e.Low ? level : palette.Foreground, StringAlignment.Near);
+                CompactRenderer.DrawLabel(g, txt, new RectangleF(x + 16f, 0, Math.Max(12f, itemW - 18f), size.Height), VisualDesign.LargeFont ? 12f : 11f, true, e.Low ? level : palette.Foreground, StringAlignment.Near);
             }
         }
 
         static void PaintExpanded(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, int hoveredRow) {
             PaintSurface(g, size, 12f, palette, dark);
+            if (size.Width < 140f || size.Height < 64f) return;
             int headerH = VisualDesign.LargeFont ? 32 : 28;
             int rowH = VisualDesign.LargeFont ? 50 : 44;
             int footerH = VisualDesign.LargeFont ? 34 : 30;
 
-            CompactRenderer.DrawLabel(g, "外设电量", new RectangleF(14, 6, size.Width - 80, headerH - 4), 12.5f, true, palette.Muted, StringAlignment.Near);
-            CompactRenderer.DrawLabel(g, "点击收起", new RectangleF(size.Width - 78, 6, 66, headerH - 4), 11f, false, palette.Muted, StringAlignment.Far);
+            CompactRenderer.DrawLabel(g, "外设电量", new RectangleF(14, 6, Math.Max(20f, size.Width - 80), headerH - 4), 12.5f, true, palette.Muted, StringAlignment.Near);
+            CompactRenderer.DrawLabel(g, "点击收起", new RectangleF(Math.Max(14f, size.Width - 78), 6, 66, headerH - 4), 11f, false, palette.Muted, StringAlignment.Far);
 
             float y = headerH + 2f;
             if (entries.Count == 0) {
-                CompactRenderer.DrawLabel(g, "暂未检测到兼容设备", new RectangleF(14, y, size.Width - 28, rowH), 12.5f, false, palette.Muted, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, "暂未检测到兼容设备", new RectangleF(14, y, Math.Max(20f, size.Width - 28), rowH), 12.5f, false, palette.Muted, StringAlignment.Center);
                 y += rowH;
             } else {
                 for (int i = 0; i < entries.Count; i++) {
                     var e = entries[i];
-                    var rowRect = new RectangleF(8, y, size.Width - 16, rowH - 2);
+                    var rowRect = new RectangleF(8, y, Math.Max(20f, size.Width - 16), rowH - 2);
                     if (hoveredRow == i && !VisualDesign.HighContrast) {
                         CompactRenderer.Fill(g, rowRect, palette.RaisedSurface, 8f);
                     }
@@ -554,8 +562,9 @@ namespace AtkBatteryTray {
                     CompactRenderer.Fill(g, tile, palette.RaisedSurface, 7f);
                     CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(e.Kind), new RectangleF(tile.X + 6, tile.Y + 6, 16, 16), e.Low ? level : palette.Foreground);
 
-                    CompactRenderer.DrawLabel(g, e.Name, new RectangleF(tile.Right + 8, rowRect.Y + 5, rowRect.Width - 104, 18), 12.5f, true, palette.Foreground, StringAlignment.Near);
-                    CompactRenderer.DrawLabel(g, e.Subtitle ?? "", new RectangleF(tile.Right + 8, rowRect.Y + 23, rowRect.Width - 104, 16), 10.5f, false, palette.Muted, StringAlignment.Near);
+                    float nameW = Math.Max(16f, rowRect.Width - 104);
+                    CompactRenderer.DrawLabel(g, e.Name, new RectangleF(tile.Right + 8, rowRect.Y + 5, nameW, 18), 12.5f, true, palette.Foreground, StringAlignment.Near);
+                    CompactRenderer.DrawLabel(g, e.Subtitle ?? "", new RectangleF(tile.Right + 8, rowRect.Y + 23, nameW, 16), 10.5f, false, palette.Muted, StringAlignment.Near);
 
                     string pct = e.Percent.HasValue ? e.Percent.Value + "%" : "—";
                     CompactRenderer.DrawLabel(g, pct, new RectangleF(rowRect.Right - 62, rowRect.Y + 5, 54, 19), 14f, true, level, StringAlignment.Far);
@@ -569,10 +578,11 @@ namespace AtkBatteryTray {
                 }
             }
 
-            float footY = size.Height - footerH - 4;
-            using (var pen = new Pen(palette.Border, 1f)) g.DrawLine(pen, 12, footY, size.Width - 12, footY);
-            CompactRenderer.DrawLabel(g, "刷新", new RectangleF(12, footY + 2, (size.Width - 24) / 2f, footerH - 2), 11.5f, false, palette.Muted, StringAlignment.Center);
-            CompactRenderer.DrawLabel(g, "控制中心", new RectangleF(12 + (size.Width - 24) / 2f, footY + 2, (size.Width - 24) / 2f, footerH - 2), 11.5f, false, palette.Foreground, StringAlignment.Center);
+            float footY = Math.Max(headerH + 4f, size.Height - footerH - 4);
+            using (var pen = new Pen(palette.Border, 1f)) g.DrawLine(pen, 12, footY, Math.Max(13f, size.Width - 12), footY);
+            float halfW = Math.Max(20f, (size.Width - 24) / 2f);
+            CompactRenderer.DrawLabel(g, "刷新", new RectangleF(12, footY + 2, halfW, footerH - 2), 11.5f, false, palette.Muted, StringAlignment.Center);
+            CompactRenderer.DrawLabel(g, "控制中心", new RectangleF(12 + halfW, footY + 2, halfW, footerH - 2), 11.5f, false, palette.Foreground, StringAlignment.Center);
         }
     }
 
@@ -903,14 +913,19 @@ namespace AtkBatteryTray {
                 : (t < 0.22 && Math.Min(frameLogical.Width, frameLogical.Height) <= 18);
 
             var physSize = LayeredSurface.ComputePhysicalSize(frameLogical, currentDpiScale);
-            surface.Commit(Handle, framePos, frameLogical, currentDpiScale, frameAlpha, delegate(Graphics g, SizeF sz) {
-                DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, animTargetExpanded && !drawHiddenTab, animTargetStripMode, drawHiddenTab, hoveredRow);
-            });
-            logicalSize = frameLogical;
-            currentPhysicalPos = framePos;
-            currentAlpha = frameAlpha;
-            currentPhysicalBounds = new Rectangle(framePos, physSize);
-            hasCommittedFrame = true;
+            try {
+                surface.Commit(Handle, framePos, frameLogical, currentDpiScale, frameAlpha, delegate(Graphics g, SizeF sz) {
+                    DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, animTargetExpanded && !drawHiddenTab, animTargetStripMode, drawHiddenTab, hoveredRow);
+                });
+                logicalSize = frameLogical;
+                currentPhysicalPos = framePos;
+                currentAlpha = frameAlpha;
+                currentPhysicalBounds = new Rectangle(framePos, physSize);
+                hasCommittedFrame = true;
+            } catch (Exception) {
+                StopAnimation();
+                RenderNow(true);
+            }
         }
 
         bool pendingSnapAnim;

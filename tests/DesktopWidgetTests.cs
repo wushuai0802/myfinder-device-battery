@@ -307,6 +307,22 @@ static class DesktopWidgetTests {
             wpSheet.Save(wpFile, ImageFormat.Png);
             Check(File.Exists(wpFile) && new FileInfo(wpFile).Length > 2000, "wallpaper contrast edge-tab screenshot rendered (all 3 styles)");
         }
+
+        // Exhaustive animation morph-frame crash regression: render every tiny/mid-flight size across rings/capsule/strip/expanded x handle/peek/dot
+        var tinySizes = new[] { new Size(10, 10), new Size(10, 72), new Size(14, 30), new Size(18, 44), new Size(24, 36), new Size(40, 26), new Size(80, 44), new Size(120, 60) };
+        int morphFrames = 0;
+        foreach (string style in DesktopWidgetGeometry.StyleKeys) {
+            var cfgMorph = new DesktopWidgetSettings { Style = style, DockEdge = "right", HiddenStyle = "handle" };
+            foreach (var sz in tinySizes) {
+                using (var b = LayeredSurface.RenderToBitmap(sz, 1.5f, delegate(Graphics g, SizeF lsz) {
+                    DesktopWidgetRenderer.Paint(g, lsz, entries, darkPal, true, cfgMorph, false, false, false, -1);
+                })) { morphFrames++; }
+                using (var b = LayeredSurface.RenderToBitmap(sz, 1.5f, delegate(Graphics g, SizeF lsz) {
+                    DesktopWidgetRenderer.Paint(g, lsz, entries, darkPal, true, cfgMorph, true, false, false, 0);
+                })) { morphFrames++; }
+            }
+        }
+        Check(morphFrames == tinySizes.Length * DesktopWidgetGeometry.StyleKeys.Length * 2, "all extreme mid-animation morph frames render cleanly without GDI+ ArgumentException");
     }
 
     [STAThread]

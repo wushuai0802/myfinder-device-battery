@@ -2007,11 +2007,23 @@ namespace AtkBatteryTray {
             var request=PanelStartup.Parse(args);
             bool fresh;using(var signal=new ShowPanelSignal())using(var updated=new ShowPanelSignal(PanelStartup.UpdatedSignalName))using(var stop=new ShowPanelSignal("Local\\MyFinderDeviceBattery.Exit"))using(var mutex=new Mutex(true,"Local\\ATK-A9-Air-Battery-Tray",out fresh)) {
                 if(!fresh){PanelStartup.Forward(request,signal,updated);return;}
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                Application.ThreadException+=delegate(object s,System.Threading.ThreadExceptionEventArgs te){LogUnhandledException("ui_thread_exception",te.Exception);};
+                AppDomain.CurrentDomain.UnhandledException+=delegate(object s,UnhandledExceptionEventArgs ue){LogUnhandledException("domain_unhandled_exception",ue.ExceptionObject as Exception);};
                 Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
                 DialogVisibility.ConsumeStartupShowCommand();
                 var context=new TrayContext(request==PanelOpenRequest.Launcher);context.ListenForShowRequest(signal);context.ListenForShowRequest(updated,true);context.ListenForExitRequest(stop);
                 if(request==PanelOpenRequest.Updated)updated.Request();Application.Run(context);
             }
+        }
+        static void LogUnhandledException(string kind,Exception ex) {
+            try {
+                string logPath=Path.Combine(DeviceSettings.DataDirectory,"diagnostics.log");
+                Directory.CreateDirectory(DeviceSettings.DataDirectory);
+                string msg=ex==null?"(null)":(ex.GetType().FullName+": "+ex.Message+" | "+(ex.StackTrace??"").Replace("\r"," ").Replace("\n"," "));
+                if(msg.Length>1800)msg=msg.Substring(0,1800);
+                File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" "+kind+" "+msg+Environment.NewLine,new UTF8Encoding(false));
+            } catch(Exception) { }
         }
     }
 }
