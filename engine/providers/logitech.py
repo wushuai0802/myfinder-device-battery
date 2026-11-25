@@ -66,11 +66,31 @@ F_ROOT, F_INFO, F_NAME = 0x0000, 0x0003, 0x0005
 F_UNIFIED, F_STATUS, F_VOLTAGE, F_ADC = 0x1004, 0x1000, 0x1001, 0x1F20
 BATTERY_FEATURES = (F_UNIFIED, F_STATUS, F_VOLTAGE, F_ADC)
 F_DPI = 0x2201
+# 0x2202 is *Extended* Adjustable DPI (X/Y + lift-off; OpenMouse FEATURE.extendedDpi,
+# Solaar EXTENDED_ADJUSTABLE_DPI), not pointer speed (0x2205). It is deliberately not
+# read or written here: only 0x2201 and the read-only 0x8100 profile sector are used.
+F_EXTENDED_DPI = 0x2202
+F_PROFILES = 0x8100
+# Historic model list, kept for reference only. Since the beta it is no longer a gate:
+# any mouse with a live unit id and a readable 0x2201 gets the volatile DPI control.
 GPW_DPI_MODELS = {(0xC547, "PRO X Wireless")} | {
     (pid, "G Pro Wireless Gaming Mouse")
     for pid in (0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC54D)
 }
 QUICK_DPI = (400, 800, 1600, 3200)
+DPI_MIN, DPI_MAX = 50, 65535
+
+# 0x8100 ONBOARD PROFILES, read only. Function numbers (OpenMouse PROFILE_FN @ 93c4cc6,
+# Logitech spec): 0 getInfo, 2 getMode, 4 getCurrentProfile, 5 memoryRead. Functions 1/3
+# (set mode / set current profile) and 6/7/8 (memory address/write/end) are NEVER sent;
+# 6 and 7 are flash-write steps, not a DPI-index getter/setter, so no 0x8100 DPI write exists.
+PROFILE_FN_INFO, PROFILE_FN_GET_MODE, PROFILE_FN_GET_CURRENT, PROFILE_FN_MEMORY_READ = 0, 2, 4, 5
+PROFILE_MODE_ONBOARD, PROFILE_MODE_HOST = 1, 2
+# profile formats whose DPI block was confirmed on hardware with a CRC-valid sector
+# (OpenMouse VERIFIED_FORMATS): 2-4 use the v1 scalar table, 7-8 the v6 X/Y/lift-off table
+PROFILE_FORMATS_V1, PROFILE_FORMATS_V6 = (2, 3, 4), (7, 8)
+PROFILE_SLOTS = 5
+ONBOARD_TTL = 60         # how long a decoded profile sector is reused, s
 
 # HID++ 1.0 battery registers, for devices without a feature table (Solaar's
 # hidpp10): read with a short report, tried in this order when nothing else
@@ -341,17 +361,38 @@ def _dpi_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _gpw_identity(pid, name, kind, unit, slot=1, require_identity=True):
-    # One model/transport gate for discovery and writes. Cable targets still
-    # require the live HID++ unit ID and the exact writable collections below.
-    if type(pid) is not int or not 0 < pid <= 65535 or not isinstance(name, str) or type(slot) is not int:
+def _dpi_slot_allowed(pid, slot):
+    # receiver slots 1..6 (any receiver family, incl. 0xC54F passthrough on slot 1) or a
+    # mouse on its own cable (0xFF, a pid that is neither a receiver nor a headset)
+    if type(pid) is not int or not 0 < pid <= 65535 or type(slot) is not int or pid in HEADSETS:
         return False
-    allowed = (slot in range(1, 7) and (pid, name) in GPW_DPI_MODELS
-               or slot == 0xFF and name == "G Pro Wireless Gaming Mouse"
-               and pid not in RECEIVERS and pid not in HEADSETS)
-    return (allowed and (not require_identity or kind == "mouse" and
-            isinstance(unit, str) and re.fullmatch(r"[0-9A-Fa-f]{8}", unit) is not None
-            and int(unit, 16) != 0))
+    return slot in range(1, 7) or slot == 0xFF and pid not in RECEIVERS
+
+
+def _dpi_identity(pid, name, kind, unit, slot=1, require_identity=True):
+    # One gate for discovery and writes. Every target still needs the live HID++ unit ID
+    # and the exact writable collections; no model name list is involved.
+    if not _dpi_slot_allowed(pid, slot):
+        return False
+    return (not require_identity or kind == "mouse" and isinstance(name, str) and bool(name.strip())
+            and isinstance(unit, str) and re.fullmatch(r"[0-9A-Fa-f]{8}", unit) is not None
+            and int(unit, 16) != 0)
+
+
+_gpw_identity = _dpi_identity    # old name
+
+
+class _OnboardCache:
+    """A one-slot window onto the provider's decoded-profile cache, keyed by receiver slot."""
+
+    def __init__(self, store, key):
+        self.store, self.key = store, key
+
+    def get(self, _slot):
+        return self.store.get(self.key)
+
+    def __setitem__(self, _slot, value):
+        self.store[self.key] = value
 
 
 def _target_token(target):
@@ -362,12 +403,20 @@ def _target_token(target):
     return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _dpi_view(target=None, current=None, supported=(), error=None, can_set=False):
-    choices = sorted({value for value in QUICK_DPI if value in supported}
-                     | ({current} if current in supported else set()))[:8]
-    return {"supported": bool(supported), "canSet": bool(can_set and target and current in supported),
-            "current": current, "stages": choices, "stageSource": "quick", "checkedAtUtc": _dpi_now(),
+def _dpi_view(target=None, current=None, supported=(), error=None, can_set=False,
+              stages=None, source="quick", current_source=None):
+    if stages is None:
+        choices = sorted({value for value in QUICK_DPI if value in supported}
+                         | ({current} if current in supported else set()))
+    else:
+        choices = list(dict.fromkeys(stages))
+    choices = [value for value in choices if type(value) is int and DPI_MIN <= value <= DPI_MAX][:8]
+    view = {"supported": bool(supported), "canSet": bool(can_set and target and current in supported),
+            "current": current, "stages": choices, "stageSource": source, "checkedAtUtc": _dpi_now(),
             "targetToken": _target_token(target or {}), "error": error}
+    if current_source:
+        view["currentSource"] = current_source
+    return view
 
 
 def _dpi_reply(ch, slot, feature, function, params=(), minimum=1):
@@ -382,6 +431,8 @@ def _dpi_reply(ch, slot, feature, function, params=(), minimum=1):
 
 def parse_dpi_list(reply):
     """Decode 0x2201 supported values, not stored profile presets.
+
+    Accepts both discrete lists and `[min, 0xE000|step, max]` ranges (also mixed).
 
     Protocol facts independently checked against Solaar settings_templates.py
     at e7304c4c451cc9bb4f206a914844525e67856a28: fn 0x10, sensor prefix,
@@ -415,6 +466,10 @@ def parse_dpi_list(reply):
             break
         else:
             values.append(word)
+    # a full reply page of discrete values may end without the 0 terminator (Solaar reads
+    # the first page only); a dangling range word was already rejected above
+    if values and len(reply) >= 16 and offset + 1 >= len(reply):
+        return tuple(values)
     raise ValueError("dpi_invalid_supported_list")
 
 
@@ -435,7 +490,7 @@ def _dpi_state(ch, slot, target):
     if not feature:
         raise ValueError("dpi_not_supported")
     sensors = _dpi_reply(ch, slot, feature, 0)
-    if sensors[0] != 1:
+    if sensors[0] < 1:      # sensor 0 is always the one used
         raise ValueError("dpi_sensor_not_supported")
     supported = parse_dpi_list(_dpi_reply(ch, slot, feature, 1, [0], minimum=3))
     current = _dpi_current(ch, slot, feature)
@@ -452,8 +507,104 @@ def _fresh_unit(ch, slot):
     return bytes(reply[1:5]).hex().upper() if any(reply[1:5]) else ""
 
 
-def _capture_gpw_dpi(ch, pid, slot, instance, paths, name, kind, unit, identity_live):
-    if not identity_live or not _gpw_identity(pid, name, kind, unit, slot) or not instance or not paths or 2 not in paths:
+def _profile_crc(data):
+    """CRC-16/CCITT-FALSE over all but the last two bytes (stored big-endian there)."""
+    crc = 0xFFFF
+    for byte in data[:-2]:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def parse_onboard_dpi(sector, profile_format):
+    """(slot DPIs in order, default slot index or None) from a CRC-valid profile sector.
+
+    Layouts from OpenMouse onboard-profiles.ts @ 93c4cc6 (hardware-verified formats only):
+    v1 (formats 2-4): block at 0x01 = default index, 1 byte, 5 x LE16 DPI;
+    v6 (formats 7-8): block at 0x02 = default index, 1 byte, 5 x (LE16 x, LE16 y, lod).
+    """
+    if profile_format in PROFILE_FORMATS_V1:
+        base, stride = 1, 2
+    elif profile_format in PROFILE_FORMATS_V6:
+        base, stride = 2, 5
+    else:
+        raise ValueError("dpi_onboard_format_unverified")
+    data = bytes(sector)
+    if len(data) < base + 2 + stride * PROFILE_SLOTS + 2 or _profile_crc(data) != (data[-2] << 8 | data[-1]):
+        raise ValueError("dpi_onboard_profile_invalid")
+    slots = []
+    for index in range(PROFILE_SLOTS):
+        at = base + 2 + index * stride
+        x = data[at] | data[at + 1] << 8
+        if stride == 5 and x not in (0, 0xFFFF) and x != data[at + 2] | data[at + 3] << 8:
+            raise ValueError("dpi_onboard_stage_unsupported")      # separate X/Y: not shown
+        if x in (0, 0xFFFF):
+            slots.append(0)                                         # unused / erased slot
+        elif DPI_MIN <= x <= DPI_MAX:
+            slots.append(x)
+        else:
+            raise ValueError("dpi_onboard_stage_unsupported")
+    if not any(slots):
+        raise ValueError("dpi_onboard_profile_invalid")
+    default = data[base]
+    return tuple(slots), default if default < PROFILE_SLOTS and slots[default] else None
+
+
+def _read_profile_sector(ch, slot, feature, sector, size):
+    """memoryRead (fn 5) in 16-byte chunks; the tail is a 16-byte read ending at `size`."""
+    buffer = bytearray(size)
+    offsets = list(range(0, size - 15, 16))
+    if offsets[-1] + 16 < size:
+        offsets.append(size - 16)
+    for offset in offsets:
+        reply = _dpi_reply(ch, slot, feature, PROFILE_FN_MEMORY_READ,
+                           [sector >> 8, sector & 0xFF, offset >> 8, offset & 0xFF], minimum=16)
+        buffer[offset:offset + 16] = bytes(reply[:16])
+    return bytes(buffer)
+
+
+def _onboard_state(ch, slot, unit, cache, now=None):
+    """Read-only 0x8100 view: the active profile's DPI slots, never a write.
+
+    `current` is the active profile's default slot: the live stage a DPI button cycles to
+    is not exposed by any function used here (0x8100 fn 6/7 are memory writes), so it is
+    labelled `currentSource: profileDefault`. In host mode the profile is not what runs,
+    so no current is claimed. The view is never writable.
+    """
+    feature = ch.feature_index(slot, F_PROFILES)
+    if not feature:
+        raise ValueError("dpi_not_supported")
+    mode = _dpi_reply(ch, slot, feature, PROFILE_FN_GET_MODE)[0]
+    if mode not in (PROFILE_MODE_ONBOARD, PROFILE_MODE_HOST):
+        raise ValueError("dpi_onboard_mode_unknown")
+    current = _dpi_reply(ch, slot, feature, PROFILE_FN_GET_CURRENT, minimum=2)
+    sector = current[0] << 8 | current[1]
+    if sector in (0, 0xFFFF):
+        raise ValueError("dpi_onboard_profile_invalid")
+    now = time.time() if now is None else now
+    key = (unit, sector)
+    hit = cache.get(slot) if cache is not None else None
+    if hit and hit[0] == key and now - hit[1] < ONBOARD_TTL:
+        slots, default = hit[2], hit[3]
+    else:
+        info = _dpi_reply(ch, slot, feature, PROFILE_FN_INFO, minimum=7)
+        size = info[7] << 8 | info[8]
+        if not 0x40 <= size <= 1024:
+            size = 255                         # OpenMouse's fallback for an unreported size
+        slots, default = parse_onboard_dpi(_read_profile_sector(ch, slot, feature, sector, size), info[1])
+        if cache is not None:
+            cache[slot] = (key, now, slots, default)
+    stages = [value for value in slots if value]
+    host = mode == PROFILE_MODE_HOST
+    value = None if host or default is None else slots[default]
+    return _dpi_view(None, value, stages, error="dpi_onboard_host_mode" if host else None,
+                     stages=stages, source="onboard",
+                     current_source=None if value is None else "profileDefault")
+
+
+def _capture_dpi(ch, pid, slot, instance, paths, name, kind, unit, identity_live, onboard_cache=None):
+    if not identity_live or not _dpi_identity(pid, name, kind, unit, slot) or not instance or not paths or 2 not in paths:
         return _dpi_view(error="dpi_identity_unconfirmed"), None
     target = {"provider": "logitech", "pid": pid, "instance": instance, "slot": slot,
               "unit": unit, "name": name, "sensor": 0,
@@ -463,11 +614,23 @@ def _capture_gpw_dpi(ch, pid, slot, instance, paths, name, kind, unit, identity_
         return view, target
     except (OSError, IOError, ValueError, TypeError, IndexError) as error:
         code = str(error) if isinstance(error, ValueError) and str(error).startswith("dpi_") else "dpi_read_failed"
+        if code == "dpi_not_supported":
+            # no volatile 0x2201: a read-only view of the onboard profile, if there is one
+            try:
+                return _onboard_state(ch, slot, unit, onboard_cache), None
+            except (OSError, IOError, ValueError, TypeError, IndexError) as onboard_error:
+                code = str(onboard_error) if isinstance(onboard_error, ValueError) \
+                    and str(onboard_error).startswith("dpi_") else "dpi_read_failed"
+            if code == "dpi_not_supported":
+                return None, None              # a mouse without any DPI feature: nothing to show
         return _dpi_view(target, error=code), None
 
 
+_capture_gpw_dpi = _capture_dpi    # old name
+
+
 def set_device_dpi(inventory, target, value, expected_dpi, target_token):
-    """Single volatile 0x2201 write to a freshly revalidated exact GPW target.
+    """Single volatile 0x2201 write to a freshly revalidated exact mouse target.
 
     No onboard mode/profile/flash command, retry or uncertain rollback is sent.
     The server must provide the selected physical receiver's scoped inventory.
@@ -487,7 +650,7 @@ def set_device_dpi(inventory, target, value, expected_dpi, target_token):
             or not isinstance(target.get("instance"), str) or not target["instance"]
             or not isinstance(target.get("long_path"), (bytes, str)) or not target["long_path"]
             or target.get("short_path") is not None and not isinstance(target["short_path"], (bytes, str))
-            or not _gpw_identity(target["pid"], target.get("name"), "mouse", target.get("unit"), target["slot"])):
+            or not _dpi_identity(target["pid"], target.get("name"), "mouse", target.get("unit"), target["slot"])):
         return result("dpi_invalid_target")
     if not isinstance(target_token, str) or target_token != _target_token(target):
         return result("dpi_stale_target")
@@ -507,7 +670,7 @@ def set_device_dpi(inventory, target, value, expected_dpi, target_token):
         if channel.request(slot, F_ROOT, 1, timeout=PING_TIMEOUT) is None:
             return result("dpi_device_unavailable")
         name, kind, unit = channel.identity(slot)
-        if not _gpw_identity(target["pid"], name, kind, unit, slot) or name != target["name"] or unit != target["unit"]:
+        if not _dpi_identity(target["pid"], name, kind, unit, slot) or name != target["name"] or unit != target["unit"]:
             return result("dpi_target_changed")
         view, feature, supported = _dpi_state(channel, slot, target)
         if value not in supported:
@@ -553,6 +716,7 @@ class LogitechProvider(Provider):
         self._asleep: Set[Tuple[int, str, int]] = set()   # paired slots that stopped answering
         self._last: Dict[str, Tuple[DeviceStatus, float]] = {}
         self._slot_key: Dict[Tuple[int, str, int], str] = {}   # slot -> last icon key
+        self._onboard: Dict[Tuple[int, str, int], tuple] = {}  # slot -> decoded 0x8100 profile
 
     def _ping(self, ch: _Channel, slot: Tuple[int, str, int]) -> bool:
         """True if a device in this slot answers. Also records why a slot did not answer."""
@@ -595,7 +759,7 @@ class LogitechProvider(Provider):
         identity_live = slot not in self._ids
         if slot in self._ids:
             name, kind, unit = self._ids[slot]
-            if _gpw_identity(pid, name, kind, unit, idx, require_identity=False):
+            if kind in ("mouse", "") and _dpi_slot_allowed(pid, idx):
                 # DPI controls never rely on the battery reader's cached unit.
                 try:
                     fresh = ch.identity(idx)
@@ -643,8 +807,9 @@ class LogitechProvider(Provider):
                     self._last.pop(old, None)
                 self._slot_key[slot] = key
                 dpi, target = None, None
-                if _gpw_identity(pid, name, kind, unit, idx, require_identity=False):
-                    dpi, target = _capture_gpw_dpi(ch, pid, idx, instance, paths, name, kind, unit, identity_live)
+                if kind == "mouse" and _dpi_slot_allowed(pid, idx):
+                    dpi, target = _capture_dpi(ch, pid, idx, instance, paths, name, kind, unit, identity_live,
+                                               _OnboardCache(self._onboard, slot))
                 return DeviceStatus(key, name, level, chg, True, "logitech", approx=approx,
                                     kind=kind, dpi=dpi, dpi_target=target,
                                     measured_at_utc=battery_time if dpi is not None else None,

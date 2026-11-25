@@ -254,12 +254,6 @@ class GpwDpiTests(unittest.TestCase):
         self.assertEqual(status.dpi["error"], "dpi_invalid_reply")
         self.assertIsNone(status.dpi_target)
 
-    def test_name_alone_on_a_different_receiver_has_no_dpi_probe(self):
-        self.inventory[:] = [dict(value, product_id=0xC539) for value in self.inventory]
-        [status] = L.LogitechProvider().poll()
-        self.assertIsNone(status.dpi)
-        self.assertFalse(any(data[2] == 10 for _, data in self.bus.writes))
-
     def test_malformed_supported_ranges_are_rejected(self):
         for reply in ([0, 0, 100, 0xE0, 0, 100, 0, 0, 0],
                       [0, 0, 100, 0xE0, 50, 0, 50, 0, 0], [1, 0, 100, 0, 0], [0, 0, 100]):
@@ -292,22 +286,6 @@ class GpwDpiTests(unittest.TestCase):
         self.assertTrue(self.change()["success"])
         self.assertEqual(len(self.bus.set_calls), 1)
         self.assertEqual(self.bus.set_calls[0][1:3], [0xFF, 10])
-
-    def test_g_pro_wireless_rejects_close_names_other_models_and_receivers(self):
-        for name in ("G Pro Wireless Gaming Mousf", "G Pro Wireless Gaming Mouse X", "G Pro Wireless", "PRO X Wireless"):
-            with self.subTest(name=name):
-                self.configure_g_pro()
-                self.mouse.name = name
-                [status] = L.LogitechProvider().poll()
-                self.assertIsNone(status.dpi)
-                self.assertEqual(self.bus.set_calls, [])
-        for pid in (0xC548, 0xC52B, 0xC500):
-            with self.subTest(pid=hex(pid)):
-                self.configure_g_pro(pid)
-                self.inventory[:] = [dict(value, product_string="Receiver") for value in self.inventory]
-                [status] = L.LogitechProvider().poll()
-                self.assertIsNone(status.dpi)
-                self.assertEqual(self.bus.set_calls, [])
 
     def test_g_pro_wireless_preserves_identity_current_and_readback_guards(self):
         for wired in (False, True):
@@ -344,9 +322,9 @@ class GpwDpiTests(unittest.TestCase):
     def test_g_pro_wireless_invalid_write_identity_never_touches_hid(self):
         self.configure_g_pro()
         self.prime()
-        for change in (dict(name=[]), dict(name="G Pro Wireless Gaming Mousf"),
-                       dict(pid=0xC548), dict(pid=0xC500), dict(pid=0),
-                       dict(slot=0), dict(slot=7), dict(slot=True), dict(unit="00000000")):
+        for change in (dict(name=[]), dict(name="  "), dict(pid=0), dict(pid=0x0AFB),
+                       dict(slot=0), dict(slot=7), dict(slot=True), dict(slot=0xFF), dict(unit="00000000"),
+                       dict(unit="1234"), dict(unit="1234567G")):
             with self.subTest(change=change):
                 target = dict(self.target, **change)
                 result = L.set_device_dpi(self.inventory, target, 800, 400, L._target_token(target))
@@ -391,6 +369,366 @@ class GpwDpiTests(unittest.TestCase):
         [recovered] = provider.poll()
         self.assertTrue(recovered.dpi and recovered.dpi["canSet"])
         self.assertEqual(self.bus.set_calls, [])
+
+    # ---- beta: every HID++ 2.0 mouse with a live unit id and a readable 0x2201 -------------
+
+    def configure_mouse(self, pid, slot=1, name="MX Master 3S", kind=3, unit=(0x0A, 0x0B, 0x0C, 0x0D)):
+        self.mouse.name = name
+        self.mouse.features[L.F_NAME] = (3, {2: [kind]})
+        self.mouse.features[L.F_INFO] = (2, {0: [1, *unit]})
+        self.inventory[:] = [dict(value, product_id=pid) for value in self.inventory]
+        self.bus.slot = slot
+        self.bus.slots[LONG] = {slot: self.mouse}
+
+    def test_any_named_mouse_on_every_receiver_family_gets_volatile_dpi(self):
+        for pid in (0xC548, 0xC52B, 0xC52F, 0xC532, 0xC539, 0xC53F, 0xC54D, 0xC54F, 0xC500):
+            for name in ("MX Master 3S", "G502 X LIGHTSPEED", "M720 Triathlon", "Pebble Mouse 2"):
+                with self.subTest(pid=hex(pid), name=name):
+                    # 0xC54F is a single-slot passthrough; 0xC500 is unknown (no "receiver" product): a cable
+                    self.configure_mouse(pid, {0xC54F: 1, 0xC500: 0xFF}.get(pid, 2), name)
+                    self.bus.current = 400
+                    self.bus.set_calls.clear()
+                    self.prime()
+                    self.assertEqual(self.target["name"], name)
+                    result = self.change()
+                    self.assertTrue(result["success"])
+                    self.assertEqual(result["confirmedDpi"], 800)
+                    self.assertEqual(len(self.bus.set_calls), 1)
+                    self.assertEqual(self.bus.set_calls[0][4:7], [0, 3, 32])      # fn 3, sensor 0, 800
+
+    def test_mouse_on_its_own_cable_gets_volatile_dpi(self):
+        self.configure_mouse(0xC08D, 0xFF, "G502 X PLUS")
+        self.prime()
+        self.assertEqual(self.target["slot"], 0xFF)
+        self.assertTrue(self.change()["success"])
+        self.assertEqual(self.bus.set_calls[0][1:3], [0xFF, 10])
+
+    def test_non_mouse_devices_are_never_probed_for_dpi(self):
+        for kind in (0, 2, 1):
+            with self.subTest(kind=kind):
+                self.configure_mouse(0xC548, 1, "K850", kind=kind)
+                self.bus.writes.clear()
+                [status] = L.LogitechProvider().poll()
+                self.assertIsNone(status.dpi)
+                self.assertIsNone(status.dpi_target)
+                self.assertFalse(any(data[2] == 10 for _, data in self.bus.writes))
+        self.configure_mouse(0x0AFB, 0xFF, "G PRO X 2")       # a headset pid is never a DPI target
+        self.assertIsNone(L.LogitechProvider().poll()[0].dpi)
+
+    def test_mouse_without_unit_id_cannot_be_written_but_keeps_battery(self):
+        self.configure_mouse(0xC548, 1, unit=(0, 0, 0, 0))
+        [status] = L.LogitechProvider().poll()
+        self.assertEqual(status.level, 75)
+        self.assertFalse(status.dpi and status.dpi["canSet"])
+        self.assertIsNone(status.dpi_target)
+        self.assertEqual(self.bus.set_calls, [])
+
+    def test_mouse_without_0x2201_has_no_dpi_and_costs_one_lookup(self):
+        self.configure_mouse(0xC548, 1)
+        del self.mouse.features[L.F_DPI]
+        [status] = L.LogitechProvider().poll()
+        self.assertEqual(status.level, 75)
+        self.assertIsNone(status.dpi)
+        self.assertEqual(status.measured_at_utc, None)
+
+    def test_0x2202_extended_dpi_and_0x2205_pointer_speed_are_never_used_as_dpi(self):
+        self.configure_mouse(0xC548, 1)
+        del self.mouse.features[L.F_DPI]
+        self.mouse.features[L.F_EXTENDED_DPI] = (11, {0: [1], 1: SUPPORTED, 2: [0, 4, 0x90, 4, 0x90]})
+        self.mouse.features[0x2205] = (12, {0: [5, 15], 1: [0, 10]})
+        [status] = L.LogitechProvider().poll()
+        self.assertIsNone(status.dpi)
+        self.assertFalse(any(data[2] in (11, 12) for _, data in self.bus.writes))
+
+    def test_sensor_count_two_uses_sensor_zero_and_zero_sensors_is_rejected(self):
+        self.mouse.features[L.F_DPI] = (10, {0: [2], 1: SUPPORTED})
+        self.prime()
+        self.assertEqual(self.target["sensor"], 0)
+        self.assertEqual(self.change()["confirmedDpi"], 800)
+        self.assertEqual(self.bus.set_calls[0][4], 0)
+        self.mouse.features[L.F_DPI] = (10, {0: [0], 1: SUPPORTED})
+        [status] = L.LogitechProvider().poll()
+        self.assertEqual(status.dpi["error"], "dpi_sensor_not_supported")
+        self.assertFalse(status.dpi["canSet"])
+
+    def test_discrete_lists_ranges_and_full_unterminated_pages(self):
+        self.assertEqual(L.parse_dpi_list([0, 0, 200, 1, 0x90, 3, 0x20, 0, 0]), (200, 400, 800))
+        self.assertEqual(L.parse_dpi_list([0, 0, 200, 0xE0, 100, 0x03, 0x20, 0, 0]),
+                         (200, 300, 400, 500, 600, 700, 800))
+        mixed = L.parse_dpi_list([0, 0, 100, 0xE0, 100, 1, 0x2C, 0x0B, 0xB8, 0, 0])   # 100..300 step 100, 3000
+        self.assertEqual(mixed, (100, 200, 300, 3000))
+        full = [0] + [b for value in (400, 800, 1200, 1600, 2400, 3200, 4800) for b in (value >> 8, value & 255)] + [0]
+        self.assertEqual(len(full), 16)
+        self.assertEqual(L.parse_dpi_list(full), (400, 800, 1200, 1600, 2400, 3200, 4800))
+        for bad in ([0, 0, 200, 1, 0x90, 3, 0x20], [0, 0, 200, 0xE0], [0, 1, 0x90, 0, 0xC8, 0, 0],
+                    [0, 0xE0, 50, 1, 0x90, 0, 0]):
+            with self.assertRaises(ValueError):
+                L.parse_dpi_list(bad)
+
+    def test_current_dpi_outside_quick_list_is_merged_and_highlighted(self):
+        for current in (50, 1250, 1200, 25600):
+            with self.subTest(current=current):
+                self.mouse.features[L.F_DPI] = (10, {0: [1], 1: [0, 0, 50, 0xE0, 50, 0x64, 0, 0, 0]})   # 50..25600
+                self.bus.current = current
+                self.prime()
+                stages = self.status.dpi["stages"]
+                self.assertIn(current, stages)
+                self.assertEqual(stages, sorted(stages))
+                self.assertLessEqual(len(stages), 8)
+                self.assertTrue(all(50 <= value <= 65535 for value in stages))
+                self.assertTrue(self.status.dpi["canSet"])
+
+    def test_current_not_in_supported_list_is_read_only(self):
+        self.bus.current = 777
+        [status] = L.LogitechProvider().poll()
+        self.assertEqual(status.dpi["error"], "dpi_current_unsupported")
+        self.assertFalse(status.dpi["canSet"])
+        self.assertIsNone(status.dpi_target)
+
+    def test_non_gpw_mouse_keeps_every_write_gate(self):
+        for failure in ("unit", "current", "readback", "unit-after-write", "token", "expected"):
+            with self.subTest(failure=failure):
+                self.configure_mouse(0xC548, 2, "MX Anywhere 3")
+                self.mouse.features[L.F_INFO] = (2, {0: [1, 0x0A, 0x0B, 0x0C, 0x0D]})
+                self.bus.current = 400
+                self.bus.set_calls.clear()
+                self.bus.fail_readback = self.bus.change_unit_after_write = False
+                self.prime()
+                token, expected = self.token, 400
+                if failure == "unit":
+                    self.mouse.features[L.F_INFO] = (2, {0: [1, 1, 2, 3, 4]})
+                elif failure == "current":
+                    self.bus.current = 1600
+                elif failure == "readback":
+                    self.bus.fail_readback = True
+                elif failure == "unit-after-write":
+                    self.bus.change_unit_after_write = True
+                elif failure == "token":
+                    token = "0" * 64
+                else:
+                    expected = 800
+                result = L.set_device_dpi(self.inventory, self.target, 800, expected, token)
+                unknown = failure in ("readback", "unit-after-write")
+                self.assertFalse(result["success"])
+                self.assertEqual(result["outcomeUnknown"], unknown)
+                self.assertEqual(len(self.bus.set_calls), int(unknown))
+                # only the volatile 0x2201 fn 3 is ever written; never an onboard profile function
+                self.assertTrue(all(data[2] == 10 and data[3] >> 4 == 3 for _, data in self.bus.writes
+                                    if data[2] not in (0, 2) and data[3] >> 4 not in (0, 1, 2)))
+
+    def test_mouse_that_changes_to_another_mouse_is_rejected(self):
+        self.configure_mouse(0xC548, 1, "MX Master 3S")
+        self.prime()
+        self.mouse.name = "MX Anywhere 3"
+        self.assertEqual(self.change()["error"], "dpi_target_changed")
+        self.assertEqual(self.bus.set_calls, [])
+
+    def test_receiver_in_other_family_never_matches_exact_paths(self):
+        self.configure_mouse(0xC548, 1)
+        self.prime()
+        moved = [dict(value, product_id=0xC52B) for value in self.inventory]
+        self.assertEqual(L.set_device_dpi(moved, self.target, 800, 400, self.token)["error"], "dpi_receiver_changed")
+        self.assertEqual(self.bus.writes, [])
+
+
+# ---- 0x8100 ONBOARD PROFILES: read-only DPI slots for mice without 0x2201 ---------------------
+
+def crc16(data):
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def profile_sector(fmt, dpis, default, size=255, y=None, corrupt=False):
+    data = bytearray(size)
+    if fmt in (2, 3, 4):
+        data[1] = default
+        for index, dpi in enumerate(dpis):
+            data[3 + 2 * index:5 + 2 * index] = dpi.to_bytes(2, "little")
+    else:
+        data[2] = default
+        for index, dpi in enumerate(dpis):
+            base = 4 + 5 * index
+            data[base:base + 2] = dpi.to_bytes(2, "little")
+            data[base + 2:base + 4] = (dpi if y is None else y).to_bytes(2, "little")
+            data[base + 4] = 1 if dpi else 0
+    data[-2:] = crc16(data[:-2]).to_bytes(2, "big")
+    if corrupt:
+        data[10] ^= 0xFF
+    return bytes(data)
+
+
+class OnboardBus(FakeBus):
+    """Feature 13 = 0x8100. Only fn 0/2/4/5 are answered; anything else is recorded as a violation."""
+
+    def __init__(self, mouse, slot=1):
+        super().__init__({LONG: ({slot: mouse}, SHORT)})
+        self.slot = slot
+        self.fmt, self.mode, self.current_sector = 7, 1, 1
+        self.sector = profile_sector(7, [400, 800, 1600, 3200, 0], 1)
+        self.profile_calls = []
+        self.memory_reads = 0
+
+    def write(self, path, data):
+        if data[1] == self.slot and data[2] == 13:
+            self.writes.append((path, list(data)))
+            fn, params = data[3] >> 4, data[4:]
+            self.profile_calls.append(fn)
+            if fn == 0:      # the #1052 capture, plus the sector size
+                return self._reply(path, self.slot, 13, data[3], [1, self.fmt, 1, 5, 1, 5, 16, 0, 255])
+            if fn == 2:
+                return self._reply(path, self.slot, 13, data[3], [self.mode])
+            if fn == 4:
+                return self._reply(path, self.slot, 13, data[3], [0, self.current_sector, 0])
+            if fn == 5:
+                self.memory_reads += 1
+                sector, offset = params[0] << 8 | params[1], params[2] << 8 | params[3]
+                assert sector == self.current_sector
+                return self._reply(path, self.slot, 13, data[3], list(self.sector[offset:offset + 16]))
+            return None      # forbidden function: no answer (and recorded in profile_calls)
+        return super().write(path, data)
+
+
+def onboard_mouse():
+    return FakeHidpp({L.F_NAME: (3, {2: [3]}), L.F_INFO: (2, {0: [1, 0x12, 0x34, 0x56, 0x78]}),
+                      L.F_UNIFIED: (6, {1: [75, 4, 0]}), L.F_PROFILES: (13, {})}, name="PRO X 2")
+
+
+class OnboardDpiTests(unittest.TestCase):
+    def setUp(self):
+        self.mouse = onboard_mouse()
+        self.inventory = [dict(entry(0xC54D, 0xFF00, 1, SHORT), vendor_id=L.LOGITECH_VID),
+                          dict(entry(0xC54D, 0xFF00, 2, LONG), vendor_id=L.LOGITECH_VID)]
+        self.bus = OnboardBus(self.mouse)
+        hid = patch.object(L, "hid", types.SimpleNamespace(device=self.bus.device_class()))
+        hidlist = patch.object(L, "hidlist", types.SimpleNamespace(enumerate=lambda vid=0: self.inventory))
+        original = L._Channel.request
+        def bounded(channel, idx, feat, func, params=(), timeout=None):
+            return original(channel, idx, feat, func, params, timeout=.01)
+        request = patch.object(L._Channel, "request", bounded)
+        for replacement in (hid, hidlist, request):
+            replacement.start()
+            self.addCleanup(replacement.stop)
+
+    def poll(self):
+        [status] = L.LogitechProvider().poll()
+        return status
+
+    def test_crc16_ccitt_false_check_value(self):
+        self.assertEqual(L._profile_crc(b"123456789\0\0"), 0x29B1)
+
+    def test_format_7_profile_gives_read_only_onboard_stages(self):
+        status = self.poll()
+        self.assertEqual(status.level, 75)
+        self.assertEqual(status.dpi["stages"], [400, 800, 1600, 3200])
+        self.assertEqual((status.dpi["current"], status.dpi["currentSource"]), (800, "profileDefault"))
+        self.assertEqual(status.dpi["stageSource"], "onboard")
+        self.assertTrue(status.dpi["supported"])
+        self.assertFalse(status.dpi["canSet"])
+        self.assertIsNone(status.dpi_target)
+        self.assertIn(status.dpi["current"], status.dpi["stages"])
+        # only getMode / getCurrentProfile / getInfo / memoryRead, 255-byte sector = 16 chunks
+        self.assertEqual(set(self.bus.profile_calls), {0, 2, 4, 5})
+        self.assertEqual(self.bus.memory_reads, 16)
+
+    def test_never_sends_any_profile_write_function_or_0x2202(self):
+        for mode in (1, 2):
+            self.bus.mode = mode
+            self.poll()
+        self.assertFalse(set(self.bus.profile_calls) & {1, 3, 6, 7, 8, 9, 10})
+
+    def test_format_4_scalar_table(self):
+        self.bus.fmt = 4
+        self.bus.sector = profile_sector(4, [800, 1600, 2400, 0, 0], 2)
+        status = self.poll()
+        self.assertEqual(status.dpi["stages"], [800, 1600, 2400])
+        self.assertEqual(status.dpi["current"], 2400)
+        self.assertFalse(status.dpi["canSet"])
+
+    def test_non_quick_onboard_stage_values_are_kept_in_device_order(self):
+        self.bus.sector = profile_sector(8, [1200, 400, 0xFFFF, 2400, 800], 3)
+        status = self.poll()
+        self.assertEqual(status.dpi["stages"], [1200, 400, 2400, 800])
+        self.assertEqual(status.dpi["current"], 2400)
+
+    def test_host_mode_claims_no_current_and_is_read_only(self):
+        self.bus.mode = 2
+        status = self.poll()
+        self.assertIsNone(status.dpi["current"])
+        self.assertEqual(status.dpi["error"], "dpi_onboard_host_mode")
+        self.assertFalse(status.dpi["canSet"])
+        self.assertEqual(status.dpi["stages"], [400, 800, 1600, 3200])
+
+    def test_unverified_format_bad_crc_and_odd_stages_report_errors(self):
+        cases = ((1, profile_sector(7, [400, 800, 0, 0, 0], 0), "dpi_onboard_format_unverified"),
+                 (7, profile_sector(7, [400, 800, 0, 0, 0], 0, corrupt=True), "dpi_onboard_profile_invalid"),
+                 (7, profile_sector(7, [0, 0, 0, 0, 0], 0), "dpi_onboard_profile_invalid"),
+                 (7, profile_sector(7, [400, 800, 0, 0, 0], 0, y=1600), "dpi_onboard_stage_unsupported"),
+                 (7, profile_sector(7, [30, 800, 0, 0, 0], 0), "dpi_onboard_stage_unsupported"))
+        for fmt, sector, error in cases:
+            with self.subTest(error=error, fmt=fmt):
+                self.bus.fmt, self.bus.sector = fmt, sector
+                status = self.poll()
+                self.assertEqual(status.level, 75)
+                self.assertFalse(status.dpi["supported"])
+                self.assertEqual(status.dpi["error"], error)
+                self.assertFalse(status.dpi["canSet"])
+
+    def test_default_index_on_an_empty_slot_gives_no_current(self):
+        self.bus.sector = profile_sector(7, [400, 800, 0, 0, 0], 4)
+        status = self.poll()
+        self.assertIsNone(status.dpi["current"])
+        self.assertEqual(status.dpi["stages"], [400, 800])
+
+    def test_directory_sector_zero_is_never_read_as_a_profile(self):
+        self.bus.current_sector = 0
+        self.assertEqual(self.poll().dpi["error"], "dpi_onboard_profile_invalid")
+        self.assertEqual(self.bus.memory_reads, 0)
+
+    def test_decoded_profile_is_cached_between_polls(self):
+        provider = L.LogitechProvider()
+        provider.poll()
+        reads = self.bus.memory_reads
+        [status] = provider.poll()
+        self.assertEqual(self.bus.memory_reads, reads)
+        self.assertEqual(status.dpi["stages"], [400, 800, 1600, 3200])
+        self.bus.current_sector = 2                       # another profile became active
+        provider.poll()
+        self.assertGreater(self.bus.memory_reads, reads)
+
+    def test_0x2201_wins_when_both_features_exist(self):
+        self.mouse.features[L.F_DPI] = (10, {0: [1], 1: SUPPORTED})
+        bus = DpiBus(self.mouse)
+        replacement = patch.object(L, "hid", types.SimpleNamespace(device=bus.device_class()))
+        replacement.start()
+        self.addCleanup(replacement.stop)
+        status = self.poll()
+        self.assertEqual(status.dpi["stageSource"], "quick")
+        self.assertTrue(status.dpi["canSet"])
+        self.assertFalse(any(data[2] == 13 for _, data in bus.writes))
+
+    def test_set_on_an_onboard_only_mouse_never_writes(self):
+        status = self.poll()
+        target = {"provider": "logitech", "pid": 0xC54D, "instance": L._instance(self.inventory[1]),
+                  "slot": 1, "unit": "12345678", "name": "PRO X 2", "sensor": 0,
+                  "long_path": LONG, "short_path": SHORT}
+        self.bus.writes.clear()
+        self.bus.profile_calls.clear()
+        result = L.set_device_dpi(self.inventory, target, 1600, 800, L._target_token(target))
+        self.assertFalse(result["success"])
+        self.assertFalse(result["outcomeUnknown"])
+        self.assertEqual(self.bus.profile_calls, [])
+        self.assertFalse(any(data[3] >> 4 == 3 and data[2] != 0 for _, data in self.bus.writes))
+        self.assertIsNone(status.dpi_target)
+
+    def test_onboard_view_is_not_writable_through_the_server_normaliser(self):
+        import server
+        dpi = server.normalise_dpi(self.poll().dpi, usable=True)
+        self.assertFalse(dpi["canSet"])
+        self.assertEqual((dpi["stageSource"], dpi["current"]), ("onboard", 800))
 
 
 if __name__ == "__main__":
