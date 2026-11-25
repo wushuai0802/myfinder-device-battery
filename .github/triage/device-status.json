@@ -51,8 +51,32 @@
     },
     "3837:101D": {
       "status": "beta",
-      "version": "1.4.0-beta.4",
-      "note": "迈从 V7 Pro 2.4G 接收器，电量和充电状态待实机核对。",
+      "version": "1.4.0-beta.7",
+      "note": "迈从 V7 Pro 2.4G 接收器，新增有界重试与诊断，电量和充电状态待实机核对。",
+      "reports": 2
+    },
+    "0E8D:0703": {
+      "status": "beta",
+      "version": "1.4.0-beta.7",
+      "note": "怒喵 AM Infinity .97 2.4G 接收器电量与充电候选，待实机核对。",
+      "reports": 1
+    },
+    "20BC:5128": {
+      "status": "beta",
+      "version": "1.4.0-beta.7",
+      "note": "北通鲲鹏系列 2.4G/有线手柄电量候选，待实机核对。",
+      "reports": 1
+    },
+    "320F:5055": {
+      "status": "beta",
+      "version": "1.4.0-beta.7",
+      "note": "ATK/VGN/VXE 指定产品名有线键盘电量与充电候选，待实机核对。",
+      "reports": 2
+    },
+    "374A:A305": {
+      "status": "beta",
+      "version": "1.4.0-beta.7",
+      "note": "瓦尔基里 VK M2 鼠标电量与充电候选，待实机核对。",
       "reports": 1
     },
     "1532:0565": {
