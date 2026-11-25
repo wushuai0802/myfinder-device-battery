@@ -213,6 +213,7 @@ namespace AtkBatteryTray {
     internal class ThemedDialog:Form {
         internal readonly DialogTheme Theme;
         readonly Font bodyFont,titleFont,descriptionFont,cardTitleFont;
+        Icon ownedWindowIcon;
         // Tests supply physical pixel work areas, independent of the host monitor.
         internal static Func<Control,Rectangle> WorkingAreaProvider=delegate(Control control){
             var form=control as Form;
@@ -232,6 +233,9 @@ namespace AtkBatteryTray {
             BackColor=Theme.Card;ForeColor=Theme.Foreground;Padding=new Padding(20);
             FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
             StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;
+            bool ownsIcon;
+            var appIcon=ControlCenterIconLoader.LoadWindowIcon(out ownsIcon);
+            if(appIcon!=null){Icon=appIcon;if(ownsIcon)ownedWindowIcon=appIcon;}
         }
         // Keep the button bar fixed; only the content regions scroll on small screens.
         internal void ConfigureLayout(TableLayoutPanel body,Control buttonBar,Func<int,int> minimum,Func<int,int> preferred=null){
@@ -343,7 +347,13 @@ namespace AtkBatteryTray {
             return new Label {Text=text,AutoSize=true,UseMnemonic=false,BackColor=Theme.Card,ForeColor=description?Theme.Muted:Theme.Foreground,Font=title?titleFont:cardTitle?cardTitleFont:description?descriptionFont:bodyFont,Margin=new Padding(0,0,0,4)};
         }
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);ThemedTitleBar.Apply(Handle,Theme);}
-        protected override void Dispose(bool disposing){base.Dispose(disposing);if(disposing){bodyFont.Dispose();titleFont.Dispose();descriptionFont.Dispose();cardTitleFont.Dispose();}}
+        protected override void Dispose(bool disposing){
+            base.Dispose(disposing);
+            if(disposing){
+                bodyFont.Dispose();titleFont.Dispose();descriptionFont.Dispose();cardTitleFont.Dispose();
+                if(ownedWindowIcon!=null){ownedWindowIcon.Dispose();ownedWindowIcon=null;}
+            }
+        }
     }
 
     internal enum ThemedButtonKind {Primary,Secondary,Text}
@@ -374,7 +384,12 @@ namespace AtkBatteryTray {
         }
         internal Color FillFor(bool hover,bool down){
             Color fill=kind==ThemedButtonKind.Text?theme.Card:Enabled&&kind==ThemedButtonKind.Primary?theme.Selected:theme.Track;
-            return Enabled&&kind!=ThemedButtonKind.Primary&&(hover||down)?theme.Interaction(fill,down):fill;
+            if(kind==ThemedButtonKind.Primary&&Enabled&&(hover||down)&&!theme.HighContrast){
+                // Tint away from the label colour so hover/pressed never lowers text contrast on the solid accent.
+                bool lightInk=theme.SelectedForeground.GetBrightness()>theme.Selected.GetBrightness();
+                return ThemePalette.Blend(fill,lightInk?Color.Black:Color.White,down?38:22);
+            }
+            return Enabled&&(hover||down)?theme.Interaction(fill,down):fill;
         }
         internal Color TextFor(bool hover,bool down){
             if(!Enabled)return theme.Muted;
@@ -385,7 +400,11 @@ namespace AtkBatteryTray {
             if(theme.HighContrast){base.OnPaint(e);return;}
             float scale=ScaleFactor;var state=e.Graphics.Save();e.Graphics.ScaleTransform(scale,scale);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;e.Graphics.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             var rect=new RectangleF(0,0,Width/scale,Height/scale);
-            if(kind!=ThemedButtonKind.Text){
+            if(kind==ThemedButtonKind.Primary){
+                // Solid accent call-to-action: Selected fill with SelectedForeground text; hover/pressed tint the fill, disabled falls back to the track.
+                CompactRenderer.Fill(e.Graphics,rect,FillFor(hovered,pressed),VisualDesign.SelectionRadius);
+                InteractionLayout.Paint(e.Graphics,DialogInteraction.Card(this,scale,rect),rect,0,Enabled?new PanelFeedback {HoverAction=hovered?0:-1,PressedAction=pressed?0:-1,KeyboardFocus=Focused&&ShowFocusCues?0:-1}:null,theme.Dark,true,delegate{CompactRenderer.DrawLabel(e.Graphics,Text,VisualDesign.SelectionTextRect(rect),VisualDesign.DeviceNameFontSize,true,TextFor(hovered,pressed),StringAlignment.Center);},false,1,2,VisualDesign.SelectionFocusRect(rect));
+            }else if(kind!=ThemedButtonKind.Text){
                 CompactRenderer.Fill(e.Graphics,rect,theme.Track,VisualDesign.SelectionRadius);
                 CompactRenderer.Selection(e.Graphics,rect,Text,null,kind==ThemedButtonKind.Primary,Enabled,hovered,pressed,false,theme.Dark,Focused&&ShowFocusCues,DialogInteraction.Card(this,scale,rect));
             }else{

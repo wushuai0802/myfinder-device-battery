@@ -797,7 +797,7 @@ namespace AtkBatteryTray {
             int rowH = VisualDesign.LargeFont ? 50 : 44;
             int footerH = VisualDesign.LargeFont ? 34 : 30;
 
-            CompactRenderer.DrawLabel(g, "外设电量", new RectangleF(14, 6, Math.Max(20f, size.Width - 80), headerH - 4), 12.5f, true, palette.Muted, StringAlignment.Near);
+            CompactRenderer.DrawLabel(g, "外设电量", new RectangleF(14, 6, Math.Max(20f, size.Width - 80), headerH - 4), 13f, true, palette.Foreground, StringAlignment.Near);
             CompactRenderer.DrawLabel(g, "点击收起", new RectangleF(Math.Max(14f, size.Width - 78), 6, 66, headerH - 4), 11f, false, palette.Muted, StringAlignment.Far);
 
             float y = headerH + 2f;
@@ -835,8 +835,13 @@ namespace AtkBatteryTray {
             float footY = Math.Max(headerH + 4f, size.Height - footerH - 4);
             using (var pen = new Pen(palette.Border, 1f)) g.DrawLine(pen, 12, footY, Math.Max(13f, size.Width - 12), footY);
             float halfW = Math.Max(20f, (size.Width - 24) / 2f);
-            CompactRenderer.DrawLabel(g, "刷新", new RectangleF(12, footY + 2, halfW, footerH - 2), 11.5f, false, palette.Muted, StringAlignment.Center);
-            CompactRenderer.DrawLabel(g, "控制中心", new RectangleF(12 + halfW, footY + 2, halfW, footerH - 2), 11.5f, false, palette.Foreground, StringAlignment.Center);
+            Color footerInk = VisualDesign.HighContrast ? palette.Foreground : Color.FromArgb(235, palette.Foreground);
+            CompactRenderer.DrawLabel(g, "刷新", new RectangleF(12, footY + 2, halfW, footerH - 2), 11.5f, false, footerInk, StringAlignment.Center);
+            CompactRenderer.DrawLabel(g, "控制中心", new RectangleF(12 + halfW, footY + 2, halfW, footerH - 2), 11.5f, false, footerInk, StringAlignment.Center);
+            using (var midPen = new Pen(VisualDesign.HighContrast ? palette.Border : Color.FromArgb(dark ? 70 : 60, palette.Border), 1f)) {
+                float midX = 12 + halfW;
+                g.DrawLine(midPen, midX, footY + 8f, midX, footY + footerH - 6f);
+            }
         }
     }
 

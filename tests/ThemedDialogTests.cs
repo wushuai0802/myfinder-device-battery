@@ -696,7 +696,8 @@ static class ThemedDialogTests {
                         bool hover=interaction>0,pressed=interaction==2;
                         button.Name=style+dark+kind+interaction;
                         ComparePaint(button,theme.Card,scale,delegate(Graphics g,RectangleF rect){
-                            if(kind!=ThemedButtonKind.Text){CompactRenderer.Fill(g,rect,theme.Track,VisualDesign.SelectionRadius);CompactRenderer.Selection(g,rect,button.Text,null,kind==ThemedButtonKind.Primary,true,hover,pressed,false,dark);}
+                            if(kind==ThemedButtonKind.Primary){CompactRenderer.Fill(g,rect,button.FillFor(hover,pressed),VisualDesign.SelectionRadius);InteractionLayout.Paint(g,DialogInteraction.Card(button,scale,rect),rect,0,new PanelFeedback {HoverAction=hover?0:-1,PressedAction=pressed?0:-1},dark,true,delegate{CompactRenderer.DrawLabel(g,button.Text,VisualDesign.SelectionTextRect(rect),VisualDesign.DeviceNameFontSize,true,button.TextFor(hover,pressed),StringAlignment.Center);},false,1,2,VisualDesign.SelectionFocusRect(rect));}
+                            else if(kind!=ThemedButtonKind.Text){CompactRenderer.Fill(g,rect,theme.Track,VisualDesign.SelectionRadius);CompactRenderer.Selection(g,rect,button.Text,null,false,true,hover,pressed,false,dark);}
                             else{InteractionLayout.Paint(g,DialogInteraction.Card(button,scale,rect),rect,0,new PanelFeedback {HoverAction=hover?0:-1,PressedAction=pressed?0:-1},dark,false,delegate{CompactRenderer.DrawLabel(g,button.Text,rect,VisualDesign.DeviceNameFontSize,false,theme.Accent,StringAlignment.Center);});}
                         });
                     }

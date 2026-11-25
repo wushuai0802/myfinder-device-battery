@@ -117,7 +117,7 @@ static class ThemeTests {
             string actual=String.Join("|",rows.FindAll(delegate(PopupControl row){return row.Id!=6;}).ConvertAll(delegate(PopupControl row){return row.Text;}).ToArray());
             Check(actual=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|设备识别|自动识别更多设备|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preference sections and order");
             foreach(string name in new[]{"显示","提醒","数据","设备识别","更新"}){
-                var row=rows.Find(delegate(PopupControl c){return c.Text==name;});Check(row.Information&&row.Id<0&&row.Rect.Height>=23&&row.Rect.Height<=25,"section is 24px information");Check(PopupPages.Hit(rows,new PointF(row.Rect.X+10,row.Rect.Y+10))==null&&PopupPages.FindStable(rows,row.StableKey)==null,"section cannot be hit or focused");
+                var row=rows.Find(delegate(PopupControl c){return c.Text==name;});Check(row.Information&&row.Id<0&&row.Rect.Height>=29&&row.Rect.Height<=31,"section is 30px information (24px label + 6px top breathing room)");Check(PopupPages.Hit(rows,new PointF(row.Rect.X+10,row.Rect.Y+10))==null&&PopupPages.FindStable(rows,row.StableKey)==null,"section cannot be hit or focused");
             }
             foreach(int count in new[]{2,3,7}){
                 var seen=new HashSet<string>();var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=count};

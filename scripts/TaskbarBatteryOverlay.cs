@@ -25,6 +25,9 @@ namespace AtkBatteryTray {
         internal Rectangle TrayNotifyRect;
         internal Rectangle PrimaryMonitorBounds;
         internal DisplayObstruction Obstruction;
+        internal bool TaskbarCoveredByFullscreen;
+        internal int NotificationState; // SHQueryUserNotificationState: 2=BUSY, 3=D3D_FULLSCREEN, 4=PRESENTATION, 5=ACCEPTS
+        internal List<Rectangle> OccupiedRects;
     }
 
     internal sealed class TaskbarOverlayPlacement {
@@ -71,14 +74,196 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll")]
         static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
 
+        const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+        const int DWMWA_CLOAKED = 14;
+        const int GWL_EXSTYLE = -20;
+        const int WS_EX_TRANSPARENT = 0x00000020;
+        const int WS_EX_LAYERED = 0x00080000;
+        const int WS_EX_NOACTIVATE = 0x08000000;
+
+        delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll")]
+        static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll")]
+        static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetShellWindow();
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetDesktopWindow();
+
+        [DllImport("kernel32.dll")]
+        static extern uint GetCurrentProcessId();
+
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out NativeRect pvAttribute, int cbAttribute);
+
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         static extern UIntPtr SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
 
+        static readonly HashSet<string> ShellWindowClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW",
+            "NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland",
+            "Windows.UI.Core.CoreWindow"
+        };
+
+        static readonly HashSet<string> ExplorerNativeChildClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Shell_TrayWnd", "ReBarWindow32", "MSTaskSwWClass", "MSTaskListWClass",
+            "TrayNotifyWnd", "Start", "TrayButton", "TrayShowDesktopButtonWClass",
+            "TrayDummySearchControl", "InputIndicatorButton",
+            "Windows.UI.Composition.DesktopWindowContentBridge", "DesktopWindowXamlSource",
+            "SysPager", "ToolbarWindow32", "Button", "ClockButton", "TrayClockWClass", "CiceroUIWndFrame"
+        };
+
+        static string ReadClassName(IntPtr hwnd) {
+            var sb = new System.Text.StringBuilder(256);
+            int len = GetClassName(hwnd, sb, sb.Capacity);
+            return len > 0 ? sb.ToString() : "";
+        }
+
+        static bool IsWindowCloaked(IntPtr hwnd) {
+            try {
+                int cloaked = 0;
+                return DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out cloaked, 4) == 0 && cloaked != 0;
+            } catch (DllNotFoundException) {
+                return false;
+            } catch (EntryPointNotFoundException) {
+                return false;
+            }
+        }
+
+        static bool TryReadVisibleRect(IntPtr hwnd, out Rectangle rect) {
+            rect = Rectangle.Empty;
+            NativeRect nr = new NativeRect();
+            try {
+                if (DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out nr, Marshal.SizeOf(typeof(NativeRect))) == 0 &&
+                    nr.Right > nr.Left && nr.Bottom > nr.Top) {
+                    rect = nr.ToRectangle();
+                    return true;
+                }
+            } catch (DllNotFoundException) { } catch (EntryPointNotFoundException) { }
+            if (!GetWindowRect(hwnd, out nr)) return false;
+            rect = nr.ToRectangle();
+            return rect.Width > 0 && rect.Height > 0;
+        }
+
+        static bool IsPassiveOverlayStyle(IntPtr hwnd) {
+            int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+            if ((ex & WS_EX_NOACTIVATE) != 0) return true;
+            if ((ex & WS_EX_TRANSPARENT) != 0 && (ex & WS_EX_LAYERED) != 0) return true;
+            return false;
+        }
+
+        internal static bool IsFullscreenCoveringTaskbar(Rectangle windowRect, Rectangle monitorBounds, Rectangle taskbarRect) {
+            if (monitorBounds.Width <= 0 || monitorBounds.Height <= 0 || taskbarRect.Width <= 0 || taskbarRect.Height <= 0) return false;
+            bool coversFullMonitor =
+                windowRect.Left <= monitorBounds.Left + 4 &&
+                windowRect.Top <= monitorBounds.Top + 4 &&
+                windowRect.Right >= monitorBounds.Right - 4 &&
+                windowRect.Bottom >= monitorBounds.Bottom - 4;
+            if (coversFullMonitor) return true;
+
+            Rectangle barOverlap = Rectangle.Intersect(windowRect, taskbarRect);
+            Rectangle monOverlap = Rectangle.Intersect(windowRect, monitorBounds);
+            return barOverlap.Width >= (taskbarRect.Width * 3) / 4 &&
+                   barOverlap.Height >= Math.Max(1, taskbarRect.Height - 8) &&
+                   monOverlap.Height >= (monitorBounds.Height * 3) / 4;
+        }
+
+        static void ProbeTaskbarWindows(IntPtr trayWnd, IntPtr selfHandle, Rectangle monitorBounds, Rectangle bar, bool hasTrayNotify, Rectangle trayNotifyRect, List<Rectangle> occupied, out bool taskbarCoveredByFullscreen) {
+            taskbarCoveredByFullscreen = false;
+            if (trayWnd == IntPtr.Zero || bar.Width <= 0 || bar.Height <= 0 || occupied == null) return;
+            uint currentPid = GetCurrentProcessId();
+            IntPtr shellWnd = GetShellWindow();
+            IntPtr desktopWnd = GetDesktopWindow();
+            bool reachedTaskbar = false;
+            bool covered = false;
+            try {
+                EnumWindows(delegate(IntPtr hwnd, IntPtr lParam) {
+                    if (hwnd == IntPtr.Zero || hwnd == selfHandle) return true;
+                    if (hwnd == trayWnd) {
+                        reachedTaskbar = true;
+                        return true;
+                    }
+                    if (hwnd == shellWnd || hwnd == desktopWnd) return true;
+                    uint pid = 0;
+                    GetWindowThreadProcessId(hwnd, out pid);
+                    if (pid == currentPid) return true;
+                    if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || IsWindowCloaked(hwnd)) return true;
+                    string cls = ReadClassName(hwnd);
+                    if (ShellWindowClasses.Contains(cls) || DesktopDisplayWatch.IsShellClassName(cls)) return true;
+                    Rectangle r;
+                    if (!TryReadVisibleRect(hwnd, out r)) return true;
+
+                    // Any interactive top-level window sitting above Shell_TrayWnd in Z-order that covers
+                    // the primary monitor (or covers the taskbar while spanning most of the screen) is a
+                    // fullscreen game/video/presentation and must hide our topmost taskbar overlay.
+                    if (!reachedTaskbar && !covered && !IsPassiveOverlayStyle(hwnd) && IsFullscreenCoveringTaskbar(r, monitorBounds, bar)) {
+                        covered = true;
+                    }
+
+                    if (!reachedTaskbar &&
+                        r.Bottom > bar.Top && r.Top < bar.Bottom &&
+                        r.Right > bar.Left && r.Left < bar.Right &&
+                        r.Height > 0 && r.Height <= bar.Height + 16 &&
+                        r.Width >= 16 && r.Width <= (bar.Width * 2) / 3) {
+                        occupied.Add(r);
+                    }
+                    return true;
+                }, IntPtr.Zero);
+            } catch (Exception) { }
+            taskbarCoveredByFullscreen = reachedTaskbar && covered;
+
+            try {
+                int rightHalfStart = bar.Left + bar.Width / 2;
+                EnumChildWindows(trayWnd, delegate(IntPtr hwnd, IntPtr lParam) {
+                    if (hwnd == IntPtr.Zero || hwnd == selfHandle) return true;
+                    if (!IsWindowVisible(hwnd)) return true;
+                    string cls = ReadClassName(hwnd);
+                    if (ExplorerNativeChildClasses.Contains(cls)) return true;
+                    NativeRect nr;
+                    if (!GetWindowRect(hwnd, out nr)) return true;
+                    Rectangle r = nr.ToRectangle();
+                    if (hasTrayNotify && r.Left >= trayNotifyRect.Left - 4) return true;
+                    if (r.Height > 0 && r.Height <= bar.Height + 4 &&
+                        r.Width >= 16 && r.Width <= bar.Width / 2 &&
+                        r.Right > rightHalfStart && r.Left < bar.Right) {
+                        occupied.Add(r);
+                    }
+                    return true;
+                }, IntPtr.Zero);
+            } catch (Exception) { }
+        }
+
         internal static TaskbarEnvironmentSnapshot Capture() {
+            return Capture(IntPtr.Zero);
+        }
+
+        internal static TaskbarEnvironmentSnapshot Capture(IntPtr selfHandle) {
             var snap = new TaskbarEnvironmentSnapshot {
                 TaskbarEdge = -1,
                 PrimaryMonitorBounds = Screen.PrimaryScreen != null ? Screen.PrimaryScreen.Bounds : new Rectangle(0, 0, 1920, 1080),
-                Obstruction = DisplayObstruction.None
+                Obstruction = DisplayObstruction.None,
+                NotificationState = 5,
+                OccupiedRects = new List<Rectangle>()
             };
 
             IntPtr trayWnd = FindWindow("Shell_TrayWnd", null);
@@ -87,7 +272,13 @@ namespace AtkBatteryTray {
             snap.TaskbarVisible = IsWindowVisible(trayWnd);
 
             Screen taskbarScreen = Screen.FromHandle(trayWnd) ?? Screen.PrimaryScreen;
-            if (taskbarScreen != null) snap.PrimaryMonitorBounds = taskbarScreen.Bounds;
+            IntPtr trayMon;
+            Rectangle liveMonBounds, liveMonWork;
+            if (DesktopDisplayWatch.TryGetMonitorRects(trayWnd, out trayMon, out liveMonBounds, out liveMonWork)) {
+                snap.PrimaryMonitorBounds = liveMonBounds;
+            } else if (taskbarScreen != null) {
+                snap.PrimaryMonitorBounds = taskbarScreen.Bounds;
+            }
 
             NativeRect barRect = new NativeRect();
             if (GetWindowRect(trayWnd, out barRect)) {
@@ -127,63 +318,122 @@ namespace AtkBatteryTray {
 
             try {
                 var fg = DesktopDisplayWatch.Capture(taskbarScreen);
+                snap.NotificationState = fg.NotificationState;
                 snap.Obstruction = DesktopDisplayWatch.Evaluate(fg);
             } catch (Exception) { }
+
+            bool coveredByFullscreen;
+            ProbeTaskbarWindows(trayWnd, selfHandle, snap.PrimaryMonitorBounds, snap.TaskbarRect, snap.HasTrayNotifyRect, snap.TrayNotifyRect, snap.OccupiedRects, out coveredByFullscreen);
+            snap.TaskbarCoveredByFullscreen = coveredByFullscreen;
 
             return snap;
         }
     }
 
     internal static class TaskbarOverlayEvaluator {
+        internal const int MinOffsetX = -1200;
         const int GapBeforeNotifyPx = 10;
+        const int GapBetweenPluginsPx = 8;
+        const int MaxAvoidanceIterations = 16;
         const int MinLeftGuardRatioDenominator = 3; // Reserve left 1/3 for Start/search/pinned apps
 
-        internal static TaskbarOverlayPlacement Evaluate(TaskbarEnvironmentSnapshot snap, Size overlayPhysicalSize, int offsetX) {
+        internal static bool TryComputeHorizontalBounds(TaskbarEnvironmentSnapshot snap, Size overlayPhysicalSize, out int safeMinX, out int maxAllowedX, out int y, out TaskbarOverlayPlacement failure) {
+            safeMinX = 0;
+            maxAllowedX = 0;
+            y = 0;
             if (snap == null || !snap.HasTaskbarWindow) {
-                return Fail("no_explorer_taskbar", "未检测到 Windows 任务栏（可能使用第三方 Shell），已自动隐藏。");
+                failure = Fail("no_explorer_taskbar", "未检测到 Windows 任务栏（可能使用第三方 Shell），已自动隐藏。");
+                return false;
             }
             if (!snap.TaskbarVisible) {
-                return Fail("taskbar_hidden", "当前任务栏不可见，叠加层已自动隐藏。");
+                failure = Fail("taskbar_hidden", "当前任务栏不可见，叠加层已自动隐藏。");
+                return false;
             }
             if (snap.AutoHideEnabled) {
-                return Fail("auto_hide_taskbar", "当前系统启用了自动隐藏任务栏，为避免悬空遮挡已自动降级隐藏。");
+                failure = Fail("auto_hide_taskbar", "当前系统启用了自动隐藏任务栏，为避免悬空遮挡已自动降级隐藏。");
+                return false;
             }
             if (snap.TaskbarEdge != TaskbarEnvironmentProbe.EdgeBottom) {
-                return Fail("non_bottom_taskbar", "实验版仅支持底部水平任务栏，当前位置已自动降级隐藏。");
+                failure = Fail("non_bottom_taskbar", "实验版仅支持底部水平任务栏，当前位置已自动降级隐藏。");
+                return false;
             }
             Rectangle bar = snap.TaskbarRect;
             if (bar.Width < 320 || bar.Height < 24 || bar.Height > 120) {
-                return Fail("invalid_taskbar_bounds", "当前任务栏尺寸异常，已自动隐藏以防止错位。");
+                failure = Fail("invalid_taskbar_bounds", "当前任务栏尺寸异常，已自动隐藏以防止错位。");
+                return false;
             }
-            if (snap.Obstruction == DisplayObstruction.Fullscreen) {
-                return Fail("fullscreen_hidden", "检测到主屏全屏应用，任务栏电量已临时隐藏。");
+            if (snap.Obstruction == DisplayObstruction.Fullscreen ||
+                snap.Obstruction == DisplayObstruction.UncertainFullscreen ||
+                snap.TaskbarCoveredByFullscreen ||
+                snap.NotificationState == 3 ||
+                snap.NotificationState == 4) {
+                failure = Fail("fullscreen_hidden", "检测到全屏应用或游戏，任务栏电量已自动隐藏。");
+                return false;
             }
 
             int w = Math.Max(1, overlayPhysicalSize.Width);
             int h = Math.Max(1, overlayPhysicalSize.Height);
             if (h > bar.Height) {
-                return Fail("invalid_taskbar_bounds", "任务栏高度不足以容纳电量条，已自动隐藏。");
+                failure = Fail("invalid_taskbar_bounds", "任务栏高度不足以容纳电量条，已自动隐藏。");
+                return false;
             }
 
             int rightAnchor = (snap.HasTrayNotifyRect && snap.TrayNotifyRect.Left > bar.Left + 80 && snap.TrayNotifyRect.Left < bar.Right)
                 ? snap.TrayNotifyRect.Left - GapBeforeNotifyPx
                 : bar.Right - Math.Max(140, bar.Width / 8);
 
-            int safeMinX = bar.Left + Math.Max(120, bar.Width / MinLeftGuardRatioDenominator);
-            int maxAllowedX = rightAnchor - w;
+            safeMinX = bar.Left + Math.Max(120, bar.Width / MinLeftGuardRatioDenominator);
+            maxAllowedX = rightAnchor - w;
             if (maxAllowedX < safeMinX) {
-                return Fail("insufficient_space", "任务栏通知区左侧空间不足，已自动隐藏以避免遮挡图标。");
+                failure = Fail("insufficient_space", "任务栏通知区左侧空间不足，已自动隐藏以避免遮挡图标。");
+                return false;
             }
 
-            int clampedOffset = Math.Max(-320, Math.Min(0, offsetX));
+            y = bar.Top + (bar.Height - h) / 2;
+            failure = null;
+            return true;
+        }
+
+        internal static TaskbarOverlayPlacement Evaluate(TaskbarEnvironmentSnapshot snap, Size overlayPhysicalSize, int offsetX) {
+            int safeMinX, maxAllowedX, y;
+            TaskbarOverlayPlacement failure;
+            if (!TryComputeHorizontalBounds(snap, overlayPhysicalSize, out safeMinX, out maxAllowedX, out y, out failure)) {
+                return failure;
+            }
+
+            int w = Math.Max(1, overlayPhysicalSize.Width);
+            int clampedOffset = Math.Max(MinOffsetX, Math.Min(0, offsetX));
             int x = maxAllowedX + clampedOffset;
             x = Math.Max(safeMinX, Math.Min(maxAllowedX, x));
-            int y = bar.Top + (bar.Height - h) / 2;
+
+            bool avoided = false;
+            if (snap.OccupiedRects != null && snap.OccupiedRects.Count > 0) {
+                int maxIters = Math.Max(MaxAvoidanceIterations, snap.OccupiedRects.Count + 1);
+                for (int iter = 0; iter < maxIters; iter++) {
+                    bool hit = false;
+                    for (int i = 0; i < snap.OccupiedRects.Count; i++) {
+                        Rectangle occ = snap.OccupiedRects[i];
+                        if (occ.Width <= 0 || occ.Height <= 0) continue;
+                        int leftBound = occ.Left - GapBetweenPluginsPx;
+                        int rightBound = occ.Right + GapBetweenPluginsPx;
+                        if (x < rightBound && (x + w) > leftBound) {
+                            x = occ.Left - GapBetweenPluginsPx - w;
+                            avoided = true;
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if (!hit || x < safeMinX) break;
+                }
+                if (x < safeMinX) {
+                    return Fail("plugin_conflict", "检测到任务栏其他插件占用空间且左侧余量不足，已自动避让隐藏。");
+                }
+            }
 
             return new TaskbarOverlayPlacement {
                 CanDisplay = true,
-                StatusCode = "ready",
-                StatusMessage = "运行正常 · 已贴合在主屏底部任务栏通知区左侧（独立无焦点层）",
+                StatusCode = avoided ? "ready_avoided" : "ready",
+                StatusMessage = avoided ? "运行正常 · 已自动避让任务栏其他插件" : "运行正常 · 已贴合在主屏底部任务栏通知区左侧（独立无焦点层）",
                 PhysicalLocation = new Point(x, y)
             };
         }
@@ -266,13 +516,11 @@ namespace AtkBatteryTray {
                 float textX = x;
                 float textW = itemW;
                 if (showIcons) {
-                    var badge = new RectangleF(x, 5f, 18f, 18f);
-                    Color badgeBg = VisualDesign.HighContrast ? SystemColors.Highlight : palette.RaisedSurface;
-                    Color badgeFg = VisualDesign.HighContrast ? SystemColors.HighlightText : (it.Low ? fg : palette.Foreground);
-                    CompactRenderer.Fill(g, badge, badgeBg, 4.5f);
-                    CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(it.Kind), new RectangleF(badge.X + 3f, badge.Y + 3f, 12f, 12f), badgeFg);
-                    textX = x + 20f;
-                    textW = itemW - 20f;
+                    // Frameless line icon: no rounded badge box, extra breathing room before the percent.
+                    Color iconFg = VisualDesign.HighContrast ? SystemColors.WindowText : (it.Low ? fg : palette.Foreground);
+                    CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(it.Kind), new RectangleF(x + 1f, 6f, 14f, 14f), iconFg);
+                    textX = x + 22f;
+                    textW = itemW - 22f;
                 }
 
                 string pct = it.Percent.HasValue ? (it.Charging ? it.Percent.Value + "%+" : it.Percent.Value + "%") : "--";
@@ -321,7 +569,7 @@ namespace AtkBatteryTray {
 
         readonly TrayContext owner;
         readonly LayeredSurface surface = new LayeredSurface();
-        readonly System.Windows.Forms.Timer watchTimer = new System.Windows.Forms.Timer { Interval = 800 };
+        readonly System.Windows.Forms.Timer watchTimer = new System.Windows.Forms.Timer { Interval = 400 };
         readonly Func<TaskbarEnvironmentSnapshot> probeFunc;
         readonly ContextMenuStrip contextMenu = new ContextMenuStrip();
 
@@ -331,10 +579,13 @@ namespace AtkBatteryTray {
         Point physicalLocation;
         bool overlayVisible;
         string lastRenderKey;
+        bool pointerDown, dragging;
+        Point dragStartScreen;
+        int dragStartX, dragMinX, dragMaxX, dragAnchorMaxX;
 
         internal TaskbarBatteryOverlayForm(TrayContext owner, Func<TaskbarEnvironmentSnapshot> probe = null) {
             this.owner = owner;
-            probeFunc = probe ?? TaskbarEnvironmentProbe.Capture;
+            probeFunc = probe ?? delegate { return TaskbarEnvironmentProbe.Capture(IsHandleCreated ? Handle : IntPtr.Zero); };
 
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
@@ -347,7 +598,10 @@ namespace AtkBatteryTray {
 
             BuildContextMenu();
             watchTimer.Tick += delegate { EvaluateAndRender(); };
+            MouseDown += HandleMouseDown;
+            MouseMove += HandleMouseMove;
             MouseUp += HandleMouseUp;
+            MouseCaptureChanged += HandleMouseCaptureChanged;
         }
 
         internal TaskbarOverlayPlacement LastPlacement { get { return lastPlacement; } }
@@ -380,6 +634,20 @@ namespace AtkBatteryTray {
             openPanel.Click += delegate { if (owner != null) owner.ShowDetailsFromOverlay(); };
             var openCc = new ToolStripMenuItem("打开控制中心 → 显示位置");
             openCc.Click += delegate { if (owner != null) owner.ShowControlCenter(ControlCenterPage.Placement); };
+            var nudgeLeft = new ToolStripMenuItem("向左避让（-40px）");
+            nudgeLeft.Click += delegate {
+                if (owner == null) return;
+                var p = DeviceSettings.Current;
+                p.TaskbarOverlay.OffsetX = Math.Max(TaskbarOverlayEvaluator.MinOffsetX, Math.Min(0, p.TaskbarOverlay.OffsetX - 40));
+                try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+            };
+            var resetOffset = new ToolStripMenuItem("重置默认位置");
+            resetOffset.Click += delegate {
+                if (owner == null) return;
+                var p = DeviceSettings.Current;
+                p.TaskbarOverlay.OffsetX = 0;
+                try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+            };
             var toggleIcons = new ToolStripMenuItem("切换图标显示");
             toggleIcons.Click += delegate {
                 if (owner == null) return;
@@ -397,15 +665,77 @@ namespace AtkBatteryTray {
             contextMenu.Items.Add(openPanel);
             contextMenu.Items.Add(openCc);
             contextMenu.Items.Add(new ToolStripSeparator());
+            contextMenu.Items.Add(nudgeLeft);
+            contextMenu.Items.Add(resetOffset);
             contextMenu.Items.Add(toggleIcons);
             contextMenu.Items.Add(disableItem);
         }
 
+        void HandleMouseDown(object sender, MouseEventArgs e) {
+            if (e.Button != MouseButtons.Left || IsDisposed) return;
+            pointerDown = true;
+            dragging = false;
+            dragStartScreen = Cursor.Position;
+            dragStartX = physicalLocation.X;
+            var pref = DeviceSettings.Current;
+            var cfg = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
+            Size logicalSize = TaskbarOverlayRenderer.ComputeLogicalSize(items, cfg.ShowIcons);
+            Size physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
+            TaskbarEnvironmentSnapshot snap = probeFunc();
+            int safeMin, maxAllowed, unusedY;
+            TaskbarOverlayPlacement unusedFail;
+            if (TaskbarOverlayEvaluator.TryComputeHorizontalBounds(snap, physicalSize, out safeMin, out maxAllowed, out unusedY, out unusedFail)) {
+                dragMinX = Math.Max(safeMin, maxAllowed + TaskbarOverlayEvaluator.MinOffsetX);
+                dragMaxX = maxAllowed;
+                dragAnchorMaxX = maxAllowed;
+            } else {
+                dragMinX = physicalLocation.X;
+                dragMaxX = physicalLocation.X;
+                dragAnchorMaxX = physicalLocation.X;
+            }
+            Capture = true;
+        }
+
+        void HandleMouseMove(object sender, MouseEventArgs e) {
+            if (!pointerDown || IsDisposed) return;
+            int dx = Cursor.Position.X - dragStartScreen.X;
+            if (!dragging && Math.Abs(dx) >= 6) dragging = true;
+            if (!dragging) return;
+            int nextX = Math.Max(dragMinX, Math.Min(dragMaxX, dragStartX + dx));
+            if (nextX == physicalLocation.X) return;
+            physicalLocation = new Point(nextX, physicalLocation.Y);
+            lastRenderKey = null;
+            SetWindowPos(Handle, HWND_TOPMOST, physicalLocation.X, physicalLocation.Y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
         void HandleMouseUp(object sender, MouseEventArgs e) {
             if (e.Button == MouseButtons.Left) {
-                if (owner != null) owner.ShowDetailsFromOverlay();
+                bool wasDown = pointerDown;
+                bool wasDragging = dragging;
+                pointerDown = false;
+                dragging = false;
+                if (Capture) Capture = false;
+                if (wasDragging) {
+                    int newOffset = Math.Max(TaskbarOverlayEvaluator.MinOffsetX, Math.Min(0, physicalLocation.X - dragAnchorMaxX));
+                    if (owner != null) {
+                        var p = DeviceSettings.Current;
+                        p.TaskbarOverlay.OffsetX = newOffset;
+                        try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+                    }
+                    RefreshNow(true);
+                    return;
+                }
+                if (wasDown && owner != null) owner.ShowDetailsFromOverlay();
             } else if (e.Button == MouseButtons.Right) {
                 contextMenu.Show(Cursor.Position);
+            }
+        }
+
+        void HandleMouseCaptureChanged(object sender, EventArgs e) {
+            if (!Capture && (pointerDown || dragging)) {
+                pointerDown = false;
+                dragging = false;
+                if (!IsDisposed) RefreshNow(true);
             }
         }
 
@@ -439,7 +769,7 @@ namespace AtkBatteryTray {
         }
 
         void EvaluateAndRender() {
-            if (IsDisposed) return;
+            if (IsDisposed || dragging) return;
             var pref = DeviceSettings.Current;
             var cfg = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
             cfg.Normalize();

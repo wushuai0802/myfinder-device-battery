@@ -34,6 +34,22 @@ namespace AtkBatteryTray {
             internal Rectangle ToRectangle() { return Rectangle.FromLTRB(Left, Top, Right, Bottom); }
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        struct NativePoint {
+            internal int X, Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MonitorInfo {
+            internal int Size;
+            internal NativeRect Monitor;
+            internal NativeRect Work;
+            internal uint Flags;
+        }
+
+        const uint MONITOR_DEFAULTTOPRIMARY = 1;
+        const uint MONITOR_DEFAULTTONEAREST = 2;
+
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern IntPtr GetShellWindow();
         [DllImport("user32.dll")] static extern IntPtr GetDesktopWindow();
@@ -43,8 +59,49 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder text, int maxCount);
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+        [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+        [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(NativePoint pt, uint flags);
+        [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo info);
         [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out NativeRect rect, int size);
         [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+
+        internal static bool TryGetMonitorRects(IntPtr hwnd, out IntPtr hMonitor, out Rectangle monitorBounds, out Rectangle workArea) {
+            hMonitor = IntPtr.Zero;
+            monitorBounds = Rectangle.Empty;
+            workArea = Rectangle.Empty;
+            if (hwnd == IntPtr.Zero) return false;
+            try {
+                hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                if (hMonitor == IntPtr.Zero) return false;
+                var mi = new MonitorInfo { Size = Marshal.SizeOf(typeof(MonitorInfo)) };
+                if (!GetMonitorInfo(hMonitor, ref mi)) return false;
+                monitorBounds = mi.Monitor.ToRectangle();
+                workArea = mi.Work.ToRectangle();
+                return monitorBounds.Width > 0 && monitorBounds.Height > 0;
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        internal static bool TryGetMonitorRectsForScreen(Screen screen, out IntPtr hMonitor, out Rectangle monitorBounds, out Rectangle workArea) {
+            hMonitor = IntPtr.Zero;
+            monitorBounds = Rectangle.Empty;
+            workArea = Rectangle.Empty;
+            try {
+                NativePoint pt = screen != null
+                    ? new NativePoint { X = screen.Bounds.Left + screen.Bounds.Width / 2, Y = screen.Bounds.Top + screen.Bounds.Height / 2 }
+                    : new NativePoint { X = 0, Y = 0 };
+                hMonitor = MonitorFromPoint(pt, screen != null ? MONITOR_DEFAULTTONEAREST : MONITOR_DEFAULTTOPRIMARY);
+                if (hMonitor == IntPtr.Zero) return false;
+                var mi = new MonitorInfo { Size = Marshal.SizeOf(typeof(MonitorInfo)) };
+                if (!GetMonitorInfo(hMonitor, ref mi)) return false;
+                monitorBounds = mi.Monitor.ToRectangle();
+                workArea = mi.Work.ToRectangle();
+                return monitorBounds.Width > 0 && monitorBounds.Height > 0;
+            } catch (Exception) {
+                return false;
+            }
+        }
 
         static readonly int OwnProcessId = Process.GetCurrentProcess().Id;
 
@@ -61,10 +118,10 @@ namespace AtkBatteryTray {
             if (!snap.SameMonitor) return DisplayObstruction.None;
 
             bool coversFullMonitor = snap.MonitorBounds.Width > 0 && snap.MonitorBounds.Height > 0 &&
-                snap.WindowRect.Left <= snap.MonitorBounds.Left + 2 &&
-                snap.WindowRect.Top <= snap.MonitorBounds.Top + 2 &&
-                snap.WindowRect.Right >= snap.MonitorBounds.Right - 2 &&
-                snap.WindowRect.Bottom >= snap.MonitorBounds.Bottom - 2;
+                snap.WindowRect.Left <= snap.MonitorBounds.Left + 4 &&
+                snap.WindowRect.Top <= snap.MonitorBounds.Top + 4 &&
+                snap.WindowRect.Right >= snap.MonitorBounds.Right - 4 &&
+                snap.WindowRect.Bottom >= snap.MonitorBounds.Bottom - 4;
 
             if (coversFullMonitor) return DisplayObstruction.Fullscreen;
 
@@ -138,16 +195,32 @@ namespace AtkBatteryTray {
             NativeRect rect = new NativeRect();
             bool gotRect = false;
             try {
-                if (DwmGetWindowAttribute(fg, 9, out rect, Marshal.SizeOf(typeof(NativeRect))) == 0) gotRect = true;
+                if (DwmGetWindowAttribute(fg, 9, out rect, Marshal.SizeOf(typeof(NativeRect))) == 0 &&
+                    rect.Right > rect.Left && rect.Bottom > rect.Top) {
+                    gotRect = true;
+                }
             } catch (EntryPointNotFoundException) { } catch (DllNotFoundException) { }
             if (!gotRect && !GetWindowRect(fg, out rect)) return snap;
 
             snap.WindowRect = rect.ToRectangle();
-            var fgScreen = Screen.FromHandle(fg);
             var targetScreen = widgetScreen ?? Screen.PrimaryScreen;
-            snap.MonitorBounds = targetScreen.Bounds;
-            snap.MonitorWorkArea = targetScreen.WorkingArea;
-            snap.SameMonitor = fgScreen != null && targetScreen != null && fgScreen.Bounds == targetScreen.Bounds;
+            IntPtr fgMon, targetMon;
+            Rectangle fgMonBounds, fgMonWork, targetBounds, targetWork;
+            bool gotFgMon = TryGetMonitorRects(fg, out fgMon, out fgMonBounds, out fgMonWork);
+            bool gotTargetMon = TryGetMonitorRectsForScreen(targetScreen, out targetMon, out targetBounds, out targetWork);
+            if (gotTargetMon) {
+                snap.MonitorBounds = targetBounds;
+                snap.MonitorWorkArea = targetWork;
+            } else if (targetScreen != null) {
+                snap.MonitorBounds = targetScreen.Bounds;
+                snap.MonitorWorkArea = targetScreen.WorkingArea;
+            }
+            if (gotFgMon && gotTargetMon) {
+                snap.SameMonitor = fgMon == targetMon;
+            } else {
+                var fgScreen = Screen.FromHandle(fg);
+                snap.SameMonitor = fgScreen != null && targetScreen != null && fgScreen.Bounds == targetScreen.Bounds;
+            }
             return snap;
         }
     }
