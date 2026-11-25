@@ -88,3 +88,10 @@ The per-device read policy in `engine/families/memory.py` (bounded trial rounds,
 remembered working read, retirement after anomalies, vendor-software
 stand-aside) follows the behaviour BrimDeck documents in
 `docs/zh-CN/devices.md`, reimplemented without copying code.
+
+The optional desktop battery widget (`scripts/DesktopWidget.cs`,
+`scripts/DesktopDisplayWatch.cs`, `scripts/LayeredSurface.cs`) conceptually
+references [MoFeng2223/BrimDeck](https://github.com/MoFeng2223/BrimDeck)
+(Apache-2.0) for user-facing compact forms, four-edge docking, and fullscreen/
+maximized auto-hide behaviour, and is independently implemented in WinForms and
+Win32 without copying WPF source code.

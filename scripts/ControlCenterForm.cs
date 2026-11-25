@@ -963,6 +963,10 @@ namespace AtkBatteryTray {
             sb.Append(pref.LowBatteryNotifications).Append('|').Append(pref.WarningThreshold).Append('|').Append(pref.BackgroundSeconds).Append('|');
             sb.Append(pref.RememberReadings).Append('|').Append(pref.AutoDetectMoreDevices).Append('|').Append(pref.AutoCheckUpdates).Append('|');
             sb.Append(pref.ShowUpdateBadge).Append('|').Append(pref.IncludeBetaUpdates).Append('|').Append(pref.CheckFeedbackReplies).Append('|');
+            if (pref.DesktopWidget != null) {
+                var w = pref.DesktopWidget;
+                sb.Append(w.Enabled).Append('|').Append(w.Style).Append('|').Append(w.DockEdge).Append('|').Append(w.AutoHideOnEdge).Append('|').Append(w.TopMost).Append('|').Append(w.FullscreenPolicy).Append('|').Append(w.CompactOnMaximized).Append('|').Append(w.MaxDevices).Append('|');
+            }
             sb.Append(owner.StoppedFamilyDeviceCount).Append('|').Append(owner.IsProbeToggleBusy).Append('|').Append(owner.IsFamilyOpBusy).Append('|');
             sb.Append(owner.GenericReady).Append('|').Append(owner.GenericError ?? "").Append('|').Append(owner.GenericHealthSummary ?? "").Append('|');
             sb.Append(owner.Current != null ? owner.Current.Percent.ToString() : "-").Append('|');
@@ -1470,7 +1474,7 @@ namespace AtkBatteryTray {
             cardsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
 
             cardsGrid.Controls.Add(CreatePlacementOptionCard(0, "托盘图标", "通知区域显示电量数字，点击打开主面板", "已启用"), 0, 0);
-            cardsGrid.Controls.Add(CreatePlacementOptionCard(1, "桌面小组件", "常驻桌面、胶囊收起、贴边隐藏、全屏防打扰", "Wave 2 接入"), 1, 0);
+            cardsGrid.Controls.Add(CreatePlacementOptionCard(1, "桌面小组件", "常驻桌面、胶囊收起、贴边隐藏、全屏防打扰", pref.DesktopWidget.Enabled ? "已启用" : "未启用"), 1, 0);
             cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏旁直接显示几台设备的电量", "实验 · Wave 4"), 2, 0);
 
             var detailCard = CreateCard(new Padding(22, 16, 22, 18));
@@ -1492,8 +1496,54 @@ namespace AtkBatteryTray {
                     UpdatePreference(delegate(AudioBindings p) { p.TraySource = ruleKeys[idx]; p.TrayDeviceId = null; });
                 }), true));
             } else if (selectedPlacementCard == 1) {
-                var info = new Label { Text = "将在下一波次（Wave 2 · T50）接入独立分层桌面小组件：支持胶囊/环条/贴边指示条、四边自动隐藏与全屏游戏自动躲避。", Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true, MaximumSize = new Size(760, 0), Padding = new Padding(0, 4, 0, 12) };
-                rows.Add(info);
+                var w = pref.DesktopWidget;
+                var enableToggle = new ControlCenterToggle(palette, dark) { Checked = w.Enabled };
+                enableToggle.Toggled += delegate {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.Enabled = enableToggle.Checked; });
+                };
+                rows.Add(CreateSettingRow("启用桌面小组件", "在桌面显示独立悬浮电量胶囊，支持自由拖动与点击展开", enableToggle, false));
+
+                int styleIdx = Array.IndexOf(DesktopWidgetGeometry.StyleKeys, DesktopWidgetGeometry.NormalizeStyle(w.Style));
+                rows.Add(CreateSettingRow("收起形态", "平时停靠在桌面上的紧凑外观", CreateSegmentedChoices(DesktopWidgetGeometry.StyleNames, styleIdx, delegate(int idx) {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.Style = DesktopWidgetGeometry.StyleKeys[idx]; });
+                }), true));
+
+                int edgeIdx = Array.IndexOf(DesktopWidgetGeometry.EdgeKeys, DesktopWidgetGeometry.NormalizeEdge(w.DockEdge));
+                rows.Add(CreateSettingRow("贴边停靠", "拖近屏幕四边也会自动吸附并记住所在显示器", CreateSegmentedChoices(DesktopWidgetGeometry.EdgeNames, edgeIdx, delegate(int idx) {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.DockEdge = DesktopWidgetGeometry.EdgeKeys[idx]; });
+                }), true));
+
+                var autoHideToggle = new ControlCenterToggle(palette, dark) { Checked = w.AutoHideOnEdge };
+                autoHideToggle.Toggled += delegate {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.AutoHideOnEdge = autoHideToggle.Checked; });
+                };
+                rows.Add(CreateSettingRow("贴边自动隐藏", "贴靠边缘时缩为细指示条，鼠标移到边缘立即滑出", autoHideToggle, true));
+
+                var topToggle = new ControlCenterToggle(palette, dark) { Checked = w.TopMost };
+                topToggle.Toggled += delegate {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.TopMost = topToggle.Checked; });
+                };
+                rows.Add(CreateSettingRow("总在最前", "关闭后小组件像普通窗口一样可被其他应用遮挡", topToggle, true));
+
+                string[] fsKeys = { "hide", "edge", "ignore" };
+                string[] fsLabels = { "全屏隐藏", "缩为指示条", "不处理" };
+                int fsIdx = Array.IndexOf(fsKeys, DesktopDisplayWatch.NormalizePolicy(w.FullscreenPolicy));
+                rows.Add(CreateSettingRow("全屏游戏 / 视频防打扰", "不确定全屏信号时不会永久消失，仅缩为指示条", CreateSegmentedChoices(fsLabels, fsIdx, delegate(int idx) {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.FullscreenPolicy = fsKeys[idx]; });
+                }), true));
+
+                var maxToggle = new ControlCenterToggle(palette, dark) { Checked = w.CompactOnMaximized };
+                maxToggle.Toggled += delegate {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.CompactOnMaximized = maxToggle.Checked; });
+                };
+                rows.Add(CreateSettingRow("窗口最大化时缩为指示条", "当前屏幕有窗口最大化时自动收窄，减少遮挡", maxToggle, true));
+
+                int[] maxOpts = { 2, 3, 4 };
+                int maxIdx = Array.IndexOf(maxOpts, w.MaxDevices);
+                if (maxIdx < 0) maxIdx = 1;
+                rows.Add(CreateSettingRow("收起时最多显示设备数", null, CreateSegmentedChoices(new[] { "2 台", "3 台", "4 台" }, maxIdx, delegate(int idx) {
+                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.MaxDevices = maxOpts[idx]; });
+                }), true));
             } else {
                 var info = new Label { Text = "将在 Wave 4 作为实验功能提供：采用纯净室独立无焦点贴合浮层，不支持环境（如自动隐藏/侧边任务栏）将自动降级隐藏并提示原因。", Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true, MaximumSize = new Size(760, 0), Padding = new Padding(0, 4, 0, 12) };
                 rows.Add(info);
