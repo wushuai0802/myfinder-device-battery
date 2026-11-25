@@ -321,19 +321,209 @@ class AtkNanoProvider(BatteryHidProvider):
 STRICT_COMPX_IDS = frozenset({(0x3554, 0xF517), (0x3554, 0xFB56), (0x3554, 0xF58E),
                              (0x3554, 0xF505), (0x3554, 0xF503), (0x3554, 0xF506)})
 
-# Exact USB + live CID/MID gates, never the broad battery protocol-family gate.
-# OpenMouse 30d6ad37d0ecc9fff53f86d5058d67a88e07150d; see upstream-protocols.md.
-# (CID/MID, codec, stage base, row length, maximum stages)
+# Exact USB + live CID/MID (or OpenMouse-verified USB layout) gates, never the broad battery protocol-family gate.
+# OpenMouse 93c4cc601d448ea481eb59d7b785eec75ae16ec2; see upstream-protocols.md.
+# (CID/MID or None for layout-matched CompX report-8 models, codec, stage base, row length, maximum stages)
 DPI_MODELS = {
+    # ATK / VXE non-NearLink CompX report-8 models & 2.4G receivers (0x10 live CID/MID verified)
+    (0x373B, 0x1014): ((2, 36), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x1015): ((2, 37), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x1016): ((2, 38), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x1017): ((2, 39), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x1018): ((2, 40), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x1019): ((2, 41), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x101A): ((2, 39), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x101B): ((2, 39), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x102E): ((2, 42), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x102F): ((2, 43), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1030): ((2, 44), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x103C): ((2, 45), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x103D): ((2, 46), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x103E): ((2, 47), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x103F): ((2, 49), "step50", 0x000C, 4, 6),
+    (0x373B, 0x1045): ((2, 50), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x104A): ((2, 53), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x104B): ((2, 54), "step50", 0x000C, 4, 6),
+    (0x373B, 0x104C): ((2, 55), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x105B): ((2, 56), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1084): ((2, 63), "paw3311", 0x000C, 4, 6),
+    (0x373B, 0x1086): ((2, 64), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x1087): ((2, 65), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x10AC): ((2, 66), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x10E9): ((2, 70), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x10FD): ((2, 108), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x1117): ((2, 85), "step50", 0x000C, 4, 6),
+    (0x373B, 0x1119): ((2, 87), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x113E): ((2, 89), "step50", 0x000C, 4, 6),
+    (0x373B, 0x113F): ((2, 90), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x1157): ((2, 99), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x1158): ((2, 100), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11A0): ((2, 107), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x11A6): ((1, 2), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11AA): ((2, 109), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x11AB): ((2, 110), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11B6): ((1, 3), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11CC): ((1, 4), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11CF): ((1, 5), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11D2): ((2, 114), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11D5): ((1, 8), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11D9): ((1, 8), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11DD): ((1, 6), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11E3): ((1, 7), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11E4): ((1, 8), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11E5): ((1, 9), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11E7): ((1, 10), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11EC): ((1, 11), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11ED): ((1, 12), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11F0): ((1, 13), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11F2): ((1, 15), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11F3): ((2, 115), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11F5): ((1, 16), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11F6): ((1, 17), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x11F7): ((1, 18), "step50", 0x000C, 4, 6),
+    (0x373B, 0x11F9): ((1, 20), "step50", 0x000C, 4, 6),
+    (0x373B, 0x1201): ((1, 19), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x120A): ((1, 21), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x120B): ((1, 22), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x120D): ((1, 23), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x120E): ((1, 24), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1230): ((1, 25), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1245): ((2, 120), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x1248): ((2, 121), "paw3315", 0x000C, 4, 6),
+    (0x373B, 0x1249): ((2, 122), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x124A): ((2, 123), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x124E): ((1, 26), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1256): ((1, 27), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x125A): ((1, 28), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1266): ((1, 30), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1269): ((1, 31), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x126D): ((2, 128), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x126E): ((1, 33), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x126F): ((1, 38), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1270): ((1, 37), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1271): ((2, 127), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1272): ((2, 125), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1273): ((2, 126), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x1274): ((1, 32), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x127C): ((1, 42), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x127E): ((1, 39), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x127F): ((1, 40), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x1285): ((1, 45), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x1286): ((1, 46), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x1289): ((1, 47), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x128A): ((1, 48), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x128B): ((1, 49), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x128C): ((1, 50), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x128D): ((1, 51), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x128E): ((1, 52), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x1292): ((1, 53), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x1293): ((1, 54), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x1296): ((1, 55), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x129B): ((1, 58), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x129C): ((1, 59), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x129D): ((1, 60), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12A2): ((1, 61), "paw3955", 0x1B00, 6, 6),
     (0x373B, 0x12A7): ((1, 62), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12A8): ((1, 63), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12A9): ((1, 64), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12AB): ((2, 129), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12AF): ((1, 66), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12B0): ((1, 67), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12B3): ((1, 75), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12B4): ((1, 76), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12BF): ((2, 130), "paw3395se", 0x000C, 4, 6),
+    (0x373B, 0x12C6): ((1, 71), "paw3955", 0x1B00, 6, 6),
+    (0x373B, 0x12D7): ((2, 131), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x12FA): ((1, 85), "ultra", 0x000C, 4, 6),
+    (0x373B, 0x12FF): ((1, 87), "paw3950", 0x000C, 4, 6),
+    (0x373B, 0x132B): ((2, 133), "ultra", 0x000C, 4, 6),
     (0x3554, 0xF58C): ((2, 27), "step50", 0x000C, 4, 8),
     (0x3554, 0xF58F): ((2, 32), "paw3395se", 0x000C, 4, 8),
+    # Pulsar CompX report-8 models (wired & 2.4G receivers)
+    (0x3710, 0x5406): (None, "pulsar", 0x000C, 4, 8),
+    (0x3710, 0x3414): (None, "pulsar", 0x000C, 4, 8),
+    (0x3554, 0xF508): (None, "step50", 0x000C, 4, 8),
+    (0x3554, 0xF507): (None, "step50", 0x000C, 4, 8),
+    # Lamzu Atlantis CompX report-8 models (1K receiver, wired, 4K receiver)
+    (0x3554, 0xF50D): (None, "step50", 0x000C, 4, 8),
+    (0x3554, 0xF50F): (None, "step50", 0x000C, 4, 8),
+    (0x3554, 0xF510): (None, "step50", 0x000C, 4, 8),
+    # Scyrox V8S (wired & Turbo 8K dongle, sensor3955 @ 0x1B00) and V8 (8K dongle)
+    (0x3554, 0xF515): (None, "sensor3955", 0x1B00, 6, 5),
+    (0x3554, 0xF517): (None, "sensor3955", 0x1B00, 6, 5),
+    (0x3554, 0xF5F7): (None, "step50", 0x000C, 4, 5),
+    # GravaStar Mercury CompX report-8 models (wired & 2.4G receivers)
+    (0x3554, 0xF548): (None, "paw3950", 0x000C, 4, 8),
+    (0x3554, 0xF549): (None, "paw3950", 0x000C, 4, 8),
+    (0x3554, 0xF54B): (None, "paw3950", 0x000C, 4, 8),
+    (0x3554, 0xF575): (None, "paw3950", 0x000C, 4, 8),
+    (0x3554, 0xF576): (None, "paw3950", 0x000C, 4, 8),
+    (0x3554, 0xF577): (None, "paw3950", 0x000C, 4, 8),
+    # Hitscan Hyperlight CompX report-8 models (wired, 2.4G receiver, 8K receiver)
+    (0x3770, 0x0100): (None, "step50", 0x000C, 4, 4),
+    (0x3770, 0x0200): (None, "step50", 0x000C, 4, 4),
+    (0x3770, 0x0300): (None, "step50", 0x000C, 4, 4),
+    # Noir Gear M1-NEX CompX report-8 model
+    (0x3554, 0xF500): (None, "step50", 0x000C, 4, 7),
+    # VGN Dragonfly F2 Master+ (2.4G & wired), VGN 4K Receiver & Teevolution Terra Pro
+    (0x3554, 0xFB56): (None, "step50", 0x000C, 4, 8),
+    (0x3554, 0xFB57): (None, "step50", 0x000C, 4, 8),
+    (0x3554, 0xF505): (None, "step50", 0x000C, 4, 8),
+    (0x3554, 0xF520): (None, "teevolution", 0x000C, 4, 4),
+    (0x3554, 0xF522): (None, "teevolution", 0x000C, 4, 4),
+    (0x3554, 0xF523): (None, "teevolution", 0x000C, 4, 4),
+    (0x3554, 0xF5BB): (None, "teevolution", 0x000C, 4, 4),
+}
+_ATK_SHARED_RECEIVERS = frozenset({
+    (0x373B, 0x101A),
+    (0x373B, 0x101B),
+    (0x373B, 0x11D5),
+    (0x373B, 0x11D9),
+})
+_ATK_CID_SPECS = {spec[0]: spec[1:] for (vid, _), spec in DPI_MODELS.items()
+                  if vid == 0x373B and spec[0] is not None}
+_DPI_ALT_SPECS = {
+    (0x3554, 0xF58C): {
+        (2, 7): ("step50", 0x000C, 4, 8),
+        (2, 27): ("step50", 0x000C, 4, 8),
+    },
+    (0x3554, 0xF58F): {
+        (2, 11): ("step50", 0x000C, 4, 8),
+        (2, 12): ("step50", 0x000C, 4, 8),
+        (2, 29): ("paw3395se", 0x000C, 4, 8),
+        (2, 31): ("paw3395se", 0x000C, 4, 8),
+        (2, 32): ("paw3395se", 0x000C, 4, 8),
+    },
+}
+_WIRED_ONLY_DPI_IDS = frozenset({(0x3554, 0xF58C), (0x3554, 0xF58F)})
+_DPI_LIMITS = {
+    "paw3955": (50, 40000),
+    "sensor3955": (50, 50000),
+    "paw3395se": (50, 18000),
+    "step50": (50, 30000),
+    "paw3950": (50, 36000),
+    "teevolution": (50, 42000),
+    "ultra": (10, 42000),
+    "pulsar": (10, 32000),
+    "paw3315": (200, 16000),
+    "paw3311": (200, 15000),
 }
 DPI_CACHE_SECONDS = 10 * 60
 _SE_INVALID = frozenset((7, 13, 20, 26, 33, 40, 46, 53, 60, 66, 73, 80, 86, 93,
                        100, 106, 113, 120, 126, 133, 140, 146, 153, 160, 166,
                        173, 180, 186, 193, 200, 206, 213, 220, 226, 233))
 _SE_CODES = tuple(code for code in range(1, 236) if code not in _SE_INVALID)
+
+
+def _dpi_spec(info, live_identity=None):
+    key = (info["vendor_id"], info["product_id"])
+    identity, codec, base, length, maximum = DPI_MODELS[key]
+    if identity is None or live_identity is None or live_identity == identity:
+        return identity, codec, base, length, maximum
+    alt = (_ATK_CID_SPECS if key in _ATK_SHARED_RECEIVERS else _DPI_ALT_SPECS.get(key, {})).get(live_identity)
+    if alt is not None:
+        return live_identity, *alt
+    return identity, codec, base, length, maximum
 
 
 def _dpi_frame(command, address=0, length=0, data=()):
@@ -377,13 +567,16 @@ def _dpi_system(data, maximum):
 
 
 def _dpi_stage(data, codec):
-    length = 6 if codec == "paw3955" else 4
+    length = 6 if codec in ("paw3955", "sensor3955") else 4
     if len(data) != length or sum(data) % 256 != 0x55:
         raise ValueError("dpi_invalid_stage")
-    if codec == "paw3955":
-        axes = [(data[0] + (data[1] << 8) + 1) * (2 if data[4] & 1 else 1),
-                (data[2] + (data[3] << 8) + 1) * (2 if data[4] & 0x10 else 1)]
-        maximum = 40000
+    if codec in ("paw3955", "sensor3955"):
+        flags = data[4]
+        axes = []
+        for lo, hi, nibble in ((data[0], data[1], flags & 15), (data[2], data[3], flags >> 4)):
+            extra = (nibble >> 2) & 3
+            mult = (2 if nibble & 1 else 1) * (2 if nibble & 2 else 1)
+            axes.append((((extra << 16) | (hi << 8) | lo) + 1) * mult)
     else:
         axes = []
         for byte, nibble in ((data[0], data[2] & 15), (data[1], data[2] >> 4)):
@@ -395,25 +588,38 @@ def _dpi_stage(data, codec):
                     if value <= 5000:
                         raise ValueError("dpi_invalid_stage")
                     value *= 2
+            elif codec in ("ultra", "pulsar"):
+                code = (((nibble >> 2) & 3) << 8) | byte
+                value = (10050 + code * 50) if (nibble & 2) else (code + 1) * 10
+                if nibble & 1:
+                    value *= 2
+            elif codec in ("paw3315", "paw3311"):
+                if nibble & 3:
+                    raise ValueError("dpi_invalid_stage")
+                code = (((nibble >> 2) & 3) << 8) | byte
+                value = 200 + code * 100
             else:
                 value = (byte + (((nibble >> 2) & 3) << 8) + 1) * 50
                 if nibble & 1:
                     value *= 2
+                if nibble & 2:
+                    value *= 2
             axes.append(value)
-        maximum = 18000 if codec == "paw3395se" else 30000
-    if any(not 50 <= value <= maximum for value in axes):
+    minimum, maximum = _DPI_LIMITS[codec]
+    if any(not minimum <= value <= maximum for value in axes):
         raise ValueError("dpi_invalid_stage")
     return axes
 
 
 def _dpi_eligible(info):
-    return ((info.get("vendor_id"), info.get("product_id")) in DPI_MODELS
+    key = (info.get("vendor_id"), info.get("product_id"))
+    product = info.get("product_string") or ""
+    return (key in DPI_MODELS
             and info.get("modelSource", info.get("model_source")) != "pack"
             and (info.get("usage_page"), info.get("usage")) == CONTROL_USAGE
             and isinstance(info.get("physical_id"), str) and bool(info["physical_id"])
-            and not re.search(r"\b(?:nearlink|nk)\b", info.get("product_string") or "", re.I)
-            and (info["vendor_id"] != 0x3554 or not re.search(
-                r"receiver|dongle", info.get("product_string") or "", re.I)))
+            and not re.search(r"\b(?:nearlink|nk|eweadn)\b", product, re.I)
+            and (key not in _WIRED_ONLY_DPI_IDS or not re.search(r"receiver|dongle", product, re.I)))
 
 
 def _dpi_token(target):
@@ -438,8 +644,11 @@ def _dpi_view(target, active, error=None):
 
 def _dpi_state(dev, info):
     identity, codec, base, length, maximum = DPI_MODELS[(info["vendor_id"], info["product_id"])]
-    if tuple(_dpi_exchange(dev, 0x10)) != identity:
-        raise ValueError("dpi_identity_unconfirmed")
+    if identity is not None:
+        live = tuple(_dpi_exchange(dev, 0x10))
+        identity, codec, base, length, maximum = _dpi_spec(info, live)
+        if live != identity:
+            raise ValueError("dpi_identity_unconfirmed")
     system = _dpi_exchange(dev, 0x08, 0, 6)
     count, active = _dpi_system(system, maximum)
     axes = [_dpi_stage(_dpi_exchange(dev, 0x08, base + index * length, length), codec)
@@ -447,7 +656,7 @@ def _dpi_state(dev, info):
     if _dpi_exchange(dev, 0x08, 0, 6) != system:
         raise ValueError("dpi_current_changed")
     target = {key: info.get(key) for key in ("vendor_id", "product_id", "physical_id", "path", "serial_number")}
-    target.update(provider="pulsar", identity=list(identity), stages=axes)
+    target.update(provider="pulsar", identity=list(identity) if identity is not None else None, stages=axes)
     return _dpi_view(target, active), target, system
 
 
@@ -533,7 +742,7 @@ def set_device_dpi(inventory, target, value, expected_dpi, target_token):
         if value == expected_dpi:
             return result(success=True)
         # Recheck identity and the complete system immediately before mutation.
-        if (_dpi_exchange(dev, 0x10) != fresh["identity"]
+        if ((fresh["identity"] is not None and _dpi_exchange(dev, 0x10) != fresh["identity"])
                 or _dpi_exchange(dev, 0x08, 0, 6) != system):
             return result("dpi_current_changed")
         frame = _dpi_frame(0x07, 4, 2, [index, (0x55 - index) & 0xFF])
@@ -542,12 +751,14 @@ def set_device_dpi(inventory, target, value, expected_dpi, target_token):
             return result("dpi_readback_unconfirmed", unknown=True)
         time.sleep(.01)  # OpenMouse WRITE_SETTLE_MS, not a resend.
         confirmed = _dpi_exchange(dev, 0x08, 0, 6)
-        spec = DPI_MODELS[(info["vendor_id"], info["product_id"])]
+        live_id = tuple(fresh["identity"]) if fresh["identity"] is not None else None
+        spec = _dpi_spec(info, live_id)
         _count, active = _dpi_system(confirmed, spec[4])
         if confirmed[:4] != system[:4] or active != index:
             return result("dpi_readback_mismatch", unknown=True)
         if (_dpi_stage(_dpi_exchange(dev, 0x08, spec[2] + index * spec[3], spec[3]), spec[1])
-                != fresh["stages"][index] or _dpi_exchange(dev, 0x10) != fresh["identity"]):
+                != fresh["stages"][index]
+                or (fresh["identity"] is not None and _dpi_exchange(dev, 0x10) != fresh["identity"])):
             return result("dpi_readback_mismatch", unknown=True)
         view = _dpi_view(fresh, active)
         return result(success=True)
@@ -799,6 +1010,9 @@ class PulsarProvider(Provider):
             candidates = list(pids)
             if vid == 0x373B:
                 candidates += sorted({d["product_id"] for d in infos if d["product_id"] not in pids})
+            else:
+                candidates += sorted({d["product_id"] for d in infos
+                                      if d["product_id"] not in pids and (vid, d["product_id"]) in DPI_MODELS})
             for pid in candidates:
                 if vid == 0x373B and pid in NANO_PIDS[0x373B]:
                     continue  # Never fall back to CompX, even if NANO proof fails.
@@ -856,7 +1070,8 @@ class PulsarProvider(Provider):
                               and output_length(d["path"]) == PAYLOAD_LEN), None)
                     if d is not None:
                         present.add(key)
-                    name = (d.get("product_string") or "ATK Mouse") if d is not None else "ATK Mouse"
+                    default_name = "ATK Mouse" if vid == 0x373B else "CompX Mouse"
+                    name = (d.get("product_string") or default_name) if d is not None else default_name
                 if d is None:
                     if not link8k:
                         # Selection already checked every eligible length. Do
