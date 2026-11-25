@@ -39,7 +39,11 @@ namespace AtkBattery {
                 int count=0;foreach(var c in d.Collections??new UnadaptedCollection[0])if(c!=null&&UnadaptedDevice.Word(c.UsagePage)&&UnadaptedDevice.Word(c.Usage)&&count++<8)line.Append(" "+c.UsagePage.ToString("X4")+":"+c.Usage.ToString("X4"));
                 unadapted.Add(line.ToString());
             }
-            foreach(var r in readers)if(r!=null&&health.Count<64&&r.State!="ok"&&r.State!="no_devices"&&r.State!="unsupported")health.Add(clean(r.Provider)+" | "+clean(r.State)+" | "+clean(r.ErrorCode));
+            foreach(var r in readers)if(r!=null&&health.Count<64&&(r.State!="ok"&&r.State!="no_devices"&&r.State!="unsupported"||IsProjectedMchoseReason(r)))health.Add(clean(r.Provider)+" | "+clean(r.State)+" | "+clean(r.ErrorCode));
+        }
+        static bool IsProjectedMchoseReason(ReaderHealth r){
+            if(r.Provider!="mchose"||(r.State!="ok"&&r.State!="no_devices"))return false;
+            return r.ErrorCode=="A5V2 topology_unproven"||r.ErrorCode=="A5V2 collection_ambiguous"||r.ErrorCode=="A5V2 feature_unproven"||r.ErrorCode=="A5V2 set_failed"||r.ErrorCode=="A5V2 no_stable_reply"||r.ErrorCode=="A5V2 io_failed";
         }
         internal static string CleanField(string value){
             value=Regex.Replace(value??"",@"(?i)(?:[a-z]:[\\/]|\\\\|(?:hid|usb|bthenum|bthledevice)[\\#]|(?<!\w)/(?:[^\s/]+/))[^\r\n""']*","[path]");

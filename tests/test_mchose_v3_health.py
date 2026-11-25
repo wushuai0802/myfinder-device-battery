@@ -295,6 +295,90 @@ class MchoseV3HealthTests(unittest.TestCase):
         self.assertIn("declared=out:4D/64,in:01/16,feature:none",
                       " ".join(health["diagnostics"]))
 
+    def test_a5v2_five_collection_reasons_and_coexistence_projection(self):
+        from providers.base import DeviceStatus
+        import test_mchose_a5v2 as A5
+
+        clock = A5.Clock()
+        with patch.object(M, "time", clock):
+            # 1) Recognized 100C candidate -> candidate_count == 1 (wrong product_string -> 0)
+            self.assertEqual(server.recognized_candidate_count("mchose", A5.inventory(21)), 1)
+            wrong_name = [dict(d, product_string="Other Mouse") for d in A5.inventory(21)]
+            self.assertEqual(server.recognized_candidate_count("mchose", wrong_name), 0)
+
+            # 2) Reading (21 / 65): state ok, NO diagnosticSummary / errorCode projected
+            for length in (21, 65):
+                infos = A5.inventory(length)
+                provider = M.MchoseProvider()
+                dev = A5.Device([A5.reply(length), A5.reply(length)])
+                with patch.object(M.hid, "device", return_value=dev):
+                    statuses = server.scoped_poll(provider, infos, A5.PARENT)
+                self.engine._accept("mchose:a5", "mchose", statuses, server.utcnow(),
+                                    physical=A5.PARENT, candidate_count=1,
+                                    diagnostics=server.reader_diagnostics(provider))
+                snap = self.engine._snapshot()
+                h, = [r for r in snap["health"] if r["readerId"] == server.public_id("mchose:a5")]
+                self.assertEqual(h["state"], "ok")
+                self.assertNotIn("errorCode", h)
+                self.assertEqual(snap["errors"], [])
+
+            # 3a) Unproven topology / descriptor_complete=False -> unavailable + "A5V2 topology_unproven"
+            topo_bad = A5.inventory(21)
+            topo_bad[0]["a5v2_descriptor_complete"] = False
+            provider = M.MchoseProvider()
+            dev_bad = A5.Device([A5.reply(), A5.reply()])
+            with patch.object(M.hid, "device", return_value=dev_bad):
+                statuses = server.scoped_poll(provider, topo_bad, A5.PARENT)
+            self.assertEqual((dev_bad.opens, dev_bad.sent), ([], []))
+            self.engine._accept("mchose:a5", "mchose", statuses, server.utcnow(),
+                                physical=A5.PARENT,
+                                candidate_count=server.recognized_candidate_count("mchose", topo_bad),
+                                diagnostics=server.reader_diagnostics(provider))
+            snap = self.engine._snapshot()
+            h, = [r for r in snap["health"] if r["readerId"] == server.public_id("mchose:a5")]
+            self.assertEqual((h["state"], h.get("errorCode")), ("unavailable", "A5V2 topology_unproven"))
+            self.assertEqual(snap["errors"], [])
+
+            # 3b) Proven topology but wrong feature report ID -> unavailable + "A5V2 feature_unproven"
+            feat_bad = A5.inventory(21)
+            feat_bad[0]["feature_report_sizes"] = {"19": 21}
+            provider = M.MchoseProvider()
+            dev_feat = A5.Device([A5.reply(), A5.reply()])
+            with patch.object(M.hid, "device", return_value=dev_feat):
+                statuses = server.scoped_poll(provider, feat_bad, A5.PARENT)
+            self.assertEqual((dev_feat.opens, dev_feat.sent), ([], []))
+            self.engine._accept("mchose:a5", "mchose", statuses, server.utcnow(),
+                                physical=A5.PARENT,
+                                candidate_count=server.recognized_candidate_count("mchose", feat_bad),
+                                diagnostics=server.reader_diagnostics(provider))
+            snap = self.engine._snapshot()
+            h, = [r for r in snap["health"] if r["readerId"] == server.public_id("mchose:a5")]
+            self.assertEqual((h["state"], h.get("errorCode")), ("unavailable", "A5V2 feature_unproven"))
+            self.assertEqual(snap["errors"], [])
+
+            # 4) Silent + coexisting ok status in same provider -> projects "A5V2 no_stable_reply"
+            provider = M.MchoseProvider()
+            dev_silent = A5.Device([])
+            with patch.object(M.hid, "device", return_value=dev_silent):
+                statuses = server.scoped_poll(provider, A5.inventory(21), A5.PARENT)
+            sibling = DeviceStatus("mchose:sibling", "MCHOSE M7", 90, False, True, "mchose", kind="mouse", physical_id=A5.PARENT)
+            self.engine._accept("mchose:a5", "mchose", [sibling], server.utcnow(),
+                                physical=A5.PARENT, candidate_count=1,
+                                diagnostics=server.reader_diagnostics(provider))
+            snap = self.engine._snapshot()
+            h, = [r for r in snap["health"] if r["readerId"] == server.public_id("mchose:a5")]
+            self.assertEqual((h["state"], h.get("errorCode")), ("ok", "A5V2 no_stable_reply"))
+            self.assertEqual(snap["errors"], [])
+
+            # 5) Next round when 100C is absent -> stale A5V2 reason does not survive
+            self.engine._accept("mchose:a5", "mchose", [], server.utcnow(), physical="", candidate_count=0, diagnostics=[])
+            snap2 = self.engine._snapshot()
+            h2, = [r for r in snap2["health"] if r["readerId"] == server.public_id("mchose:a5")]
+            self.assertEqual(h2["state"], "no_devices")
+            self.assertNotIn("errorCode", h2)
+            self.assertNotIn("synthetic-a5v2", json.dumps(snap2))
+
+
 
 if __name__ == "__main__":
     unittest.main()

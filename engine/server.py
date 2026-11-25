@@ -45,7 +45,9 @@ PROVIDERS = (
     ("vgn_dragonfly3", "VgnDragonfly3Provider"),
     ("vgn_ry_ms", "VgnRyMsProvider"),
     ("ajazz_aj179_nlp", "AjazzAj179NlpProvider"),
+    ("ajazz_ak980", "AjazzAk980Provider"),
     ("am_infinity_97", "AmInfinity97Provider"),
+    ("inphic", "InphicProvider"),
     ("ninjutso_legacy", "NinjutsoLegacyProvider"),
     ("flydigi", "FlydigiProvider"),
     ("betop", "BetopProvider"),
@@ -102,7 +104,9 @@ PROVIDER_VIDS = {
     "vgn_beiying": (0x258A, 0x391D),
     "vgn_dragonfly3": (0x391D,), "vgn_ry_ms": (0x391D,), "ninjutso_legacy": (0x1915,),
     "ajazz_aj179_nlp": (0x7768,),
+    "ajazz_ak980": (0x0C45,),
     "am_infinity_97": (0x0E8D,),
+    "inphic": (0x7768,),
     "mchose_qhw_keyboard": (0x3837,), "mchose_glw_keyboard": (0x3837,), "mchose_k99v3": (0x3837,),
     "mchose_v9pro2": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
@@ -143,9 +147,17 @@ SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 # Passive and system readers send nothing or run their own schedule.
 IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
-IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
-NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s"}
-READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse"}
+IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt", "inphic", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
+NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "inphic", "ajazz_ak980"}
+READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse"}
+A5V2_FAILURE_REASONS = frozenset({
+    "A5V2 topology_unproven",
+    "A5V2 collection_ambiguous",
+    "A5V2 feature_unproven",
+    "A5V2 set_failed",
+    "A5V2 no_stable_reply",
+    "A5V2 io_failed",
+})
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -831,9 +843,12 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
         return len({d.get("product_id") for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS
                     and module.product_allowed(d.get("product_string"))})
+    if name == "ajazz_ak980":
+        return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
+                    if module.is_candidate_info(d)})
     if name in ("moondrop", "valkyrie", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
                 "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt",
-                "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "cherry_mw5500"):
+                "inphic", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "cherry_mw5500"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop"):
@@ -846,6 +861,12 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                            if d.get("product_id") in module.NANO_PIDS.get(d.get("vendor_id"), {})}
     v3_candidates = ({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                       if d.get("vendor_id") == module.V3_VID and d.get("product_id") in module.V3_PIDS}
+                     | ({(module.A5V2_VID, module.A5V2_PID)}
+                        if any(d.get("vendor_id") == module.A5V2_VID
+                               and d.get("product_id") == module.A5V2_PID
+                               and str(d.get("product_string") or "").strip() == module.A5V2_NAME
+                               for d in inventory)
+                        else set())
                      | ({(module.K7_ULTRA_VID, module.K7_ULTRA_PID)}
                         if any(d.get("vendor_id") == module.K7_ULTRA_VID
                                and d.get("product_id") == module.K7_ULTRA_PID
@@ -1077,7 +1098,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "am_infinity_97", "mchose", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "am_infinity_97", "mchose", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive", "rainyrt", "inphic", "ajazz_ak980", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -1130,7 +1151,7 @@ class BatteryEngine:
         self._idle_backoff(reader_key, name, physical, candidate_count, statuses)
         # Passive readers can return history without a new notification.
         # Keep the card, but expose the same idle health as a first silent poll.
-        measured = bool(group) and (name not in ("rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt") or any(
+        measured = bool(group) and (name not in ("rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt", "inphic") or any(
             s.online and not s.cached and s.level is not None for s in statuses))
         self.health[reader_key] = {"provider": name, "readerId": public_id(reader_key),
                                    "state": "ok" if measured else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),
@@ -1164,28 +1185,35 @@ class BatteryEngine:
                 if diagnostics and not measured:
                     self.health[reader_key]["diagnosticSummary"] = ASUS_OMNI_DIAGNOSTICS[diagnostics[0]]
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
-            if name == "mchose" and not measured:
-                # V3-only / K7ULTRA protocol-owned failures outrank identity/proof notes.
-                # The full safe proof stays in diagnostics, the first clause fits feedback.
-                for line in diagnostics:
-                    if isinstance(line, str) and line.startswith((
-                            "V3 missing or ambiguous FF01:0001 collection;",
-                            "V3 collection path unresolved;",
-                            "V3 input report 4D/64 length unproven;",
-                            "V3 output report 4D/64 length unproven;",
-                            "V3 power query write failed or short;",
-                            "V3 power I/O failed;",
-                            "no valid V3 power reply;")):
-                        if "; declared=" in line and line.startswith("V3 "):
-                            compact = line[len("V3 "):].replace(
-                                " report 4D/64 length unproven;", " report 4D length unproven;", 1)
-                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(compact)
-                        else:
-                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
-                        break
-                    if isinstance(line, str) and line.startswith("K7ULTRA ") and line != "K7ULTRA stable_reply_C_pending_hardware":
-                        self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line)
-                        break
+            if name == "mchose":
+                # V3-only / K7ULTRA protocol-owned failures outrank identity/proof notes
+                # when no reading is present; bounded A5V2 failure reasons still project
+                # even when another MCHOSE mouse on the same machine reports ok.
+                if not measured:
+                    for line in diagnostics:
+                        if isinstance(line, str) and line.startswith((
+                                "V3 missing or ambiguous FF01:0001 collection;",
+                                "V3 collection path unresolved;",
+                                "V3 input report 4D/64 length unproven;",
+                                "V3 output report 4D/64 length unproven;",
+                                "V3 power query write failed or short;",
+                                "V3 power I/O failed;",
+                                "no valid V3 power reply;")):
+                            if "; declared=" in line and line.startswith("V3 "):
+                                compact = line[len("V3 "):].replace(
+                                    " report 4D/64 length unproven;", " report 4D length unproven;", 1)
+                                self.health[reader_key]["diagnosticSummary"] = reader_health_summary(compact)
+                            else:
+                                self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
+                            break
+                        if isinstance(line, str) and line.startswith("K7ULTRA ") and line != "K7ULTRA stable_reply_C_pending_hardware":
+                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line)
+                            break
+                if "diagnosticSummary" not in self.health[reader_key]:
+                    for line in diagnostics:
+                        if isinstance(line, str) and line in A5V2_FAILURE_REASONS:
+                            self.health[reader_key]["diagnosticSummary"] = line
+                            break
             if name == "pulsar":
                 # A cached card can keep the existing health state ok while this
                 # poll has no reading. Project its safe result without a failure.
@@ -1198,7 +1226,7 @@ class BatteryEngine:
                     if reason in diagnostics:
                         self.health[reader_key]["diagnosticSummary"] = reason
                         break
-            if name in ("rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "moondrop", "hyperx_flight_s", "cherry_mw5500") and not measured and diagnostics:
+            if name in ("rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "inphic", "ajazz_ak980", "moondrop", "hyperx_flight_s", "cherry_mw5500") and not measured and diagnostics:
                 # These readers emit only fixed text, numeric descriptor sizes and
                 # input report IDs/lengths. No paths, payloads or exceptions.
                 self.health[reader_key]["diagnosticSummary"] = reader_health_summary(diagnostics[0])

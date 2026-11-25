@@ -110,6 +110,8 @@
     {"provider":"corsair","name":"Corsair 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/corsair.py"},
     {"provider":"lamzu","name":"LAMZU Maya X","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/lamzu.py"},
     {"provider":"ajazz_aj179_nlp","name":"AJAZZ AJ179 NLP 2.4G (NearLink)","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/ajazz_aj179_nlp.py","matchScope":"仅7768:642E / FFB2:0001；要求原生pnp:usb父设备、匹配VID/PID的MI_01路径和接口1，先计数再验证，每个父设备唯一目标集合；仅接受IN/OUT均唯一编号06且含报告ID恰64字节的描述符证明。排空旧输入后每接收器每轮仅一次64字节06 05查询；有界等待状态或电池通知，离线状态清除当前百分比；不使用Feature。公开上游协议与合成测试候选，本项目未实机验证；五格显示不作为实测百分比证据，排除有线6D2E、FFB1 DFU及其他型号","reference":"engine/upstream-protocols.md#ajazz-aj179-nlp-7768642e"},
+    {"provider":"ajazz_ak980","name":"AJAZZ AK980 PRO（有线 / 2.4G）","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/ajazz_ak980.py","matchScope":"仅0C45:8039（产品全名精确AK980 PRO、MI_02 FF68:0061）与0C45:FEFE（产品全名精确AJAZZ AK980 PRO 2.4G、MI_03 FF60:0061，排除MI_04；不混入其他0C45:FEFE产品名），须解析到原生pnp:usb父设备且运行时证明无编号输入/输出报告0均恰为65字节；单次发送GET_DEVICE_INFO 00 AA 10 30 00 00 00 01不重试，核对回显0C45:8039及workMode，取1..100%电量，0%视为休眠无读数，充电语义待进一步验证暂标未知（#966贡献者双链路实测100%匹配官方网页驱动协议，待本项目实机验证）；FF67大包通道绝不打开","reference":"engine/upstream-protocols.md#batch-1126-wave-2--backlog--stock-resolution-959-966-737-1035"},
+    {"provider":"inphic","name":"英菲克 Inphic IN9 星闪版（2.4G / 有线）","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/inphic.py","matchScope":"仅7768:642C（2.4G星闪接收器）与7768:6D2C（有线USB）的MI_01 / FFB2:0001唯一集合，须解析匹配USB父设备与HID路径，运行时证明输入报告06恰64字节（支持caps固定用法与严格raw descriptor回退）；全程只被动接收约30秒一帧06 FA 03 00 00 03报文、绝不写入（不含AJAZZ 7768:642E）；忽略切链过渡0%占位帧以免误拆双卡，句柄常开跨轮排空取最新并靠同类同名抑制折叠旧连接；byte7暂标充电未知；#959贡献者双链路实测90%/100%与官方驱动V1.0.1.2一致，待本项目实机验证","reference":"engine/upstream-protocols.md#batch-1126-wave-2--backlog--stock-resolution-959-966-737-1035"},
     {"provider":"am_infinity_97","name":"Angry Miao AM Infinity .97 2.4G","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/am_infinity_97.py","matchScope":"仅0E8D:0703 / FF13:0001且产品名为AM Infinity .97；要求原生pnp:usb父设备、每个父设备唯一目标集合，以及描述符证明OUT 06、IN 07均含报告ID恰62字节（支持固定用法数组与多报告集合），否则不打开。发送前排空旧输入，每接收器每轮仅一次62字节06 06 80 05 5A 02 00 CF 30 RACE只读电量查询（0x30CF）；有界读取IN 07并重组RACE帧，跳过ACK，仅接受充电0/1、电量0..100；鼠标不在线（mouse_exists=0）时不显示百分比并保留休眠缓存。不使用FF14/FF15，不发送接收器电量、FOTA、配置、灯效或DPI命令。官方AM Master 1.3.9静态分析候选，本项目未实机验证","reference":"engine/upstream-protocols.md#angry-miao-am-infinity-97-0e8d0703"},
     {"provider":"am_infinity","name":"Angry Miao AM Infinity 8K","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/am_infinity.py"},
     {"provider":"steelseries_elite","name":"SteelSeries Arctis Nova Elite","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/steelseries_elite.py"},
@@ -121,7 +123,7 @@
     {"provider":"xinput","name":"Xbox 及兼容 XInput 手柄","kinds":["gamepad"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/xinput.py","matchScope":"Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄","reference":"engine/upstream-protocols.md#windows-xinput-gamepad-battery","precision":"EMPTY/LOW/MEDIUM/FULL是四档估算，不是精确百分比；无设备测量时间"},
     {"provider":"standard_hid","name":"描述符声明的标准HID电量Feature字段","kinds":["mouse","keyboard","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/standardhid.py","reference":"https://www.usb.org/hid","precision":"依据字段逻辑范围；无充电字段时充电未知"},
     {"provider":"rainyrt","name":"WOB Rainy75 V2（2.4G 接收器 / USB）","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/rainyrt.py","matchScope":"仅36B0:3071与36B0:3075的FF60:0061集合，须解析到匹配VID/PID的原生pnp:usb父设备与唯一集合，并由运行时HidP caps或严格原始Report Descriptor证明唯一无编号Input报告0/257字节（含ID槽）；只被动接收每约5秒推送的256字节BE BB帧，绝不写入；帧长00/06/0A/0E字节且以ED结尾，byte3为0至100电量，byte4仅0空闲/1充满/2充电中；首开最多监听1500ms，常开句柄排空取最新，静默保留历史；协议来源官方WOB HUB rainy75v2-wireless-test.html（PR #943），贡献者2.4G实测97%，睡眠/充电中/满电/3075有线与本项目实机待验证","reference":"engine/upstream-protocols.md#wob-rainy75-v2-36b03071--36b03075"},
-    { "provider":"families", "name":"声明式方案族（架构 v2）", "kinds":["headset", "keyboard", "mouse"], "verificationLevel":"C", "source":"engine/providers/families.py", "reference":"docs/design/architecture-v2.md", "matchScope":"仅 engine/families/builtin 中逐项列出的 VID/PID（有产品名的须产品名一致，有接口号的须接口一致），且候选厂商集合在同一物理设备上唯一、按 Windows 报告能力证明了规格书声明的报告 ID 与长度后才发送；只发送规格书中的只读请求（可带只读前置在线查询），按字节、校验和与布局规则校验回复。方案族：XIBERIA（BrimDeck→Voltide→XIBERIA HUB；含 K03S 36F9:C001 与 T10 36F9:F001，唯一 FF90:0001 在输入报告 0x55/64 字节已证明且 Windows 报告输出为常量占位 64 字节时允许只读查询）、Lofree Flow Lite84（BrimDeck→HaloBattery，05AC:024F 仅产品名 2.4G Wireless Receiver、接口1、FF02 报告08/17）、EWEADN beiyin 接收器（BrimDeck→vigil-watt）、容源接收器 F7 状态查询（BrimDeck→HaloBattery/mousedock/vigil-watt/YesCharge）。西伯利亚 T10 使用型号专属状态查询，机械师 L7 Air 1K（320F:226F）在接收器确认在线后读取电量，雷蛇 BlackShark V3 Pro（1532:0577）在唯一 MI_05 FF14:0001 优先被动接收，静默时按 >=60s 节流发一次只读 0x21 电量查询（不含充电推断），达尔优 2.4G 鼠标接收器（260D:1156，覆盖 CM610 V2 MAX / CM610 MAX / A950 LCD）在 FF02:0002 证明 17 字节 Report 08 并经 08 03 在线门控后读取 08 04 电量与充电状态。均待本项目实机验证。整品牌试读族默认关闭。" }
+    { "provider":"families", "name":"声明式方案族（架构 v2）", "kinds":["headset", "keyboard", "mouse"], "verificationLevel":"C", "source":"engine/providers/families.py", "reference":"docs/design/architecture-v2.md", "matchScope":"仅 engine/families/builtin 中逐项列出的 VID/PID（有产品名的须产品名一致，有接口号的须接口一致），且候选厂商集合在同一物理设备上唯一、按 Windows 报告能力证明了规格书声明的报告 ID 与长度后才发送；只发送规格书中的只读请求（可带只读前置在线查询），按字节、校验和与布局规则校验回复。方案族：XIBERIA（BrimDeck→Voltide→XIBERIA HUB；含 T7 F008、K03S F016、K06S F002 与 T10 F001；36F9:C001 已因官方 X HUB 亦无电量接口降级 D 级停读）、Lofree Flow Lite84（BrimDeck→HaloBattery，05AC:024F 仅产品名 2.4G Wireless Receiver、接口1、FF02 报告08/17）、EWEADN beiyin 接收器（BrimDeck→vigil-watt）、容源接收器 F7 状态查询（BrimDeck→HaloBattery/mousedock/vigil-watt/YesCharge）。西伯利亚 T10 使用型号专属状态查询，机械师 L7 Air 1K（320F:226F）在接收器确认在线后读取电量，雷蛇 BlackShark V3 Pro（1532:0577）在唯一 MI_05 FF14:0001 优先被动接收，静默时按 >=60s 节流发一次只读 0x21 电量查询（不含充电推断），达尔优 2.4G 鼠标接收器（260D:1156，覆盖 CM610 V2 MAX / CM610 MAX / A950 LCD）在 FF02:0002 证明 17 字节 Report 08 并经 08 03 在线门控后读取 08 04 电量与充电状态。均待本项目实机验证。整品牌试读族默认关闭。" }
   ],
   "observedUnsupported": [
     {
@@ -186,7 +188,34 @@
         }
       ],
       "reference": "engine/upstream-protocols.md#xiberia-k03s--k02bs-actions-receiver-10d64801-grade-d-observed-unsupported",
-      "notes": "#1107 / #954 / #736 / #789 多位用户与静态取证证实：官方 XIBERIA X HUB V0.3.1.13（及上游 ActHID.dll 分析）仅绑定 VID 36F9 接收器，不识别 10D6:4801；36F9:C001/F001 的 55 65 / 55 10 与 41 65 只读查询均 0 回复，四个集合被动监听 6 秒均 0 帧，且无标准电量页 0x06、蓝牙无 Windows 电量属性。与已支持的 36F9:C001 版 K03S 不同，维持 D 级且零发送，待官方新增 PC 协议或公开确凿抓包后再评估。"
+      "notes": "#1107 / #954 / #736 / #789 多位用户与静态取证证实：官方 XIBERIA X HUB V0.3.1.13（及上游 ActHID.dll 分析）仅绑定 VID 36F9 接收器，不识别 10D6:4801；36F9 已知查询均 0 回复，四个集合被动监听 6 秒均 0 帧，且无标准电量页 0x06、蓝牙无 Windows 电量属性。维持 D 级且零发送，待官方新增 PC 协议或公开确凿抓包后再评估。"
+    },
+    {
+      "id": "xiberia_k03s_36f9_c001_observed",
+      "name": "西伯利亚 XIBERIA K03S Wireless 7.1（36F9:C001）",
+      "kind": "headset",
+      "verificationLevel": "D",
+      "compatible": false,
+      "match": {
+        "vendorId": "36F9",
+        "productId": "C001"
+      },
+      "transport": "2.4G 接收器（FF90:0001 / FF82:0001 / FF22:0001）及官方 X HUB 均无 PC 端电量读取接口",
+      "capabilities": [],
+      "observations": [
+        {
+          "connection": "2.4G",
+          "productName": "XIBERIA K03S Wireless 7.1",
+          "usagePage": "FF90",
+          "usage": "0001",
+          "inputBytes": 64,
+          "outputBytes": 64,
+          "reportId": "0x55",
+          "checkedOn": "2026-11-25"
+        }
+      ],
+      "reference": "engine/families/builtin/xiberia.json",
+      "notes": "#1035 用户于 1.4.0-beta.6 及 1.4.1-beta.1（已含 constant-output 证明）实测 FF90:0001 仍无电量返回，且用户实机对照官方 X HUB 亦确认官方软件尚未接入该型号电量读取接口。已移出 xiberia.json 停止无效查询，维持 D 级已观测不支持。"
     }
   ]
 }
