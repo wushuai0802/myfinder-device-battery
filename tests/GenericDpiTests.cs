@@ -42,8 +42,19 @@ static class GenericDpiTests {
         var pack=GenericBatteryWorker.Parse(Frame(devices:compx.Replace("\"dpi\":","\"modelSource\":\"pack\",\"dpi\":"))).Devices[0];
         Check(!pack.Dpi.Supported&&!pack.Dpi.CanSet&&pack.Dpi.TargetToken==null,"pack-origin pulsar devices cannot expose a DPI write lease");
         Check(!GenericBatteryWorker.Parse(Frame(devices:Device(IdA,TokenA,provider:"pulsar"))).Devices[0].Dpi.CanSet,"pulsar cannot advertise software quick DPI");
+        string familiesOnboard=Device(IdA,TokenA,provider:"families").Replace("\"stageSource\":\"quick\"","\"stageSource\":\"onboard\"");
+        Check(GenericBatteryWorker.Parse(Frame(devices:familiesOnboard)).Devices[0].Dpi.CanSet,"families onboard stages survive the generic parser and write gate");
+        Check(!GenericBatteryWorker.Parse(Frame(devices:Device(IdA,TokenA,provider:"families"))).Devices[0].Dpi.CanSet,"families cannot advertise software quick DPI");
+        foreach(string brand in new[]{"razer","mchose","asus","asus_omni","lamzu","gwolves"}){
+            Check(GenericBatteryWorker.Parse(Frame(devices:Device(IdA,TokenA,provider:brand))).Devices[0].Dpi.CanSet,brand+" quick DPI is accepted by host gate");
+            string brandOnboard=Device(IdA,TokenA,provider:brand).Replace("\"stageSource\":\"quick\"","\"stageSource\":\"onboard\"");
+            Check(GenericBatteryWorker.Parse(Frame(devices:brandOnboard)).Devices[0].Dpi.CanSet,brand+" onboard DPI is accepted by host gate");
+        }
+        string readOnlyGpw=Device(IdA,null,1600,false,"logitech","mouse","400,800,1600,3200").Replace("\"stageSource\":\"quick\"","\"stageSource\":\"onboard\"").Replace("\"targetToken\":\"\"","\"targetToken\":null");
+        var parsedReadOnly=GenericBatteryWorker.Parse(Frame(devices:readOnlyGpw)).Devices[0];
+        Check(parsedReadOnly.Dpi.Supported&&!parsedReadOnly.Dpi.CanSet&&parsedReadOnly.Dpi.Current==1600&&parsedReadOnly.Dpi.Stages.Length==4&&parsedReadOnly.Dpi.TargetToken==null&&WirelessLayout.DpiFresh(parsedReadOnly)&&WirelessLayout.DpiSubtitle(parsedReadOnly,null,null)=="DPI · 1600","read-only onboard DPI preserves live current value and stages without a write lease");
         string original=device.Key;device.Dpi.Current=800;Check(device.Key!=original,"DPI changes participate in the wireless presentation key");
-        foreach(string body in new[]{Device(IdA,TokenA,400,true,"logitech","mouse","400,400,800"),Device(IdA,TokenA,400,true,"logitech","mouse","0,800"),Device(IdA,TokenA,400,true,"logitech","mouse","50,100,200,400,800,1600,3200,6400,12800"),Device(IdA,"bad"),Device(IdA,TokenA,400,true,"other"),Device(IdA,TokenA,400,true,"logitech","keyboard"),Device(IdA,TokenA,1),Device(IdA,TokenA,400,true,"logitech","mouse","400,800",DateTime.UtcNow.AddMinutes(-2).ToString("o")),Device(IdA,TokenA,400,true,"logitech","mouse","400,800",DateTime.UtcNow.AddMinutes(1).ToString("o"))}){
+        foreach(string body in new[]{Device(IdA,TokenA,400,true,"logitech","mouse","400,400,800"),Device(IdA,TokenA,400,true,"logitech","mouse","0,800"),Device(IdA,TokenA,400,true,"logitech","mouse","50,100,200,400,800,1600,3200,6400,12800"),Device(IdA,"bad"),Device(IdA,TokenA,400,true,"bluetooth"),Device(IdA,TokenA,400,true,"xinput"),Device(IdA,TokenA,400,true,"standard_hid"),Device(IdA,TokenA,400,true,"unknown"),Device(IdA,TokenA,400,true,"logitech","keyboard"),Device(IdA,TokenA,1),Device(IdA,TokenA,400,true,"logitech","mouse","400,800",DateTime.UtcNow.AddMinutes(-2).ToString("o")),Device(IdA,TokenA,400,true,"logitech","mouse","400,800",DateTime.UtcNow.AddMinutes(1).ToString("o"))}){
             var invalid=GenericBatteryWorker.Parse(Frame(1,1,body)).Devices[0];Check(!invalid.Dpi.CanSet&&invalid.Dpi.TargetToken==null,"invalid, stale or unsupported DPI capability loses its write lease");
         }
         var offline=GenericBatteryWorker.Parse(Frame().Replace("\"online\":true","\"online\":false")).Devices[0];Check(!offline.Dpi.CanSet&&offline.Dpi.TargetToken==null,"offline snapshots cannot preserve DPI write capability");

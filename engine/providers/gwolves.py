@@ -48,7 +48,13 @@ except ImportError:              # pragma: no cover
 
 from . import hidlist
 from .base import DeviceStatus, Provider, hexdump, log
-from .wlmouse import QUERY, parse_feature
+from .wlmouse import (
+    QUERY,
+    _dpi_token,
+    compx_dpi_state,
+    compx_set_device_dpi,
+    parse_feature,
+)
 
 GWOLVES_VID = 0x33E4
 RECEIVER = 0x3854
@@ -195,8 +201,59 @@ def feature_length(path) -> Optional[int]:
         k32.CloseHandle(ctypes.c_void_p(handle))
 
 
+GWOLVES_MAX_STAGES = 7
+GWOLVES_PROFILE = 1
+
+
+def _dpi_eligible(info: dict) -> bool:
+    return (
+        isinstance(info, dict)
+        and info.get("vendor_id") == GWOLVES_VID
+        and info.get("product_id") in MODELS
+        and isinstance(info.get("physical_id"), str)
+        and bool(info["physical_id"])
+        and info.get("modelSource", info.get("model_source")) != "pack"
+        and bool(info.get("path"))
+        and feature_length(info["path"]) == FEATURE_LENGTH
+    )
+
+
+def _capture_dpi(info: Optional[dict]) -> Tuple[Optional[dict], Optional[dict]]:
+    if not info or not _dpi_eligible(info) or hid is None:
+        return None, None
+    dev = None
+    try:
+        dev = hid.device()
+        dev.open_path(info["path"])
+        view, target, _ = compx_dpi_state(
+            dev, info, "gwolves",
+            max_stages=GWOLVES_MAX_STAGES, fixed_profile=GWOLVES_PROFILE,
+        )
+        return view, target if view["canSet"] else None
+    except Exception:
+        return None, None
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token):
+    return compx_set_device_dpi(
+        inventory, target, value, expected_dpi, target_token,
+        provider_name="gwolves", eligible_fn=_dpi_eligible,
+        max_stages=GWOLVES_MAX_STAGES, fixed_profile=GWOLVES_PROFILE,
+        open_device_fn=(lambda: hid.device()) if hid is not None else None,
+    )
+
+
 class GWolvesProvider(Provider):
     name = "gwolves"
+
+    def set_device_dpi(self, inventory, target, value, expected_dpi, target_token):
+        return set_device_dpi(inventory, target, value, expected_dpi, target_token)
 
     def __init__(self):
         self._diag: List[str] = []
@@ -317,16 +374,21 @@ class GWolvesProvider(Provider):
         name = MODELS[model][0]
         key = f"gwolves:{model:04x}"
         reading = None
+        winning_info = None
         for pid in sorted(pids, key=lambda p: not MODELS[p][3]):
             self._diag.append(f"[G-Wolves] pid={pid:04x} '{name}' "
                               f"({'cable' if MODELS[pid][3] else 'receiver'}, "
                               f"{MODELS[pid][2]} exchange)")
             reading = self._read_pid(pid, pids[pid])
             if reading is not None:
+                path = self._path.get(pid)
+                winning_info = next((d for d in pids[pid] if d.get("path") == path), None)
                 break
         if reading is not None:
             self._model_last[model] = (reading[0], reading[1], time.time())
-            return DeviceStatus(key, name, reading[0], reading[1], True, "gwolves", kind="mouse")
+            dpi, dpi_target = _capture_dpi(winning_info)
+            return DeviceStatus(key, name, reading[0], reading[1], True, "gwolves", kind="mouse",
+                                dpi=dpi, dpi_target=dpi_target)
         last = self._model_last.get(model)
         if last and time.time() - last[2] < ASLEEP_KEEP:
             return DeviceStatus(key, name, last[0], last[1], False, "gwolves", kind="mouse")

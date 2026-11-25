@@ -115,7 +115,7 @@ namespace AtkBattery {
             DateTime time=CheckedTime,now=DateTime.UtcNow;
             if(Stages==null||Stages.Length==0||Stages.Length>8)return false;
             var seen=new HashSet<int>();foreach(int stage in Stages)if(!ValidValue(stage)||!seen.Add(stage))return false;
-            return device!=null&&device.Kind=="mouse"&&(device.Provider=="logitech"||(device.Provider=="pulsar"||device.Provider=="families")&&StageSource=="onboard")&&device.ModelSource!="pack"&&device.Online&&device.ConnectionState=="connected"&&Supported&&CanSet&&Current.HasValue&&ValidValue(Current.Value)&&String.IsNullOrEmpty(Error)&&ValidToken(token)&&String.Equals(TargetToken,token,StringComparison.Ordinal)&&(StageSource=="onboard"||StageSource=="quick")&&time!=DateTime.MinValue&&time<=now.AddSeconds(5)&&(now-time).TotalSeconds<=90;
+            return device!=null&&device.Kind=="mouse"&&device.ModelSource!="pack"&&!String.IsNullOrEmpty(device.Provider)&&device.Provider!="bluetooth"&&device.Provider!="xinput"&&device.Provider!="standard_hid"&&device.Provider!="unknown"&&device.Online&&device.ConnectionState=="connected"&&Supported&&CanSet&&Current.HasValue&&ValidValue(Current.Value)&&String.IsNullOrEmpty(Error)&&ValidToken(token)&&String.Equals(TargetToken,token,StringComparison.Ordinal)&&(StageSource=="onboard"||StageSource=="quick"&&device.Provider!="pulsar"&&device.Provider!="families")&&time!=DateTime.MinValue&&time<=now.AddSeconds(5)&&(now-time).TotalSeconds<=90;
         }
         public string Key {get{return Supported+"|"+CanSet+"|"+Current+"|"+String.Join(",",Stages??new int[0])+"|"+StageSource+"|"+CheckedAtUtc+"|"+TargetToken+"|"+Error;}}
     }
