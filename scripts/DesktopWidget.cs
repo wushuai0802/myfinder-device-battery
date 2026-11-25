@@ -17,6 +17,8 @@ namespace AtkBatteryTray {
         internal static readonly string[] StyleNames = { "胶囊", "迷你环", "指示条" };
         internal static readonly string[] EdgeKeys = { "none", "top", "bottom", "left", "right" };
         internal static readonly string[] EdgeNames = { "自由拖动", "顶部贴边", "底部贴边", "左侧贴边", "右侧贴边" };
+        internal static readonly string[] HiddenStyleKeys = { "handle", "peek", "dot" };
+        internal static readonly string[] HiddenStyleNames = { "细长把手", "半露电量", "极简光点" };
 
         internal static string NormalizeStyle(string style) {
             return Array.IndexOf(StyleKeys, style) >= 0 ? style : "capsule";
@@ -26,10 +28,23 @@ namespace AtkBatteryTray {
             return Array.IndexOf(EdgeKeys, edge) >= 0 ? edge : "none";
         }
 
-        internal static Size CollapsedLogicalSize(string style, int deviceCount, bool largeFont, string dockEdge, bool hiddenEdgeTab) {
+        internal static string NormalizeHiddenStyle(string hiddenStyle) {
+            return Array.IndexOf(HiddenStyleKeys, hiddenStyle) >= 0 ? hiddenStyle : "handle";
+        }
+
+        internal static Size CollapsedLogicalSize(string style, int deviceCount, bool largeFont, string dockEdge, bool hiddenEdgeTab, string hiddenStyle = "handle") {
             string edge = NormalizeEdge(dockEdge);
             if (hiddenEdgeTab && edge != "none") {
                 bool vertical = edge == "left" || edge == "right";
+                string hs = NormalizeHiddenStyle(hiddenStyle);
+                if (hs == "peek") {
+                    return vertical
+                        ? new Size(largeFont ? 34 : 30, largeFont ? 58 : 52)
+                        : new Size(largeFont ? 64 : 58, largeFont ? 24 : 22);
+                }
+                if (hs == "dot") {
+                    return vertical ? new Size(14, 30) : new Size(30, 14);
+                }
                 return vertical ? new Size(10, 72) : new Size(72, 10);
             }
             string s = NormalizeStyle(style);
@@ -185,7 +200,9 @@ namespace AtkBatteryTray {
     internal sealed class DesktopWidgetRenderer {
         internal static void Paint(Graphics g, SizeF logicalSize, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, DesktopWidgetSettings cfg, bool expanded, bool edgeStripMode, bool hiddenEdgeTab, int hoveredRow) {
             if (hiddenEdgeTab) {
-                PaintHiddenTab(g, logicalSize, entries, palette, dark, DesktopWidgetGeometry.NormalizeEdge(cfg != null ? cfg.DockEdge : "right"));
+                string edge = DesktopWidgetGeometry.NormalizeEdge(cfg != null ? cfg.DockEdge : "right");
+                string hiddenStyle = DesktopWidgetGeometry.NormalizeHiddenStyle(cfg != null ? cfg.HiddenStyle : "handle");
+                PaintHiddenTab(g, logicalSize, entries, palette, dark, edge, hiddenStyle);
                 return;
             }
             // Clip smoothly inside the rounded card surface during morph/spring frames so text never bleeds outside.
@@ -257,47 +274,67 @@ namespace AtkBatteryTray {
             return path;
         }
 
-        // Wallpaper-proof 3-layer edge handle:
-        // 1. Dark outer shadow outline (visible on pure white/bright wallpapers)
-        // 2. High-opacity neutral charcoal pill + luminous inner rim (visible on pure black/vivid wallpapers)
-        // 3. Centered battery-level status core bar (+ bright white center dot when charging)
-        static void PaintHiddenTab(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, string edge) {
-            bool vertical = edge == "left" || edge == "right" || size.Height > size.Width;
-            var outerRect = new RectangleF(0.5f, 0.5f, Math.Max(4, size.Width - 1f), Math.Max(4, size.Height - 1f));
-            float outerRadius = vertical ? Math.Min(5f, outerRect.Width * 0.65f) : Math.Min(5f, outerRect.Height * 0.65f);
-
-            int? minPct = null;
-            bool anyLow = false;
-            bool anyCharging = false;
-            foreach (var e in entries) {
-                if (e.Percent.HasValue && e.Fresh) {
-                    if (!minPct.HasValue || e.Percent.Value < minPct.Value) minPct = e.Percent.Value;
-                    if (e.Low) anyLow = true;
-                    if (e.Charging) anyCharging = true;
+        static void ResolveEdgeBatterySummary(List<DesktopWidgetEntry> entries, out int? primaryPct, out bool anyLow, out bool anyCharging, out Color statusColor) {
+            primaryPct = null;
+            anyLow = false;
+            anyCharging = false;
+            if (entries != null) {
+                foreach (var e in entries) {
+                    if (e.Percent.HasValue && e.Fresh) {
+                        if (!primaryPct.HasValue || e.Percent.Value < primaryPct.Value) primaryPct = e.Percent.Value;
+                        if (e.Low) anyLow = true;
+                        if (e.Charging) anyCharging = true;
+                    }
                 }
             }
-            Color coreColor = anyLow
+            statusColor = anyLow
                 ? Color.FromArgb(248, 108, 108)
-                : minPct.HasValue
-                    ? (minPct.Value <= 30 ? Color.FromArgb(245, 192, 78) : Color.FromArgb(74, 218, 148))
+                : primaryPct.HasValue
+                    ? (primaryPct.Value <= 30 ? Color.FromArgb(245, 192, 78) : Color.FromArgb(74, 218, 148))
                     : Color.FromArgb(164, 174, 188);
+        }
 
-            Color shellFill = VisualDesign.HighContrast ? SystemColors.Window : Color.FromArgb(242, 24, 27, 34);
-            Color outerBorder = VisualDesign.HighContrast ? SystemColors.WindowText : Color.FromArgb(175, 0, 0, 0);
-            Color innerRim = VisualDesign.HighContrast ? SystemColors.Highlight : Color.FromArgb(95, 255, 255, 255);
+        // Wallpaper-proof 3-layer edge tabs in 3 user-selectable styles:
+        // - handle (default): slim charcoal handle with luminous rim & battery core bar
+        // - peek: compact half-pill showing live battery digits + color accent edge
+        // - dot: ultra-minimal ear tab with glowing battery indicator dot
+        static void PaintHiddenTab(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, string edge, string hiddenStyle) {
+            int? primaryPct; bool anyLow, anyCharging; Color coreColor;
+            ResolveEdgeBatterySummary(entries, out primaryPct, out anyLow, out anyCharging, out coreColor);
+            string style = DesktopWidgetGeometry.NormalizeHiddenStyle(hiddenStyle);
+            if (style == "peek") {
+                PaintHiddenPeek(g, size, primaryPct, anyLow, anyCharging, coreColor, palette, dark, edge);
+                return;
+            }
+            if (style == "dot") {
+                PaintHiddenDot(g, size, anyCharging, coreColor, edge);
+                return;
+            }
+            PaintHiddenHandle(g, size, anyCharging, coreColor, edge);
+        }
 
+        static void PaintHiddenShell(Graphics g, RectangleF outerRect, string edge, float outerRadius, Color shellFill, Color outerBorder, Color innerRim) {
             using (var shellPath = CreateEdgeTabPath(outerRect, edge, outerRadius)) {
                 using (var fillBrush = new SolidBrush(shellFill)) g.FillPath(fillBrush, shellPath);
                 using (var outerPen = new Pen(outerBorder, 1f)) g.DrawPath(outerPen, shellPath);
             }
-
             var rimRect = new RectangleF(outerRect.X + 1f, outerRect.Y + 1f, Math.Max(2f, outerRect.Width - 2f), Math.Max(2f, outerRect.Height - 2f));
             using (var rimPath = CreateEdgeTabPath(rimRect, edge, Math.Max(1.5f, outerRadius - 1f)))
             using (var rimPen = new Pen(innerRim, 1f)) {
                 g.DrawPath(rimPen, rimPath);
             }
+        }
 
-            // Centered vibrant battery status core pill
+        static void PaintHiddenHandle(Graphics g, SizeF size, bool anyCharging, Color coreColor, string edge) {
+            bool vertical = edge == "left" || edge == "right" || size.Height > size.Width;
+            var outerRect = new RectangleF(0.5f, 0.5f, Math.Max(4, size.Width - 1f), Math.Max(4, size.Height - 1f));
+            float outerRadius = vertical ? Math.Min(5f, outerRect.Width * 0.65f) : Math.Min(5f, outerRect.Height * 0.65f);
+
+            Color shellFill = VisualDesign.HighContrast ? SystemColors.Window : Color.FromArgb(242, 24, 27, 34);
+            Color outerBorder = VisualDesign.HighContrast ? SystemColors.WindowText : Color.FromArgb(175, 0, 0, 0);
+            Color innerRim = VisualDesign.HighContrast ? SystemColors.Highlight : Color.FromArgb(95, 255, 255, 255);
+            PaintHiddenShell(g, outerRect, edge, outerRadius, shellFill, outerBorder, innerRim);
+
             RectangleF coreRect;
             if (vertical) {
                 float coreW = 3f;
@@ -316,6 +353,98 @@ namespace AtkBatteryTray {
                 float dot = 3f;
                 using (var white = new SolidBrush(Color.White)) {
                     g.FillEllipse(white, coreRect.X + (coreRect.Width - dot) / 2f, coreRect.Y + (coreRect.Height - dot) / 2f, dot, dot);
+                }
+            }
+        }
+
+        static void PaintHiddenPeek(Graphics g, SizeF size, int? primaryPct, bool anyLow, bool anyCharging, Color coreColor, ThemePalette palette, bool dark, string edge) {
+            bool vertical = edge == "left" || edge == "right";
+            var outerRect = new RectangleF(0.5f, 0.5f, Math.Max(8, size.Width - 1f), Math.Max(8, size.Height - 1f));
+            float outerRadius = vertical ? 9f : 8f;
+
+            Color shellFill = VisualDesign.HighContrast
+                ? SystemColors.Window
+                : (dark ? Color.FromArgb(244, 24, 27, 34) : Color.FromArgb(246, 252, 253, 255));
+            Color outerBorder = VisualDesign.HighContrast
+                ? SystemColors.WindowText
+                : (dark ? Color.FromArgb(190, 0, 0, 0) : Color.FromArgb(155, 42, 48, 58));
+            Color innerRim = VisualDesign.HighContrast
+                ? SystemColors.Highlight
+                : (dark ? Color.FromArgb(72, 255, 255, 255) : Color.FromArgb(190, 255, 255, 255));
+            PaintHiddenShell(g, outerRect, edge, outerRadius, shellFill, outerBorder, innerRim);
+
+            Color accent = VisualDesign.HighContrast
+                ? SystemColors.Highlight
+                : (dark ? coreColor : (anyLow ? Color.FromArgb(210, 48, 48) : (primaryPct.HasValue && primaryPct.Value <= 30 ? Color.FromArgb(198, 128, 12) : Color.FromArgb(22, 152, 86))));
+            Color textColor = VisualDesign.HighContrast
+                ? SystemColors.WindowText
+                : (anyLow ? accent : (dark ? Color.FromArgb(244, 247, 250) : Color.FromArgb(24, 28, 36)));
+
+            string digits = primaryPct.HasValue ? primaryPct.Value.ToString() : "--";
+            if (vertical) {
+                // Status bar tucked on the screen-edge side, crisp percentage centered in remaining tab
+                float barW = 3f;
+                float barH = Math.Max(14f, outerRect.Height - 18f);
+                float barX = edge == "left" ? outerRect.Left + 2.5f : outerRect.Right - barW - 2.5f;
+                var barRect = new RectangleF(barX, outerRect.Y + (outerRect.Height - barH) / 2f, barW, barH);
+                CompactRenderer.Fill(g, barRect, accent, 1.5f);
+                if (anyCharging) {
+                    using (var wb = new SolidBrush(Color.White)) g.FillEllipse(wb, barRect.X + (barRect.Width - 2.6f) / 2f, barRect.Y + (barRect.Height - 2.6f) / 2f, 2.6f, 2.6f);
+                }
+
+                float textX = edge == "left" ? barX + barW + 1f : outerRect.Left + 1.5f;
+                float textW = Math.Max(16f, outerRect.Width - barW - 5f);
+                float fontPx = digits.Length >= 3 ? (VisualDesign.LargeFont ? 10.5f : 9.5f) : (VisualDesign.LargeFont ? 12f : 11f);
+                CompactRenderer.DrawLabel(g, digits, new RectangleF(textX, outerRect.Y + 4f, textW, outerRect.Height - 14f), fontPx, true, textColor, StringAlignment.Center);
+                if (primaryPct.HasValue) {
+                    CompactRenderer.DrawLabel(g, "%", new RectangleF(textX, outerRect.Bottom - 14f, textW, 10f), 8.5f, false, dark ? Color.FromArgb(160, 170, 184) : Color.FromArgb(108, 116, 128), StringAlignment.Center);
+                }
+            } else {
+                // Horizontal peek tab: small status dot + percentage text + thin bottom/top accent bar
+                float barH = 2.5f;
+                float barW = Math.Max(16f, outerRect.Width - 22f);
+                float barY = edge == "top" ? outerRect.Top + 2f : outerRect.Bottom - barH - 2f;
+                CompactRenderer.Fill(g, new RectangleF(outerRect.X + (outerRect.Width - barW) / 2f, barY, barW, barH), accent, 1.25f);
+
+                float contentY = edge == "top" ? outerRect.Y + 4.5f : outerRect.Y + 1f;
+                float contentH = Math.Max(12f, outerRect.Height - 6f);
+                string label = primaryPct.HasValue ? (anyCharging ? primaryPct.Value + "%+" : primaryPct.Value + "%") : "--";
+                CompactRenderer.DrawLabel(g, label, new RectangleF(outerRect.X + 4f, contentY, outerRect.Width - 8f, contentH), VisualDesign.LargeFont ? 12f : 11f, true, textColor, StringAlignment.Center);
+            }
+        }
+
+        static void PaintHiddenDot(Graphics g, SizeF size, bool anyCharging, Color coreColor, string edge) {
+            bool vertical = edge == "left" || edge == "right" || size.Height > size.Width;
+            var outerRect = new RectangleF(0.5f, 0.5f, Math.Max(6, size.Width - 1f), Math.Max(6, size.Height - 1f));
+            float outerRadius = vertical ? Math.Min(7f, outerRect.Width * 0.65f) : Math.Min(7f, outerRect.Height * 0.65f);
+
+            Color shellFill = VisualDesign.HighContrast ? SystemColors.Window : Color.FromArgb(242, 24, 27, 34);
+            Color outerBorder = VisualDesign.HighContrast ? SystemColors.WindowText : Color.FromArgb(185, 0, 0, 0);
+            Color innerRim = VisualDesign.HighContrast ? SystemColors.Highlight : Color.FromArgb(95, 255, 255, 255);
+            PaintHiddenShell(g, outerRect, edge, outerRadius, shellFill, outerBorder, innerRim);
+
+            float cx = outerRect.X + outerRect.Width / 2f;
+            float cy = outerRect.Y + outerRect.Height / 2f;
+            if (edge == "left") cx += 0.5f;
+            else if (edge == "right") cx -= 0.5f;
+            else if (edge == "top") cy += 0.5f;
+            else if (edge == "bottom") cy -= 0.5f;
+
+            // Soft luminous halo + crisp battery status dot
+            if (!VisualDesign.HighContrast) {
+                float halo = 9.5f;
+                using (var hb = new SolidBrush(Color.FromArgb(72, coreColor))) {
+                    g.FillEllipse(hb, cx - halo / 2f, cy - halo / 2f, halo, halo);
+                }
+            }
+            float dot = 5.5f;
+            using (var db = new SolidBrush(VisualDesign.HighContrast ? SystemColors.Highlight : coreColor)) {
+                g.FillEllipse(db, cx - dot / 2f, cy - dot / 2f, dot, dot);
+            }
+            if (anyCharging) {
+                float inner = 2.4f;
+                using (var wb = new SolidBrush(Color.White)) {
+                    g.FillEllipse(wb, cx - inner / 2f, cy - inner / 2f, inner, inner);
                 }
             }
         }
@@ -604,6 +733,15 @@ namespace AtkBatteryTray {
                 autoHide.Click += delegate { UpdateWidgetConfig(delegate(DesktopWidgetSettings w) { w.AutoHideOnEdge = !w.AutoHideOnEdge; }); };
                 menu.Items.Add(autoHide);
 
+                var hiddenStyleMenu = new ToolStripMenuItem("贴边隐藏样式");
+                for (int i = 0; i < DesktopWidgetGeometry.HiddenStyleKeys.Length; i++) {
+                    string key = DesktopWidgetGeometry.HiddenStyleKeys[i];
+                    var item = new ToolStripMenuItem(DesktopWidgetGeometry.HiddenStyleNames[i]) { Checked = DesktopWidgetGeometry.NormalizeHiddenStyle(cfg.HiddenStyle) == key };
+                    item.Click += delegate { UpdateWidgetConfig(delegate(DesktopWidgetSettings w) { w.HiddenStyle = key; }); };
+                    hiddenStyleMenu.DropDownItems.Add(item);
+                }
+                menu.Items.Add(hiddenStyleMenu);
+
                 var topMost = new ToolStripMenuItem("总在最前") { Checked = cfg.TopMost };
                 topMost.Click += delegate { UpdateWidgetConfig(delegate(DesktopWidgetSettings w) { w.TopMost = !w.TopMost; }); };
                 menu.Items.Add(topMost);
@@ -690,13 +828,13 @@ namespace AtkBatteryTray {
 
             targetLogical = expanded
                 ? DesktopWidgetGeometry.ExpandedLogicalSize(cachedEntries.Count, VisualDesign.LargeFont)
-                : DesktopWidgetGeometry.CollapsedLogicalSize(stripMode ? "strip" : cfg.Style, cachedEntries.Count, VisualDesign.LargeFont, cfg.DockEdge, hiddenTab);
+                : DesktopWidgetGeometry.CollapsedLogicalSize(stripMode ? "strip" : cfg.Style, cachedEntries.Count, VisualDesign.LargeFont, cfg.DockEdge, hiddenTab, cfg.HiddenStyle);
 
             var physSize = LayeredSurface.ComputePhysicalSize(targetLogical, currentDpiScale);
             targetPos = dragging ? dragPhysicalLocation : DesktopWidgetGeometry.ComputePhysicalLocation(cfg.DockEdge, physSize, workArea, cfg.AnchorXRatio, cfg.AnchorYRatio, hiddenTab);
 
             targetAlpha = (byte)Math.Max(140, Math.Min(255, (int)Math.Round(cfg.OpacityPercent * 2.55)));
-            if (hiddenTab) targetAlpha = 215;
+            if (hiddenTab) targetAlpha = DesktopWidgetGeometry.NormalizeHiddenStyle(cfg.HiddenStyle) == "peek" ? (byte)242 : (byte)220;
         }
 
         void TransitionToCurrentState(int durationMs, bool bouncy, double overshoot) {
@@ -861,7 +999,7 @@ namespace AtkBatteryTray {
         string BuildRenderSignature(DesktopWidgetSettings cfg, bool dark, bool hiddenTab, bool stripMode, Point pos, Size size) {
             var sb = new StringBuilder();
             sb.Append(dark).Append('|').Append(DeviceSettings.Current.ThemeStyle).Append('|').Append(VisualDesign.LargeFont).Append('|').Append(VisualDesign.HighContrast).Append('|');
-            sb.Append(cfg.Style).Append('|').Append(cfg.DockEdge).Append('|').Append(cfg.OpacityPercent).Append('|').Append(expanded).Append('|').Append(hiddenTab).Append('|').Append(stripMode).Append('|');
+            sb.Append(cfg.Style).Append('|').Append(cfg.DockEdge).Append('|').Append(cfg.HiddenStyle).Append('|').Append(cfg.OpacityPercent).Append('|').Append(expanded).Append('|').Append(hiddenTab).Append('|').Append(stripMode).Append('|');
             sb.Append(hoveredRow).Append('|').Append(pos.X).Append(',').Append(pos.Y).Append('|').Append(size.Width).Append('x').Append(size.Height).Append('|');
             foreach (var e in cachedEntries) sb.Append(e.Id).Append(':').Append(e.Name).Append(':').Append(e.Percent).Append(':').Append(e.Fresh).Append(':').Append(e.Charging).Append(';');
             return sb.ToString();

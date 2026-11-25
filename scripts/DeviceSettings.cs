@@ -44,13 +44,15 @@ namespace AtkBattery {
         [DataMember(Order=9)] public double AnchorXRatio = 0.96;
         [DataMember(Order=10)] public double AnchorYRatio = 0.08;
         [DataMember(Order=11, EmitDefaultValue=false)] public string MonitorDeviceName;
+        [DataMember(Order=12)] public string HiddenStyle = "handle";
         [OnDeserializing] void Defaults(StreamingContext context) {
-            Style="capsule";DockEdge="none";AutoHideOnEdge=true;TopMost=true;FullscreenPolicy="hide";CompactOnMaximized=true;OpacityPercent=96;MaxDevices=3;AnchorXRatio=0.96;AnchorYRatio=0.08;
+            Style="capsule";DockEdge="none";AutoHideOnEdge=true;TopMost=true;FullscreenPolicy="hide";CompactOnMaximized=true;OpacityPercent=96;MaxDevices=3;AnchorXRatio=0.96;AnchorYRatio=0.08;HiddenStyle="handle";
         }
         public DesktopWidgetSettings Clone(){return (DesktopWidgetSettings)MemberwiseClone();}
         internal void Normalize() {
             Style=AtkBatteryTray.DesktopWidgetGeometry.NormalizeStyle(Style);
             DockEdge=AtkBatteryTray.DesktopWidgetGeometry.NormalizeEdge(DockEdge);
+            HiddenStyle=AtkBatteryTray.DesktopWidgetGeometry.NormalizeHiddenStyle(HiddenStyle);
             FullscreenPolicy=AtkBatteryTray.DesktopDisplayWatch.NormalizePolicy(FullscreenPolicy);
             OpacityPercent=Math.Max(70,Math.Min(100,OpacityPercent==0?96:OpacityPercent));
             MaxDevices=Math.Max(1,Math.Min(4,MaxDevices==0?3:MaxDevices));

@@ -249,6 +249,14 @@ static class ControlCenterTests {
                         Check(File.Exists(file) && new FileInfo(file).Length > 1000, "rendered screenshot saved: " + Path.GetFileName(file));
                     }
                     if (page == ControlCenterPage.Placement && theme == "light") {
+                        form.SelectPlacementCard(1);
+                        Application.DoEvents();
+                        using (var bmp = new Bitmap(form.Width, form.Height)) {
+                            form.DrawToBitmap(bmp, new Rectangle(0, 0, form.Width, form.Height));
+                            string file = Path.Combine(shotDir, "cc-graphite-light-placement-widget.png");
+                            bmp.Save(file, ImageFormat.Png);
+                            Check(File.Exists(file) && new FileInfo(file).Length > 1000, "rendered screenshot saved: " + Path.GetFileName(file));
+                        }
                         form.SelectPlacementCard(2);
                         Application.DoEvents();
                         using (var bmp = new Bitmap(form.Width, form.Height)) {

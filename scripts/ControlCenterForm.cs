@@ -2271,7 +2271,12 @@ namespace AtkBatteryTray {
                 autoHideToggle.Toggled += delegate {
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.AutoHideOnEdge = autoHideToggle.Checked; });
                 };
-                rows.Add(CreateSettingRow("贴边自动隐藏", "缩为全壁纸高反差边缘把手，鼠标移近立即滑出", autoHideToggle, true));
+                rows.Add(CreateSettingRow("贴边自动隐藏", "缩为全壁纸高反差边缘样式，鼠标移近弹性滑出", autoHideToggle, true));
+
+                int hiddenStyleIdx = Array.IndexOf(DesktopWidgetGeometry.HiddenStyleKeys, DesktopWidgetGeometry.NormalizeHiddenStyle(w.HiddenStyle));
+                rows.Add(CreateSettingRow("贴边隐藏样式", "贴边缩起后的外观，支持细长把手、半露电量或极简光点", CreateSegmentedChoices(DesktopWidgetGeometry.HiddenStyleNames, hiddenStyleIdx, delegate(int idx) {
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.HiddenStyle = DesktopWidgetGeometry.HiddenStyleKeys[idx]; });
+                }), true));
 
                 var topToggle = new ControlCenterToggle(palette, dark) { Checked = w.TopMost };
                 topToggle.Toggled += delegate {

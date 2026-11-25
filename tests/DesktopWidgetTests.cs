@@ -44,6 +44,7 @@ static class DesktopWidgetTests {
         custom.DesktopWidget.Style = "rings";
         custom.DesktopWidget.DockEdge = "right";
         custom.DesktopWidget.AutoHideOnEdge = true;
+        custom.DesktopWidget.HiddenStyle = "peek";
         custom.DesktopWidget.TopMost = false;
         custom.DesktopWidget.FullscreenPolicy = "edge";
         custom.DesktopWidget.CompactOnMaximized = false;
@@ -55,12 +56,13 @@ static class DesktopWidgetTests {
 
         DeviceSettings.SaveBindings(path, custom);
         var loaded = DeviceSettings.LoadBindings(path);
-        Check(loaded.DesktopWidget.Enabled && loaded.DesktopWidget.Style == "rings" && loaded.DesktopWidget.DockEdge == "right" && !loaded.DesktopWidget.TopMost && loaded.DesktopWidget.FullscreenPolicy == "edge" && loaded.DesktopWidget.MaxDevices == 4 && loaded.DesktopWidget.OpacityPercent == 88, "desktop widget settings round-trip cleanly");
+        Check(loaded.DesktopWidget.Enabled && loaded.DesktopWidget.Style == "rings" && loaded.DesktopWidget.DockEdge == "right" && loaded.DesktopWidget.HiddenStyle == "peek" && !loaded.DesktopWidget.TopMost && loaded.DesktopWidget.FullscreenPolicy == "edge" && loaded.DesktopWidget.MaxDevices == 4 && loaded.DesktopWidget.OpacityPercent == 88, "desktop widget settings round-trip cleanly");
 
         // Out-of-range / NaN / unknown values normalize without throwing
         var weird = new AudioBindings();
         weird.DesktopWidget.Style = "invalid";
         weird.DesktopWidget.DockEdge = "diagonal";
+        weird.DesktopWidget.HiddenStyle = "unknown-tab";
         weird.DesktopWidget.FullscreenPolicy = "bogus";
         weird.DesktopWidget.OpacityPercent = 12;
         weird.DesktopWidget.MaxDevices = 99;
@@ -68,7 +70,7 @@ static class DesktopWidgetTests {
         weird.DesktopWidget.AnchorYRatio = 4.2;
         DeviceSettings.SaveBindings(path, weird);
         var normalized = DeviceSettings.LoadBindings(path);
-        Check(normalized.DesktopWidget.Style == "capsule" && normalized.DesktopWidget.DockEdge == "none" && normalized.DesktopWidget.FullscreenPolicy == "hide" && normalized.DesktopWidget.OpacityPercent == 70 && normalized.DesktopWidget.MaxDevices == 4 && normalized.DesktopWidget.AnchorXRatio >= 0 && normalized.DesktopWidget.AnchorYRatio == 1.0, "malformed widget fields normalize safely");
+        Check(normalized.DesktopWidget.Style == "capsule" && normalized.DesktopWidget.DockEdge == "none" && normalized.DesktopWidget.HiddenStyle == "handle" && normalized.DesktopWidget.FullscreenPolicy == "hide" && normalized.DesktopWidget.OpacityPercent == 70 && normalized.DesktopWidget.MaxDevices == 4 && normalized.DesktopWidget.AnchorXRatio >= 0 && normalized.DesktopWidget.AnchorYRatio == 1.0, "malformed widget fields normalize safely");
     }
 
     static void GeometryAndEdgeSnap() {
@@ -83,10 +85,18 @@ static class DesktopWidgetTests {
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(400, 1025, 200, 36), workArea) == "bottom", "pushing past bottom edge still snaps to bottom");
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(500, 500, 200, 36), workArea) == "none", "center stays undocked");
 
-        var hiddenRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true);
-        Check(hiddenRight.Width == 10 && hiddenRight.Height == 72, "vertical hidden edge tab is slim 10x72");
-        var hiddenTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true);
-        Check(hiddenTop.Width == 72 && hiddenTop.Height == 10, "horizontal hidden edge tab is slim 72x10");
+        var hiddenRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true, "handle");
+        Check(hiddenRight.Width == 10 && hiddenRight.Height == 72, "vertical hidden edge handle is slim 10x72");
+        var hiddenTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true, "handle");
+        Check(hiddenTop.Width == 72 && hiddenTop.Height == 10, "horizontal hidden edge handle is slim 72x10");
+        var peekRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true, "peek");
+        Check(peekRight.Width == 30 && peekRight.Height == 52, "vertical peek edge tab is compact 30x52");
+        var peekTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true, "peek");
+        Check(peekTop.Width == 58 && peekTop.Height == 22, "horizontal peek edge tab is compact 58x22");
+        var dotRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true, "dot");
+        Check(dotRight.Width == 14 && dotRight.Height == 30, "vertical dot edge tab is ultra-compact 14x30");
+        var dotTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true, "dot");
+        Check(dotTop.Width == 30 && dotTop.Height == 14, "horizontal dot edge tab is ultra-compact 30x14");
 
         var locRight = DesktopWidgetGeometry.ComputePhysicalLocation("right", new Size(200, 36), workArea, 0.5, 0.5, false);
         Check(locRight.X == workArea.Right - 200 - 6 && locRight.Y >= workArea.Top && locRight.Y + 36 <= workArea.Bottom, "right docked widget hugs right edge within workArea");
@@ -250,38 +260,52 @@ static class DesktopWidgetTests {
         var edgeEntriesFull = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m1", Kind = "mouse", Percent = 92, Fresh = true } };
         var edgeEntriesWarn = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m2", Kind = "mouse", Percent = 26, Fresh = true, Charging = true } };
         var edgeEntriesLow = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m3", Kind = "mouse", Percent = 12, Fresh = true, Low = true } };
-        var rightTabSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true);
-        var topTabSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "top", true);
-        var cfgRight = new DesktopWidgetSettings { DockEdge = "right" };
-        var cfgTop = new DesktopWidgetSettings { DockEdge = "top" };
+        var rightHandleSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true, "handle");
+        var rightPeekSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true, "peek");
+        var rightDotSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true, "dot");
+        var topPeekSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "top", true, "peek");
+        var cfgRightHandle = new DesktopWidgetSettings { DockEdge = "right", HiddenStyle = "handle" };
+        var cfgRightPeek = new DesktopWidgetSettings { DockEdge = "right", HiddenStyle = "peek" };
+        var cfgRightDot = new DesktopWidgetSettings { DockEdge = "right", HiddenStyle = "dot" };
+        var cfgLeftPeek = new DesktopWidgetSettings { DockEdge = "left", HiddenStyle = "peek" };
+        var cfgTopPeek = new DesktopWidgetSettings { DockEdge = "top", HiddenStyle = "peek" };
         var darkPal = ThemePalette.For("graphite", true);
+        var lightPal = ThemePalette.For("graphite", false);
 
-        using (var wpSheet = new Bitmap(900, 300, PixelFormat.Format32bppArgb))
+        using (var wpSheet = new Bitmap(920, 360, PixelFormat.Format32bppArgb))
         using (var wg = Graphics.FromImage(wpSheet)) {
             wg.Clear(Color.FromArgb(24, 26, 30));
             using (var lblFont = new Font("Segoe UI", 12f, FontStyle.Bold, GraphicsUnit.Pixel))
             for (int i = 0; i < wallpapers.Length; i++) {
-                int x = 15 + i * 176;
-                var panel = new Rectangle(x, 16, 164, 268);
+                int x = 15 + i * 180;
+                var panel = new Rectangle(x, 16, 168, 328);
                 using (var b = new SolidBrush(wallpapers[i])) wg.FillRectangle(b, panel);
                 Color labelCol = i == 0 ? Color.FromArgb(30, 34, 40) : Color.White;
-                using (var tb = new SolidBrush(labelCol)) wg.DrawString(wpNames[i], lblFont, tb, x + 10, 34);
+                using (var tb = new SolidBrush(labelCol)) wg.DrawString(wpNames[i], lblFont, tb, x + 10, 48);
 
-                using (var topTab = LayeredSurface.RenderToBitmap(topTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, darkPal, true, cfgTop, false, false, true, -1); }))
+                // Top horizontal peek tab (light mode on bright wallpaper, dark mode on others)
+                bool useDark = i != 0;
+                var pal = useDark ? darkPal : lightPal;
+                using (var topTab = LayeredSurface.RenderToBitmap(topPeekSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, pal, useDark, cfgTopPeek, false, false, true, -1); }))
                     wg.DrawImageUnscaled(topTab, x + (panel.Width - topTab.Width) / 2, panel.Top);
 
-                using (var rFull = LayeredSurface.RenderToBitmap(rightTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, darkPal, true, cfgRight, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(rFull, panel.Right - rFull.Width, panel.Top + 40);
+                // Right edge: 3 styles stacked (handle / peek / dot)
+                using (var rHandle = LayeredSurface.RenderToBitmap(rightHandleSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, darkPal, true, cfgRightHandle, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rHandle, panel.Right - rHandle.Width, panel.Top + 72);
 
-                using (var rWarn = LayeredSurface.RenderToBitmap(rightTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesWarn, darkPal, true, cfgRight, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(rWarn, panel.Right - rWarn.Width, panel.Top + 154);
+                using (var rPeek = LayeredSurface.RenderToBitmap(rightPeekSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesWarn, pal, useDark, cfgRightPeek, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rPeek, panel.Right - rPeek.Width, panel.Top + 194);
 
-                using (var rLow = LayeredSurface.RenderToBitmap(rightTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesLow, darkPal, true, new DesktopWidgetSettings { DockEdge = "left" }, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(rLow, panel.Left, panel.Top + 98);
+                using (var rDot = LayeredSurface.RenderToBitmap(rightDotSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesLow, darkPal, true, cfgRightDot, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rDot, panel.Right - rDot.Width, panel.Top + 280);
+
+                // Left edge: low-battery peek tab
+                using (var lPeek = LayeredSurface.RenderToBitmap(rightPeekSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesLow, pal, useDark, cfgLeftPeek, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(lPeek, panel.Left, panel.Top + 132);
             }
             string wpFile = Path.Combine(dir, "t50-edge-wallpapers-contrast.png");
             wpSheet.Save(wpFile, ImageFormat.Png);
-            Check(File.Exists(wpFile) && new FileInfo(wpFile).Length > 2000, "wallpaper contrast edge-tab screenshot rendered");
+            Check(File.Exists(wpFile) && new FileInfo(wpFile).Length > 2000, "wallpaper contrast edge-tab screenshot rendered (all 3 styles)");
         }
     }
 
