@@ -4697,3 +4697,17 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - Source: `.ai/evidence/rapoohub/index-cgGQw9wn.js` (`dy(n)` offset `227909`: `xCpiVal = kc(n, 2)` after report ID `07`) and real Issue `#120` capture `07 10 01 40 06 40 06 01 44 ...` (`0x0640 = 1600 DPI`).
 - `engine/providers/rapoo.py` decodes current X DPI passively from `Report 07` bytes `3..4` (50..45000) and exposes it with `canSet = False` (`rapoo` stays excluded from `server.DPI_PROVIDERS`, strictly zero writes).
 - Active EEPROM DPI stage switching (`Output 06 / Feature 08`, `write_eeprom 0xA5`) from A HUB remains disabled until real `24AE:1412` HID descriptor proof is captured for those reports (requested on `#1138`).
+
+
+## Batch 1126 Device Fixes & Candidates (PR #1146 port, #1127, #1148)
+
+- **Generic `05AC:024F` `"2.4G Dongle"` (`engine/providers/aula_keyboard.py`, `engine/topology.py`, hardened port of PR `#1146` by `@Nasak2`)**:
+  - Grade **C** (contributor Windows 11 capture: `iface=3 FF60:0061` write `00 20 01 ... 21` -> `20 01 00 64 ... 85` = 100%, checksum `0x85`; sibling `MI_04` 65B returned `0f 01 01 11 ...` and stays excluded).
+  - Strictly gated to `05AC:024F`, `"2.4G Dongle"`, `interface_number == 3` (`int`), `FF60:0061`, resolved USB parent, unique `MI_03` collection, and proven 33-byte unnumbered Report 0 I/O (`caps` or `_descriptor_fallback`). Displays neutral name `"2.4G 无线键盘（05AC:024F）"`.
+- **ATK N9 V2 Ultimate / ULTRA (`373B:1262` / `12D6`, `#1127`, `engine/topology.py`, `engine/providers/atk_headset.py`)**:
+  - Diagnosed from `#1127` (`atk_headset | unavailable | report sizes unproven`): C-Media/Bolutek `FF90:0001` declares `OutputReportByteLength = 64` with Constant items (`ob=ov=0`) or fixed-usage arrays. Added `allow_fixed_usage=True`, `_descriptor_fallback`, and strict `output_constant_only` proof for `(0x373B, 0x1262/0x12D6, 0xFF90, 0x0001)` (`Input 0x55` proven in `22..64` bytes, `output_report_length == 64`).
+- **MCHOSE K7 Ultra (`3837:1001`, `#1127`, `engine/providers/mchose.py`, `engine/topology.py`)**:
+  - Grade **C** read-only candidate (`allowUpdateDevice`-excluded in M HUB `main-DCRwBIvm.js`, wired to V2 `0x11 0x06` on `FF01:0001`). `#1127` confirms Windows collections `FF01:0001` & `FF0B:0104` on `"MCHOSE K7 Ultra"`.
+  - Proves Feature Report `0x11` (`"17"` = `21` or `65` bytes; allows sibling Feature `0x12`) via HidP (`allow_fixed_usage=True`) or `_descriptor_fallback`; requires 2 consecutive identical valid `0x11 0xF9` replies (`vid in {0x3837, 0x5253}`); never opens `FF0B:0104`, never writes `0x12`, never enables DPI.
+- **Angry Miao AM Infinity .97 (`0E8D:0703`, `#1148`, `engine/topology.py`, `engine/providers/am_infinity_97.py`, `engine/server.py`)**:
+  - Enabled `allow_fixed_usage=True` on `0E8D:0703 FF13:0001`, relaxed `reports_proven()` to accept multi-report collections (`REPORT_BYTES <= length <= 4096` with `max(sizes.values()) == length` and proven OUT `06` / IN `07` == `62` bytes), and added `am_infinity_97` safe `diagnosticSummary` -> `errorCode` health projection in `server.py` (`+ declared=` proof notes).

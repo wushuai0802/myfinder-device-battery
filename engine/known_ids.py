@@ -268,6 +268,9 @@ def build_index(root=None, *, engine_root=None):
                 if "A5V2_VID" in source.values and "A5V2_PID" in source.values:
                     add(module, source.get("A5V2_VID"), source.get("A5V2_PID"),
                         source.get("A5V2_NAME"), "mouse")
+                if "K7_ULTRA_VID" in source.values and "K7_ULTRA_PID" in source.values:
+                    add(module, source.get("K7_ULTRA_VID"), source.get("K7_ULTRA_PID"),
+                        source.get("K7_ULTRA_NAME"), "mouse")
                 if "V3_VID" in source.values and "V3_PIDS" in source.values:
                     for pid, name in source.table("V3_PIDS"):
                         add(module, source.get("V3_VID"), source.literal(pid), source.name(name), "mouse")

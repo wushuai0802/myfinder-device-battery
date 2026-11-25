@@ -4,11 +4,12 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _hidstub  # noqa: F401
 import battery_hid as H
+import topology
 from providers import atk_headset as A, pulsar
 from test_new_brands import FakeHid
 
@@ -206,6 +207,92 @@ class AtkHeadsetTests(unittest.TestCase):
             lengths.assert_not_called()
             self.assertEqual(bus.opened, [])
             self.assertEqual(bus.writes, [])
+
+    def test_constant_output_0x55_64_proven_path_works_and_fail_closes_on_mismatch(self):
+        for pid, name in ((0x1262, "ATK N9 V2 Ultimate"), (0x12D6, "ATK N9 V2 ULTRA")):
+            for in_len in (22, 32, 64):
+                info = entry(product_id=pid, input_report_length=in_len,
+                             input_report_sizes={"85": in_len},
+                             output_report_length=64, output_report_sizes=None,
+                             output_constant_only=True)
+                with self.subTest(pid=pid, in_len=in_len), fixture(
+                        [reply(68, 0x02, length=in_len)], [info]) as bus:
+                    status, = P().poll()
+                self.assertEqual((status.name, status.level), (name, 68))
+                self.assertEqual(bus.writes, [(info["path"], REQUEST)])
+                self.assertEqual(bus.reads[0][0], in_len)
+
+        bad_inventories = [
+            [entry(output_report_sizes=None, output_constant_only=False)],
+            [entry(output_report_sizes=None)],
+            [entry(output_report_sizes={}, output_constant_only=True)],
+            [entry(output_report_sizes=None, output_constant_only=True, output_report_length=63)],
+            [entry(output_report_sizes=None, output_constant_only=True, output_report_length=65)],
+            [entry(output_report_sizes=None, output_constant_only=True,
+                   input_report_sizes={"85": 64, "65": 64})],
+            [entry(output_report_sizes=None, output_constant_only=True),
+             entry(output_report_sizes=None, output_constant_only=False, path=b"dup-ff90")],
+        ]
+        for inv in bad_inventories:
+            with self.subTest(inv=inv), fixture([reply()], inv) as bus:
+                self.assertEqual(P().poll(), [])
+            self.assertEqual((bus.opened, bus.writes), ([], []))
+
+    def test_topology_discover_sets_constant_output_and_runs_descriptor_fallback(self):
+        path = r"\\?\hid#vid_373b&pid_1262&mi_03#n9v2"
+        kernel, hid = MagicMock(), MagicMock()
+        kernel.CreateFileW.return_value = 1
+
+        def get_attrs(handle, pointer):
+            pointer._obj.vendor, pointer._obj.product = 0x373B, 0x1262
+            return 1
+
+        def get_caps(data, pointer):
+            caps = pointer._obj
+            caps.page, caps.usage, caps.input, caps.output = 0xFF90, 1, 64, 64
+            caps.ib, caps.iv, caps.ob, caps.ov = 1, 0, 0, 0
+            return 0x00110000
+
+        def get_name(handle, buffer, size):
+            buffer.value = "ATK N9V2 ULTIMATE dongle"
+            return 1
+
+        hid.HidD_GetAttributes.side_effect = get_attrs
+        hid.HidD_GetPreparsedData.return_value = 1
+        hid.HidP_GetCaps.side_effect = get_caps
+        hid.HidD_GetProductString.side_effect = get_name
+        dlls = {"kernel32": kernel, "hid": hid}
+        # 1) Constant output (ob=ov=0, output=64) with HidP-proven Input 0x55/64:
+        # no descriptor handle open needed.
+        desc = bytes.fromhex(
+            "06 90 ff 09 01 a1 01 85 55 09 01 15 00 26 ff 00 75 08 95 3f 81 00 "
+            "85 55 09 01 15 00 26 ff 00 75 08 95 3f 91 00 c0"
+        )
+        with patch.object(topology, "os", SimpleNamespace(name="nt")), \
+             patch.object(topology.c, "WinDLL", side_effect=lambda k, **_: dlls[k], create=True), \
+             patch.object(topology, "usb_parent", return_value=r"pnp:usb\vid_373b&pid_1262\n9v2"), \
+             patch.object(topology, "_descriptor_cache", {}), patch.object(topology, "_descriptor_paths", None), \
+             patch.object(H, "battery_caps", return_value={"input_report_sizes": {"85": 64},
+                                                           "output_report_sizes": None}), \
+             patch.object(topology, "_read_report_descriptor", return_value=(desc, None)) as getter:
+            info, = topology.discover([path])
+        self.assertEqual(getter.call_count, 0)
+        self.assertTrue(info["output_constant_only"])
+        self.assertEqual(info["input_report_sizes"], {"85": 64})
+        self.assertIsNone(info["output_report_sizes"])
+
+        # 2) Valid bounds (22..64 in, 64 out) with failed HidP triggers fallback.
+        with patch.object(topology, "os", SimpleNamespace(name="nt")), \
+             patch.object(topology.c, "WinDLL", side_effect=lambda k, **_: dlls[k], create=True), \
+             patch.object(topology, "usb_parent", return_value=r"pnp:usb\vid_373b&pid_1262\n9v2"), \
+             patch.object(topology, "_descriptor_cache", {}), patch.object(topology, "_descriptor_paths", None), \
+             patch.object(H, "battery_caps", return_value={"input_report_sizes": None,
+                                                           "output_report_sizes": None}), \
+             patch.object(topology, "_read_report_descriptor", return_value=(desc, None)) as getter:
+            info, = topology.discover([path])
+        self.assertEqual(getter.call_count, 1)
+        self.assertEqual(info["input_report_sizes"], {"85": 64})
+        self.assertEqual(info["output_report_sizes"], {"85": 64})
 
 
 if __name__ == "__main__":

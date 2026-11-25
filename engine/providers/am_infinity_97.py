@@ -28,6 +28,7 @@ from dataclasses import replace
 
 import hid
 
+from battery_hid import report_proof_summary
 from . import hidlist
 from .base import DeviceStatus, Provider
 
@@ -92,10 +93,14 @@ def reports_proven(info):
     for direction, report_id in (("output", OUTPUT_REPORT_ID), ("input", INPUT_REPORT_ID)):
         length = info.get(direction + "_report_length")
         sizes = info.get(direction + "_report_sizes")
-        if (type(length) is not int or length != REPORT_BYTES
-                or not isinstance(sizes, dict)
-                or type(sizes.get(str(report_id))) is not int
-                or sizes[str(report_id)] != REPORT_BYTES):
+        if (type(length) is not int or not REPORT_BYTES <= length <= 4096
+                or not isinstance(sizes, dict) or not sizes
+                or any(not isinstance(key, str) or not key.isascii() or not key.isdecimal()
+                       or len(key) > 3 or str(int(key)) != key or not 0 <= int(key) <= 255
+                       or type(n) is not int or not 2 <= n <= length
+                       for key, n in sizes.items())
+                or max(sizes.values()) != length
+                or sizes.get(str(report_id)) != REPORT_BYTES):
             return False
     return True
 
@@ -317,7 +322,10 @@ class AmInfinity97Provider(Provider):
                 self._diag.append("product string/path unproven: nothing sent")
                 continue
             if not reports_proven(info):
-                self._diag.append("numbered OUT 6 / IN 7 report (62 bytes) unproven: nothing sent")
+                out_summary = report_proof_summary(info, "output")
+                in_summary = report_proof_summary(info, "input", include_declared=True)
+                self._diag.append("numbered OUT 6 / IN 7 report (62 bytes) unproven: nothing sent"
+                                  + out_summary + in_summary)
                 continue
             dev = None
             try:

@@ -37,6 +37,21 @@ def no_reading_reply(reply):
                  or tuple(reply[1:3]) == (0x0A, 0x01)))
 
 
+def _constant_output_proven(info):
+    """Allow C-Media/Bolutek 373B FF90:0001 constant-only 0x55/64 output reports (#1127).
+
+    Windows HidP exposes Input 0x55 within 22..64B and OutputReportByteLength = 64
+    with zero output value/button caps when firmware marks Output 0x55 as Constant.
+    """
+    in_len = info.get("input_report_length")
+    out_len = info.get("output_report_length")
+    return (type(in_len) is int and 22 <= in_len <= 64
+            and info.get("input_report_sizes") == {str(AtkHeadsetProvider.input_id): in_len}
+            and info.get("output_report_sizes") is None
+            and info.get("output_constant_only") is True
+            and type(out_len) is int and out_len == AtkHeadsetProvider.output_bytes)
+
+
 class AtkHeadsetProvider(BatteryHidProvider):
     name = "atk_headset"
     vid, pids = VID, PIDS
@@ -49,3 +64,12 @@ class AtkHeadsetProvider(BatteryHidProvider):
     make_request = staticmethod(make_request)
     parse_reply = staticmethod(parse_reply)
     no_reading_reply = staticmethod(no_reading_reply)
+
+    def _pick(self, infos):
+        candidates = [info for info in infos
+                      if info.get("vendor_id") == self.vid
+                      and info.get("product_id") in self.pids
+                      and (info.get("usage_page"), info.get("usage")) == self.collection]
+        if len(candidates) == 1 and candidates[0].get("path") and _constant_output_proven(candidates[0]):
+            return candidates[0]
+        return super()._pick(infos)
