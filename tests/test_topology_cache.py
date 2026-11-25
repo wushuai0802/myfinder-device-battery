@@ -907,13 +907,14 @@ class DescriptorCacheTests(unittest.TestCase):
     def test_atk_nano_input_report_is_proven_without_hardware_commands(self):
         from providers import pulsar
         for report_id, length in ((0, 8), (8, 64), (85, 32)):
-            self.cache.clear()
-            self.batch3_descriptor((0x373B, 0x1216), (0xFF05, 1), {report_id: length}, {8: 64})
-            info, = self.scan([PATH_A])
-            self.assertEqual(info["input_report_sizes"], {str(report_id): length})
-            self.assertEqual(info["output_report_sizes"], {"8": 64})
-            self.assertEqual(pulsar.AtkNanoProvider()._pick([info]), info)
-            self.assertEqual(self.scan([PATH_A]), [info])
+            for pid in (0x1216, 0x12F5):
+                self.cache.clear()
+                self.batch3_descriptor((0x373B, pid), (0xFF05, 1), {report_id: length}, {8: 64})
+                info, = self.scan([PATH_A])
+                self.assertEqual(info["input_report_sizes"], {str(report_id): length})
+                self.assertEqual(info["output_report_sizes"], {"8": 64})
+                self.assertEqual(pulsar.AtkNanoProvider()._pick([info]), info)
+                self.assertEqual(self.scan([PATH_A]), [info])
         self.hid.HidD_GetFeature.assert_not_called()
         self.hid.HidD_SetFeature.assert_not_called()
         self.kernel.ReadFile.assert_not_called()
@@ -932,6 +933,9 @@ class DescriptorCacheTests(unittest.TestCase):
         for identity, collection in (((0x373B, 0x1216), (0xFFB1, 1)),
                                      ((0x373B, 0x1216), (0xFFB3, 1)),
                                      ((0x373B, 0x1216), (0xFF05, 2)),
+                                     ((0x373B, 0x12F5), (0xFF00, 1)),
+                                     ((0x373B, 0x12F5), (0xFF01, 1)),
+                                     ((0x373B, 0x12F5), (0xFF05, 2)),
                                      ((0x373B, 0x1217), (0xFF05, 1)),
                                      ((0x3554, 0x1216), (0xFF05, 1))):
             self.cache.clear()

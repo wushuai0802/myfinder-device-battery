@@ -286,6 +286,24 @@ class AtkNanoTests(unittest.TestCase):
         self.assertEqual(len({s.key for s in first}), 2)
         self.assertEqual({s.key for s in first}, {s.key for s in second})
 
+    def test_12f5_dongle_m1_uses_bitmouse_path_and_never_falls_back_to_compx(self):
+        info = entry("m1-a", product_id=0x12F5, product_string="Wireless mouse 8k dongle-M1")
+        with fixture([reply(84)], [info]) as bus:
+            status, = P.PulsarProvider().poll()
+        self.assertEqual((status.level, status.kind, status.verification_level, status.name),
+                         (84, "mouse", "C", "ATK 8K dongle-M1"))
+        self.assertFalse(status.charging_known)
+        self.assertIsNone(status.dpi)
+        self.assertEqual(bus.writes, [(info["path"], REQUEST)])
+        # Unproven 12F5 must never fall back to legacy FF02 CompX even if an FF02 collection exists.
+        unproven = [entry("m1-b", product_id=0x12F5, input_report_sizes=None),
+                    entry("m1-b", product_id=0x12F5, usage_page=0xFF02, usage=2, path=b"m1-ff02")]
+        with fixture([reply()], unproven) as bus:
+            provider = P.PulsarProvider()
+            self.assertEqual(provider.poll(), [])
+        self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
+        self.assertEqual(provider.reader_diagnostics(), ["NANO input report unproven"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,8 +4,8 @@ MyFinder extension: unlisted ATK VID 373B devices may use protocol-family matchi
 (协议族匹配，未实测; level C). Only FF02:0002 with a known output length of exactly
 17 bytes receives the existing power query. N9 headset IDs 1204/1262/12D6 are
 excluded before collection/length probing. FF04/FF05 alone and unknown lengths
-are not sufficient. Exact 373B:1216 uses the separate, descriptor-guarded
-FF05 BITMOUSE reader below; it never enters the legacy FF02/DPI path.
+are not sufficient. Exact 373B:1216 and 373B:12F5 use the separate, descriptor-guarded
+FF05 BITMOUSE reader below; they never enter the legacy FF02/DPI path.
 DPI uses a separate exact allow-list below; the server keeps
 native 373B:1278 excluded. Scyrox 3554:F517, VGN F2 Master+ 3554:FB56 and
 VXE R1 SE 1K 3554:F58E also require FF02:0002 and exactly 17 output bytes;
@@ -214,7 +214,12 @@ PIDS: Dict[int, Dict[int, str]] = {
 }
 
 # Separate from PIDS: that table's listed mice use the legacy CompX protocol.
-NANO_PIDS = {0x373B: {0x1216: "ATK / VXE NANO receiver"}}
+NANO_PIDS = {
+    0x373B: {
+        0x1216: "ATK / VXE NANO receiver",
+        0x12F5: "ATK 8K dongle-M1",
+    },
+}
 
 
 # Public projection of existing private-reader results, never free-form logs.
@@ -767,7 +772,7 @@ class PulsarProvider(Provider):
             except Exception as e:  # pragma: no cover
                 log.warning("hid.enumerate(%04x): %s", vid, e)
                 continue
-            if vid == 0x373B and any(d.get("product_id") == 0x1216 for d in infos):
+            if vid == 0x373B and any(d.get("product_id") in NANO_PIDS[0x373B] for d in infos):
                 nano = AtkNanoProvider()
                 out.extend(nano.poll())
                 nano_diag = nano.diagnostics()
@@ -780,7 +785,7 @@ class PulsarProvider(Provider):
             if vid == 0x373B:
                 candidates += sorted({d["product_id"] for d in infos if d["product_id"] not in pids})
             for pid in candidates:
-                if vid == 0x373B and pid == 0x1216:
+                if vid == 0x373B and pid in NANO_PIDS[0x373B]:
                     continue  # Never fall back to CompX, even if NANO proof fails.
                 if vid == 0x373B and pid in ATK_HEADSET_PIDS:
                     self._diag.append(f"  ATK {vid:04x}:{pid:04x} headset reserved: nothing sent")
