@@ -2274,7 +2274,7 @@ namespace AtkBatteryTray {
                 rows.Add(CreateSettingRow("贴边自动隐藏", "缩为全壁纸高反差边缘样式，鼠标移近弹性滑出", autoHideToggle, true));
 
                 int hiddenStyleIdx = Array.IndexOf(DesktopWidgetGeometry.HiddenStyleKeys, DesktopWidgetGeometry.NormalizeHiddenStyle(w.HiddenStyle));
-                rows.Add(CreateSettingRow("贴边隐藏样式", "贴边缩起后的外观，支持细长把手、半露电量或极简光点", CreateSegmentedChoices(DesktopWidgetGeometry.HiddenStyleNames, hiddenStyleIdx, delegate(int idx) {
+                rows.Add(CreateSettingRow("贴边隐藏样式", "贴边缩起后的现代琉璃外观：琉璃丝带、凹角灵动耳翼或微光露珠", CreateSegmentedChoices(DesktopWidgetGeometry.HiddenStyleNames, hiddenStyleIdx, delegate(int idx) {
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.HiddenStyle = DesktopWidgetGeometry.HiddenStyleKeys[idx]; });
                 }), true));
 

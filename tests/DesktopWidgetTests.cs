@@ -86,17 +86,17 @@ static class DesktopWidgetTests {
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(500, 500, 200, 36), workArea) == "none", "center stays undocked");
 
         var hiddenRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true, "handle");
-        Check(hiddenRight.Width == 10 && hiddenRight.Height == 72, "vertical hidden edge handle is slim 10x72");
+        Check(hiddenRight.Width == 18 && hiddenRight.Height == 72, "vertical glass-ribbon handle canvas is 18x72");
         var hiddenTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true, "handle");
-        Check(hiddenTop.Width == 72 && hiddenTop.Height == 10, "horizontal hidden edge handle is slim 72x10");
+        Check(hiddenTop.Width == 72 && hiddenTop.Height == 18, "horizontal glass-ribbon handle canvas is 72x18");
         var peekRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true, "peek");
-        Check(peekRight.Width == 30 && peekRight.Height == 52, "vertical peek edge tab is compact 30x52");
+        Check(peekRight.Width == 42 && peekRight.Height == 84, "vertical concave-notch ear canvas is 42x84");
         var peekTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true, "peek");
-        Check(peekTop.Width == 58 && peekTop.Height == 22, "horizontal peek edge tab is compact 58x22");
+        Check(peekTop.Width == 86 && peekTop.Height == 38, "horizontal concave-notch ear canvas is 86x38");
         var dotRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true, "dot");
-        Check(dotRight.Width == 14 && dotRight.Height == 30, "vertical dot edge tab is ultra-compact 14x30");
+        Check(dotRight.Width == 24 && dotRight.Height == 38, "vertical dewdrop dot canvas is 24x38");
         var dotTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true, "dot");
-        Check(dotTop.Width == 30 && dotTop.Height == 14, "horizontal dot edge tab is ultra-compact 30x14");
+        Check(dotTop.Width == 38 && dotTop.Height == 24, "horizontal dewdrop dot canvas is 38x24");
 
         var locRight = DesktopWidgetGeometry.ComputePhysicalLocation("right", new Size(200, 36), workArea, 0.5, 0.5, false);
         Check(locRight.X == workArea.Right - 200 - 6 && locRight.Y >= workArea.Top && locRight.Y + 36 <= workArea.Bottom, "right docked widget hugs right edge within workArea");
@@ -194,7 +194,7 @@ static class DesktopWidgetTests {
             form.EvaluateEdgeAutoHideTick(farAway, t0);
             form.EvaluateEdgeAutoHideTick(farAway, t0.AddMilliseconds(500));
             Application.DoEvents();
-            Check(form.IsAutoHiddenOnEdge && form.LogicalSize.Width == 10 && form.LogicalSize.Height == 72, "cursor watchdog retracts docked widget to edge handle even if WM_MOUSELEAVE is dropped");
+            Check(form.IsAutoHiddenOnEdge && form.LogicalSize.Width == 18 && form.LogicalSize.Height == 72, "cursor watchdog retracts docked widget to edge handle even if WM_MOUSELEAVE is dropped");
 
             // Disable widget -> disposes completely
             next = DeviceSettings.Current;
@@ -248,15 +248,16 @@ static class DesktopWidgetTests {
             Check(File.Exists(file) && new FileInfo(file).Length > 2000, "widget showcase screenshot rendered");
         }
 
-        // Render extreme wallpaper contrast verification sheet for edge-hidden tab (white/black/vivid green/vivid red/vivid blue)
+        // Render modern glass edge-tab comparison across 6 wallpapers (Pure White, Soft Mist, Pure Black, Midnight Blue, Emerald, Coral)
         Color[] wallpapers = {
             Color.FromArgb(255, 255, 255),
-            Color.FromArgb(10, 12, 16),
-            Color.FromArgb(46, 204, 113),
-            Color.FromArgb(231, 76, 60),
-            Color.FromArgb(52, 152, 219)
+            Color.FromArgb(236, 240, 246),
+            Color.FromArgb(12, 14, 18),
+            Color.FromArgb(28, 44, 72),
+            Color.FromArgb(36, 178, 114),
+            Color.FromArgb(228, 102, 76)
         };
-        string[] wpNames = { "Pure White", "Pure Black", "Vivid Green", "Vivid Red", "Sky Blue" };
+        string[] wpNames = { "Pure White", "Soft Mist", "Pure Black", "Midnight", "Emerald", "Coral" };
         var edgeEntriesFull = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m1", Kind = "mouse", Percent = 92, Fresh = true } };
         var edgeEntriesWarn = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m2", Kind = "mouse", Percent = 26, Fresh = true, Charging = true } };
         var edgeEntriesLow = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m3", Kind = "mouse", Percent = 12, Fresh = true, Low = true } };
@@ -264,44 +265,51 @@ static class DesktopWidgetTests {
         var rightPeekSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true, "peek");
         var rightDotSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true, "dot");
         var topPeekSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "top", true, "peek");
+        var topHandleSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "top", true, "handle");
         var cfgRightHandle = new DesktopWidgetSettings { DockEdge = "right", HiddenStyle = "handle" };
         var cfgRightPeek = new DesktopWidgetSettings { DockEdge = "right", HiddenStyle = "peek" };
         var cfgRightDot = new DesktopWidgetSettings { DockEdge = "right", HiddenStyle = "dot" };
         var cfgLeftPeek = new DesktopWidgetSettings { DockEdge = "left", HiddenStyle = "peek" };
         var cfgTopPeek = new DesktopWidgetSettings { DockEdge = "top", HiddenStyle = "peek" };
+        var cfgTopHandle = new DesktopWidgetSettings { DockEdge = "top", HiddenStyle = "handle" };
         var darkPal = ThemePalette.For("graphite", true);
         var lightPal = ThemePalette.For("graphite", false);
 
-        using (var wpSheet = new Bitmap(920, 360, PixelFormat.Format32bppArgb))
+        using (var wpSheet = new Bitmap(1140, 440, PixelFormat.Format32bppArgb))
         using (var wg = Graphics.FromImage(wpSheet)) {
-            wg.Clear(Color.FromArgb(24, 26, 30));
+            wg.Clear(Color.FromArgb(20, 22, 26));
             using (var lblFont = new Font("Segoe UI", 12f, FontStyle.Bold, GraphicsUnit.Pixel))
             for (int i = 0; i < wallpapers.Length; i++) {
-                int x = 15 + i * 180;
-                var panel = new Rectangle(x, 16, 168, 328);
+                int x = 14 + i * 186;
+                var panel = new Rectangle(x, 16, 174, 408);
                 using (var b = new SolidBrush(wallpapers[i])) wg.FillRectangle(b, panel);
-                Color labelCol = i == 0 ? Color.FromArgb(30, 34, 40) : Color.White;
-                using (var tb = new SolidBrush(labelCol)) wg.DrawString(wpNames[i], lblFont, tb, x + 10, 48);
-
-                // Top horizontal peek tab (light mode on bright wallpaper, dark mode on others)
-                bool useDark = i != 0;
+                bool useDark = i >= 2;
                 var pal = useDark ? darkPal : lightPal;
-                using (var topTab = LayeredSurface.RenderToBitmap(topPeekSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, pal, useDark, cfgTopPeek, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(topTab, x + (panel.Width - topTab.Width) / 2, panel.Top);
+                Color labelCol = useDark ? Color.White : Color.FromArgb(30, 36, 46);
+                using (var tb = new SolidBrush(labelCol)) wg.DrawString(wpNames[i], lblFont, tb, x + 10, 68);
 
-                // Right edge: 3 styles stacked (handle / peek / dot)
-                using (var rHandle = LayeredSurface.RenderToBitmap(rightHandleSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, darkPal, true, cfgRightHandle, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(rHandle, panel.Right - rHandle.Width, panel.Top + 72);
+                // Top horizontal concave notch (even columns) or ribbon (odd columns)
+                if (i % 2 == 0) {
+                    using (var topTab = LayeredSurface.RenderToBitmap(topPeekSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, pal, useDark, cfgTopPeek, false, false, true, -1); }))
+                        wg.DrawImageUnscaled(topTab, x + (panel.Width - topTab.Width) / 2, panel.Top);
+                } else {
+                    using (var topBar = LayeredSurface.RenderToBitmap(topHandleSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, pal, useDark, cfgTopHandle, false, false, true, -1); }))
+                        wg.DrawImageUnscaled(topBar, x + (panel.Width - topBar.Width) / 2, panel.Top);
+                }
+
+                // Right edge: all 3 styles stacked (Glass Ribbon / Concave Ear / Glowing Dewdrop)
+                using (var rHandle = LayeredSurface.RenderToBitmap(rightHandleSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, pal, useDark, cfgRightHandle, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rHandle, panel.Right - rHandle.Width, panel.Top + 94);
 
                 using (var rPeek = LayeredSurface.RenderToBitmap(rightPeekSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesWarn, pal, useDark, cfgRightPeek, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(rPeek, panel.Right - rPeek.Width, panel.Top + 194);
+                    wg.DrawImageUnscaled(rPeek, panel.Right - rPeek.Width, panel.Top + 210);
 
-                using (var rDot = LayeredSurface.RenderToBitmap(rightDotSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesLow, darkPal, true, cfgRightDot, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(rDot, panel.Right - rDot.Width, panel.Top + 280);
+                using (var rDot = LayeredSurface.RenderToBitmap(rightDotSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesLow, pal, useDark, cfgRightDot, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rDot, panel.Right - rDot.Width, panel.Top + 344);
 
-                // Left edge: low-battery peek tab
+                // Left edge: low-battery concave ear
                 using (var lPeek = LayeredSurface.RenderToBitmap(rightPeekSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesLow, pal, useDark, cfgLeftPeek, false, false, true, -1); }))
-                    wg.DrawImageUnscaled(lPeek, panel.Left, panel.Top + 132);
+                    wg.DrawImageUnscaled(lPeek, panel.Left, panel.Top + 150);
             }
             string wpFile = Path.Combine(dir, "t50-edge-wallpapers-contrast.png");
             wpSheet.Save(wpFile, ImageFormat.Png);
