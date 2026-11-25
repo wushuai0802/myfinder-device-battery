@@ -136,6 +136,7 @@ V9 PRO / V9 Turbo+ 的接电状态由读取器输出（Turbo+ 的充电和关机
 | Logitech G PRO X 2 LIGHTSPEED | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | HyperX Cloud III S | headset | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
 | NZXT Lift Elite Wireless | mouse | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |
+| Xiaomi 无线鼠标 4 Pro（2.4G 接收器） | mouse | C | 协议已接入，待本项目实机验证；仅2717:50FC、MI_02 / FF03:0000，须解析到匹配VID/PID的原生pnp:usb父设备与唯一目标集合，并由运行时HidP caps或严格原始Report Descriptor证明输入/输出均为单一无编号报告0、33字节（含ID槽）；单次发送00 00 16补零33字节只读查询，回复须32字节且00 16 02 01 <1..100>，拒绝请求回显，电量0视为关机/休眠无新读数，充电未知，不含蓝牙模式；协议取自官方网页驱动（PR #91，贡献者实测85%与官网一致），待本项目实机复核 |
 | Windows 系统蓝牙电量属性 | mouse, keyboard, headset, gamepad, device | C | 协议已接入，待本项目实机验证；Windows提供电量属性的已连接设备，含蓝牙手柄；Xbox系统百分比优先于XInput四档估算 |
 | Xbox 及兼容 XInput 手柄 | gamepad | C | 协议已接入，待本项目实机验证；Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄 |
 | 描述符声明的标准HID电量Feature字段 | mouse, keyboard, device | C | 协议已接入，待本项目实机验证；限代码内既有匹配表 |

@@ -42,7 +42,7 @@ BRAND_PROVIDERS = frozenset((
     "rainyrt",
     "hyperx", "keychron", "pulsar", "rapoo", "rapoo_mt560", "jbl", "logitech", "steelseries", "barracuda",
     "asus", "asus_omni", "asus_azoth", "asus_headset", "gwolves", "lofree", "astro", "corsair", "lamzu", "am_infinity",
-    "steelseries_elite", "logitech_centurion", "hyperx_cloud3s", "nzxt",
+    "steelseries_elite", "logitech_centurion", "hyperx_cloud3s", "nzxt", "xiaomi_mouse",
 ))
 
 

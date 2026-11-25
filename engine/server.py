@@ -71,6 +71,7 @@ PROVIDERS = (
     ("steelseries_elite", "SteelSeriesEliteProvider"),
     ("logitech_centurion", "LogitechCenturionProvider"),
     ("hyperx_cloud3s", "HyperXCloud3SProvider"), ("nzxt", "NzxtProvider"),
+    ("xiaomi_mouse", "XiaomiMouseProvider"),
     ("bluetooth", "BluetoothProvider"),
     ("xinput", "XInputProvider"),
     ("families", "FamiliesProvider"),
@@ -115,6 +116,7 @@ PROVIDER_VIDS = {
     "astro": (0x046D,), "corsair": (0x1B1C,), "lamzu": (0x373E,),
     "am_infinity": (0x3151,), "steelseries_elite": (0x1038,),
     "logitech_centurion": (0x046D,), "hyperx_cloud3s": (0x03F0,), "nzxt": (0x1E71,),
+    "xiaomi_mouse": (0x2717,),
 }
 # Architecture v2: declarative families (engine/families) declare their own vendors.
 from families import vendor_ids as _family_vendor_ids  # noqa: E402
@@ -137,8 +139,8 @@ SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
 IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "fa6x_passive", "rainyrt", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
-NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro"}
-READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "lingbao", "zhuaudio", "asus_omni"}
+NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse"}
+READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "ajazz_aj179_nlp", "am_infinity_97", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse"}
 READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
 READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
 FA6X_DIAGNOSTICS = {
@@ -374,7 +376,7 @@ def suppress_old_connections(devices):
     """Presentation only. Complete-link groups protect current cards and slots."""
     def same(a, b):
         if (a.get("provider") in ("cherry", "lingbao", "zhuaudio", "asus_omni", "asus_headset",
-                                  "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt")
+                                  "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt", "xiaomi_mouse")
                 or a.get("provider") != b.get("provider") or a.get("kind") != b.get("kind")
                 or not a.get("physicalId") or not b.get("physicalId")
                 or a["physicalId"] == b["physicalId"]
@@ -816,7 +818,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS
                     and module.product_allowed(d.get("product_string"))})
     if name in ("moondrop", "valkyrie", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
-                "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt"):
+                "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt", "xiaomi_mouse"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop"):
@@ -1622,7 +1624,7 @@ class BatteryEngine:
                                 if provider_name != "standard_hid" and not vids.intersection(self._provider_vids(provider_name)):
                                     continue
                                 if (provider_name in ("delux", "vgn_ry_ms", "sony_inzone", "asus_headset", "valkyrie",
-                                                      "vgn_keyboard_wired", "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt")
+                                                      "vgn_keyboard_wired", "weikav_nut75", "veekos_shine60", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt", "xiaomi_mouse")
                                         and not recognized_candidate_count(provider_name, infos)):
                                     continue
                                 matches.append((group_id, infos))
