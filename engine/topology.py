@@ -580,6 +580,15 @@ def discover(paths, excluded=(), *, full=False):
                 info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
                 _descriptor_fallback(info, caps, ("input",))
                 caps_complete = bool(info["input_report_sizes"] and "187" in info["input_report_sizes"])
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x36B0, 0x3071, 0xFF60, 0x0061),
+                    (0x36B0, 0x3075, 0xFF60, 0x0061)):
+                # WOB Rainy75 V2 passive input only: prove unnumbered 257-byte
+                # report from HidP caps first, then strict raw descriptor.
+                from battery_hid import byte_report_sizes
+                info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
+                _descriptor_fallback(info, caps, ("input",))
+                caps_complete = info["input_report_sizes"] == {"0": 257}
             if caps_complete and ((attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x1D57, 0xFA60, 0x000A, 0x0000),
                     (0x1D57, 0xFA65, 0xFF00, 0x0001))
@@ -711,6 +720,8 @@ def discover(paths, excluded=(), *, full=False):
                     (0x0C45, 0xFEFE, 0xFF60, 0x0061)):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
+                if (attrs.vendor, attrs.product) == (0x0C45, 0xFEFE) and info.get("product_string") == "MINI 60 HE PRO Dongle":
+                    _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete
@@ -740,6 +751,15 @@ def discover(paths, excluded=(), *, full=False):
                 _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete
+                    and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                        0x2717, 0x50FC, 0xFF03, 0x0000)
+                    and info.get("interface_number") == 2):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = (info.get("input_report_sizes") == {"0": 33}
+                                 and info.get("output_report_sizes") == {"0": 33})
             if caps_complete and info.get("input_report_sizes") is None:
                 # Architecture v2: a declarative family asks for per-report
                 # proof only on its own identities and vendor-page collections.

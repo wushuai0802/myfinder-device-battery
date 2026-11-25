@@ -63,10 +63,12 @@ TABLES = {
     "rapoo": ("PIDS",),
     "rapoo_mt560": ("PIDS",),
     "fa6x_passive": ("PIDS",),
+    "rainyrt": ("PIDS",),
     "dareu": ("PIDS",), "delux": ("PIDS",), "vgn_ry_ms": ("PIDS",),
     "vgn_dragonfly3": ("PIDS",), "ninjutso_legacy": ("PIDS",),
     "steelseries": ("MODELS", "MOUSE_MODELS", "CLASSIC_MODELS"),
     "steelseries_elite": ("PIDS",), "wlmouse": ("KNOWN",), "razer": ("KNOWN",),
+    "xiaomi_mouse": ("PIDS",),
 }
 SINGLE = {"am_infinity", "hyperx_alpha2", "barracuda"}
 # Receiver IDs shared by unrelated device models.

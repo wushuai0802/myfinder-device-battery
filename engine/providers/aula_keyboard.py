@@ -26,6 +26,11 @@ PIDS = {0xFEFE: "AULA F87ProV2"}
 F99_VID = 0x05AC
 F99_PIDS = {0x024F: "AULA F99 MAX"}
 PRODUCT = "AULA F87ProV2D Dongle"
+MINI60_PRODUCT = "MINI 60 HE PRO Dongle"
+PRODUCTS = {
+    PRODUCT: "AULA F87ProV2",
+    MINI60_PRODUCT: "AULA MINI 60 HE PRO",
+}
 INTERFACE = 3
 F108_VID = 0x05AC
 F108_PID = 0x024F
@@ -120,6 +125,9 @@ class AulaKeyboardProvider(BatteryHidProvider):
             self._diag.extend(f108.diagnostics())
         return result
 
+    def device_name(self, info):
+        return PRODUCTS.get(info.get("product_string")) or PIDS.get(info.get("product_id"), "AULA Keyboard")
+
     def _pick(self, infos):
         info = super()._pick(infos)
         if info is None:
@@ -129,7 +137,7 @@ class AulaKeyboardProvider(BatteryHidProvider):
             self._diag.append("physical parent unresolved; uniqueness unknown: nothing sent")
         elif (type(info.get("interface_number")) is not int
               or info["interface_number"] != INTERFACE
-              or info.get("product_string") != PRODUCT):
+              or info.get("product_string") not in PRODUCTS):
             self._diag.append("unverified AULA keyboard interface/product: nothing sent")
         elif (info["input_report_sizes"] != {"0": 33}
               or info["output_report_sizes"] != {"0": 33}):
@@ -139,14 +147,24 @@ class AulaKeyboardProvider(BatteryHidProvider):
         return None
 
     def _query(self, dev, info):
-        """Repeat once when the query is ignored.
+        """Repeat once when the F87ProV2 query is ignored; MINI 60 HE PRO sends once.
 
-        Bring-up observation: an idle keyboard sometimes accepts the output
+        Bring-up observation: an idle F87ProV2 sometimes accepts the output
         report but never answers, and the immediately repeated query returns
         the status page. Only a silent attempt is repeated - a rejected reply
         keeps its diagnostic and waits for the next poll, so this can cost one
         extra 33-byte write and never an extra read loop.
+
+        For MINI 60 HE PRO Dongle (#901), send the single AA 10 18 00 query
+        without retries or dual-stack 0xA0 probing, and treat a 0% payload as
+        asleep/offline rather than a live 0% reading.
         """
+        if info.get("product_string") == MINI60_PRODUCT:
+            parsed = super()._query(dev, info)
+            if parsed is not None and parsed[0] == 0:
+                self._diag.append("device asleep/offline; no new reading; connection unknown")
+                return None
+            return parsed
         before = len(self._diag)
         parsed = super()._query(dev, info)
         if parsed is not None:
