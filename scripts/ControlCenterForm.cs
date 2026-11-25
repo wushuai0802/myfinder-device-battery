@@ -342,11 +342,21 @@ namespace AtkBatteryTray {
 
     internal enum ControlCenterBadgeTone { Muted, Positive, Accent }
 
+    internal sealed class BufferedPanel : Panel {
+        internal BufferedPanel() {
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw, true);
+        }
+    }
+
     internal sealed class ControlCenterBadge : Control {
         readonly ThemePalette palette;
         readonly bool dark;
         readonly ControlCenterBadgeTone tone;
         readonly bool showDot;
+        readonly float fontPx;
+        readonly float measuredTextWidth;
+        internal Color? SurfaceColor;
 
         internal ControlCenterBadge(string text, ThemePalette palette, bool dark, Font font, ControlCenterBadgeTone tone, bool showDot = false) {
             Text = text ?? "";
@@ -354,20 +364,27 @@ namespace AtkBatteryTray {
             this.dark = dark;
             this.tone = tone;
             this.showDot = showDot;
+            this.fontPx = VisualDesign.LargeFont ? 12f : 11f;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
             BackColor = palette.Card;
 
-            using (var measureFont = new Font(font.FontFamily, font.Size, tone != ControlCenterBadgeTone.Muted ? FontStyle.Bold : FontStyle.Regular, font.Unit)) {
-                var sz = TextRenderer.MeasureText(Text, measureFont, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-                int dotW = showDot ? 12 : 0;
-                Size = new Size(Math.Max(48, sz.Width + dotW + 30), 22);
+            bool bold = tone != ControlCenterBadgeTone.Muted;
+            using (var bmp = new Bitmap(1, 1))
+            using (var g = Graphics.FromImage(bmp))
+            using (var measureFont = new Font("Microsoft YaHei UI", fontPx, bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var sf = new StringFormat(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces }) {
+                g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                measuredTextWidth = (float)Math.Ceiling(g.MeasureString(Text, measureFont, Int32.MaxValue, sf).Width) + 2f;
             }
+            float dotBlock = showDot ? 11f : 0f;
+            int padX = 11;
+            Size = new Size(Math.Max(52, (int)Math.Ceiling(measuredTextWidth + dotBlock) + padX * 2), VisualDesign.LargeFont ? 24 : 22);
         }
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
-            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            Color hostBg = SurfaceColor.HasValue ? SurfaceColor.Value : (Parent != null ? Parent.BackColor : BackColor);
             g.Clear(hostBg);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
@@ -398,11 +415,20 @@ namespace AtkBatteryTray {
                 using (var pen = new Pen(SystemColors.WindowText, 1f)) g.DrawPath(pen, path);
             }
 
-            float textLeft = showDot ? 18f : 8f;
+            bool bold = tone != ControlCenterBadgeTone.Muted;
+            float dotSize = 6f;
+            float gap = 5f;
+            float contentW = (showDot ? dotSize + gap : 0f) + measuredTextWidth;
+            float startX = Math.Max(6f, (Width - contentW) / 2f);
             if (showDot) {
-                using (var b = new SolidBrush(dotColor)) g.FillEllipse(b, 8f, (Height - 6f) / 2f, 6f, 6f);
+                using (var b = new SolidBrush(dotColor)) g.FillEllipse(b, startX, (Height - dotSize) / 2f, dotSize, dotSize);
+                startX += dotSize + gap;
             }
-            CompactRenderer.DrawLabel(g, Text, new RectangleF(textLeft, 0, Math.Max(20f, Width - textLeft - 6f), Height), 11f, tone != ControlCenterBadgeTone.Muted, fg, showDot ? StringAlignment.Near : StringAlignment.Center);
+            using (var drawFont = new Font("Microsoft YaHei UI", fontPx, bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var brush = new SolidBrush(fg))
+            using (var sf = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap }) {
+                g.DrawString(Text, drawFont, brush, new RectangleF(startX, 0f, Math.Max(16f, Width - startX - 4f), Height), sf);
+            }
         }
     }
 
@@ -735,8 +761,9 @@ namespace AtkBatteryTray {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
-            // Right separator hairline
-            using (var pen = new Pen(palette.Border, 1)) g.DrawLine(pen, Width - 1, 0, Width - 1, Height);
+            // Subtle inset hairline divider (avoids harsh full-bleed seam against fused Win11 titlebar)
+            Color seamColor = VisualDesign.HighContrast ? palette.Foreground : Color.FromArgb(dark ? 22 : 16, palette.Foreground);
+            using (var pen = new Pen(seamColor, 1f)) g.DrawLine(pen, Width - 1, 14, Width - 1, Math.Max(14, Height - 14));
 
             // Brand header (top-left logo + title + version chip)
             ControlCenterIconLoader.DrawBrandGlyph(g, new RectangleF(16, 18, 28, 28), dark);
@@ -1138,7 +1165,7 @@ namespace AtkBatteryTray {
 
     internal sealed class ControlCenterSegments : Control {
         readonly string[] labels;
-        readonly int selectedIndex;
+        int selectedIndex;
         readonly Action<int> onSelect;
         readonly ThemePalette palette;
         readonly Font font, boldFont;
@@ -1172,6 +1199,14 @@ namespace AtkBatteryTray {
             naturalTotalWidth = (int)Math.Ceiling(sum + 2f);
             Size = new Size(naturalTotalWidth, h);
             LayoutSegments();
+        }
+
+        internal int SelectedIndex { get { return selectedIndex; } }
+
+        internal void SetSelectedIndex(int idx) {
+            if (selectedIndex == idx) return;
+            selectedIndex = idx;
+            Invalidate();
         }
 
         internal int NaturalWidth { get { return naturalTotalWidth; } }
@@ -1221,7 +1256,10 @@ namespace AtkBatteryTray {
         protected override void OnMouseDown(MouseEventArgs e) {
             if (e.Button == MouseButtons.Left) {
                 int idx = Hit(e.Location);
-                if (idx >= 0 && onSelect != null) onSelect(idx);
+                if (idx >= 0) {
+                    SetSelectedIndex(idx);
+                    if (onSelect != null) onSelect(idx);
+                }
             }
             base.OnMouseDown(e);
         }
@@ -1312,7 +1350,7 @@ namespace AtkBatteryTray {
             noticeBar.Controls.Add(noticeLabel);
             noticeTimer.Tick += delegate { noticeTimer.Stop(); if (!IsDisposed) noticeBar.Visible = false; };
 
-            pageHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(30, 22, 30, 24) };
+            pageHost = new BufferedPanel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(30, 22, 30, 24) };
             DialogScrollbars.Track(pageHost, dialogTheme);
 
             Controls.Add(pageHost);
@@ -1430,7 +1468,7 @@ namespace AtkBatteryTray {
         internal void SelectPage(ControlCenterPage page) {
             currentPage = page;
             rail.SelectedPage = page;
-            RebuildCurrentPage();
+            RebuildCurrentPage(true);
         }
 
         internal void RefreshData() {
@@ -1488,9 +1526,16 @@ namespace AtkBatteryTray {
             sb.Append(owner.TaskbarOverlayStatusCode).Append('|');
             sb.Append(owner.StoppedFamilyDeviceCount).Append('|').Append(owner.IsProbeToggleBusy).Append('|').Append(owner.IsFamilyOpBusy).Append('|');
             sb.Append(owner.GenericReady).Append('|').Append(owner.GenericError ?? "").Append('|').Append(owner.GenericHealthSummary ?? "").Append('|');
-            sb.Append(owner.Current != null ? owner.Current.Percent.ToString() : "-").Append('|');
+            sb.Append(owner.Current != null ? owner.Current.Percent.ToString() + ":" + owner.Current.Charging : "-").Append('|');
+            sb.Append(owner.Dpi != null ? owner.Dpi.ActiveStage.ToString() + ":" + (owner.Dpi.Stages != null ? owner.Dpi.Stages.Count : 0) : "-").Append('|');
+            sb.Append(owner.IsDpiRefreshing).Append('|').Append(owner.DpiError ?? "").Append('|');
             if (owner.WirelessDevices != null) {
-                foreach (var d in owner.WirelessDevices) if (d != null) sb.Append(d.Key).Append(';');
+                foreach (var d in owner.WirelessDevices) {
+                    if (d == null) continue;
+                    sb.Append(d.Key).Append(':').Append(d.Percent.HasValue ? d.Percent.Value.ToString() : "-").Append(':').Append(d.Fresh).Append(':').Append(d.Charging);
+                    if (d.Dpi != null) sb.Append(':').Append(d.Dpi.Current.HasValue ? d.Dpi.Current.Value.ToString() : "-");
+                    sb.Append(';');
+                }
             }
             return sb.ToString();
         }
@@ -1592,7 +1637,19 @@ namespace AtkBatteryTray {
             return list;
         }
 
-        void RebuildCurrentPage() {
+        [DllImport("user32.dll")]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
+
+        const int WM_SETREDRAW = 0x000B;
+        const uint RDW_ERASE = 0x0004;
+        const uint RDW_FRAME = 0x0400;
+        const uint RDW_INVALIDATE = 0x0001;
+        const uint RDW_ALLCHILDREN = 0x0080;
+
+        void RebuildCurrentPage(bool resetScroll = false) {
             if (IsDisposed || closing || rebuilding) return;
             rebuilding = true;
             deferredDataRefresh = false;
@@ -1600,6 +1657,9 @@ namespace AtkBatteryTray {
             var pref = DeviceSettings.Current;
             rail.UpdateIndicators((pref.DesktopWidget != null && pref.DesktopWidget.Enabled) || (pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled), owner.LocalApiRunning);
 
+            Point savedScroll = resetScroll ? Point.Empty : pageHost.AutoScrollPosition;
+            bool lockRedraw = pageHost.IsHandleCreated && pageHost.Visible;
+            if (lockRedraw) SendMessage(pageHost.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
             pageHost.SuspendLayout();
             try {
                 while (pageHost.Controls.Count > 0) {
@@ -1618,7 +1678,14 @@ namespace AtkBatteryTray {
                 pageHost.Controls.Add(content);
             } finally {
                 pageHost.ResumeLayout(true);
+                if (!resetScroll && (savedScroll.X != 0 || savedScroll.Y != 0)) {
+                    pageHost.AutoScrollPosition = new Point(-savedScroll.X, -savedScroll.Y);
+                }
                 rebuilding = false;
+                if (lockRedraw && !pageHost.IsDisposed) {
+                    SendMessage(pageHost.Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+                    RedrawWindow(pageHost.Handle, IntPtr.Zero, IntPtr.Zero, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+                }
             }
         }
 
@@ -1693,15 +1760,16 @@ namespace AtkBatteryTray {
             if (rightControl != null) {
                 row.Controls.Add(rightControl);
                 var segs = rightControl as ControlCenterSegments;
+                int initialRightW = rightControl.Width;
                 Action position = delegate {
                     int cw = row.ClientSize.Width;
                     if (cw <= 0) return;
-                    int naturalW = segs != null ? segs.NaturalWidth : rightControl.Width;
+                    int naturalW = segs != null ? segs.NaturalWidth : initialRightW;
                     bool shouldStack = preferStacked || (cw - naturalW - 28 < 185 && naturalW > 130);
                     if (shouldStack) {
                         int maxW = Math.Max(120, cw - 20);
                         if (segs != null) segs.FitMaxWidth(maxW);
-                        else if (rightControl.Width > maxW) rightControl.Width = maxW;
+                        else rightControl.Width = Math.Min(initialRightW, maxW);
                         int ctrlTop = String.IsNullOrEmpty(subtitle) ? 40 : 58;
                         int desiredH = ctrlTop + rightControl.Height + 12;
                         if (row.Height != desiredH) row.Height = desiredH;
@@ -1714,6 +1782,7 @@ namespace AtkBatteryTray {
                         rightControl.Location = new Point(10, ctrlTop);
                     } else {
                         if (segs != null) segs.FitMaxWidth(naturalW);
+                        else if (rightControl.Width != initialRightW) rightControl.Width = initialRightW;
                         if (row.Height != singleRowH) row.Height = singleRowH;
                         titleLbl.Location = new Point(10, String.IsNullOrEmpty(subtitle) ? 17 : 11);
                         int rx = Math.Max(160, cw - rightControl.Width - 10);
@@ -1753,6 +1822,29 @@ namespace AtkBatteryTray {
                 else RebuildCurrentPage();
             } catch (Exception ex) {
                 ShowNotice("设置未保存：" + ex.Message);
+            }
+        }
+
+        // Flicker-free in-place update for controls that do not add/remove page rows.
+        void UpdatePreferenceInPlace(Action<AudioBindings> mutate, Action afterSave = null) {
+            var pref = DeviceSettings.Current;
+            mutate(pref);
+            try {
+                bool prevRebuilding = rebuilding;
+                rebuilding = true;
+                try {
+                    owner.SavePreferences(pref);
+                    owner.ConfigurationChanged(false);
+                } finally {
+                    rebuilding = prevRebuilding;
+                }
+                lastDataSignature = ComputeDataSignature();
+                var latest = DeviceSettings.Current;
+                rail.UpdateIndicators((latest.DesktopWidget != null && latest.DesktopWidget.Enabled) || (latest.TaskbarOverlay != null && latest.TaskbarOverlay.Enabled), owner.LocalApiRunning);
+                if (afterSave != null) afterSave();
+            } catch (Exception ex) {
+                ShowNotice("设置未保存：" + ex.Message);
+                RebuildCurrentPage();
             }
         }
 
@@ -1998,8 +2090,13 @@ namespace AtkBatteryTray {
             if (item.DpiStages != null && item.DpiStages.Length > 0) {
                 string[] labels = new string[item.DpiStages.Length];
                 for (int i = 0; i < item.DpiStages.Length; i++) labels[i] = item.DpiStages[i].ToString();
-                var dpiCtrl = CreateSegmentedChoices(labels, item.ActiveDpiIndex, delegate(int idx) {
-                    if (!item.HasWritableDpi) { ShowNotice("此设备当前为只读 DPI 或状态待确认"); return; }
+                ControlCenterSegments dpiCtrl = null;
+                dpiCtrl = (ControlCenterSegments)CreateSegmentedChoices(labels, item.ActiveDpiIndex, delegate(int idx) {
+                    if (!item.HasWritableDpi) {
+                        if (dpiCtrl != null) dpiCtrl.SetSelectedIndex(item.ActiveDpiIndex);
+                        ShowNotice("此设备当前为只读 DPI 或状态待确认");
+                        return;
+                    }
                     if (item.IsNativeMouse) owner.SelectDpiStage(idx, item.DpiTargetToken);
                     else owner.SelectWirelessDpi(item.Key, item.DpiTargetToken, item.DpiStages[idx]);
                     ShowNotice("已请求切换 DPI 至 " + item.DpiStages[idx]);
@@ -2010,7 +2107,7 @@ namespace AtkBatteryTray {
             if (item.CanHide) {
                 var showToggle = new ControlCenterToggle(palette, dark) { Checked = !item.Hidden };
                 showToggle.Toggled += delegate {
-                    UpdatePreference(delegate(AudioBindings p) { DeviceSettings.SetDeviceHidden(p, item.Key, !showToggle.Checked); });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { DeviceSettings.SetDeviceHidden(p, item.Key, !showToggle.Checked); });
                 };
                 rows.Add(CreateSettingRow("在主面板显示", "关闭后不在托盘弹出面板展示，后台仍继续读取电量", showToggle, true));
             }
@@ -2018,7 +2115,7 @@ namespace AtkBatteryTray {
             if (item.CanPinTray) {
                 var pinToggle = new ControlCenterToggle(palette, dark) { Checked = item.PinnedTray };
                 pinToggle.Toggled += delegate {
-                    UpdatePreference(delegate(AudioBindings p) { p.TrayDeviceId = pinToggle.Checked ? item.Key : null; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TrayDeviceId = pinToggle.Checked ? item.Key : null; });
                 };
                 rows.Add(CreateSettingRow("固定为托盘图标", "主托盘图标始终显示这台设备的电量", pinToggle, true));
             }
@@ -2082,10 +2179,12 @@ namespace AtkBatteryTray {
                 UpdatePreference(delegate(AudioBindings p) { p.Theme = idx == 1 ? "light" : idx == 2 ? "dark" : "auto"; }, false, true);
             }), true);
 
+            var preview = new ControlCenterLivePreview(owner, palette, dark) { Dock = DockStyle.Top, Height = 360 };
+
             int layoutIdx = Array.IndexOf(PanelLayouts.Keys, PanelLayouts.Normalize(pref.PanelLayout));
             if (layoutIdx < 0) layoutIdx = 0;
             var layoutRow = CreateSettingRow("主面板布局", "环形、电量条或网格三种样式", CreateSegmentedChoices(PanelLayouts.Names, layoutIdx, delegate(int idx) {
-                UpdatePreference(delegate(AudioBindings p) { p.PanelLayout = PanelLayouts.Keys[idx]; });
+                UpdatePreferenceInPlace(delegate(AudioBindings p) { p.PanelLayout = PanelLayouts.Keys[idx]; }, delegate { preview.Invalidate(); });
             }), true);
 
             int fontIdx = pref.FontSize == "large" ? 1 : 0;
@@ -2095,7 +2194,7 @@ namespace AtkBatteryTray {
 
             var motionToggle = new ControlCenterToggle(palette, dark) { Checked = pref.ReducedMotion };
             motionToggle.Toggled += delegate {
-                UpdatePreference(delegate(AudioBindings p) { p.ReducedMotion = motionToggle.Checked; });
+                UpdatePreferenceInPlace(delegate(AudioBindings p) { p.ReducedMotion = motionToggle.Checked; });
             };
             var motionRow = CreateSettingRow("减弱动画效果", "减少面板展开、切换与进度条过渡动画", motionToggle, true);
 
@@ -2107,7 +2206,6 @@ namespace AtkBatteryTray {
 
             var rightWrap = new Panel { Dock = DockStyle.Top, AutoSize = true, BackColor = palette.WindowBackground };
             var previewLbl = new Label { Text = "实时预览（当前主面板）", Font = subFont, ForeColor = palette.Muted, BackColor = palette.WindowBackground, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(4, 0, 0, 8) };
-            var preview = new ControlCenterLivePreview(owner, palette, dark) { Dock = DockStyle.Top, Height = 360 };
             rightWrap.Controls.Add(preview);
             rightWrap.Controls.Add(previewLbl);
 
@@ -2143,13 +2241,13 @@ namespace AtkBatteryTray {
             if (selectedPlacementCard == 0) {
                 int iconStyleIdx = pref.TrayIconStyle == "device" ? 1 : 0;
                 rows.Add(CreateSettingRow("托盘图标样式", "选择在系统托盘直接显示电量数字或设备图标", CreateSegmentedChoices(new[] { "数字", "设备图标" }, iconStyleIdx, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.TrayIconStyle = idx == 1 ? "device" : "number"; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TrayIconStyle = idx == 1 ? "device" : "number"; });
                 }), false));
                 string[] ruleKeys = { "active", "lowest", "auto", "mouse", "headset", "keyboard" };
                 string[] ruleLabels = { "当前使用", "最低电量", "自动", "鼠标优先", "耳机优先", "键盘优先" };
                 int ruleIdx = Array.IndexOf(ruleKeys, pref.TraySource);
                 rows.Add(CreateSettingRow("主托盘显示规则", String.IsNullOrEmpty(pref.TrayDeviceId) ? "当未固定单台设备时生效" : "当前已固定单台设备，点击任意规则可解除固定", CreateSegmentedChoices(ruleLabels, String.IsNullOrEmpty(pref.TrayDeviceId) ? ruleIdx : -1, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.TraySource = ruleKeys[idx]; p.TrayDeviceId = null; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TraySource = ruleKeys[idx]; p.TrayDeviceId = null; });
                 }), true));
             } else if (selectedPlacementCard == 1) {
                 var w = pref.DesktopWidget;
@@ -2161,23 +2259,23 @@ namespace AtkBatteryTray {
 
                 int styleIdx = Array.IndexOf(DesktopWidgetGeometry.StyleKeys, DesktopWidgetGeometry.NormalizeStyle(w.Style));
                 rows.Add(CreateSettingRow("收起形态", "平时停靠在桌面上的紧凑外观", CreateSegmentedChoices(DesktopWidgetGeometry.StyleNames, styleIdx, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.Style = DesktopWidgetGeometry.StyleKeys[idx]; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.Style = DesktopWidgetGeometry.StyleKeys[idx]; });
                 }), true));
 
                 int edgeIdx = Array.IndexOf(DesktopWidgetGeometry.EdgeKeys, DesktopWidgetGeometry.NormalizeEdge(w.DockEdge));
-                rows.Add(CreateSettingRow("贴边停靠", "拖近屏幕四边也会自动吸附并记住所在显示器", CreateSegmentedChoices(DesktopWidgetGeometry.EdgeNames, edgeIdx, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.DockEdge = DesktopWidgetGeometry.EdgeKeys[idx]; });
+                rows.Add(CreateSettingRow("贴边停靠", "拖近或推到屏幕四边会自动吸附并记住所在显示器", CreateSegmentedChoices(DesktopWidgetGeometry.EdgeNames, edgeIdx, delegate(int idx) {
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.DockEdge = DesktopWidgetGeometry.EdgeKeys[idx]; });
                 }), true));
 
                 var autoHideToggle = new ControlCenterToggle(palette, dark) { Checked = w.AutoHideOnEdge };
                 autoHideToggle.Toggled += delegate {
-                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.AutoHideOnEdge = autoHideToggle.Checked; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.AutoHideOnEdge = autoHideToggle.Checked; });
                 };
                 rows.Add(CreateSettingRow("贴边自动隐藏", "缩为全壁纸高反差边缘把手，鼠标移近立即滑出", autoHideToggle, true));
 
                 var topToggle = new ControlCenterToggle(palette, dark) { Checked = w.TopMost };
                 topToggle.Toggled += delegate {
-                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.TopMost = topToggle.Checked; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.TopMost = topToggle.Checked; });
                 };
                 rows.Add(CreateSettingRow("总在最前", "关闭后小组件像普通窗口一样可被其他应用遮挡", topToggle, true));
 
@@ -2185,12 +2283,12 @@ namespace AtkBatteryTray {
                 string[] fsLabels = { "全屏隐藏", "缩为指示条", "不处理" };
                 int fsIdx = Array.IndexOf(fsKeys, DesktopDisplayWatch.NormalizePolicy(w.FullscreenPolicy));
                 rows.Add(CreateSettingRow("全屏游戏 / 视频防打扰", "不确定全屏信号时不会永久消失，仅缩为指示条", CreateSegmentedChoices(fsLabels, fsIdx, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.FullscreenPolicy = fsKeys[idx]; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.FullscreenPolicy = fsKeys[idx]; });
                 }), true));
 
                 var maxToggle = new ControlCenterToggle(palette, dark) { Checked = w.CompactOnMaximized };
                 maxToggle.Toggled += delegate {
-                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.CompactOnMaximized = maxToggle.Checked; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.CompactOnMaximized = maxToggle.Checked; });
                 };
                 rows.Add(CreateSettingRow("窗口最大化时缩为指示条", "当前屏幕有窗口最大化时自动收窄，减少遮挡", maxToggle, true));
 
@@ -2198,7 +2296,7 @@ namespace AtkBatteryTray {
                 int maxIdx = Array.IndexOf(maxOpts, w.MaxDevices);
                 if (maxIdx < 0) maxIdx = 1;
                 rows.Add(CreateSettingRow("收起时最多显示设备数", null, CreateSegmentedChoices(new[] { "2 台", "3 台", "4 台" }, maxIdx, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.MaxDevices = maxOpts[idx]; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.DesktopWidget.MaxDevices = maxOpts[idx]; });
                 }), true));
             } else {
                 var tb = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
@@ -2209,21 +2307,17 @@ namespace AtkBatteryTray {
                 rows.Add(CreateSettingRow("启用任务栏电量（实验）", "采用独立无焦点贴合层，绝不注入 Explorer；不支持环境自动降级隐藏", tbEnable, false));
 
                 rows.Add(CreateSettingRow("显示样式", "在任务栏通知区左侧紧凑显示设备电量条", CreateSegmentedChoices(new[] { "图标 + 数字", "仅数字" }, tb.ShowIcons ? 0 : 1, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.ShowIcons = idx == 0; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TaskbarOverlay.ShowIcons = idx == 0; });
                 }), true));
 
                 int[] tbMaxOpts = { 1, 2, 3 };
                 int tbMaxIdx = Array.IndexOf(tbMaxOpts, tb.MaxDevices);
                 if (tbMaxIdx < 0) tbMaxIdx = 2;
                 rows.Add(CreateSettingRow("最多显示设备数", null, CreateSegmentedChoices(new[] { "1 台", "2 台", "3 台" }, tbMaxIdx, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.MaxDevices = tbMaxOpts[idx]; });
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TaskbarOverlay.MaxDevices = tbMaxOpts[idx]; });
                 }), true));
 
-                int[] offOpts = { 0, -40, -100 };
-                int offIdx = tb.OffsetX <= -70 ? 2 : tb.OffsetX <= -20 ? 1 : 0;
-                rows.Add(CreateSettingRow("水平微调", "如紧邻其他任务栏插件，可向左微调避让（自动限制在安全区内）", CreateSegmentedChoices(new[] { "紧邻通知区", "左移 40px", "左移 100px" }, offIdx, delegate(int idx) {
-                    UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.OffsetX = offOpts[idx]; });
-                }), true));
+                rows.Add(CreateSettingRow("水平偏移微调", "默认紧贴通知区左侧（避免遮挡时间与系统图标），按 20px 对称向左/向右微调", CreateTaskbarOffsetStepper(tb.OffsetX), true));
 
                 var statusTone = owner.TaskbarOverlayStatusCode == "ready" ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;
                 var diagBadge = new ControlCenterBadge(owner.TaskbarOverlayStatusCode == "ready" ? "环境就绪" : (tb.Enabled ? "已自动降级" : "未开启"), palette, dark, subFont, statusTone, true);
@@ -2245,6 +2339,54 @@ namespace AtkBatteryTray {
             root.Controls.SetChildIndex(gap, 1);
             root.Controls.SetChildIndex(cardsGrid, 2);
             return root;
+        }
+
+        Control CreateTaskbarOffsetStepper(int initialOffset) {
+            int current = Math.Max(-320, Math.Min(0, initialOffset));
+            var panel = new Panel { Height = ControlCenterTokens.ButtonHeight, Width = 296, BackColor = palette.Card };
+            ControlCenterButton leftBtn = null, rightBtn = null, resetBtn = null;
+            Label valLbl = null;
+
+            Action syncUi = delegate {
+                if (valLbl != null) valLbl.Text = current == 0 ? "0 px (默认)" : ("左移 " + Math.Abs(current) + " px");
+                if (leftBtn != null) { leftBtn.Enabled = current > -320; leftBtn.Invalidate(); }
+                if (rightBtn != null) { rightBtn.Enabled = current < 0; rightBtn.Invalidate(); }
+                if (resetBtn != null) { resetBtn.Enabled = current != 0; resetBtn.Invalidate(); }
+            };
+            Action<int> applyOffset = delegate(int next) {
+                int clamped = Math.Max(-320, Math.Min(0, next));
+                if (clamped == current) return;
+                current = clamped;
+                syncUi();
+                UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TaskbarOverlay.OffsetX = current; });
+            };
+
+            leftBtn = CreateActionButton("← 20px", delegate { applyOffset(current - 20); });
+            rightBtn = CreateActionButton("20px →", delegate { applyOffset(current + 20); });
+            resetBtn = CreateActionButton("重置", delegate { applyOffset(0); });
+            leftBtn.Width = 74;
+            rightBtn.Width = 74;
+            resetBtn.Width = 54;
+            valLbl = new Label {
+                Font = subFont,
+                ForeColor = palette.Foreground,
+                BackColor = palette.Card,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Width = 86,
+                Height = ControlCenterTokens.ButtonHeight
+            };
+
+            leftBtn.Location = new Point(0, 0);
+            valLbl.Location = new Point(leftBtn.Right + 2, 0);
+            rightBtn.Location = new Point(valLbl.Right + 2, 0);
+            resetBtn.Location = new Point(rightBtn.Right + 4, 0);
+            panel.Width = resetBtn.Right;
+            panel.Controls.Add(leftBtn);
+            panel.Controls.Add(valLbl);
+            panel.Controls.Add(rightBtn);
+            panel.Controls.Add(resetBtn);
+            syncUi();
+            return panel;
         }
 
         Control CreatePlacementOptionCard(int mode, string title, string desc, string tag, ControlCenterBadgeTone tone) {
@@ -2277,13 +2419,28 @@ namespace AtkBatteryTray {
             };
             var lblT = new Label { Text = title, Font = boldFont, ForeColor = palette.Foreground, BackColor = Color.Transparent, AutoSize = true, Location = new Point(16, 14), Cursor = Cursors.Hand };
             var lblD = new Label { Text = desc, Font = subFont, ForeColor = palette.Muted, BackColor = Color.Transparent, MaximumSize = new Size(216, 42), AutoSize = true, Location = new Point(16, 38), Cursor = Cursors.Hand };
-            var badge = new ControlCenterBadge(tag, palette, dark, subFont, tone, tone == ControlCenterBadgeTone.Positive) { Location = new Point(16, 86), Cursor = Cursors.Hand };
+            var badge = new ControlCenterBadge(tag, palette, dark, subFont, tone, tone == ControlCenterBadgeTone.Positive) { Location = new Point(16, 86), Cursor = Cursors.Hand, SurfaceColor = palette.Card };
+            card.MouseEnter += delegate { badge.SurfaceColor = !active && !VisualDesign.HighContrast ? palette.RaisedSurface : palette.Card; badge.Invalidate(); };
+            card.MouseLeave += delegate { badge.SurfaceColor = palette.Card; badge.Invalidate(); };
             EventHandler click = delegate {
                 if (selectedPlacementCard != mode) { selectedPlacementCard = mode; RebuildCurrentPage(); }
             };
             card.Click += click; lblT.Click += click; lblD.Click += click; badge.Click += click;
             card.Controls.Add(lblT); card.Controls.Add(lblD); card.Controls.Add(badge);
             return card;
+        }
+
+        public void SelectPlacementCard(int mode) {
+            int clamped = mode < 0 ? 0 : (mode > 2 ? 2 : mode);
+            if (currentPage != ControlCenterPage.Placement) {
+                selectedPlacementCard = clamped;
+                SelectPage(ControlCenterPage.Placement);
+                return;
+            }
+            if (selectedPlacementCard != clamped) {
+                selectedPlacementCard = clamped;
+                RebuildCurrentPage(true);
+            }
         }
 
         // ==================== PAGE 4: REMINDERS ====================
@@ -2295,13 +2452,13 @@ namespace AtkBatteryTray {
 
             var lowToggle = new ControlCenterToggle(palette, dark) { Checked = pref.LowBatteryNotifications };
             lowToggle.Toggled += delegate {
-                UpdatePreference(delegate(AudioBindings p) { p.LowBatteryNotifications = lowToggle.Checked; });
+                UpdatePreferenceInPlace(delegate(AudioBindings p) { p.LowBatteryNotifications = lowToggle.Checked; });
             };
             var row1 = CreateSettingRow("低电量提醒", "任意外设电量低于阈值时弹出一次系统通知", lowToggle, false);
 
             int threshIdx = pref.WarningThreshold == 10 ? 0 : pref.WarningThreshold == 15 ? 1 : 2;
             var row2 = CreateSettingRow("提醒阈值", "所有无线外设共用此低电量提醒与警示色门槛", CreateSegmentedChoices(new[] { "10%", "15%", "20%" }, threshIdx, delegate(int idx) {
-                UpdatePreference(delegate(AudioBindings p) { p.WarningThreshold = idx == 0 ? 10 : idx == 1 ? 15 : 20; });
+                UpdatePreferenceInPlace(delegate(AudioBindings p) { p.WarningThreshold = idx == 0 ? 10 : idx == 1 ? 15 : 20; });
             }), true);
 
             card.Controls.Add(row2);
@@ -2398,12 +2555,12 @@ namespace AtkBatteryTray {
 
             int bgIdx = pref.BackgroundSeconds == 60 ? 0 : pref.BackgroundSeconds == 120 ? 1 : 2;
             genRows.Add(CreateSettingRow("后台同步间隔", "托盘面板收起时的后台轮询频率", CreateSegmentedChoices(new[] { "1 分钟", "2 分钟", "5 分钟" }, bgIdx, delegate(int idx) {
-                UpdatePreference(delegate(AudioBindings p) { p.BackgroundSeconds = idx == 0 ? 60 : idx == 1 ? 120 : 300; });
+                UpdatePreferenceInPlace(delegate(AudioBindings p) { p.BackgroundSeconds = idx == 0 ? 60 : idx == 1 ? 120 : 300; });
             }), true));
 
             var rememberToggle = new ControlCenterToggle(palette, dark) { Checked = pref.RememberReadings };
             rememberToggle.Toggled += delegate {
-                UpdatePreference(delegate(AudioBindings p) { p.RememberReadings = rememberToggle.Checked; });
+                UpdatePreferenceInPlace(delegate(AudioBindings p) { p.RememberReadings = rememberToggle.Checked; });
             };
             genRows.Add(CreateSettingRow("跨重启保留读数", "关闭保留不删除已有历史，需通过下方按钮单独清除", rememberToggle, true));
 
@@ -2419,19 +2576,19 @@ namespace AtkBatteryTray {
             var extRows = new List<Control>();
 
             var autoUpdate = new ControlCenterToggle(palette, dark) { Checked = pref.AutoCheckUpdates };
-            autoUpdate.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.AutoCheckUpdates = autoUpdate.Checked; }); };
+            autoUpdate.Toggled += delegate { UpdatePreferenceInPlace(delegate(AudioBindings p) { p.AutoCheckUpdates = autoUpdate.Checked; }); };
             extRows.Add(CreateSettingRow("自动检查更新", "定期检查 GitHub 签名版本更新", autoUpdate, false));
 
             var badgeToggle = new ControlCenterToggle(palette, dark) { Checked = pref.ShowUpdateBadge };
-            badgeToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.ShowUpdateBadge = badgeToggle.Checked; }); };
+            badgeToggle.Toggled += delegate { UpdatePreferenceInPlace(delegate(AudioBindings p) { p.ShowUpdateBadge = badgeToggle.Checked; }); };
             extRows.Add(CreateSettingRow("托盘图标显示更新角标", null, badgeToggle, true));
 
             var betaToggle = new ControlCenterToggle(palette, dark) { Checked = pref.IncludeBetaUpdates };
-            betaToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.IncludeBetaUpdates = betaToggle.Checked; }); };
+            betaToggle.Toggled += delegate { UpdatePreferenceInPlace(delegate(AudioBindings p) { p.IncludeBetaUpdates = betaToggle.Checked; }); };
             extRows.Add(CreateSettingRow("提醒测试版更新", "接收 1.4 测试版新设备与功能更新通知", betaToggle, true));
 
             var replyToggle = new ControlCenterToggle(palette, dark) { Checked = pref.CheckFeedbackReplies };
-            replyToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.CheckFeedbackReplies = replyToggle.Checked; }); };
+            replyToggle.Toggled += delegate { UpdatePreferenceInPlace(delegate(AudioBindings p) { p.CheckFeedbackReplies = replyToggle.Checked; }); };
             extRows.Add(CreateSettingRow("自动检查反馈回复", null, replyToggle, true));
 
             var apiToggle = new ControlCenterToggle(palette, dark) { Checked = pref.LocalApi != null && pref.LocalApi.Enabled };

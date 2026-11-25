@@ -165,6 +165,15 @@ static class ControlCenterTests {
             Check(unadapted != null && unadapted.Capability == DeviceBatteryCapability.NoBatteryPlaceholder, "unadapted USB device is placed in NoBatteryPlaceholder group");
             var familyKb = items.Find(delegate(ControlCenterDeviceItem it) { return it.Key == "dev-kb"; });
             Check(familyKb != null && familyKb.CanStopFamily && familyKb.VerificationText.Contains("自动识别"), "family probe device exposes stop-reading and experimental badge");
+
+            // Switching native mouse DPI stage updates Control Center signature and displayed active stage
+            f.Owner.Dpi.ActiveStage = 1;
+            form.RefreshData();
+            Application.DoEvents();
+            var updatedItems = form.BuildDeviceItems();
+            var mouseAfter = updatedItems.Find(delegate(ControlCenterDeviceItem it) { return it.IsNativeMouse; });
+            Check(mouseAfter != null && mouseAfter.ActiveDpiIndex == 1 && mouseAfter.CurrentDpi == 800, "DPI stage change triggers live Control Center refresh");
+
             form.Close();
             Application.DoEvents();
         }
@@ -239,6 +248,16 @@ static class ControlCenterTests {
                         bmp.Save(file, ImageFormat.Png);
                         Check(File.Exists(file) && new FileInfo(file).Length > 1000, "rendered screenshot saved: " + Path.GetFileName(file));
                     }
+                    if (page == ControlCenterPage.Placement && theme == "light") {
+                        form.SelectPlacementCard(2);
+                        Application.DoEvents();
+                        using (var bmp = new Bitmap(form.Width, form.Height)) {
+                            form.DrawToBitmap(bmp, new Rectangle(0, 0, form.Width, form.Height));
+                            string file = Path.Combine(shotDir, "cc-graphite-light-placement-taskbar.png");
+                            bmp.Save(file, ImageFormat.Png);
+                            Check(File.Exists(file) && new FileInfo(file).Length > 1000, "rendered screenshot saved: " + Path.GetFileName(file));
+                        }
+                    }
                 }
                 form.Close();
                 Application.DoEvents();
@@ -263,6 +282,37 @@ static class ControlCenterTests {
             }
             form.Close();
             Application.DoEvents();
+        }
+        // Render light/dark themed context menu with hovered item to verify vertical centering and Fluent pill inset
+        foreach (string theme in new[] { "light", "dark" }) {
+            using (var f = new Fixture("graphite", theme)) {
+                var menu = new ContextMenuStrip();
+                menu.Items.Add("设备电量与音频");
+                menu.Items.Add("控制中心...");
+                var refreshItem = new ToolStripMenuItem("刷新");
+                menu.Items.Add(refreshItem);
+                var audioSub = new ToolStripMenuItem("音源设置");
+                audioSub.DropDownItems.Add(new ToolStripMenuItem("主音箱") { Checked = true });
+                menu.Items.Add(audioSub);
+                menu.Items.Add("设置...");
+                menu.Items.Add("检查更新...");
+                menu.Items.Add("我的反馈");
+                menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add("退出");
+                ThemedContextMenu.Apply(menu);
+                menu.Show(new Point(80, 80));
+                refreshItem.Select();
+                Application.DoEvents();
+                using (var bmp = new Bitmap(menu.Width, menu.Height)) {
+                    menu.DrawToBitmap(bmp, new Rectangle(0, 0, menu.Width, menu.Height));
+                    string file = Path.Combine(shotDir, "themed-context-menu-" + theme + ".png");
+                    bmp.Save(file, ImageFormat.Png);
+                    Check(File.Exists(file) && new FileInfo(file).Length > 500, "rendered themed context menu screenshot: " + theme);
+                }
+                menu.Close();
+                menu.Dispose();
+                Application.DoEvents();
+            }
         }
     }
 

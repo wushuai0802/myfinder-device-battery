@@ -10,16 +10,38 @@ namespace AtkBatteryTray {
     // Fluent-styled theme-aware ContextMenuStrip renderer unifying Tray, Desktop Widget,
     // and Taskbar Overlay menus with the active ThemePalette, dark/light mode, and Win11 rounded corners.
     internal static class ThemedContextMenu {
+        static readonly ThemedMenuRenderer SharedRenderer = new ThemedMenuRenderer();
+        static Font normalMenuFont;
+        static Font largeMenuFont;
+
         [DllImport("dwmapi.dll", PreserveSig = true)]
         static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+        static Font MenuFontFor(bool large) {
+            if (large) {
+                if (largeMenuFont == null) largeMenuFont = new Font("Microsoft YaHei UI", 10.5f, FontStyle.Regular, GraphicsUnit.Point);
+                return largeMenuFont;
+            }
+            if (normalMenuFont == null) normalMenuFont = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point);
+            return normalMenuFont;
+        }
+
+        static bool HasCheckableItems(ToolStripItemCollection items) {
+            if (items == null) return false;
+            foreach (ToolStripItem item in items) {
+                var mi = item as ToolStripMenuItem;
+                if (mi != null && (mi.Checked || mi.CheckOnClick)) return true;
+            }
+            return false;
+        }
 
         internal static void Apply(ContextMenuStrip menu) {
             if (menu == null) return;
             menu.ShowImageMargin = false;
-            menu.ShowCheckMargin = true;
-            menu.Padding = new Padding(4, 5, 4, 5);
+            menu.ShowCheckMargin = HasCheckableItems(menu.Items);
+            menu.Padding = new Padding(0, 5, 0, 5);
             menu.DropShadowEnabled = true;
-            menu.Renderer = new ThemedMenuRenderer();
+            menu.Renderer = SharedRenderer;
             menu.Opening += delegate { SyncMenuTheme(menu); };
             menu.HandleCreated += delegate { ApplyWin11Corners(menu.Handle); };
             SyncMenuTheme(menu);
@@ -40,37 +62,46 @@ namespace AtkBatteryTray {
             if (menu == null || menu.IsDisposed) return;
             bool dark = Style.Dark;
             var pal = ThemePalette.Current(dark);
-            float fontPx = VisualDesign.LargeFont ? 13.5f : 12.5f;
+            var dropMenu = menu as ToolStripDropDownMenu;
+            bool hasChecks = HasCheckableItems(menu.Items);
+            if (dropMenu != null) {
+                dropMenu.ShowImageMargin = false;
+                dropMenu.ShowCheckMargin = hasChecks;
+                dropMenu.Padding = new Padding(0, 5, 0, 5);
+            }
             menu.BackColor = VisualDesign.HighContrast ? SystemColors.Menu : pal.Card;
             menu.ForeColor = VisualDesign.HighContrast ? SystemColors.MenuText : pal.Foreground;
-            if (menu.Font == null || Math.Abs(menu.Font.SizeInPoints - fontPx * 0.75f) > 0.5f || menu.Font.Name != "Microsoft YaHei UI") {
-                try { menu.Font = new Font("Microsoft YaHei UI", fontPx, FontStyle.Regular, GraphicsUnit.Pixel); } catch (Exception) { }
+            var targetFont = MenuFontFor(VisualDesign.LargeFont);
+            if (!ReferenceEquals(menu.Font, targetFont)) {
+                try { menu.Font = targetFont; } catch (Exception) { }
             }
             if (menu.IsHandleCreated) ApplyWin11Corners(menu.Handle);
             foreach (ToolStripItem item in menu.Items) {
-                SyncItem(item, pal);
+                SyncItem(item, pal, hasChecks);
             }
         }
 
-        static void SyncItem(ToolStripItem item, ThemePalette pal) {
+        static void SyncItem(ToolStripItem item, ThemePalette pal, bool parentHasChecks) {
             if (item == null) return;
             item.ForeColor = VisualDesign.HighContrast ? SystemColors.MenuText : (item.Enabled ? pal.Foreground : pal.Muted);
             var menuItem = item as ToolStripMenuItem;
             if (menuItem != null) {
-                menuItem.Padding = new Padding(2, 4, 8, 4);
+                menuItem.Margin = new Padding(0, 1, 0, 1);
+                menuItem.Padding = new Padding(parentHasChecks ? 2 : 8, 5, 14, 5);
                 if (menuItem.HasDropDownItems) {
                     var drop = menuItem.DropDown as ToolStripDropDownMenu;
+                    bool childChecks = HasCheckableItems(menuItem.DropDownItems);
                     if (drop != null) {
                         drop.ShowImageMargin = false;
-                        drop.ShowCheckMargin = true;
-                        drop.Padding = new Padding(4, 5, 4, 5);
-                        drop.Renderer = new ThemedMenuRenderer();
+                        drop.ShowCheckMargin = childChecks;
+                        drop.Padding = new Padding(0, 5, 0, 5);
+                        drop.Renderer = SharedRenderer;
                         drop.Opening -= HandleSubMenuOpening;
                         drop.Opening += HandleSubMenuOpening;
                         drop.HandleCreated -= HandleSubMenuHandleCreated;
                         drop.HandleCreated += HandleSubMenuHandleCreated;
                     }
-                    foreach (ToolStripItem child in menuItem.DropDownItems) SyncItem(child, pal);
+                    foreach (ToolStripItem child in menuItem.DropDownItems) SyncItem(child, pal, childChecks);
                 }
             }
         }
@@ -93,6 +124,16 @@ namespace AtkBatteryTray {
             static ThemePalette CurrentPalette(out bool dark) {
                 dark = Style.Dark;
                 return ThemePalette.Current(dark);
+            }
+
+            static bool OwnerShowsCheckMargin(ToolStripItem item) {
+                var owner = item != null ? item.Owner as ToolStripDropDownMenu : null;
+                return owner != null && owner.ShowCheckMargin;
+            }
+
+            static int MenuClientWidth(ToolStripItem item) {
+                if (item != null && item.Owner != null && item.Owner.ClientSize.Width > 0) return item.Owner.ClientSize.Width;
+                return item != null ? item.Width : 0;
             }
 
             protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) {
@@ -124,22 +165,44 @@ namespace AtkBatteryTray {
                 var pal = CurrentPalette(out dark);
                 var g = e.Graphics;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                var rect = new RectangleF(4f, 1f, Math.Max(4f, e.Item.Width - 8f), Math.Max(4f, e.Item.Height - 2f));
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                // Strictly symmetric [6px .. menuWidth - 6px] Fluent pill in menu coordinates regardless of item.Bounds.X
+                int menuW = MenuClientWidth(e.Item);
+                int itemX = e.Item.Bounds.X;
+                float left = Math.Max(1f, 6f - itemX);
+                float right = Math.Max(left + 12f, menuW - 6f - itemX);
+                var rect = new RectangleF(left, 1.5f, right - left, Math.Max(8f, e.Item.Height - 3f));
                 Color fill = VisualDesign.HighContrast
                     ? SystemColors.Highlight
-                    : (dark ? Color.FromArgb(24, 255, 255, 255) : Color.FromArgb(16, 0, 0, 0));
-                CompactRenderer.Fill(g, rect, fill, 5.5f);
+                    : (dark ? Color.FromArgb(26, 255, 255, 255) : Color.FromArgb(18, 0, 0, 0));
+                CompactRenderer.Fill(g, rect, fill, 6f);
             }
 
             protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) {
                 bool dark;
                 var pal = CurrentPalette(out dark);
                 bool active = e.Item.Enabled && (e.Item.Selected || e.Item.Pressed);
-                e.TextColor = VisualDesign.HighContrast
+                Color fg = VisualDesign.HighContrast
                     ? (active ? SystemColors.HighlightText : (e.Item.Enabled ? SystemColors.MenuText : SystemColors.GrayText))
                     : (e.Item.Enabled ? pal.Foreground : pal.Muted);
-                e.Graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-                base.OnRenderItemText(e);
+
+                bool hasCheck = OwnerShowsCheckMargin(e.Item);
+                var mi = e.Item as ToolStripMenuItem;
+                bool hasArrow = mi != null && mi.HasDropDownItems;
+                int menuW = MenuClientWidth(e.Item);
+                int itemX = e.Item.Bounds.X;
+                int left = hasCheck ? Math.Max(28 - itemX, e.TextRectangle.X) : Math.Max(4, 14 - itemX);
+                int rightEdge = menuW - (hasArrow ? 26 : 14) - itemX;
+                int w = Math.Max(20, rightEdge - left);
+                // Align text vertically to exact item center so text and pill highlight share the exact midline
+                var centeredRect = new Rectangle(left, 0, w, e.Item.Height);
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    e.Text,
+                    e.TextFont,
+                    centeredRect,
+                    fg,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
             }
 
             protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) {
@@ -150,9 +213,8 @@ namespace AtkBatteryTray {
                 Color fg = VisualDesign.HighContrast
                     ? ((e.Item.Selected || e.Item.Pressed) ? SystemColors.HighlightText : SystemColors.MenuText)
                     : pal.Selected;
-                var r = e.ImageRectangle;
-                float cx = r.X + r.Width / 2f;
-                float cy = r.Y + r.Height / 2f;
+                float cx = Math.Max(10f, 16f - e.Item.Bounds.X);
+                float cy = e.Item.Height / 2f;
                 using (var pen = new Pen(fg, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round }) {
                     g.DrawLines(pen, new[] {
                         new PointF(cx - 4f, cy),
@@ -166,9 +228,13 @@ namespace AtkBatteryTray {
                 bool dark;
                 var pal = CurrentPalette(out dark);
                 int y = e.Item.Height / 2;
-                Color line = VisualDesign.HighContrast ? SystemColors.GrayText : Color.FromArgb(dark ? 55 : 42, pal.Border);
+                int menuW = MenuClientWidth(e.Item);
+                int itemX = e.Item.Bounds.X;
+                int x1 = Math.Max(4, 12 - itemX);
+                int x2 = Math.Max(x1 + 8, menuW - 12 - itemX);
+                Color line = VisualDesign.HighContrast ? SystemColors.GrayText : Color.FromArgb(dark ? 68 : 60, pal.Border);
                 using (var pen = new Pen(line, 1f)) {
-                    e.Graphics.DrawLine(pen, 10, y, Math.Max(10, e.Item.Width - 10), y);
+                    e.Graphics.DrawLine(pen, x1, y, x2, y);
                 }
             }
 
@@ -180,8 +246,9 @@ namespace AtkBatteryTray {
                     : pal.Muted;
                 var g = e.Graphics;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                float cx = e.ArrowRectangle.X + e.ArrowRectangle.Width / 2f;
-                float cy = e.ArrowRectangle.Y + e.ArrowRectangle.Height / 2f;
+                int menuW = MenuClientWidth(e.Item);
+                float cx = Math.Max(16f, menuW - 16f - e.Item.Bounds.X);
+                float cy = e.Item.Height / 2f;
                 using (var pen = new Pen(fg, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round }) {
                     g.DrawLines(pen, new[] {
                         new PointF(cx - 2.2f, cy - 3.6f),

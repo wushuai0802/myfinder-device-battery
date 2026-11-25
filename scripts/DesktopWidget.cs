@@ -56,18 +56,19 @@ namespace AtkBatteryTray {
             return new Size(width, headerH + count * rowH + footerH + 14);
         }
 
-        internal static string DetectSnapEdge(Rectangle physicalRect, Rectangle workArea, int threshold = 22) {
+        internal static string DetectSnapEdge(Rectangle physicalRect, Rectangle workArea, int threshold = 32) {
             if (workArea.Width <= 0 || workArea.Height <= 0) return "none";
-            int dTop = Math.Abs(physicalRect.Top - workArea.Top);
-            int dBottom = Math.Abs(workArea.Bottom - physicalRect.Bottom);
-            int dLeft = Math.Abs(physicalRect.Left - workArea.Left);
-            int dRight = Math.Abs(workArea.Right - physicalRect.Right);
+            // Treat dragging slightly past a screen edge as distance 0 so pushing against an edge always snaps.
+            int dTop = physicalRect.Top <= workArea.Top ? 0 : physicalRect.Top - workArea.Top;
+            int dBottom = physicalRect.Bottom >= workArea.Bottom ? 0 : workArea.Bottom - physicalRect.Bottom;
+            int dLeft = physicalRect.Left <= workArea.Left ? 0 : physicalRect.Left - workArea.Left;
+            int dRight = physicalRect.Right >= workArea.Right ? 0 : workArea.Right - physicalRect.Right;
             int best = Math.Min(Math.Min(dTop, dBottom), Math.Min(dLeft, dRight));
             if (best > threshold) return "none";
-            if (best == dTop) return "top";
-            if (best == dBottom) return "bottom";
             if (best == dLeft) return "left";
-            return "right";
+            if (best == dRight) return "right";
+            if (best == dTop) return "top";
+            return "bottom";
         }
 
         internal static void ComputeAnchorRatios(Point physicalLocation, Size physicalSize, Rectangle workArea, out double xRatio, out double yRatio) {
@@ -522,8 +523,13 @@ namespace AtkBatteryTray {
             }
             var cfg = DeviceSettings.Current.DesktopWidget;
             if (TopMost != cfg.TopMost) TopMost = cfg.TopMost;
-            if (DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) == "none" || !cfg.AutoHideOnEdge) {
+            bool docked = DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none";
+            if (!docked || !cfg.AutoHideOnEdge) {
                 autoHiddenOnEdge = false;
+                hideDelayTimer.Stop();
+            } else if (!expanded && !dragging && !hovered && !autoHiddenOnEdge) {
+                hideDelayTimer.Stop();
+                hideDelayTimer.Start();
             }
             RenderNow(force);
         }
@@ -626,6 +632,9 @@ namespace AtkBatteryTray {
 
         protected override void OnMouseLeave(EventArgs e) {
             base.OnMouseLeave(e);
+            if (!dragging && !currentPhysicalBounds.IsEmpty && currentPhysicalBounds.Contains(Cursor.Position)) {
+                return;
+            }
             hovered = false;
             hoveredRow = -1;
             if (expanded) RenderNow(false);
@@ -685,9 +694,20 @@ namespace AtkBatteryTray {
             Capture = false;
             if (dragMoved) {
                 var physRect = currentPhysicalBounds.IsEmpty ? new Rectangle(dragPhysicalLocation, Size) : currentPhysicalBounds;
-                var screen = Screen.FromPoint(new Point(physRect.Left + physRect.Width / 2, physRect.Top + physRect.Height / 2));
+                var cursor = Cursor.Position;
+                var screen = Screen.FromPoint(cursor);
                 var workArea = screen.WorkingArea;
-                string snapped = DesktopWidgetGeometry.DetectSnapEdge(physRect, workArea);
+                float scale = Math.Max(1f, NativeDisplay.ScaleAt(cursor));
+                int snapThreshold = Math.Max(28, (int)Math.Round(36f * scale));
+                string snapped = DesktopWidgetGeometry.DetectSnapEdge(physRect, workArea, snapThreshold);
+                // Also snap if cursor itself was dragged right onto the screen edge
+                if (snapped == "none") {
+                    int edgeCursorThreshold = Math.Max(12, (int)Math.Round(16f * scale));
+                    if (cursor.X <= workArea.Left + edgeCursorThreshold) snapped = "left";
+                    else if (cursor.X >= workArea.Right - edgeCursorThreshold) snapped = "right";
+                    else if (cursor.Y <= workArea.Top + edgeCursorThreshold) snapped = "top";
+                    else if (cursor.Y >= workArea.Bottom - edgeCursorThreshold) snapped = "bottom";
+                }
                 double rx, ry;
                 DesktopWidgetGeometry.ComputeAnchorRatios(physRect.Location, physRect.Size, workArea, out rx, out ry);
                 UpdateWidgetConfig(delegate(DesktopWidgetSettings w) {
@@ -696,6 +716,14 @@ namespace AtkBatteryTray {
                     w.AnchorYRatio = ry;
                     w.MonitorDeviceName = screen.DeviceName;
                 });
+                var latest = DeviceSettings.Current.DesktopWidget;
+                if (snapped != "none" && latest.AutoHideOnEdge && !expanded) {
+                    hovered = !currentPhysicalBounds.IsEmpty && currentPhysicalBounds.Contains(Cursor.Position);
+                    if (!hovered) {
+                        hideDelayTimer.Stop();
+                        hideDelayTimer.Start();
+                    }
+                }
                 return;
             }
             HandleClick(e.Location);

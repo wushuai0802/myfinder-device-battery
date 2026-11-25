@@ -77,6 +77,10 @@ static class DesktopWidgetTests {
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(400, 1000, 200, 36), workArea) == "bottom", "snaps to bottom edge");
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(8, 300, 200, 36), workArea) == "left", "snaps to left edge");
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(1715, 300, 200, 36), workArea) == "right", "snaps to right edge");
+        Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(1760, 300, 200, 36), workArea) == "right", "pushing past right edge still snaps to right");
+        Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(-30, 300, 200, 36), workArea) == "left", "pushing past left edge still snaps to left");
+        Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(400, -25, 200, 36), workArea) == "top", "pushing past top edge still snaps to top");
+        Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(400, 1025, 200, 36), workArea) == "bottom", "pushing past bottom edge still snaps to bottom");
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(500, 500, 200, 36), workArea) == "none", "center stays undocked");
 
         var hiddenRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true);
