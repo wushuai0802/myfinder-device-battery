@@ -72,13 +72,14 @@ namespace AtkBattery {
         [DataMember(Name="description")] public string Description;
         [DataMember(Name="diagnostics")] public string Diagnostics;
         [DataMember(Name="appVersion")] public string AppVersion;
+        [DataMember(Name="images",EmitDefaultValue=false)] public FeedbackImageDto[] Images;
     }
     [DataContract] internal sealed class FeedbackSupplementReceipt {
         [DataMember(Name="number",IsRequired=true)] public long Number;
         [DataMember(Name="commentId",IsRequired=true)] public string CommentId;
         [DataMember(Name="duplicate",IsRequired=true)] public bool Duplicate;
     }
-    internal enum SupplementKind {Success,Unknown,Denied,Closed,RateLimited,Unavailable,Invalid,TooLarge,LocalFailure,Busy}
+    internal enum SupplementKind {Success,Unknown,Denied,Closed,RateLimited,Unavailable,Invalid,TooLarge,LocalFailure,Busy,ImagesUnavailable}
     internal sealed class SupplementResult {
         internal readonly SupplementKind Kind;internal readonly DateTime? RetryAt;
         internal SupplementResult(SupplementKind kind,DateTime? retry=null){Kind=kind;RetryAt=retry;}
@@ -93,6 +94,7 @@ namespace AtkBattery {
                 case SupplementKind.TooLarge:return "补充内容过长，请缩短描述或取消附带诊断信息。";
                 case SupplementKind.LocalFailure:return "无法保存本地记录，请稍后重试。";
                 case SupplementKind.Busy:return "正在处理，请稍后重试。";
+                case SupplementKind.ImagesUnavailable:return "当前反馈服务暂未开启图片上传，请先移除图片后再提交。";
                 default:return "正在确认，请稍后重试";
             }
         }}
@@ -217,8 +219,12 @@ namespace AtkBattery {
             return result;
         }
         internal SupplementResult Supplement(long number,string description,string diagnostics,CancellationToken token){
+            return Supplement(number,description,diagnostics,token,null);
+        }
+        internal SupplementResult Supplement(long number,string description,string diagnostics,CancellationToken token,IList<FeedbackImageAttachment> images){
             if(Interlocked.CompareExchange(ref supplementing,1,0)!=0)return new SupplementResult(SupplementKind.Busy);
             try{
+                bool hasImages=images!=null&&images.Count>0;
                 var record=Store.Find(number);if(record==null||!record.MaySupplement)return new SupplementResult(SupplementKind.Denied);
                 if(record.Pending==null){
                     if(!FeedbackInput.Valid(record.Category,description))return new SupplementResult(SupplementKind.Invalid);
@@ -229,14 +235,16 @@ namespace AtkBattery {
                 }
                 if(record==null||record.Pending==null)return new SupplementResult(SupplementKind.LocalFailure);
                 var saved=record.Pending;var now=clock();if(saved.RetryAt.HasValue&&now<saved.RetryAt.Value)return new SupplementResult(SupplementKind.RateLimited,saved.RetryAt);
-                var request=new FeedbackSupplementRequest {Number=number,ReplyKey=record.ReplyKey,RequestId=saved.RequestId,Description=saved.Description,Diagnostics=saved.Diagnostics,AppVersion=saved.AppVersion};
+                var request=new FeedbackSupplementRequest {Number=number,ReplyKey=record.ReplyKey,RequestId=saved.RequestId,Description=saved.Description,Diagnostics=saved.Diagnostics,AppVersion=saved.AppVersion,Images=FeedbackPayload.ToDtos(images)};
                 var result=new SupplementResult(SupplementKind.Unknown);
                 byte[] body=FeedbackProtocol.Json(request);
+                int effectiveTimeout=hasImages&&timeoutMilliseconds==20000?45000:timeoutMilliseconds;
                 try{
                     token.ThrowIfCancellationRequested();
                     using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
-                        timeout.CancelAfter(timeoutMilliseconds);
-                        using(var response=http.Post(new Uri(FeedbackRelay.Endpoint(relay).AbsoluteUri+"/supplement"),body,timeout.Token)){
+                        timeout.CancelAfter(effectiveTimeout);
+                        var targetUri=new Uri(FeedbackRelay.Endpoint(relay).AbsoluteUri+(hasImages?"/supplement/with-images":"/supplement"));
+                        using(var response=http.Post(targetUri,body,timeout.Token)){
                             var retry=FeedbackProtocol.RetryAt(response.RetryAfter,clock());
                             if((response.Status==429||response.Status==503)&&!retry.HasValue)retry=clock().AddMinutes(15);
                             result=new SupplementResult(SupplementKind.Unknown,retry);
@@ -244,10 +252,14 @@ namespace AtkBattery {
                             if(response.Status==200||response.Status==201){
                                 var receipt=UpdateJson.Read<FeedbackSupplementReceipt>(bytes);
                                 if(receipt!=null&&receipt.Number==number&&FeedbackProtocol.ValidId(receipt.CommentId)&&receipt.Duplicate==(response.Status==200))result=new SupplementResult(SupplementKind.Success);
+                            }else if(hasImages&&response.Status==404){
+                                result=new SupplementResult(SupplementKind.ImagesUnavailable);
                             }else{
                                 var error=UpdateJson.Read<FeedbackError>(bytes);string code=error==null?null:error.Error;
                                 result=new SupplementResult(response.Status==403&&code=="denied"?SupplementKind.Denied:response.Status==409&&code=="closed"?SupplementKind.Closed:
-                                    response.Status==429&&code=="rate_limited"?SupplementKind.RateLimited:response.Status==503&&(code=="disabled"||code=="unavailable")?SupplementKind.Unavailable:
+                                    response.Status==429&&code=="rate_limited"?SupplementKind.RateLimited:
+                                    response.Status==503&&code=="images_unavailable"?SupplementKind.ImagesUnavailable:
+                                    response.Status==503&&(code=="disabled"||code=="unavailable")?SupplementKind.Unavailable:
                                     response.Status==400&&code=="invalid"?SupplementKind.Invalid:response.Status==413&&code=="too_large"?SupplementKind.TooLarge:SupplementKind.Unknown,retry);
                             }
                         }
@@ -256,7 +268,7 @@ namespace AtkBattery {
                 try{Store.Change(delegate(FeedbackData data){
                     var target=data.Records.Find(delegate(FeedbackRecord r){return r.Number==number;});if(target==null||target.Pending==null||target.Pending.RequestId!=saved.RequestId)return;
                     if(result.Kind==SupplementKind.Success){target.Pending=null;target.LastActivityAt=clock();target.NextCheckAt=FeedbackSchedule.Next(target,clock(),random());}
-                    else if(result.Kind==SupplementKind.Invalid||result.Kind==SupplementKind.TooLarge||result.Kind==SupplementKind.Denied||result.Kind==SupplementKind.Closed){target.Pending=null;if(result.Kind==SupplementKind.Denied||result.Kind==SupplementKind.Closed)target.CanSupplement=false;}
+                    else if(result.Kind==SupplementKind.Invalid||result.Kind==SupplementKind.TooLarge||result.Kind==SupplementKind.Denied||result.Kind==SupplementKind.Closed||result.Kind==SupplementKind.ImagesUnavailable){target.Pending=null;if(result.Kind==SupplementKind.Denied||result.Kind==SupplementKind.Closed)target.CanSupplement=false;}
                     else target.Pending.RetryAt=result.RetryAt;
                 });}catch(Exception){return new SupplementResult(result.Kind==SupplementKind.Success?SupplementKind.Unknown:SupplementKind.LocalFailure);}
                 return result;

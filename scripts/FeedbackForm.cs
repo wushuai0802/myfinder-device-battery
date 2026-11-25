@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
@@ -48,14 +49,28 @@ namespace AtkBattery {
         [DataMember(Name="diagnostics")] public string Diagnostics;
         [DataMember(Name="appVersion")] public string AppVersion;
         [DataMember(Name="replyKey",EmitDefaultValue=false)] public string ReplyKey;
+        [DataMember(Name="images",EmitDefaultValue=false)] public FeedbackImageDto[] Images;
         internal static string LimitDiagnostics(string diagnostics){
             const string marker="[已截断]";
             return diagnostics!=null&&diagnostics.Length>20000?FeedbackInput.Prefix(diagnostics,20000-marker.Length)+marker:diagnostics;
         }
+        internal static FeedbackImageDto[] ToDtos(IList<FeedbackImageAttachment> images){
+            if(images==null||images.Count==0)return null;
+            if(images.Count>FeedbackImageEncoder.MaxImages)throw new ArgumentException("Too many feedback images.");
+            var dtos=new FeedbackImageDto[images.Count];
+            for(int i=0;i<images.Count;i++){
+                if(images[i]==null)throw new ArgumentException("Invalid feedback image.");
+                dtos[i]=images[i].ToDto();
+            }
+            return dtos;
+        }
         internal static byte[] Create(string category,string description,string diagnostics,string replyKey=null){
+            return Create(category,description,diagnostics,replyKey,null);
+        }
+        internal static byte[] Create(string category,string description,string diagnostics,string replyKey,IList<FeedbackImageAttachment> images){
             if(!FeedbackInput.Valid(category,description))throw new ArgumentException("Invalid feedback input.");
             if(replyKey!=null&&!FeedbackProtocol.ValidKey(replyKey))throw new ArgumentException("Invalid feedback key.");
-            var payload=new FeedbackPayload {Schema=replyKey==null?1:2,ReplyKey=replyKey,Category=category,Description=description.Trim(),Diagnostics=LimitDiagnostics(diagnostics),AppVersion=AppRuntime.Version};
+            var payload=new FeedbackPayload {Schema=replyKey==null?1:2,ReplyKey=replyKey,Category=category,Description=description.Trim(),Diagnostics=LimitDiagnostics(diagnostics),AppVersion=AppRuntime.Version,Images=ToDtos(images)};
             using(var stream=new MemoryStream()){new DataContractJsonSerializer(typeof(FeedbackPayload)).WriteObject(stream,payload);return stream.ToArray();}
         }
     }
@@ -77,7 +92,11 @@ namespace AtkBattery {
         public UpdateResponse Post(Uri uri,byte[] body,CancellationToken token){
             bool sending=false;CancellationTokenRegistration registration=default(CancellationTokenRegistration);
             try{
-                var request=CreateRequest(uri);request.ContentLength=body.Length;
+                var request=CreateRequest(uri);
+                if(uri.AbsolutePath.EndsWith("/with-images",StringComparison.Ordinal)){
+                    request.Timeout=45000;request.ReadWriteTimeout=45000;
+                }
+                request.ContentLength=body.Length;
                 // Keep cancellation registered through response reads, not just through GetResponse.
                 registration=token.Register(request.Abort);
                 token.ThrowIfCancellationRequested();using(var stream=request.GetRequestStream()){sending=true;stream.Write(body,0,body.Length);}
@@ -95,7 +114,7 @@ namespace AtkBattery {
         internal void MarkSuccess(){lock(gate)lastSuccess=clock();}
     }
     internal enum FeedbackResultKind {Success,RateLimited,Unavailable,Browser}
-    internal enum FeedbackFailure {Unspecified,Connection,Service,Disabled}
+    internal enum FeedbackFailure {Unspecified,Connection,Service,Disabled,ImagesUnavailable}
     internal sealed class FeedbackResult {
         internal readonly FeedbackResultKind Kind;internal readonly long Number;internal readonly string Url;
         internal readonly FeedbackFailure Failure;
@@ -113,30 +132,40 @@ namespace AtkBattery {
         internal static string IssueUrl(long number){if(number<=0||number>9007199254740991L)throw new ArgumentException("Invalid issue number.");return "https://github.com/wushuai0802/myfinder-device-battery/issues/"+number.ToString(CultureInfo.InvariantCulture);}
         internal static bool IsIssueUrl(long number,string url){return number>0&&number<=9007199254740991L&&String.Equals(url,IssueUrl(number),StringComparison.Ordinal);}
         internal FeedbackResult Submit(string category,string description,string diagnostics,CancellationToken token){
+            return Submit(category,description,diagnostics,token,null);
+        }
+        internal FeedbackResult Submit(string category,string description,string diagnostics,CancellationToken token,IList<FeedbackImageAttachment> images){
             token.ThrowIfCancellationRequested();
             if(!FeedbackInput.Valid(category,description))return new FeedbackResult(FeedbackResultKind.Unavailable);
             if(String.IsNullOrEmpty(relay))return new FeedbackResult(FeedbackResultKind.Browser);
+            bool hasImages=images!=null&&images.Count>0;
             string creation=null;bool mayHaveCreated=false;
             var failure=FeedbackFailure.Unspecified;
             try{
                 string key=FeedbackProtocol.NewKey();
                 creation=store.BeginCreation(category,description,key,clock());
-                var endpoint=FeedbackRelay.Endpoint(relay);
+                var baseEndpoint=FeedbackRelay.Endpoint(relay);
+                var endpoint=hasImages?new Uri(baseEndpoint.AbsoluteUri+"/with-images",UriKind.Absolute):baseEndpoint;
                 bool production=relay==FeedbackRelay.Url;
+                int effectiveTimeout=hasImages&&timeoutMilliseconds==20000?45000:timeoutMilliseconds;
                 using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)){
-                    timeout.CancelAfter(timeoutMilliseconds);
+                    timeout.CancelAfter(effectiveTimeout);
                     var cancel=timeout.Token;
                     // A legacy custom relay may explicitly reject schema 2 before creating anything.
-                    int attempts=production?1:2;
+                    int attempts=production||hasImages?1:2;
                     for(int attempt=0;attempt<attempts;attempt++){
-                        var payload=FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null);
+                        var payload=FeedbackPayload.Create(category,description,diagnostics,attempt==0?key:null,images);
                         cancel.ThrowIfCancellationRequested();
                         mayHaveCreated=true;
                         using(var response=http.Post(endpoint,payload,cancel)){
                             int status=response.Status;
-                            if(status==400||status==413||!production&&(status==429||status==503))mayHaveCreated=false;
+                            if(status==400||status==413||(hasImages&&status==404)||!production&&(status==429||status==503))mayHaveCreated=false;
                             if(status>=500&&status<600)failure=FeedbackFailure.Service;
                             cancel.ThrowIfCancellationRequested();
+                            if(hasImages&&status==404){
+                                failure=FeedbackFailure.ImagesUnavailable;
+                                return new FeedbackResult(FeedbackResultKind.Unavailable,failure:failure);
+                            }
                             if(status==429||status==503){
                                 // Only the relay's explicit pre-write rejection clears an uncertain creation.
                                 FeedbackError error=null;
@@ -145,10 +174,11 @@ namespace AtkBattery {
                                 if(error!=null){
                                     if(status==429&&error.Error=="rate_limited")mayHaveCreated=false;
                                     if(status==503&&error.Error=="disabled"){mayHaveCreated=false;failure=FeedbackFailure.Disabled;}
+                                    if(status==503&&error.Error=="images_unavailable"){mayHaveCreated=false;failure=FeedbackFailure.ImagesUnavailable;}
                                 }
                                 if(status==429)return new FeedbackResult(FeedbackResultKind.RateLimited);
                             }
-                            if(status==400&&!production&&attempt==0){
+                            if(status==400&&!production&&!hasImages&&attempt==0){
                                 var error=UpdateJson.Read<FeedbackError>(FeedbackProtocol.Read(response,16384,cancel));
                                 if(error!=null&&error.Error=="invalid")continue;
                             }
@@ -199,11 +229,27 @@ namespace AtkBatteryTray {
         internal static string Category,Description,EntryCategory;
         internal static bool Diagnostics;
         internal static int ComparisonChoice, ComparisonDifference;
-        internal static void Clear(){Category=null;Description=null;EntryCategory=null;Diagnostics=true;ComparisonChoice=0;ComparisonDifference=0;}
-        internal static void SaveIfChanged(string category,string description,bool diagnostics,string initialCategory,int comparisonChoice=0,int comparisonDifference=0){
-            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics&&comparisonChoice==0){Clear();return;}
+        static List<FeedbackImageAttachment> images;
+        internal static List<FeedbackImageAttachment> CloneImages(){
+            var copy=new List<FeedbackImageAttachment>();
+            if(images!=null)for(int i=0;i<images.Count;i++)copy.Add(images[i].Clone());
+            return copy;
+        }
+        internal static bool HasImages {get{return images!=null&&images.Count>0;}}
+        static void ReplaceImages(IList<FeedbackImageAttachment> next){
+            if(images!=null){for(int i=0;i<images.Count;i++)images[i].Dispose();images=null;}
+            if(next!=null&&next.Count>0){
+                images=new List<FeedbackImageAttachment>(next.Count);
+                for(int i=0;i<next.Count;i++)if(next[i]!=null)images.Add(next[i].Clone());
+            }
+        }
+        internal static void Clear(){Category=null;Description=null;EntryCategory=null;Diagnostics=true;ComparisonChoice=0;ComparisonDifference=0;ReplaceImages(null);}
+        internal static void SaveIfChanged(string category,string description,bool diagnostics,string initialCategory,int comparisonChoice=0,int comparisonDifference=0,IList<FeedbackImageAttachment> attachedImages=null){
+            bool hasImages=attachedImages!=null&&attachedImages.Count>0;
+            if(category==initialCategory&&String.IsNullOrEmpty(description)&&diagnostics&&comparisonChoice==0&&!hasImages){Clear();return;}
             Category=category;Description=description;Diagnostics=diagnostics;EntryCategory=initialCategory;
             ComparisonChoice=comparisonChoice;ComparisonDifference=comparisonDifference;
+            ReplaceImages(attachedImages);
         }
     }
 
@@ -213,6 +259,7 @@ namespace AtkBatteryTray {
         readonly Action<long> openHistory;long? requestedHistory;
         readonly ThemedSegments categories,comparison;
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview=new LinkLabel();
+        readonly FeedbackImageStrip imageStrip;
         readonly TextBox difference = new TextBox { Name="BatteryComparisonDifference", AccessibleName="相差百分比", MaxLength=3, TextAlign=HorizontalAlignment.Right };
         readonly Label remaining=new Label(),status=new Label();
         readonly ThemedButton submit,cancel,fallback,copyReport,view,mine;
@@ -226,7 +273,8 @@ namespace AtkBatteryTray {
             replies=feedbackReplies??new FeedbackReplies(new FeedbackStore(null),transport??new FeedbackHttp(),relay);
             client=new FeedbackClient(relay,transport??new FeedbackHttp(),session,20000,replies.Store);
             Text="反馈问题";ShowInTaskbar=false;StartPosition=FormStartPosition.CenterParent;FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
-            ClientSize=new Size(540,568);categories=new ThemedSegments(Theme) {Name="Categories",AccessibleName="类型"};diagnostics=new ThemedSwitch(Theme);
+            ClientSize=new Size(540,616);AllowDrop=true;categories=new ThemedSegments(Theme) {Name="Categories",AccessibleName="类型"};diagnostics=new ThemedSwitch(Theme);
+            imageStrip=new FeedbackImageStrip(Theme);
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary);cancel=new ThemedButton(Theme);fallback=new ThemedButton(Theme);copyReport=new ThemedButton(Theme);view=new ThemedButton(Theme,ThemedButtonKind.Text);
             mine=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="MyFeedback",Text=replies.Store.MenuText,AutoSize=true,Enabled=openMyFeedback!=null};
             mine.Click+=delegate{
@@ -235,8 +283,8 @@ namespace AtkBatteryTray {
                 bool modal=Modal;Close();
                 if(!modal)OpenRequestedHistory();
             };
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=6,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            for(int i=0;i<6;i++)layout.RowStyles.Add(new RowStyle(i==1?SizeType.Percent:SizeType.AutoSize,i==1?100:0));
             var typeCard=new ThemedSection(Theme) {Name="FeedbackTypeCard",Dock=DockStyle.Fill,Height=54};
             var typeTitle=Caption("类型",false,false,true);typeTitle.Dock=DockStyle.Top;
             categories.Dock=DockStyle.Bottom;categories.Margin=Padding.Empty;
@@ -252,7 +300,7 @@ namespace AtkBatteryTray {
             comparison.AddOption("Comparison-Agreement","一致","agreement");
             comparison.AddOption("Comparison-Difference","有差异","difference");
             comparison.AddOption("Comparison-Unavailable","官方读不到","unavailable");
-            bool restoreDraft=FeedbackDraft.Description!=null&&FeedbackDraft.EntryCategory==FeedbackInput.DefaultCategory(deviceMissing);
+            bool restoreDraft=(FeedbackDraft.Description!=null||FeedbackDraft.HasImages)&&FeedbackDraft.EntryCategory==FeedbackInput.DefaultCategory(deviceMissing);
             if(restoreDraft){
                 for(int i=0;i<categories.OptionCount;i++)if(FeedbackInput.CategoryAt(i)==FeedbackDraft.Category){categories.SelectedIndex=i;break;}
             }
@@ -272,10 +320,29 @@ namespace AtkBatteryTray {
             var diagnosticCard=new ThemedSection(Theme) {Name="FeedbackDiagnosticsCard",Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink};
             var diagnosticRow=new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Top,Margin=Padding.Empty,WrapContents=true};
             diagnostics.Name="IncludeDiagnostics";diagnostics.Text="附带诊断信息（推荐）";diagnostics.AccessibleName=diagnostics.Text;diagnostics.Checked=true;diagnostics.Margin=new Padding(0,0,12,0);
-            if(restoreDraft){description.Text=FeedbackDraft.Description;diagnostics.Checked=FeedbackDraft.Diagnostics;}
+            if(restoreDraft){description.Text=FeedbackDraft.Description??"";diagnostics.Checked=FeedbackDraft.Diagnostics;}
             preview.Name="ViewDiagnostics";preview.Text="查看内容";preview.AutoSize=true;preview.BackColor=Theme.Card;preview.LinkColor=Theme.Accent;preview.ActiveLinkColor=preview.LinkColor;preview.VisitedLinkColor=preview.LinkColor;preview.DisabledLinkColor=Theme.Muted;preview.Margin=new Padding(0,4,0,3);preview.LinkClicked+=delegate{ShowDiagnostics();};
             diagnosticRow.Controls.Add(diagnostics);diagnosticRow.Controls.Add(preview);
             diagnosticCard.Controls.Add(diagnosticRow);layout.Controls.Add(diagnosticCard,0,2);
+            imageStrip.Font=hint.Font;
+            if(restoreDraft&&FeedbackDraft.HasImages){
+                var restored=FeedbackDraft.CloneImages();
+                try{imageStrip.SetAttachments(restored);}finally{for(int i=0;i<restored.Count;i++)restored[i].Dispose();}
+            }
+            var imagesCard=new FeedbackImageSection(Theme,imageStrip) {Name="FeedbackImagesCard",Dock=DockStyle.Fill};
+            layout.Controls.Add(imagesCard,0,3);
+            imageStrip.ImagesChanged+=delegate{LayoutFooter();};
+            imageStrip.StatusMessage+=delegate(string message){if(!busy)SetStatus(message);};
+            DragEnter+=delegate(object s,DragEventArgs e){
+                if(!busy&&receipt==null&&e.Data!=null&&e.Data.GetDataPresent(DataFormats.FileDrop))e.Effect=DragDropEffects.Copy;
+                else e.Effect=DragDropEffects.None;
+            };
+            DragDrop+=delegate(object s,DragEventArgs e){
+                if(busy||receipt!=null||e.Data==null||!e.Data.GetDataPresent(DataFormats.FileDrop))return;
+                var files=e.Data.GetData(DataFormats.FileDrop) as string[];
+                string err;
+                imageStrip.TryAddFiles(files,out err);
+            };
             var comparisonPanel=new TableLayoutPanel {Name="FeedbackComparison",Dock=DockStyle.Fill,AutoSize=true,RowCount=2,ColumnCount=1,Margin=new Padding(0,6,0,0)};
             comparisonPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             comparisonPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -311,13 +378,13 @@ namespace AtkBatteryTray {
             comparisonPanel.Controls.Add(comparisonCaption,0,0);
             comparisonPanel.Controls.Add(comparisonRow,0,1);
             descriptionLayout.Controls.Add(comparisonPanel,0,4);
-            var notice=Caption(String.IsNullOrEmpty(relay)?"将打开 GitHub 提交，需要 GitHub 账号":"提交后会公开显示在 GitHub 项目的问题列表里。诊断不含序列号和文件路径，请不要在描述里填写个人信息。",false,true);
+            var notice=Caption(String.IsNullOrEmpty(relay)?"将打开 GitHub 提交，需要 GitHub 账号":"提交后会公开显示在 GitHub 项目的问题列表里。诊断不含序列号和文件路径，请不要在描述或图片里包含个人信息。",false,true);
             notice.Name="FeedbackNotice";
             notice.AutoSize=false;
             notice.Margin=Padding.Empty;
             notice.Dock=DockStyle.Fill;
             var noticeCard=new FeedbackNoticeSection(Theme,notice) {Name="FeedbackNoticeCard",Dock=DockStyle.Fill};
-            layout.Controls.Add(noticeCard,0,3);
+            layout.Controls.Add(noticeCard,0,4);
             status.Name="FeedbackStatus";status.AutoSize=true;status.Dock=DockStyle.Fill;status.Font=hint.Font;status.BackColor=Theme.Card;status.ForeColor=Theme.Foreground;status.Margin=new Padding(0,0,0,6);status.Visible=false;
             submit.Name="SubmitFeedback";submit.Text=String.IsNullOrEmpty(relay)?"在浏览器中提交":"提交";submit.AutoSize=true;submit.MinimumSize=new Size(82,30);submit.Click+=delegate{Submit();};
             cancel.Name="CancelFeedback";cancel.Text="取消";cancel.AutoSize=true;cancel.MinimumSize=new Size(82,30);cancel.Click+=delegate{Close();};
@@ -330,7 +397,7 @@ namespace AtkBatteryTray {
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             footer.Controls.Add(status,0,0);footer.Controls.Add(actionBar,0,1);
-            layout.Controls.Add(footer,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
+            layout.Controls.Add(footer,0,5);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
             ConfigureLayout(layout,footer,delegate(int width){
                 int textWidth=Math.Max(1,width-descriptionCard.Padding.Horizontal);
                 int minimum=descriptionCard.Padding.Vertical;
@@ -340,11 +407,34 @@ namespace AtkBatteryTray {
                 }
                 return typeCard.Height+typeCard.Margin.Vertical+minimum+descriptionCard.Margin.Vertical
                     +diagnosticCard.GetPreferredSize(new Size(width,0)).Height+diagnosticCard.Margin.Vertical
+                    +imagesCard.GetPreferredSize(new Size(width,0)).Height+imagesCard.Margin.Vertical
                     +noticeCard.GetPreferredSize(new Size(width,0)).Height+noticeCard.Margin.Vertical;
             });
             string initialCategory=FeedbackInput.DefaultCategory(deviceMissing);
             Shown+=delegate{LayoutFooter();};
-            FormClosing+=delegate{AbortSubmission();if(receipt==null)FeedbackDraft.SaveIfChanged(SelectedCategory,description.Text,diagnostics.Checked,initialCategory,comparison.SelectedIndex,DifferenceValue);else FeedbackDraft.Clear();};UpdateValidation();
+            FormClosing+=delegate{AbortSubmission();if(receipt==null)FeedbackDraft.SaveIfChanged(SelectedCategory,description.Text,diagnostics.Checked,initialCategory,comparison.SelectedIndex,DifferenceValue,imageStrip.SnapshotAttachments());else FeedbackDraft.Clear();};UpdateValidation();
+        }
+        protected override bool ProcessCmdKey(ref Message msg,Keys keyData){
+            if(keyData==(Keys.Control|Keys.V)&&!busy&&receipt==null){
+                if(FeedbackClipboardHelper.TryPasteInto(imageStrip))return true;
+            }
+            return base.ProcessCmdKey(ref msg,keyData);
+        }
+        sealed class FeedbackImageSection:ThemedSection {
+            readonly FeedbackImageStrip strip;
+            internal FeedbackImageSection(DialogTheme theme,FeedbackImageStrip strip):base(theme){
+                this.strip=strip;
+                strip.Dock=DockStyle.Fill;
+                Controls.Add(strip);
+                AutoSizeMode=AutoSizeMode.GrowAndShrink;
+                AutoSize=true;
+            }
+            public override Size GetPreferredSize(Size proposedSize){
+                if(strip==null)return base.GetPreferredSize(proposedSize);
+                int width=proposedSize.Width>0?proposedSize.Width:Width;
+                int innerWidth=Math.Max(1,width-Padding.Horizontal);
+                return new Size(width,strip.GetPreferredSize(new Size(innerWidth,0)).Height+Padding.Vertical);
+            }
         }
         sealed class FeedbackNoticeSection:ThemedSection {
             readonly Label notice;
@@ -491,7 +581,7 @@ namespace AtkBatteryTray {
             fallback.Enabled=copyReport.Enabled=!busy&&InputValid;
         }
         bool ConfirmRepeat(){return !session.NeedsConfirmation||confirm("刚刚已提交过一次，确定还要再提交吗？");}
-        void EnableInputs(bool enabled){categories.Enabled=enabled;description.Enabled=enabled;diagnostics.Enabled=enabled;preview.Enabled=enabled;comparison.Enabled=enabled;difference.Enabled=enabled;}
+        void EnableInputs(bool enabled){categories.Enabled=enabled;description.Enabled=enabled;diagnostics.Enabled=enabled;preview.Enabled=enabled;comparison.Enabled=enabled;difference.Enabled=enabled;imageStrip.Enabled=enabled;}
         void Submit(){
             if(receipt!=null){Close();return;}
             if(busy)return;
@@ -513,13 +603,17 @@ namespace AtkBatteryTray {
             if(!ConfirmRepeat())return;
             if(String.IsNullOrEmpty(relay)){OpenBrowser();return;}
             string category=SelectedCategory,text=SubmittedDescription,diagnosticText=diagnostics.Checked?report.FullText:null;
-            busy=true;EnableInputs(false);fallback.Visible=copyReport.Visible=false;SetStatus("正在提交…");UpdateValidation();
+            var attachedImages=imageStrip.CloneAttachments();
+            busy=true;EnableInputs(false);fallback.Visible=copyReport.Visible=false;SetStatus(attachedImages.Count>0?"正在上传图片并提交…":"正在提交…");UpdateValidation();
             var cancellation=new CancellationTokenSource();pending=cancellation;var token=cancellation.Token;
             ThreadPool.QueueUserWorkItem(delegate{
                 try{
-                    var result=client.Submit(category,text,diagnosticText,token);
+                    var result=client.Submit(category,text,diagnosticText,token,attachedImages);
                     if(!token.IsCancellationRequested)try{BeginInvoke((MethodInvoker)delegate{if(!IsDisposed&&!Disposing&&!token.IsCancellationRequested)Complete(result);});}catch(InvalidOperationException){}
-                }catch(OperationCanceledException){}finally{cancellation.Dispose();}
+                }catch(OperationCanceledException){}finally{
+                    for(int i=0;i<attachedImages.Count;i++)attachedImages[i].Dispose();
+                    cancellation.Dispose();
+                }
             });
         }
         void Complete(FeedbackResult result){
@@ -533,6 +627,7 @@ namespace AtkBatteryTray {
                 EnableInputs(true);
                 fallback.Visible=copyReport.Visible=true;
                 if(result.Kind==FeedbackResultKind.RateLimited)SetStatus("提交太频繁，请过一会儿再试。");
+                else if(result.Failure==FeedbackFailure.ImagesUnavailable)SetStatus("提交失败：当前反馈服务暂未开启图片上传，请先移除图片后再提交，或改用浏览器提交。");
                 else{
                     string reason="暂时无法提交";
                     if(result.Failure==FeedbackFailure.Connection)reason="连不上反馈服务";
@@ -543,7 +638,12 @@ namespace AtkBatteryTray {
             }
             UpdateValidation();
         }
-        void OpenBrowser(){if(busy||!InputValid)return;SetStatus(report.BrowserSubmission(SelectedCategory,SubmittedDescription,diagnostics.Checked).Open(copy,open));}
+        void OpenBrowser(){
+            if(busy||!InputValid)return;
+            string msg=report.BrowserSubmission(SelectedCategory,SubmittedDescription,diagnostics.Checked).Open(copy,open);
+            if(imageStrip.ImageCount>0)msg+="（浏览器提交需手动粘贴或上传图片）";
+            SetStatus(msg);
+        }
         void CopyReport(){
             if(busy||!InputValid)return;
             try{
