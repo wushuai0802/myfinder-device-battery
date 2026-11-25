@@ -871,12 +871,17 @@ namespace AtkBatteryTray {
         FeedbackReplyController feedbackChecks;MyFeedbackDialog feedbackDialog;
         readonly ControlCenterController controlCenter;
         readonly DesktopWidgetController desktopWidget;
+        readonly LocalApiController localApi;
         internal UnadaptedDevice[] UnadaptedDevicesSnapshot {get{return unadaptedDevices??new UnadaptedDevice[0];}}
         public void ShowControlCenter(ControlCenterPage page=ControlCenterPage.Devices){if(!disposed&&controlCenter!=null)controlCenter.Show(page);}
         internal bool ControlCenterOpen {get{return controlCenter!=null&&controlCenter.IsOpen;}}
         internal ControlCenterForm ActiveControlCenter {get{return controlCenter==null?null:controlCenter.ActiveForm;}}
         internal bool DesktopWidgetRunning {get{return desktopWidget!=null&&desktopWidget.IsRunning;}}
         internal DesktopWidgetForm ActiveDesktopWidget {get{return desktopWidget==null?null:desktopWidget.ActiveForm;}}
+        internal bool LocalApiRunning {get{return localApi!=null&&localApi.IsRunning;}}
+        internal int LocalApiPort {get{return localApi==null?0:localApi.ListeningPort;}}
+        internal string LocalApiSessionPath {get{return localApi==null?"":localApi.SessionFilePath;}}
+        internal string LocalApiError {get{return localApi==null?null:localApi.LastError;}}
         internal void OpenFeedbackFromHost(IWin32Window parent,bool missingDevice,Action<string> copyText,Action<string> openLink){
             if(disposed)return;
             using(var dialog=new FeedbackForm(CreateFeedbackReport(),missingDevice,Style.Dark,copyText,openLink,feedbackReplies:FeedbackReplies,openMyFeedback:OpenMyFeedback)){
@@ -1091,6 +1096,7 @@ namespace AtkBatteryTray {
             saveConfiguration=configurationWriter??DeviceSettings.SaveConfiguration;
             controlCenter=new ControlCenterController(this);
             desktopWidget=new DesktopWidgetController(this);
+            localApi=new LocalApiController(this,dataDirectory);
             activityTimer.Tick+=delegate{activityTimer.Stop();DrainActivityRefresh();};
             readLeftButton=leftButtonReader??new Func<bool>(NativeDisplay.IsLeftButtonPressed);
             if(diagnostics){if(genericWorker==null){
@@ -1122,6 +1128,7 @@ namespace AtkBatteryTray {
             if((diagnostics||dataDirectory!=null)&&DeviceSettings.Current.RememberReadings)foreach(var device in ReadingCache.LoadWireless(wirelessCachePath))wirelessCache[device.Id]=device;
             UpdateIcon();
             if(desktopWidget!=null)desktopWidget.ApplySettings();
+            if(localApi!=null)localApi.ApplySettings();
             refresh.Interval=DeviceSettings.Current.BackgroundSeconds*1000;refresh.Tick+=delegate {if(!panelOpen){RequestRead(true,false);RequestHeadsetRead(false);RequestAudioRead(false);RequestWirelessRead(false);}};refresh.Start();
             expiryTimer.Tick+=delegate{expiryTimer.Stop();UpdateIcon();};
             operationTimer.Interval=500;operationTimer.Tick+=delegate{if(audioBusy!=0&&(DateTime.UtcNow-audioOperationStarted).TotalSeconds>4){audioActionFailure="音频响应较慢，结果尚未确认";audioFailureAt=DateTime.UtcNow;if(details!=null&&!details.IsDisposed)details.Invalidate();}};
@@ -1211,6 +1218,7 @@ namespace AtkBatteryTray {
             if(updates!=null)updates.ConfigurationChanged();
             if(feedbackChecks!=null)feedbackChecks.ConfigurationChanged();
             if(desktopWidget!=null)desktopWidget.ApplySettings();
+            if(localApi!=null)localApi.ApplySettings();
             refresh.Interval=sessionLocked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;
             if(refreshAudio){
                 Interlocked.Increment(ref audioGeneration);ClearPendingAudioCommands();audioNeedsReconcile=true;
@@ -1268,6 +1276,7 @@ namespace AtkBatteryTray {
             if(details!=null&&!details.IsDisposed)details.SyncDevices();
             if(controlCenter!=null)controlCenter.NotifyDataChanged();
             if(desktopWidget!=null)desktopWidget.NotifyDataChanged();
+            if(localApi!=null)localApi.NotifyDataChanged();
             if(persistStatus&&preferences.LowBatteryNotifications)EvaluateLowBattery(mouse,headset);
             ScheduleExpiry();
             SaveStatus();
@@ -1916,6 +1925,7 @@ namespace AtkBatteryTray {
             if(feedbackChecks!=null)feedbackChecks.Dispose();if(feedbackDialog!=null&&!feedbackDialog.IsDisposed)feedbackDialog.Close();
             if(controlCenter!=null)controlCenter.Dispose();
             if(desktopWidget!=null)desktopWidget.Dispose();
+            if(localApi!=null)localApi.Dispose();
             if(devicePackChecks!=null)devicePackChecks.Dispose();
             if(updatedPanelRequest!=null)updatedPanelRequest.Dispose();
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;

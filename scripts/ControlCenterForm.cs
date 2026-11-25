@@ -967,6 +967,7 @@ namespace AtkBatteryTray {
                 var w = pref.DesktopWidget;
                 sb.Append(w.Enabled).Append('|').Append(w.Style).Append('|').Append(w.DockEdge).Append('|').Append(w.AutoHideOnEdge).Append('|').Append(w.TopMost).Append('|').Append(w.FullscreenPolicy).Append('|').Append(w.CompactOnMaximized).Append('|').Append(w.MaxDevices).Append('|');
             }
+            sb.Append(pref.LocalApi != null && pref.LocalApi.Enabled).Append('|').Append(owner.LocalApiRunning).Append('|').Append(owner.LocalApiPort).Append('|');
             sb.Append(owner.StoppedFamilyDeviceCount).Append('|').Append(owner.IsProbeToggleBusy).Append('|').Append(owner.IsFamilyOpBusy).Append('|');
             sb.Append(owner.GenericReady).Append('|').Append(owner.GenericError ?? "").Append('|').Append(owner.GenericHealthSummary ?? "").Append('|');
             sb.Append(owner.Current != null ? owner.Current.Percent.ToString() : "-").Append('|');
@@ -1730,6 +1731,20 @@ namespace AtkBatteryTray {
             var replyToggle = new ControlCenterToggle(palette, dark) { Checked = pref.CheckFeedbackReplies };
             replyToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.CheckFeedbackReplies = replyToggle.Checked; }); };
             rows.Add(CreateSettingRow("自动检查反馈回复", null, replyToggle, true));
+
+            var apiToggle = new ControlCenterToggle(palette, dark) { Checked = pref.LocalApi != null && pref.LocalApi.Enabled };
+            apiToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.LocalApi.Enabled = apiToggle.Checked; }); };
+            string apiSub = owner.LocalApiRunning
+                ? "已监听 127.0.0.1:" + owner.LocalApiPort + "（仅本机只读 JSON-RPC 2.0 / SSE，凭据仅当前用户可读）"
+                : !String.IsNullOrEmpty(owner.LocalApiError) ? "启动失败：" + owner.LocalApiError : "默认关闭 · 开启后供 MyDockFinder / Rainmeter / OBS 等读取电量";
+            rows.Add(CreateSettingRow("本机只读开放接口（JSON-RPC 2.0）", apiSub, apiToggle, true));
+
+            if (owner.LocalApiRunning) {
+                rows.Add(CreateSettingRow("接口连接信息", "凭据文件仅当前 Windows 用户可读，不含写入权限", CreateActionButton("复制文件路径", delegate {
+                    copyText(owner.LocalApiSessionPath);
+                    ShowNotice("已复制 api-session.json 路径（令牌请从受保护文件读取）");
+                }), true));
+            }
 
             for (int i = rows.Count - 1; i >= 0; i--) card.Controls.Add(rows[i]);
             root.Controls.Add(card);
