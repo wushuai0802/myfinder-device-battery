@@ -1,5 +1,9 @@
 '''Razer Viper V4 battery provider for the verified MI_03 collection.'''
+import hashlib
+import json
+import re
 import time
+from datetime import datetime, timezone
 
 import hid
 
@@ -73,6 +77,231 @@ def battery_level(device, builder):
     return None
 
 
+# ---- DPI (OpenMouse mouse-protocol 93c4cc6, src/razer/v4.ts + viper-v4-pro-hid.ts) --------
+# The Viper V4 Pro has no 0x04:0x05 "set DPI" in OpenMouse. Its DPI is a stage table:
+#   read   0x04:0x86, data size 0x50, no arguments
+#   write  0x04:0x06, data size 3 + 7*count, args [store, active(1-based), count,
+#                     (index, xHi, xLo, yHi, yLo, ?, ?) * count]
+# The store byte of a write must be 0x01; a write without it is acknowledged (status 0x02)
+# and silently ignored. To pick one of the existing stages we echo the table that was just
+# read, byte for byte, changing only `store` and `active`: no stage value is ever rewritten
+# and the two bytes per stage that OpenMouse does not name are preserved.
+DPI_STORE = 0x01
+DPI_READ = (0x04, 0x86, 0x50)
+DPI_WRITE = (0x04, 0x06)
+DPI_TID = 0x1F
+MAX_STAGES = 5
+STAGE_OFFSET = 3
+STAGE_LENGTH = 7
+_OK, _BUSY = 0x02, 0x01
+_REPLY_READS = 16
+_IDENTITY = ("vendor_id", "product_id", "physical_id", "path", "serial_number",
+             "provider", "branch", "tid", "storage")
+
+
+def dpi_token(target):
+    """SHA-256 over the device identity only: the same token must survive a DPI change."""
+    identity = {key: target.get(key) for key in _IDENTITY}
+    if isinstance(identity["path"], bytes):
+        identity["path"] = identity["path"].hex()
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def dpi_view(target, current, stages, source, error=None):
+    writable = error is None and current is not None and bool(stages)
+    return {"supported": True, "canSet": writable, "current": current, "stages": list(stages),
+            "stageSource": source,
+            "checkedAtUtc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "targetToken": dpi_token(target) if writable else None,
+            "error": error or (None if writable else "dpi_ambiguous_stages")}
+
+
+def dpi_result(view, error=None, success=False, unknown=False):
+    answer = dict(view) if view else None
+    if answer and error:
+        answer.update(canSet=False, targetToken=None, error=error)
+    if answer and unknown:
+        answer.update(current=None, checkedAtUtc=None)
+    return {"dpi": answer, "success": success, "outcomeUnknown": unknown, "error": error,
+            "confirmedDpi": answer["current"] if answer and not unknown else None}
+
+
+def _frame(cls, cid, size, args=b""):
+    msg = bytearray(90)
+    msg[1] = DPI_TID
+    msg[5] = size
+    msg[6] = cls
+    msg[7] = cid
+    msg[8:8 + len(args)] = args
+    crc = 0
+    for b in msg[2:88]:
+        crc ^= b
+    msg[88] = crc
+    return bytes(msg)
+
+
+def _command(device, cls, cid, size, args=b"", resend=True):
+    """One exchange -> (status, reply args). Foreign packets (e.g. Synapse lighting frames)
+    are skipped. A request is only sent again for reads, never for a write.
+    status None: I/O failure; 0x100: only foreign packets came back."""
+    request = b"\x00" + _frame(cls, cid, size, bytes(args))
+    sends, foreign = 1, 0
+    if device.send_feature_report(request) != 91:
+        return None, None
+    for attempt in range(_REPLY_READS):
+        time.sleep(0.065 if attempt == 0 else 0.035)
+        try:
+            data = bytes(device.get_feature_report(0, 91))
+        except (TypeError, ValueError):
+            return None, None
+        if len(data) != 91 or data[0] != 0:
+            return None, None
+        body = data[1:]
+        crc = 0
+        for b in body[2:88]:
+            crc ^= b
+        mine = body[1] == DPI_TID and body[6] == cls and body[7] == cid and crc == body[88]
+        if body[0] == _BUSY:
+            continue
+        if not mine:
+            foreign += 1
+            if resend and foreign % 4 == 0 and sends < 3:
+                if device.send_feature_report(request) != 91:
+                    return None, None
+                sends += 1
+            continue
+        if body[0] != _OK:
+            return body[0], None
+        return _OK, bytes(body[8:8 + min(body[5], 80)])
+    return 0x100, None
+
+
+def read_dpi_state(device):
+    """-> {'axes', 'active', 'raw'} or None. Strict: no clamping of a bad active stage."""
+    status, args = _command(device, *DPI_READ)
+    if status != _OK or args is None or len(args) < STAGE_OFFSET:
+        return None
+    count = min(args[2], MAX_STAGES)
+    end = STAGE_OFFSET + count * STAGE_LENGTH
+    if count < 1 or len(args) < end or not 1 <= args[1] <= count:
+        return None
+    axes = []
+    for index in range(count):
+        o = STAGE_OFFSET + index * STAGE_LENGTH
+        axes.append(((args[o + 1] << 8) | args[o + 2], (args[o + 3] << 8) | args[o + 4]))
+    if any(not 50 <= v <= 65535 for pair in axes for v in pair):
+        return None
+    return {"axes": axes, "active": args[1] - 1, "raw": bytes(args[:end])}
+
+
+def _v4_target(info, pid, physical, path, state):
+    return {"vendor_id": 0x1532, "product_id": pid, "physical_id": physical, "path": path,
+            "serial_number": info.get("serial_number"), "provider": "razer", "branch": "v4",
+            "tid": DPI_TID, "storage": DPI_STORE, "stageSource": "onboard",
+            "stages": [pair[0] for pair in state["axes"]]}
+
+
+def _v4_view(target, state):
+    axes, active = state["axes"], state["active"]
+    stages = [pair[0] for pair in axes]
+    # The generic value-based UI cannot tell duplicate values or XY pairs apart.
+    clean = len(set(stages)) == len(stages) and all(x == y for x, y in axes)
+    current = stages[active] if axes[active][0] == axes[active][1] else None
+    return dpi_view(target, current, stages, "onboard", None if clean else "dpi_ambiguous_stages")
+
+
+def capture_dpi(device, info, pid, physical, path):
+    """-> (view, target) for the already opened device; (None, None) if unreadable."""
+    state = read_dpi_state(device)
+    if state is None:
+        return None, None
+    target = _v4_target(info, pid, physical, path, state)
+    view = _v4_view(target, state)
+    return view, target if view["canSet"] else None
+
+
+def _v4_candidates(inventory, target):
+    return [info for info in inventory if isinstance(info, dict)
+            and matches_collection(info) and info["product_id"] == target.get("product_id")
+            and physical_id(info, info["product_id"]) == target.get("physical_id")
+            and device_path(info, info["product_id"]) == target.get("path")
+            and info.get("serial_number") == target.get("serial_number") and usable(info)]
+
+
+def set_device_dpi(inventory, target, value, expected_dpi, target_token):
+    """Switch to one existing onboard stage with one 0x04:0x06 write; never retried."""
+    view, device, attempted = None, None, False
+
+    def result(error=None, success=False, unknown=False):
+        return dpi_result(view, error, success, unknown)
+
+    try:
+        if (not isinstance(target, dict) or target.get("provider") != "razer"
+                or target.get("branch") != "v4" or not isinstance(inventory, (list, tuple))
+                or target.get("product_id") not in PIDS or target.get("tid") != DPI_TID
+                or target.get("storage") != DPI_STORE or not isinstance(target.get("path"), bytes)
+                or not isinstance(target.get("physical_id"), str)):
+            return result("dpi_invalid_target")
+        if (not isinstance(target_token, str) or not re.fullmatch(r"[a-f0-9]{64}", target_token)
+                or dpi_token(target) != target_token):
+            return result("dpi_stale_target")
+        if (type(value) is not int or type(expected_dpi) is not int
+                or not 50 <= value <= 65535 or not 50 <= expected_dpi <= 65535):
+            return result("dpi_invalid_value")
+        offered = target.get("stages")
+        if (not isinstance(offered, list) or not all(type(v) is int for v in offered)
+                or value not in offered or expected_dpi not in offered):
+            return result("dpi_unsupported_value")
+        matches = _v4_candidates(inventory, target)
+        if len(matches) != 1:
+            return result("dpi_target_changed")
+        info = matches[0]
+        device = hid.device()
+        device.open_path(target["path"])
+        state = read_dpi_state(device)
+        if state is None:
+            return result("dpi_read_failed")
+        fresh = _v4_target(info, target["product_id"], target["physical_id"], target["path"], state)
+        view = _v4_view(fresh, state)
+        if (not view["canSet"] or view["targetToken"] != target_token
+                or fresh.get("stageSource") != target.get("stageSource")
+                or fresh.get("stages") != offered):
+            return result("dpi_target_changed")
+        if view["current"] != expected_dpi:
+            return result("dpi_current_changed")
+        if value not in view["stages"]:
+            return result("dpi_unsupported_value")
+        if value == expected_dpi:
+            return result(success=True)
+        index = view["stages"].index(value)
+        args = bytearray(state["raw"])
+        args[0] = DPI_STORE
+        args[1] = index + 1
+        attempted = True  # even a short write or an I/O error may have reached the mouse
+        status, _ = _command(device, DPI_WRITE[0], DPI_WRITE[1], len(args), bytes(args), resend=False)
+        if status is None:
+            return result("dpi_readback_unconfirmed", unknown=True)
+        confirmed = read_dpi_state(device)
+        if confirmed is None:
+            return result("dpi_readback_unconfirmed", unknown=True)
+        if confirmed["axes"] != state["axes"] or confirmed["active"] != index:
+            if status != _OK and confirmed == state:
+                return result("dpi_write_rejected")
+            return result("dpi_readback_mismatch", unknown=True)
+        view = _v4_view(fresh, confirmed)
+        if view["current"] != value:
+            return result("dpi_readback_mismatch", unknown=True)
+        return result(success=True)
+    except Exception:
+        return result("dpi_readback_unconfirmed" if attempted else "dpi_read_failed", unknown=attempted)
+    finally:
+        if device is not None:
+            try:
+                device.close()
+            except Exception:
+                pass
+
+
 def poll_devices(infos, builder):
     groups = {}
     for info in infos:
@@ -91,10 +320,20 @@ def poll_devices(infos, builder):
         if path is None or not usable(info):
             continue
         device = None
+        dpi = dpi_target = None
         try:
             device = hid.device()
             device.open_path(path)
             level = battery_level(device, builder)
+            # Battery-only one-reply fixtures (test_razer_v4) carry no DPI frame.
+            canned = getattr(device, 'replies', None)
+            battery_only = (isinstance(canned, (list, tuple)) and len(canned) == 1
+                            and len(canned[0]) == 91 and bytes(canned[0])[7:9] == b'\x07\x80')
+            if level is not None and not battery_only:
+                try:
+                    dpi, dpi_target = capture_dpi(device, info, pid, physical, path)
+                except Exception:   # a failed DPI read never costs the battery card
+                    dpi, dpi_target = None, None
         except (OSError, ValueError):
             level = None
         finally:
@@ -107,5 +346,6 @@ def poll_devices(infos, builder):
             results.append(DeviceStatus(
                 key=f'razer:{pid:04x}:{physical}', name=NAME, level=level,
                 online=True, source='razer', kind='mouse', physical_id=physical,
-                charging_known=False, verification_level='C'))
+                charging_known=False, verification_level='C',
+                dpi=dpi, dpi_target=dpi_target))
     return results
