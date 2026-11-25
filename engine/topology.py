@@ -581,6 +581,20 @@ def discover(paths, excluded=(), *, full=False):
                 info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
                 _descriptor_fallback(info, caps, ("input",))
                 caps_complete = bool(info["input_report_sizes"] and "187" in info["input_report_sizes"])
+            if caps_complete and attrs.vendor == 0x24AE and attrs.product in (0x1221, 0x1205, 0x4405):
+                # Rapoo VT9 PRO read-only status (Feature 0x2A on FF0B:0104)
+                # and passive fallback (Input 0xBB on FF00:000E); zero writes.
+                if (caps.page, caps.usage) == (0xFF0B, 0x0104):
+                    from battery_hid import byte_report_sizes
+                    info.update(feature_report_length=caps.feature,
+                                feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True))
+                    _descriptor_fallback(info, caps, ("feature",))
+                    caps_complete = bool(info["feature_report_sizes"] and "42" in info["feature_report_sizes"])
+                elif (caps.page, caps.usage) == (0xFF00, 0x000E):
+                    from battery_hid import byte_report_sizes
+                    info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
+                    _descriptor_fallback(info, caps, ("input",))
+                    caps_complete = bool(info["input_report_sizes"] and "187" in info["input_report_sizes"])
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x36B0, 0x3071, 0xFF60, 0x0061),
                     (0x36B0, 0x3075, 0xFF60, 0x0061)):

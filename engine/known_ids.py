@@ -62,6 +62,7 @@ TABLES = {
     "vgn_beiying": ("PIDS",),
     "rapoo": ("PIDS",),
     "rapoo_mt560": ("PIDS",),
+    "rapoo_vt9": ("PIDS",),
     "fa6x_passive": ("PIDS",),
     "rainyrt": ("PIDS",),
     "dareu": ("PIDS",), "delux": ("PIDS",), "vgn_ry_ms": ("PIDS",),

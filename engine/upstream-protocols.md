@@ -4653,3 +4653,17 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - **CompX (`engine/providers/pulsar.py`)**: Expanded `DPI_MODELS` from 3 to 139 wired and 2.4G `(VID, PID)` pairs per OpenMouse `93c4cc60` (ATK/VXE mice + shared 1K/8K dongles with live `0x10` CID/MID lookup, Pulsar `0x3710`/`0x3554`, Lamzu Atlantis, Scyrox, GravaStar, Hitscan `0x3770`, Noir, VGN, Teevolution), retaining `0xFF02:0x0002` `output_length == 17`, NearLink/pack exclusion, `0x55` checksum, `0x07@0x0004` stage-only select, and full readback. Pulsar Link 8K (`3710:5501`) and R1 1K/F503/F506/FB3E/`391D:1A1A` remain battery-only.
 - **MCHOSE / ASUS ROG / WLmouse / Lamzu / G-Wolves & C4 Adapter (`engine/providers/{mchose,asus,wlmouse,lamzu,gwolves}.py`, `engine/families/dpi/dareu_jm_24g.py`)**: Added onboard stage read + single stage switch + readback for MCHOSE V2 (`0x5253`/`0x3837`) & A5 Gen1 (`0x2023`), ASUS ROG Harpe Ace (`0B05:1A92/1A94`), WLmouse (`0x36A7` excl. `A887` which lacks active stage read), Lamzu Maya X (`373E:001C/001E`), G-Wolves XVI/XVI-new (`0x33E4`, 48 PIDs excl. `3854`), and first Architecture v2 C4 adapter `dareu_jm_24g` (`260D:1156`). MCHOSE V3 / A5 V2 (`v3-hid.ts` unexercised writes) and ASUS OMNI (`01 A0` guard) remain battery-only.
 - **Server & Host Plumbing (`engine/server.py`, `scripts/GenericBattery.cs`, `scripts/WirelessLayout.cs`)**: Registered all 8 static DPI providers + dynamic `families` in `DPI_PROVIDERS`; generalized C# `WirelessDpi.CanWrite` beyond the 3-provider list while preserving `pulsar`/`families` `onboard`-only and `pack`/system-provider exclusions; fixed `WirelessLayout.DpiFresh` so valid read-only DPI (`canSet=False, targetToken=null`) renders current DPI & read-only highlight cleanly until stale.
+
+
+## Rapoo VT9 PRO read-only status/notification (24AE:1221, 1205, 4405)
+
+- Verification grade: **C** (pending owner hardware verification; static + OpenMouse protocol evidence + user HID diagnostic).
+- Sources:
+  - OpenMouse commit `93c4cc601d448ea481eb59d7b785eec75ae16ec2` (`docs/rapoo-vt9-pro-testing.md`, `src/rapoo/index.ts`, `src/rapoo/index.test.ts`): documents `24AE:1205` (2.4 GHz receiver) and `24AE:4405` (wired USB).
+  - User hardware diagnostic (`1.4.0-beta.6`): `24AE:1221` ("Rapoo Gaming Device") exposes collections `0001:0002 0001:0006 0001:0080 000C:0001 FF00:0002 FF00:0002 FF00:000E FF0B:0104`.
+- Read-only protocol (strictly zero writes; no `0xBA` commands, no DPI writes):
+  - **Primary Feature channel (`FF0B:0104`)**: `GET_FEATURE` Report ID `0x2A` (`42`), Windows buffer length `>= 10` (with leading report ID `0x2A` at `raw[0]`, e.g. `2a 01 00 00 04 11 20 00 00 62 00` or `2a 01 00 00 04 21 50 00 00 62 00`); `raw[9]` holds battery percent (`0..100`). Works even while the mouse is idle/asleep.
+  - **Fallback passive Input channel (`FF00:000E`)**: passive listen for Input Report ID `0xBB` (`187`), length `>= 7`, `raw[0] == 0xBB`, `raw[1] == 0xB0`, `raw[5] in (1, 2)` (1=Wireless, 2=Wired), `raw[6]` holds battery percent (`0..100`).
+- Scope exclusions:
+  - Unverified older VT9 PIDs (`24AE:1601`, `24AE:185A`, `24AE:1849`) remain excluded; `24AE:1601` stays Grade D `observedUnsupported`.
+  - No DPI support in `rapoo_vt9` (`DPI_PROVIDERS` does not include `rapoo_vt9`).
