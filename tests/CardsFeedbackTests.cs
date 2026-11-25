@@ -206,6 +206,17 @@ static class CardsFeedbackTests {
             Apply(owner,new WirelessSnapshot {Devices=new[]{a}});Check(owner.DiagnosticSummary().Contains("Old Mouse"),"omitted optional suppression preserves diagnostics");
             Apply(owner,new WirelessSnapshot {Devices=new[]{a},Suppressed=new SuppressedDevice[0]});Check(!owner.DiagnosticSummary().Contains("Old Mouse"),"explicit empty suppression clears diagnostics");
             ReaderHealthStates(owner);
+            var a5v2Readers=new[]{
+                new ReaderHealth {Provider="mchose",State="unavailable",ErrorCode="A5V2 no_stable_reply"},
+                new ReaderHealth {Provider="mchose",State="ok",ErrorCode="A5V2 topology_unproven"},
+                new ReaderHealth {Provider="mchose",State="no_devices",ErrorCode="A5V2 feature_unproven"},
+                new ReaderHealth {Provider="mchose",State="ok",ErrorCode="A5V2 stable_reply_C_pending_hardware"},
+                new ReaderHealth {Provider="mchose",State="ok",ErrorCode="arbitrary_secret_reason"},
+                new ReaderHealth {Provider="other",State="ok",ErrorCode="A5V2 no_stable_reply"}
+            };
+            var a5v2Report=new FeedbackReport("1","10",new WirelessDevice[0],new SuppressedDevice[0],new UnadaptedDevice[0],a5v2Readers,new string[0]).FullText;
+            Check(a5v2Report.Contains("mchose | unavailable | A5V2 no_stable_reply")&&a5v2Report.Contains("mchose | ok | A5V2 topology_unproven")&&a5v2Report.Contains("mchose | no_devices | A5V2 feature_unproven"),"FeedbackReport projects fixed A5V2 failure reasons across states");
+            Check(!a5v2Report.Contains("stable_reply_C_pending_hardware")&&!a5v2Report.Contains("arbitrary_secret_reason")&&!a5v2Report.Contains("other | ok"),"FeedbackReport ignores non-whitelisted ok/no_devices reasons");
             ReaderFooterActions(owner);
             Console.WriteLine("PASS "+checks+" cards/feedback checks; no HID or browser");return 0;
         }catch(Exception e){Console.Error.WriteLine(e);return 1;}finally{if(owner!=null)owner.ExitThread();}

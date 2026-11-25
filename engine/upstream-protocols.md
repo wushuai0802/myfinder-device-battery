@@ -4711,3 +4711,22 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
   - Proves Feature Report `0x11` (`"17"` = `21` or `65` bytes; allows sibling Feature `0x12`) via HidP (`allow_fixed_usage=True`) or `_descriptor_fallback`; requires 2 consecutive identical valid `0x11 0xF9` replies (`vid in {0x3837, 0x5253}`); never opens `FF0B:0104`, never writes `0x12`, never enables DPI.
 - **Angry Miao AM Infinity .97 (`0E8D:0703`, `#1148`, `engine/topology.py`, `engine/providers/am_infinity_97.py`, `engine/server.py`)**:
   - Enabled `allow_fixed_usage=True` on `0E8D:0703 FF13:0001`, relaxed `reports_proven()` to accept multi-report collections (`REPORT_BYTES <= length <= 4096` with `max(sizes.values()) == length` and proven OUT `06` / IN `07` == `62` bytes), and added `am_infinity_97` safe `diagnosticSummary` -> `errorCode` health projection in `server.py` (`+ declared=` proof notes).
+
+
+## Batch 1126 Wave 2 — Backlog & Stock Resolution (#959, #966, #737, #1035)
+
+- **Inphic IN9 SLE (`7768:642C` 2.4G / `7768:6D2C` wired, `#959`, Grade C, `engine/providers/inphic.py`)**:
+  - Source: Contributor `@NJjojoj` hardware captures on both 2.4G SparkLink receiver and wired USB compared against official driver V1.0.1.2 (90% and 100%).
+  - Protocol: Receive-only passive 64-byte Input Report ID `0x06` on `MI_01` `FFB2:0001` (`06 FA 03 00 00 03 <percent 1..100> <0|1> ...`), ~30s heartbeat; zero writes / zero Feature transfers; ignores transient `0%` link-handoff placeholders and excludes `7768:642E`.
+  - Design: No local disk cache; keeps open per-parent handle across polls (`READ_WINDOW_MS = 1500` initial listen, `DRAIN_TIMEOUT_MS = 1` queued drain) and shares `"Inphic IN9 SLE"` across both links so `suppress_old_connections` folds the inactive link automatically.
+
+- **AJAZZ AK980 PRO (wired `0C45:8039` / 2.4G `0C45:FEFE`, `#966`, Grade C, `engine/providers/ajazz_ak980.py`)**:
+  - Source: Official web driver `https://ajazz.driveall.cn/custom-keys` (`layout-classic-CMxiG14P.js` `GET_DEVICE_INFO = 0x10`) + `@NJjojoj` hardware captures on both links (100%).
+  - Protocol: Wired requires exact `"AK980 PRO"`, `MI_02` `FF68:0061`, proven unnumbered `0:65` I/O (`FF67:0061` is never opened). 2.4G requires all `FF60:0061` collections on the receiver to carry `"AJAZZ AK980 PRO 2.4G"` and narrows strictly to `MI_03` (`MI_04` junk frames excluded) with proven `0:65` I/O. Single 65-byte `00 AA 10 30 00 00 00 01 ...` write, validates `55 10` header + echoed `0C45:8039` fingerprint (`raw[12:16]`) + `workMode` (`0`/`2`) + `1..100%` (`0` = asleep/offline); `charging_known = False`.
+
+- **MCHOSE A5 V2 Ultra (`3837:100C`, `#737`, `engine/server.py`, `scripts/GenericBattery.cs`)**:
+  - Added `(A5V2_VID, A5V2_PID)` to `recognized_candidate_count("mchose", ...)`, projected the bounded 6-value `A5V2` failure enum (excluding `stable_reply_C_pending_hardware`) via `diagnosticSummary`, and rendered fixed `mchose` `ok`/`no_devices`/`A5V2` health rows in `FeedbackReport`.
+
+- **XIBERIA K03S Wireless 7.1 (`36F9:C001`, `#1035`, Grade D `observedUnsupported`)**:
+  - Hardware testing on `1.4.0-beta.6` & `1.4.1-beta.1` and owner verification against official `XIBERIA X HUB` both confirmed no PC battery support; removed `36F9:C001` from `engine/families/builtin/xiberia.json` and recorded Grade D `observedUnsupported` in `engine/compatibility.json`.
+

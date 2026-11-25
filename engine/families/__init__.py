@@ -25,12 +25,11 @@ _pack: Tuple[Family, ...] = ()
 _probe_enabled = False
 _RECEIVER_PARENTS = {
     ("xiberia", 0x36F9, 0xF001),
-    ("xiberia", 0x36F9, 0xC001),
     ("machenike_l7_air", 0x320F, 0x226F),
     ("razer_blackshark_v3_pro_rx", 0x1532, 0x0577),
     ("dareu_jm_24g", 0x260D, 0x1156),
 }
-_XIBERIA_FF90_ONLY_PIDS = {0xF002, 0xC001}
+_XIBERIA_FF90_ONLY_PIDS = {0xF002}
 
 
 def load(directory: Path = BUILTIN) -> Dict[str, Family]:

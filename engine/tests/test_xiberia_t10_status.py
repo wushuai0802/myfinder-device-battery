@@ -298,8 +298,9 @@ class T10StatusTests(unittest.TestCase):
                 self.assertEqual(dev.opened, [b"t10-ff90"])
                 self.assertEqual(dev.writes, [STATUS_REQUEST])
 
-    def test_k03s_c001_constant_output_ff90_matches_issue_1035_inventory(self):
-        # #1035: real Windows inventory for 36F9:C001 "XIBERIA K03S Wireless 7.1".
+    def test_k03s_c001_downgraded_to_observed_unsupported_and_opens_nothing(self):
+        # #1035: confirmed 36F9:C001 "XIBERIA K03S Wireless 7.1" has no PC battery
+        # support even in official X HUB -> must not be opened or queried.
         parent = r"pnp:usb\vid_36f9&pid_c001\receiver"
         base = dict(vendor_id=0x36F9, product_id=0xC001,
                     product_string="XIBERIA K03S Wireless 7.1", physical_id=parent)
@@ -313,22 +314,10 @@ class T10StatusTests(unittest.TestCase):
         ff22 = collection(**base, usage_page=0xFF22, usage=1, path=b"c001-ff22",
                           input_report_length=0, output_report_length=0,
                           input_report_sizes=None, output_report_sizes=None)
-        dev = FakeDevice([frame("55 65 00 47")])  # 0x47 = 71%
-        statuses, _ = poll([ff22, ff82, ff90], dev)
-        self.assertEqual(len(statuses), 1)
-        self.assertEqual((statuses[0].name, statuses[0].level, statuses[0].verification_level),
-                         ("XIBERIA K03S", 71, "C"))
-        self.assertEqual(dev.opened, [b"c001-ff90"])
-        # K03S C001 uses legacy battery read only, never t10_status.
-        self.assertEqual(dev.writes, [LEGACY_REQUEST])
+        self.assertFalse(families.wants_caps(0x36F9, 0xC001, 0xFF90, 0x0001))
+        self.assert_not_opened([ff22, ff82, ff90])
 
     def test_constant_output_gate_is_strictly_fail_closed(self):
-        c001_parent = r"pnp:usb\vid_36f9&pid_c001\receiver"
-        c001 = collection(vendor_id=0x36F9, product_id=0xC001,
-                          product_string="XIBERIA K03S Wireless 7.1",
-                          physical_id=c001_parent, usage_page=0xFF90, usage=1,
-                          path=b"c001-ff90", input_report_sizes={"85": 64},
-                          output_report_sizes=None, output_constant_only=True)
         t10_const = t10_collection(usage_page=0xFF90, path=b"t10-ff90",
                                    input_report_sizes={"85": 64},
                                    output_report_sizes=None, output_constant_only=True)
@@ -341,13 +330,6 @@ class T10StatusTests(unittest.TestCase):
             ("duplicate t10 ff90 with unproved sibling", [
                 t10_const, t10_collection(usage_page=0xFF90, path=b"t10-ff90-dup",
                                           input_report_sizes=None, output_report_sizes=None)]),
-            ("duplicate c001 ff90 with unproved sibling", [
-                c001, dict(c001, path=b"c001-ff90-dup", input_report_sizes=None, output_constant_only=False)]),
-            ("c001 wrong product string", [dict(c001, product_string="XIBERIA K03S")]),
-            ("c001 wrong parent", [dict(c001, physical_id=T10_PARENT)]),
-            ("c001 ff82 even if fully proved", [dict(c001, usage_page=0xFF82,
-                                                     output_report_sizes={"85": 64},
-                                                     output_constant_only=False)]),
         )
         for label, rows in cases:
             with self.subTest(label):

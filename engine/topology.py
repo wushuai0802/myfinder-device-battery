@@ -772,10 +772,33 @@ def discover(paths, excluded=(), *, full=False):
                     (0x0C45, 0xFEFE, 0xFF60, 0x0061)):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
-                if (attrs.vendor, attrs.product) == (0x0C45, 0xFEFE) and info.get("product_string") == "MINI 60 HE PRO Dongle":
+                if (attrs.vendor, attrs.product) == (0x0C45, 0xFEFE) and (
+                        info.get("product_string") == "MINI 60 HE PRO Dongle"
+                        or (info.get("product_string") == "AJAZZ AK980 PRO 2.4G"
+                            and info.get("interface_number") == 3
+                            and caps.input == caps.output == 65)):
                     _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
+            if (caps_complete
+                    and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                        0x0C45, 0x8039, 0xFF68, 0x0061)
+                    and info.get("product_string") == "AK980 PRO"
+                    and info.get("interface_number") == 2
+                    and caps.input == caps.output == 65):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = (info.get("input_report_sizes") == {"0": 65}
+                                 and info.get("output_report_sizes") == {"0": 65})
+            if (caps_complete
+                    and attrs.vendor == 0x7768 and attrs.product in (0x642C, 0x6D2C)
+                    and (caps.page, caps.usage) == (0xFFB2, 0x0001)
+                    and info.get("interface_number") == 1):
+                from battery_hid import byte_report_sizes
+                info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
+                _descriptor_fallback(info, caps, ("input",))
+                caps_complete = bool(info["input_report_sizes"] and info["input_report_sizes"].get("6") == 64)
             if (caps_complete
                     and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
                     (0x320F, 0x5055, 0xFF1C, 0x0092)):

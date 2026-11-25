@@ -10,12 +10,11 @@
     "revision": "f1510d0",
     "license": "Apache-2.0 (BrimDeck legacy); MIT (Voltide legacy); T10 status: no license declared, protocol facts only",
     "origin": "Voltide XiberiaT7Provider.cs (MIT), derived from XIBERIA HUB ActHID.dll; T10 status facts: https://github.com/sumyunq/CMAKE_K03/blob/1305c673ab808af7920bd0e8d224698cc4d1c778/src/LoadLib.cpp#L247-L289",
-    "evidence": "Legacy: T7 F008 HW check; HUB binds 36F9 55/41. MyFinder F016(#56/#259), F002(#846/#852, FF90 replied 55 65 00 64), F001(#225/#271/#1070), C001(#1035). #1035/#1070 Windows caps show FF90 Input 0x55 64B + OutputReportByteLength=64 with zero output caps (Constant item), FF82 has 0x41 64B. T10: CMAKE_K03 LoadLib.cpp:247-289, send 55 10 01 + 61 zeros, reply 64B byte[4] 1 wireless/0 offline/2 wired, byte[7]&7F %. Pending in-app verification."
+    "evidence": "Legacy: T7 F008 HW check; HUB binds 36F9 55/41. MyFinder F016(#56/#259), F002(#846/#852, FF90 replied 55 65 00 64), F001(#225/#271/#1070). #1070 Windows caps show FF90 Input 0x55 64B + OutputReportByteLength=64 with zero output caps (Constant item), FF82 has 0x41 64B. T10: CMAKE_K03 LoadLib.cpp:247-289, send 55 10 01 + 61 zeros, reply 64B byte[4] 1 wireless/0 offline/2 wired, byte[7]&7F %. Pending in-app verification. #1035 confirmed 36F9:C001 has no PC battery support even in official X HUB (moved to Grade-D observedUnsupported)."
   },
   "devices": [
     {"vendorId": "36F9", "productId": "F008", "name": "XIBERIA T7"},
     {"vendorId": "36F9", "productId": "F016", "name": "XIBERIA K03S", "productString": "XIBERIA K03S"},
-    {"vendorId": "36F9", "productId": "C001", "name": "XIBERIA K03S", "productString": "XIBERIA K03S Wireless 7.1"},
     {"vendorId": "36F9", "productId": "F002", "name": "XIBERIA K06S", "productString": "XIBERIA K06S Wireless"},
     {"vendorId": "36F9", "productId": "F001", "name": "XIBERIA T10", "productString": "XIBERIA T10 Wireless"}
   ],
