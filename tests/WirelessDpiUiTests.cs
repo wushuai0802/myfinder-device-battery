@@ -83,6 +83,14 @@ static class WirelessDpiUiTests {
         var compx=Device("c");compx.Provider="pulsar";owner.WirelessDevices=new[]{compx};
         Check(Stage(Controls(owner),compx.Id,1600).Enabled&&Stage(Controls(owner),compx.Id,800).Selected&&WirelessLayout.DpiSubtitle(compx,null,null).StartsWith("DPI ·"),"pulsar uses the existing onboard row, selection and switch controls");
         compx.ModelSource="pack";Check(!Stage(Controls(owner),compx.Id,1600).Enabled,"pack-origin pulsar cannot activate a DPI stage");
+        var readOnlyGpw=Device("r","onboard",new[]{400,800,1600,3200});readOnlyGpw.Dpi.CanSet=false;readOnlyGpw.Dpi.Current=1600;readOnlyGpw.Dpi.TargetToken=null;readOnlyGpw.Dpi.Error=null;owner.WirelessDevices=new[]{readOnlyGpw};
+        var roRows=Controls(owner);var roCurrent=Stage(roRows,readOnlyGpw.Id,1600);var roOther=Stage(roRows,readOnlyGpw.Id,800);
+        Check(WirelessLayout.DpiFresh(readOnlyGpw)&&WirelessLayout.DpiSubtitle(readOnlyGpw,null,null)=="DPI · 1600","read-only onboard DPI shows live current DPI without stale prefix or error");
+        Check(roCurrent!=null&&roCurrent.Selected&&!roCurrent.Enabled&&roOther!=null&&!roOther.Selected&&!roOther.Enabled,"read-only onboard DPI highlights the current stage while disabling all stage writes");
+        Check(PopupPages.Hit(roRows,new PointF(roCurrent.Rect.Left+roCurrent.Rect.Width/2,roCurrent.Rect.Top+roCurrent.Rect.Height/2))==null&&PopupPages.Hit(roRows,new PointF(roOther.Rect.Left+roOther.Rect.Width/2,roOther.Rect.Top+roOther.Rect.Height/2))==null,"read-only DPI stages cannot be clicked");
+        var roNav=new PopupNavigation {Page=PopupPage.Device,SelectedDeviceKey=readOnlyGpw.Id,SelectedDeviceName=readOnlyGpw.Name,VisibleChoices=20};
+        var roDetails=PopupPages.Build(owner,roNav,false);
+        Check(roDetails.Exists(delegate(PopupControl row){return row.Information&&row.Text=="DPI"&&row.Value=="1600";})&&roDetails.Exists(delegate(PopupControl row){return row.Information&&row.Text=="DPI状态"&&row.Value=="只读";}),"read-only DPI device details report fresh current value and read-only status");
     }
     static void IdentityAndAccessibility(TrayContext owner) {
         var a=Device("a");var b=Device("b");owner.WirelessDevices=new[]{a,b};var rows=Controls(owner);var pressed=Stage(rows,a.Id,1600);string identity=pressed.StableKey;

@@ -1,8 +1,85 @@
 using System;
+using System.IO;
+using System.Reflection;
 using AtkBattery;
 static class Tests {
     static int passed;
     static void Assert(bool ok,string name){if(!ok)throw new Exception("FAIL "+name);passed++;}
+    static void RunWirelessDpiTests() {
+        const BindingFlags Any=BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static;
+        Assembly asm=typeof(Tests).Assembly.GetType("AtkBattery.WirelessDpi")!=null?typeof(Tests).Assembly:null;
+        if(asm==null) {
+            string sibling=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"AtkMouseBattery.exe");
+            if(File.Exists(sibling))asm=Assembly.LoadFrom(sibling);
+        }
+        if(asm==null)return;
+        Type dpiType=asm.GetType("AtkBattery.WirelessDpi",true);
+        Type devType=asm.GetType("AtkBattery.WirelessDevice",true);
+        Type workerType=asm.GetType("AtkBattery.GenericBatteryWorker",true);
+        Type layoutType=asm.GetType("AtkBatteryTray.WirelessLayout",true);
+        MethodInfo canWrite=dpiType.GetMethod("CanWrite",Any);
+        MethodInfo parse=workerType.GetMethod("Parse",Any);
+        MethodInfo dpiFresh=layoutType.GetMethod("DpiFresh",Any);
+        MethodInfo dpiSubtitle=layoutType.GetMethod("DpiSubtitle",Any);
+        MethodInfo dpiStageCount=layoutType.GetMethod("DpiStageCount",Any);
+        string token=new string('a',64);
+        string now=DateTime.UtcNow.ToString("o");
+        Func<string,string,string,bool,string,object> makeDevice=delegate(string provider,string stageSource,string modelSource,bool canSet,string targetToken) {
+            object dev=Activator.CreateInstance(devType);
+            devType.GetField("Id").SetValue(dev,"device-000000000000000000000001");
+            devType.GetField("Name").SetValue(dev,"Fixture Mouse");
+            devType.GetField("Kind").SetValue(dev,"mouse");
+            devType.GetField("Provider").SetValue(dev,provider);
+            devType.GetField("ModelSource").SetValue(dev,modelSource);
+            devType.GetField("Online").SetValue(dev,true);
+            devType.GetField("Fresh").SetValue(dev,true);
+            devType.GetField("ConnectionState").SetValue(dev,"connected");
+            object dpi=Activator.CreateInstance(dpiType);
+            dpiType.GetField("Supported").SetValue(dpi,true);
+            dpiType.GetField("CanSet").SetValue(dpi,canSet);
+            dpiType.GetField("Current").SetValue(dpi,(int?)1600);
+            dpiType.GetField("Stages").SetValue(dpi,new[]{400,800,1600,3200});
+            dpiType.GetField("StageSource").SetValue(dpi,stageSource);
+            dpiType.GetField("CheckedAtUtc").SetValue(dpi,now);
+            dpiType.GetField("TargetToken").SetValue(dpi,targetToken);
+            dpiType.GetField("Error").SetValue(dpi,null);
+            devType.GetField("Dpi").SetValue(dev,dpi);
+            return dev;
+        };
+        Func<object,string,bool> checkCanWrite=delegate(object dev,string tok) {
+            object dpi=devType.GetField("Dpi").GetValue(dev);
+            return (bool)canWrite.Invoke(dpi,new[]{dev,tok});
+        };
+        foreach(string provider in new[]{"logitech","razer","mchose","asus","asus_omni","lamzu","gwolves"}) {
+            Assert(checkCanWrite(makeDevice(provider,"onboard",null,true,token),token),provider+" onboard CanWrite allowed");
+            Assert(checkCanWrite(makeDevice(provider,"quick",null,true,token),token),provider+" quick CanWrite allowed");
+        }
+        foreach(string provider in new[]{"pulsar","families"}) {
+            Assert(checkCanWrite(makeDevice(provider,"onboard",null,true,token),token),provider+" onboard CanWrite allowed");
+            Assert(!checkCanWrite(makeDevice(provider,"quick",null,true,token),token),provider+" quick CanWrite rejected");
+        }
+        foreach(string forbidden in new[]{"bluetooth","standard_hid","xinput","unknown",""}) {
+            Assert(!checkCanWrite(makeDevice(forbidden,"onboard",null,true,token),token),"forbidden provider '"+forbidden+"' onboard rejected");
+            Assert(!checkCanWrite(makeDevice(forbidden,"quick",null,true,token),token),"forbidden provider '"+forbidden+"' quick rejected");
+        }
+        foreach(string provider in new[]{"logitech","pulsar","razer","mchose","families"}) {
+            Assert(!checkCanWrite(makeDevice(provider,"onboard","pack",true,token),token),provider+" pack modelSource CanWrite rejected");
+        }
+        object readOnlyDev=makeDevice("logitech","onboard",null,false,null);
+        Assert(!checkCanWrite(readOnlyDev,null)&&!checkCanWrite(readOnlyDev,token),"read-only GPW3 0x8100 CanWrite rejected");
+        Assert((int)dpiStageCount.Invoke(null,new[]{readOnlyDev})==4,"read-only DPI retains onboard stage count");
+        Assert((bool)dpiFresh.Invoke(null,new[]{readOnlyDev}),"read-only live DPI is fresh without targetToken");
+        Assert((string)dpiSubtitle.Invoke(null,new object[]{readOnlyDev,null,null})=="DPI · 1600","read-only live DPI subtitle displays current value without stale or error marker");
+        string roJson="{\"schema\":2,\"requestId\":1,\"generation\":1,\"complete\":true,\"devices\":[{\"id\":\"device-000000000000000000000001\",\"name\":\"PRO X SUPERLIGHT 2\",\"kind\":\"mouse\",\"provider\":\"logitech\",\"percent\":85,\"fresh\":true,\"online\":true,\"connectionState\":\"connected\",\"confirmedAtUtc\":\""+now+"\",\"dpi\":{\"supported\":true,\"canSet\":false,\"current\":1600,\"stages\":[400,800,1600,3200],\"stageSource\":\"onboard\",\"checkedAtUtc\":\""+now+"\",\"targetToken\":null,\"error\":null}}]}";
+        object snap=parse.Invoke(null,new object[]{roJson});
+        Array parsedDevs=(Array)snap.GetType().GetField("Devices").GetValue(snap);
+        object parsedRo=parsedDevs.GetValue(0);
+        object parsedRoDpi=devType.GetField("Dpi").GetValue(parsedRo);
+        Assert((bool)dpiType.GetField("Supported").GetValue(parsedRoDpi)&&!(bool)dpiType.GetField("CanSet").GetValue(parsedRoDpi)&&dpiType.GetField("TargetToken").GetValue(parsedRoDpi)==null,"parsed read-only DPI keeps Supported=true and CanSet=false");
+        Assert((bool)dpiFresh.Invoke(null,new[]{parsedRo})&&(string)dpiSubtitle.Invoke(null,new object[]{parsedRo,null,null})=="DPI · 1600","parsed read-only DPI renders fresh current DPI subtitle");
+        dpiType.GetField("CheckedAtUtc").SetValue(parsedRoDpi,DateTime.UtcNow.AddSeconds(-95).ToString("o"));
+        Assert(!(bool)dpiFresh.Invoke(null,new[]{parsedRo})&&(string)dpiSubtitle.Invoke(null,new object[]{parsedRo,null,null})=="DPI · 上次 1600","stale read-only DPI falls back to historical subtitle");
+    }
     static byte[] Response(int pct,int charge) {
         var b=MouseBattery.QueryPacket(4,17);b[6]=(byte)pct;b[7]=(byte)charge;b[8]=0x0f;b[9]=0xa0;
         int sum=0;for(int i=0;i<16;i++)sum+=b[i];b[16]=(byte)((0x55-sum)&255);return b;
@@ -74,6 +151,7 @@ static class Tests {
             MustFail(delegate{MouseBattery.ValidateActiveDpiIndex(0,0);},"reject invalid stage count before write");
             MustFail(delegate{MouseBattery.SetActiveDpiStage(-1);},"public switch rejects negative index before HID access");
             MustFail(delegate{MouseBattery.SetActiveDpiStage(8);},"public switch rejects oversized index before HID access");
+            RunWirelessDpiTests();
             Console.WriteLine("PASS "+passed+" offline tests; no HID device opened");return 0;
         }catch(Exception e){Console.Error.WriteLine(e.Message);return 1;}
     }

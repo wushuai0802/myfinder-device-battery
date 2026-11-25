@@ -145,7 +145,10 @@ class RazerForeignRecoveryTests(unittest.TestCase):
             opened, sent = len(bus.opens), len(bus.requests)
             self.assertTrue(provider.poll()[0].online)
             self.assertEqual(bus.opens[opened:], [b"b"])
-            self.assertEqual(len(bus.requests) - sent, 2)
+            new_reqs = bus.requests[sent:]
+            self.assertEqual([(r[6], r[7]) for r in new_reqs[:2]],
+                             [(7, 0x80), (7, 0x84)])
+            self.assertTrue(all((r[6], r[7]) == (0x04, 0x85) for r in new_reqs[2:]))
             self.assertEqual((provider._foreign, provider._rediscovery, provider._failing), ({}, {}, {}))
 
     def test_persistent_foreign_reaches_next_existing_tid(self):
@@ -197,7 +200,9 @@ class RazerForeignRecoveryTests(unittest.TestCase):
                 status, = provider.poll()
                 self.assertEqual((status.level, status.charging, status.online), (71, True, True))
                 self.assertEqual(bus.opens[opened:], [b"a"])
-                self.assertEqual([r[7] for r in bus.requests[sent:]], [0x80, 0x84])
+                reqs = [(r[6], r[7]) for r in bus.requests[sent:]]
+                self.assertEqual(reqs[:2], [(7, 0x80), (7, 0x84)])
+                self.assertTrue(all(cmd == (0x04, 0x85) for cmd in reqs[2:]))
             modes[b"a"] = "foreign_reply"
             for _ in range(2):
                 opened = len(bus.opens)
@@ -208,7 +213,9 @@ class RazerForeignRecoveryTests(unittest.TestCase):
             opened, sent = len(bus.opens), len(bus.requests)
             self.assertTrue(provider.poll()[0].online)
             self.assertEqual(bus.opens[opened:], [b"a"])
-            self.assertEqual(len(bus.requests) - sent, 2)
+            reqs = [(r[6], r[7]) for r in bus.requests[sent:]]
+            self.assertEqual(reqs[:2], [(7, 0x80), (7, 0x84)])
+            self.assertTrue(all(cmd == (0x04, 0x85) for cmd in reqs[2:]))
             self.assertEqual((provider._foreign, provider._rediscovery, provider._failing), ({}, {}, {}))
 
     def test_single_interface_recovers_after_bounded_walk(self):
@@ -524,8 +531,9 @@ class RazerUnavailableTests(unittest.TestCase):
                     status, = provider.poll()
                     self.assertEqual((status.level, status.online), (71, True))
                     self.assertEqual(provider.failure_code(), "")
-                    self.assertEqual([(r[1], r[6], r[7]) for r in bus.requests],
-                                     [(0x1F, 7, 0x80), (0x1F, 7, 0x84)])
+                    reqs = [(r[1], r[6], r[7]) for r in bus.requests]
+                    self.assertEqual(reqs[:2], [(0x1F, 7, 0x80), (0x1F, 7, 0x84)])
+                    self.assertTrue(all(cmd[1:] == (0x04, 0x85) for cmd in reqs[2:]))
 
     def test_failure_stages_and_status_codes_for_both_models(self):
         cases = [(s, s) for s in ("open_failed", "send_failed", "get_failed", "short_reply", "foreign_reply")]

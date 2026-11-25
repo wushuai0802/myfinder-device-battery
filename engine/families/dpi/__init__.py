@@ -42,7 +42,9 @@ import json
 from datetime import datetime, timezone
 
 # family id -> adapter module name (families/dpi/<name>.py). Reviewed by Claude per PR.
-ADAPTERS: dict = {}
+ADAPTERS: dict = {
+    "dareu_jm_24g": "dareu_jm_24g",
+}
 
 IDENTITY_KEYS = ("vendor_id", "product_id", "physical_id", "path", "serial_number")
 
