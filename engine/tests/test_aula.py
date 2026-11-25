@@ -259,6 +259,37 @@ class AulaTests(unittest.TestCase):
             self.assertEqual(len({s.key for s in statuses}), 2)
             self.assertEqual(bus.opened, [infos[0]["path"], infos[1]["path"]])
 
+    def test_mini60_he_pro_reads_once_rejects_zero_and_isolates_shared_0c45_fefe(self):
+        mini_entry = entry(K.AulaKeyboardProvider, product_string=K.MINI60_PRODUCT)
+        # Contributor live sample (#901): 76%, byte 26 (payload[18]) = 0x02 ignored.
+        mini_reply = reply(K.AulaKeyboardProvider, level=76, **{"26": 0x02})
+        with fixture(K.AulaKeyboardProvider, [mini_reply], [mini_entry]) as bus:
+            status, = K.AulaKeyboardProvider().poll()
+            self.assertEqual(status.name, "AULA MINI 60 HE PRO")
+            self.assertEqual(status.level, 76)
+            self.assertFalse(status.charging)
+            self.assertFalse(status.charging_known)
+            self.assertEqual(status.verification_level, "C")
+            self.assertEqual(len(bus.writes), 1)
+            self.assertEqual(bus.writes[0][1], list(KEYBOARD_REQUEST))
+        # Silence must NOT repeat write or probe 0xA0.
+        with fixture(K.AulaKeyboardProvider, [], [mini_entry]) as bus:
+            self.assertEqual(K.AulaKeyboardProvider().poll(), [])
+            self.assertEqual(len(bus.writes), 1)
+        # Level 0 (asleep/all-zero payload) must not emit a 0% reading.
+        zero_reply = reply(K.AulaKeyboardProvider, level=0)
+        with fixture(K.AulaKeyboardProvider, [zero_reply], [mini_entry]) as bus:
+            provider = K.AulaKeyboardProvider()
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(len(bus.writes), 1)
+            self.assertIn("device asleep/offline; no new reading; connection unknown",
+                          provider.diagnostics())
+        # Shared 0C45:FEFE belonging to EWEADN X87 ("2.4G Dongle") must never be opened.
+        x87_entry = entry(K.AulaKeyboardProvider, product_string="2.4G Dongle")
+        with fixture(K.AulaKeyboardProvider, [mini_reply], [x87_entry]) as bus:
+            self.assertEqual(K.AulaKeyboardProvider().poll(), [])
+            self.assertEqual((bus.opened, bus.writes), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -720,6 +720,8 @@ def discover(paths, excluded=(), *, full=False):
                     (0x0C45, 0xFEFE, 0xFF60, 0x0061)):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))
+                if (attrs.vendor, attrs.product) == (0x0C45, 0xFEFE) and info.get("product_string") == "MINI 60 HE PRO Dongle":
+                    _descriptor_fallback(info, caps, ("input", "output"))
                 caps_complete = all(info.get(key) is not None
                                     for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete
