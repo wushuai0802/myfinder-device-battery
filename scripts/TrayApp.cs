@@ -1119,12 +1119,12 @@ namespace AtkBatteryTray {
             var unused=dispatch.Handle;
             var menu=new ContextMenuStrip();
             var detail=new ToolStripMenuItem("设备电量与音频");detail.Click+=delegate {ShowDetails();};menu.Items.Add(detail);
-            var controlCenterItem=new ToolStripMenuItem("控制中心…");controlCenterItem.Click+=delegate {ShowControlCenter();};menu.Items.Add(controlCenterItem);
+            var controlCenterItem=new ToolStripMenuItem("控制中心");controlCenterItem.Click+=delegate {ShowControlCenter();};menu.Items.Add(controlCenterItem);
             var update=new ToolStripMenuItem("\u5237\u65b0");update.Click+=delegate {RefreshBattery();};menu.Items.Add(update);
             menu.Items.Add(audioSettingsMenu);menu.Opening+=delegate {BuildAudioSettingsMenu();};
-            var settingsItem=new ToolStripMenuItem("设置…");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
-            var checkUpdates=new ToolStripMenuItem("检查更新…");checkUpdates.Click+=delegate{if(UpdateAvailable)OpenUpdate();else CheckUpdates();};menu.Items.Add(checkUpdates);
-            menu.Opening+=delegate{checkUpdates.Text=UpdateAvailable?"查看新版本 "+updates.Version+"…":"检查更新…";};
+            var settingsItem=new ToolStripMenuItem("设置");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
+            var checkUpdates=new ToolStripMenuItem("检查更新");checkUpdates.Click+=delegate{if(UpdateAvailable)OpenUpdate();else CheckUpdates();};menu.Items.Add(checkUpdates);
+            menu.Opening+=delegate{checkUpdates.Text=UpdateAvailable?"查看新版本 "+updates.Version:"检查更新";};
             var myFeedback=new ToolStripMenuItem("我的反馈");myFeedback.Click+=delegate{OpenMyFeedback();};menu.Items.Add(myFeedback);
             menu.Opening+=delegate{myFeedback.Text=FeedbackReplies.Store.MenuText;};
             menu.Items.Add(new ToolStripSeparator());

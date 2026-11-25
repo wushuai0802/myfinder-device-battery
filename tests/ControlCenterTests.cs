@@ -296,14 +296,14 @@ static class ControlCenterTests {
             using (var f = new Fixture("graphite", theme)) {
                 var menu = new ContextMenuStrip();
                 menu.Items.Add("设备电量与音频");
-                menu.Items.Add("控制中心...");
+                menu.Items.Add("控制中心");
                 var refreshItem = new ToolStripMenuItem("刷新");
                 menu.Items.Add(refreshItem);
                 var audioSub = new ToolStripMenuItem("音源设置");
                 audioSub.DropDownItems.Add(new ToolStripMenuItem("主音箱") { Checked = true });
                 menu.Items.Add(audioSub);
-                menu.Items.Add("设置...");
-                menu.Items.Add("检查更新...");
+                menu.Items.Add("设置");
+                menu.Items.Add("检查更新");
                 menu.Items.Add("我的反馈");
                 menu.Items.Add(new ToolStripSeparator());
                 menu.Items.Add("退出");

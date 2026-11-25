@@ -747,7 +747,7 @@ namespace AtkBatteryTray {
                 menu.Items.Add(topMost);
 
                 menu.Items.Add(new ToolStripSeparator());
-                var openCc = new ToolStripMenuItem("打开控制中心…");
+                var openCc = new ToolStripMenuItem("打开控制中心");
                 openCc.Click += delegate { owner.ShowControlCenter(ControlCenterPage.Placement); };
                 menu.Items.Add(openCc);
 
