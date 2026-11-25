@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.4.0**（正式版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.4.1-beta.1**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.4.1-beta.1 新增雷柏 VT9 PRO 双 8K（`24AE:1221`）与 VT9 PRO（`24AE:1205` / `4405`）C 级纯只读电量读取候选，面向全品牌鼠标大幅扩展 DPI 读取与档位切换候选（罗技 HID++ 2.0 `0x2201` 全系与 GPW3 `0x8100` 只读 #1052、雷蛇 64 款 90B #558 与毒蝰 V4 Pro #872、CompX 系 139 款、迈从 V2 & A5 Gen1、ROG Harpe Ace、WLmouse #405、Lamzu Maya X、G-Wolves 与达尔优 2.4G `260D:1156`，均为 C 级待实机验证），并同步打磨 WinForms 视觉层级与弹窗品牌图标、新增任务栏电量浮层第三方插件自动避让与鼠标水平拖动，以及修复全屏与无边框游戏时未自动隐藏的问题。
 
 1.4.0 正式版汇总了 1.4.0-beta.1 至 beta.7 与随后合入的社区硬件适配（含 ATK 8K dongle-M1、WOB Rainy75 V2、小米无线鼠标 4 Pro、狼蛛 MINI 60 HE PRO、ROG 游侠 2 96 无线、VGN 蜻蜓 F3 MasterGT、怒喵 AM Infinity .97、北通鲲鹏系列手柄、瓦尔基里 VK 系列、罗技 PRO X3 SUPERSTRIKE、雷蛇 BlackShark V2/V3 等，新增设备均为 C 级待实机验证），并带来全新「控制中心」、石墨主题、支持弹性贴边隐藏的桌面电量小组件、实验性任务栏电量浮层、本地只读 API、程序内反馈附带图片（自动去 EXIF），以及实验性自动识别/单设备停读控制与关机弹窗（#1085）/配置回退（#1023）修复。完整说明见 [更新日志](CHANGELOG.md)。
 
