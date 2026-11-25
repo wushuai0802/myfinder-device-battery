@@ -45,6 +45,7 @@ class RapooMT560Provider(RapooProvider):
     input_id = INPUT_ID
     minimum_input_length = 7
     parse_input = staticmethod(parse_battery)
+    parse_dpi_value = None
 
     def _inventory_safe(self, inventory):
         # An unparented duplicate cannot safely be assigned to another receiver.

@@ -374,6 +374,26 @@ class RapooTests(unittest.TestCase):
             self.assertEqual(provider.diagnostics(), ["opened; no input reports; no new measurement"])
             self.assertEqual(len(bus.opened), 2)
 
+    def test_vt3_1412_passive_readonly_dpi_from_real_capture(self):
+        # Exact #120 capture: 07 10 01 40 06 40 06 01 44 ... -> 68% battery, 1600 DPI (0x0640)
+        frame = [0x07, 0x10, 0x01, 0x40, 0x06, 0x40, 0x06, 0x01, 0x44] + [0] * 10
+        self.assertEqual(R.parse_dpi(frame), 1600)
+        self.assertIsNone(R.parse_dpi([0x07, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x44] + [0] * 10))
+        with fixture([frame], inventory=[descriptor(pid=0x1412)]) as bus:
+            provider = R.RapooProvider()
+            self.addCleanup(provider.close)
+            statuses = provider.poll()
+        self.assertEqual(len(statuses), 1)
+        self.assertEqual(statuses[0].level, 68)
+        self.assertEqual(statuses[0].dpi["current"], 1600)
+        self.assertFalse(statuses[0].dpi["canSet"])
+        self.assertNotIn("rapoo", server.DPI_PROVIDERS)
+        normalised = server.normalise(statuses[0], None, "2026-11-25T13:15:00.000Z")
+        self.assertEqual(normalised["dpi"]["current"], 1600)
+        self.assertFalse(normalised["dpi"]["canSet"])
+        self.assertIsNone(normalised["dpi"]["targetToken"])
+        self.assertEqual(bus.forbidden, [])
+
     def test_provider_has_only_open_read_close_device_operations(self):
         tree = ast.parse(Path(R.__file__).read_text(encoding="utf-8"))
         calls = {node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call)
