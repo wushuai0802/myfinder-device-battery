@@ -595,6 +595,28 @@ def discover(paths, excluded=(), *, full=False):
                     info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
                     _descriptor_fallback(info, caps, ("input",))
                     caps_complete = bool(info["input_report_sizes"] and "187" in info["input_report_sizes"])
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x0951, 0x16EA, 0xFF13, 0x0001):
+                # HyperX Cloud Flight S: prove Output 06 and Input 0B/06 before querying.
+                from battery_hid import byte_report_sizes
+                info.update(input_report_sizes=byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True),
+                            output_report_sizes=byte_report_sizes(hid, data, caps, 1, allow_fixed_usage=True))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = bool(
+                    info["output_report_sizes"] and "6" in info["output_report_sizes"]
+                    and info["input_report_sizes"]
+                    and ("11" in info["input_report_sizes"] or "6" in info["input_report_sizes"]))
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x046A, 0x0133, 0xFF10, 0x0001):
+                # CHERRY MW5500: prove Feature 00 (9B) and Input 00 before querying.
+                from battery_hid import byte_report_sizes
+                info.update(feature_report_length=caps.feature,
+                            feature_report_sizes=byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True),
+                            input_report_sizes=byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True))
+                _descriptor_fallback(info, caps, ("feature", "input"))
+                caps_complete = bool(
+                    info["feature_report_sizes"] and "0" in info["feature_report_sizes"]
+                    and info["input_report_sizes"] and "0" in info["input_report_sizes"])
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x36B0, 0x3071, 0xFF60, 0x0061),
                     (0x36B0, 0x3075, 0xFF60, 0x0061)):

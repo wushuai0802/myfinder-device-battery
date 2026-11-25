@@ -132,6 +132,21 @@ def parse_battery(raw):
     return raw[8], state in (2, 3), state in (1, 2, 3)
 
 
+def parse_dpi(raw):
+    """Extract passive current X DPI from Report 07 bytes 3..4 (little-endian).
+
+    Matches official A HUB dy(n) `xCpiVal = kc(n, 2)` after stripping report ID
+    (verified against #120 real capture: 07 10 01 40 06 40 06 01 44 -> 1600 DPI).
+    Zero or out-of-range values yield None (read-only passive display only).
+    """
+    if len(raw) < 9 or raw[0] != INPUT_ID:
+        return None
+    if any(type(b) is not int or not 0 <= b <= 255 for b in raw[3:5]):
+        return None
+    x_dpi = raw[3] | (raw[4] << 8)
+    return x_dpi if 50 <= x_dpi <= 45000 else None
+
+
 class RapooProvider(Provider):
     name = "rapoo"
     product_ids = PIDS
@@ -139,6 +154,7 @@ class RapooProvider(Provider):
     input_id = INPUT_ID
     minimum_input_length = 9
     parse_input = staticmethod(parse_battery)
+    parse_dpi_value = staticmethod(parse_dpi)
 
     def __init__(self):
         self._diag = []
@@ -188,6 +204,13 @@ class RapooProvider(Provider):
             self._diag.append(f"opened; no valid report {self.input_id:02X}; seen=" + summary
                               + (",..." if len(seen) > 6 else "") + report_proof_summary(info, "input"))
 
+    def _decode_frame(self, raw):
+        parsed = self.parse_input(raw)
+        if parsed is None:
+            return None
+        dpi = self.parse_dpi_value(raw) if self.parse_dpi_value is not None else None
+        return parsed[0], parsed[1], parsed[2], dpi
+
     def _drain(self, dev, info):
         """Newest valid battery report already queued on a handle kept open."""
         newest = None
@@ -198,7 +221,7 @@ class RapooProvider(Provider):
             self._observe_input(info, raw)
             if raw[0] != self.input_id or len(raw) != info["input_report_sizes"][str(self.input_id)]:
                 continue
-            parsed = self.parse_input(raw)
+            parsed = self._decode_frame(raw)
             if parsed is not None:
                 newest = parsed
                 self._seen_inputs.pop(info["path"], None)
@@ -239,7 +262,7 @@ class RapooProvider(Provider):
             self._observe_input(info, raw)
             if raw[0] != self.input_id or len(raw) != info["input_report_sizes"][str(self.input_id)]:
                 continue
-            parsed = self.parse_input(raw)
+            parsed = self._decode_frame(raw)
             if parsed is not None:
                 self._seen_inputs.pop(info["path"], None)
                 return parsed
@@ -304,14 +327,23 @@ class RapooProvider(Provider):
                                       + report_proof_summary(info, "input"))
                     self._release(physical)
             if reading is not None:
-                level, charging, charging_known = reading
+                level, charging, charging_known, dpi = reading
                 received = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                dpi_info = ({
+                    "supported": True,
+                    "canSet": False,
+                    "current": dpi,
+                    "stages": [dpi],
+                    "stageSource": "onboard",
+                    "checkedAtUtc": received,
+                } if dpi is not None else None)
                 status = DeviceStatus(
                     f"{self.name}:{physical}", self.product_ids[info["product_id"]],
                     level, charging, True, self.name, kind="mouse",
                     physical_id=physical, connection_known=True,
                     charging_known=charging_known, verification_level="C",
-                    measured_at_utc=received, queried_at_utc=received)
+                    measured_at_utc=received, queried_at_utc=received,
+                    dpi=dpi_info)
                 self._last[physical] = status
                 found.add(physical)
                 result.append(status)

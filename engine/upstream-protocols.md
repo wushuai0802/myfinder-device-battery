@@ -4667,3 +4667,33 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - Scope exclusions:
   - Unverified older VT9 PIDs (`24AE:1601`, `24AE:185A`, `24AE:1849`) remain excluded; `24AE:1601` stays Grade D `observedUnsupported`.
   - No DPI support in `rapoo_vt9` (`DPI_PROVIDERS` does not include `rapoo_vt9`).
+
+
+## HyperX Cloud Flight S (0951:16EA)
+
+- Verification grade: **C** (pending owner hardware confirmation; Issue `#1130` diagnostic `0951:16EA "HyperX Cloud Flight S" 000C:0001 000C:0001 FF13:0001`).
+- Corroborated independent open-source protocol references:
+  - `TERABAYTYCH/hyperx-cloud-flight-s-macos` (`42a73a93c0880f53738048da0e6070eb72cca40b`, `Sources/HeadsetMonitor.swift`)
+  - `CubE135/hyperx-cloud-flight-s-battery-monitor` (`e2271dff2cc78006f509aebee6e0f65281e23f82`, `src/assets/js/classes/HyperX.js`)
+  - `TheRealRazbi/hyperx-cloud-flight-s-battery-icon` (`cfddb9c30031e86b5ab5e78ff7d536728304dc90`, `headset_interface.py`)
+- Bounded query (`engine/providers/hyperx_flight_s.py`):
+  - Exact `0951:16EA` under resolved USB parent, unique `(0xFF13, 0x0001)` collection, runtime-proven Output report `06` (`>= 16` bytes) and Input report `0B` or `06` (`>= 8` bytes).
+  - Sends only `06 00 02 00 9A 00 00 68 4A 8E 0A 00 00 00 BB 02` zero-padded to proven Output length.
+  - Parses replies where `raw[0] in (0x0B, 0x06)`, `raw[3] == 0x02`, `(raw[5], raw[6]) != (0, 0)`, `0 <= raw[7] <= 100`, suppressing `level == 0` when voltage `>= 3500 mV` (startup glitch), and treating `raw[3] == 0x01, raw[4] == 0x03` as power-off (`no reading`). Charging stays unknown; EQ/button/mic/7.1 packets are never sent.
+
+
+## CHERRY MW5500 (046A:0133)
+
+- Verification grade: **C** (pending owner hardware confirmation; Issue `#131` diagnostic `046A:0133 "MW5500 Dongle" FF00:0001 FF10:0001 FF11:0001 FFAA:0001`).
+- Source: static extraction of CHERRY official web driver `https://utilitywebmw5500.cherry.cn/_next/static/chunks/app/page-2d87df2859342c64.js` (`getParam1Info`, `webhid_send_report2`, `loadMouseData`).
+- Bounded query (`engine/providers/cherry_mw5500.py`):
+  - Exact `046A:0133` under resolved USB parent, unique `(0xFF10, 0x0001)` collection, runtime-proven unnumbered Feature report `0` (`9` bytes) and unnumbered Input report `0` (`>= 10` bytes incl. Windows report-ID slot).
+  - Sends only 9-byte Feature query `[0x00, 0x82, 0, 0, 0, 0, 0, 0, 0]` (`getParam1Info`) and reads one bounded Input reply (`input_report_length - 1` bytes).
+  - Decodes `batt_byte = raw[8]`, `level = batt_byte & 0x7F` (`1..100`), `charging = bool(batt_byte & 0x80)`. Rejects zero/echo/out-of-range frames. No DPI, LED, macro, pairing, or configuration writes.
+
+
+## Rapoo VT nrf54L passive read-only DPI (24AE:1412 & listed wireless IDs)
+
+- Source: `.ai/evidence/rapoohub/index-cgGQw9wn.js` (`dy(n)` offset `227909`: `xCpiVal = kc(n, 2)` after report ID `07`) and real Issue `#120` capture `07 10 01 40 06 40 06 01 44 ...` (`0x0640 = 1600 DPI`).
+- `engine/providers/rapoo.py` decodes current X DPI passively from `Report 07` bytes `3..4` (50..45000) and exposes it with `canSet = False` (`rapoo` stays excluded from `server.DPI_PROVIDERS`, strictly zero writes).
+- Active EEPROM DPI stage switching (`Output 06 / Feature 08`, `write_eeprom 0xA5`) from A HUB remains disabled until real `24AE:1412` HID descriptor proof is captured for those reports (requested on `#1138`).
