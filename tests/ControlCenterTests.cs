@@ -244,6 +244,26 @@ static class ControlCenterTests {
                 Application.DoEvents();
             }
         }
+        // Also verify single-device wide grid card preview in light ocean theme
+        using (var f = new Fixture("ocean", "light")) {
+            f.Owner.WirelessDevices = new WirelessDevice[0];
+            f.Owner.Audio = null;
+            var p = DeviceSettings.Current;
+            p.PanelLayout = "grid";
+            f.Owner.SavePreferences(p);
+            f.Owner.ShowControlCenter(ControlCenterPage.Appearance);
+            var form = f.Owner.ActiveControlCenter;
+            form.Size = new Size(1040, 680);
+            Application.DoEvents();
+            using (var bmp = new Bitmap(form.Width, form.Height)) {
+                form.DrawToBitmap(bmp, new Rectangle(0, 0, form.Width, form.Height));
+                string file = Path.Combine(shotDir, "cc-ocean-light-appearance-grid.png");
+                bmp.Save(file, ImageFormat.Png);
+                Check(File.Exists(file) && new FileInfo(file).Length > 1000, "rendered ocean light wide-grid appearance screenshot");
+            }
+            form.Close();
+            Application.DoEvents();
+        }
     }
 
     [STAThread]

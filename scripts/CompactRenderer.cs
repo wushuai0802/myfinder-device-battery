@@ -469,9 +469,21 @@ namespace AtkBatteryTray {
             var focus=surface;focus.Inflate(-2,-2);
             InteractionLayout.Paint(g,tile,tile,action,feedback,dark,false,delegate{
                 string icon=card.Kind=="keyboard"?"keyboard":card.Kind=="headset"?"headset":card.Kind=="mouse"?"mouse":card.Kind=="gamepad"?"gamepad":"info";
-                DrawSymbol(g,icon,GridLayout.Icon(tile),sleeping?palette.Tertiary:Muted(dark));
-                var number=GridNumber(g,card,dark,true);var name=GridLayout.Name(tile);if(tile.Width>GridLayout.TileWidth)name.Width=Math.Max(1,Math.Min(name.Right,number.Left-6)-name.Left);
-                DrawLabel(g,card.Name,name,VisualDesign.LargeFont?13:11,false,Muted(dark),StringAlignment.Near);
+                bool wide=tile.Width>GridLayout.TileWidth;
+                if(wide&&!VisualDesign.HighContrast){Fill(g,GridLayout.WideIconTile(tile),palette.RaisedSurface,8f);}
+                DrawSymbol(g,icon,GridLayout.Icon(tile),sleeping?palette.Tertiary:(wide?Fg(dark):Muted(dark)));
+                var number=GridNumber(g,card,dark,true);var name=GridLayout.Name(tile);if(wide)name.Width=Math.Max(1,Math.Min(name.Right,number.Left-6)-name.Left);
+                DrawLabel(g,card.Name,name,wide?(VisualDesign.LargeFont?15:13.5f):(VisualDesign.LargeFont?13:11),wide,wide?Fg(dark):Muted(dark),StringAlignment.Near);
+                if(wide){
+                    string sub=card.Subtitle;
+                    if(String.IsNullOrEmpty(sub)){
+                        string kindCn=GridLayout.KindName(card.Kind);
+                        string transport=card.NativeMouse||card.NativeHeadset?"2.4 GHz":(card.Device!=null&&!String.IsNullOrEmpty(card.Device.Transport)?card.Device.Transport:"无线连接");
+                        sub=sleeping?kindCn+" · 休眠中":(view!=null&&view.Fresh?kindCn+" · "+transport:(view!=null&&view.Percent.HasValue?"上次确认 "+view.TimeText:kindCn+" · "+transport));
+                    }
+                    var subRect=GridLayout.WideSubtitle(tile,number.Left-6);
+                    if(subRect.Width>20)DrawLabel(g,sub,subRect,VisualDesign.LargeFont?12:11,false,Muted(dark),StringAlignment.Near);
+                }
                 if(!String.IsNullOrEmpty(status)){var tag=GridLayout.Tag(tile,status);Color ink=status=="充电"?palette.Charging:status=="电量低"?ThemePalette.LevelColor(0,dark):Muted(dark);Fill(g,tag,palette.StatusFill(ink),tag.Height/2);DrawLabel(g,status,tag,VisualDesign.LargeFont?11:10,false,ink,StringAlignment.Center);}
                 if(reveal)DrawSymbol(g,"chevron",GridLayout.Chevron(tile,status),Muted(dark));
                 var bar=GridLayout.Bar(tile);if(VisualDesign.HighContrast){using(var path=VisualDesign.RoundRect(bar.X+.5f,bar.Y+.5f,bar.Width-1,bar.Height-1,2))using(var pen=new Pen(Fg(dark),1))g.DrawPath(pen,path);}else Fill(g,bar,Track(dark),2);

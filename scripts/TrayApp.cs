@@ -1129,6 +1129,7 @@ namespace AtkBatteryTray {
             menu.Opening+=delegate{myFeedback.Text=FeedbackReplies.Store.MenuText;};
             menu.Items.Add(new ToolStripSeparator());
             var exit=new ToolStripMenuItem("\u9000\u51fa");exit.Click+=delegate {ExitThread();};menu.Items.Add(exit);
+            ThemedContextMenu.Apply(menu);
             ConfigureTrayIcon(tray,menu);
             trayIcons=new TrayIconSet(new NativeTrayIcon(tray,diagnostics),delegate(string id){var extra=new NotifyIcon();ConfigureTrayIcon(extra,menu);return new NativeTrayIcon(extra,diagnostics);});
             if(diagnostics&&DeviceSettings.Current.RememberReadings)ReadingCache.Load(Path.Combine(DeviceSettings.DataDirectory,"readings-cache.json"),out LastGood,out lastKnownHeadset);

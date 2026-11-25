@@ -375,6 +375,7 @@ namespace AtkBatteryTray {
         }
 
         void BuildContextMenu() {
+            ThemedContextMenu.Apply(contextMenu);
             var openPanel = new ToolStripMenuItem("打开设备电量面板");
             openPanel.Click += delegate { if (owner != null) owner.ShowDetailsFromOverlay(); };
             var openCc = new ToolStripMenuItem("打开控制中心 → 显示位置");

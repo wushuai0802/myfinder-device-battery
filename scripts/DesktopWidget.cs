@@ -423,6 +423,7 @@ namespace AtkBatteryTray {
         internal Size LogicalSize { get { return logicalSize; } }
 
         void BuildContextMenu() {
+            ThemedContextMenu.Apply(menu);
             menu.Opening += delegate {
                 menu.Items.Clear();
                 var cfg = DeviceSettings.Current.DesktopWidget;

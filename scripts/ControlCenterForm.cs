@@ -187,41 +187,46 @@ namespace AtkBatteryTray {
         }
     }
 
-    // Rounded Fluent/Linear surface card without jagged Region clipping.
+    // Rounded Fluent/Linear surface card without jagged Region clipping or AntiAlias edge artifacts.
     internal sealed class ControlCenterCard : Panel {
-        ThemePalette palette;
-        bool dark;
+        readonly ThemePalette palette;
+        readonly bool dark;
 
         internal ControlCenterCard(ThemePalette palette, bool dark, Padding padding) {
             this.palette = palette;
             this.dark = dark;
             AutoSize = true;
             AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            Padding = new Padding(padding.Left + 1, padding.Top + 1, padding.Right + 1, padding.Bottom + 1);
+            Padding = new Padding(padding.Left + 2, padding.Top + 2, padding.Right + 2, padding.Bottom + 2);
             BackColor = VisualDesign.HighContrast ? SystemColors.Window : palette.Card;
             ForeColor = palette.Foreground;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         }
 
         protected override void OnPaintBackground(PaintEventArgs e) {
-            var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            Color outerBg = Parent != null ? Parent.BackColor : palette.WindowBackground;
-            using (var outerBrush = new SolidBrush(outerBg)) g.FillRectangle(outerBrush, ClientRectangle);
+            // Paint entire background cleanly inside OnPaint using g.Clear() first to avoid GDI+ AntiAlias edge bleed.
+        }
 
-            var rect = new RectangleF(0.5f, 0.5f, Math.Max(4, Width - 1f), Math.Max(4, Height - 1f));
+        protected override void OnPaint(PaintEventArgs e) {
+            var g = e.Graphics;
+            Color outerBg = Parent != null ? Parent.BackColor : palette.WindowBackground;
+            g.Clear(outerBg);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+            var rect = new RectangleF(1f, 1f, Math.Max(4f, Width - 2f), Math.Max(4f, Height - 2f));
             Color fill = VisualDesign.HighContrast ? SystemColors.Window : palette.Card;
             CompactRenderer.Fill(g, rect, fill, ControlCenterTokens.RadiusCard);
 
             if (!VisualDesign.HighContrast && dark) {
-                // Subtle top inner rim highlight for depth on dark surfaces
                 using (var rimPen = new Pen(Color.FromArgb(18, 255, 255, 255), 1f)) {
                     g.DrawLine(rimPen, rect.Left + ControlCenterTokens.RadiusCard, rect.Top + 1f, rect.Right - ControlCenterTokens.RadiusCard, rect.Top + 1f);
                 }
             }
 
+            Color border = VisualDesign.HighContrast ? palette.Foreground : Color.FromArgb(dark ? 185 : 140, palette.Border);
             using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, ControlCenterTokens.RadiusCard))
-            using (var pen = new Pen(VisualDesign.HighContrast ? palette.Foreground : palette.Border, 1f)) {
+            using (var pen = new Pen(border, 1f)) {
                 g.DrawPath(pen, path);
             }
         }
@@ -281,12 +286,12 @@ namespace AtkBatteryTray {
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            g.Clear(hostBg);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
-            DialogPaint.Background(this, e, hostBg);
 
-            var rect = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+            var rect = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
             Color fill, fg, border;
             if (VisualDesign.HighContrast) {
                 fill = pressed || hovered ? SystemColors.Highlight : SystemColors.Window;
@@ -353,19 +358,21 @@ namespace AtkBatteryTray {
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
             BackColor = palette.Card;
 
-            var sz = TextRenderer.MeasureText(Text, font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-            int dotW = showDot ? 11 : 0;
-            Size = new Size(Math.Max(46, sz.Width + dotW + 18), 22);
+            using (var measureFont = new Font(font.FontFamily, font.Size, tone != ControlCenterBadgeTone.Muted ? FontStyle.Bold : FontStyle.Regular, font.Unit)) {
+                var sz = TextRenderer.MeasureText(Text, measureFont, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+                int dotW = showDot ? 12 : 0;
+                Size = new Size(Math.Max(48, sz.Width + dotW + 30), 22);
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            g.Clear(hostBg);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
-            DialogPaint.Background(this, e, hostBg);
 
-            var rect = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+            var rect = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
             Color fill, fg, dotColor;
             if (VisualDesign.HighContrast) {
                 fill = SystemColors.Window;
@@ -399,17 +406,19 @@ namespace AtkBatteryTray {
         }
     }
 
-    // Hybrid owner-drawn rounded TextBox container wrapping a borderless native TextBox for full IME/accessibility.
+    // Hybrid Fluent owner-drawn rounded TextBox container wrapping a borderless native TextBox for full IME/accessibility.
     internal sealed class ControlCenterTextBox : Panel {
         readonly ThemePalette palette;
+        readonly bool dark;
         readonly TextBox inner;
         bool hovered, focused;
 
         internal event EventHandler Committed;
 
-        internal ControlCenterTextBox(string initialText, ThemePalette palette, Font font, int width = 220) {
+        internal ControlCenterTextBox(string initialText, ThemePalette palette, bool dark, Font font, int width = 196) {
             this.palette = palette;
-            Size = new Size(width, ControlCenterTokens.InputHeight);
+            this.dark = dark;
+            Size = new Size(width, 32);
             BackColor = palette.Card;
             Cursor = Cursors.IBeam;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
@@ -418,13 +427,13 @@ namespace AtkBatteryTray {
                 BorderStyle = BorderStyle.None,
                 Text = initialText ?? "",
                 Font = font,
-                BackColor = VisualDesign.HighContrast ? SystemColors.Window : palette.RaisedSurface,
+                BackColor = FieldFill(false),
                 ForeColor = VisualDesign.HighContrast ? SystemColors.WindowText : palette.Foreground,
-                Location = new Point(10, 6),
+                Location = new Point(10, 7),
                 Width = Math.Max(40, width - 20)
             };
-            inner.GotFocus += delegate { focused = true; Invalidate(); };
-            inner.LostFocus += delegate { focused = false; Invalidate(); if (Committed != null) Committed(this, EventArgs.Empty); };
+            inner.GotFocus += delegate { focused = true; SyncInnerBack(); Invalidate(); };
+            inner.LostFocus += delegate { focused = false; SyncInnerBack(); Invalidate(); if (Committed != null) Committed(this, EventArgs.Empty); };
             inner.MouseEnter += delegate { hovered = true; Invalidate(); };
             inner.MouseLeave += delegate { hovered = false; Invalidate(); };
             inner.KeyDown += delegate(object sender, KeyEventArgs e) {
@@ -442,29 +451,51 @@ namespace AtkBatteryTray {
             PositionInner();
         }
 
+        Color FieldFill(bool isFocused) {
+            if (VisualDesign.HighContrast) return SystemColors.Window;
+            if (dark) return isFocused ? ThemePalette.Blend(palette.RaisedSurface, Color.White, 8) : palette.RaisedSurface;
+            return isFocused ? Color.White : palette.WindowBackground;
+        }
+
+        void SyncInnerBack() {
+            Color c = FieldFill(focused);
+            if (inner.BackColor != c) inner.BackColor = c;
+        }
+
         internal string ValueText { get { return inner.Text; } }
         internal TextBox InnerBox { get { return inner; } }
 
         void PositionInner() {
-            int y = Math.Max(4, (Height - inner.Height) / 2);
-            inner.SetBounds(10, y, Math.Max(40, Width - 20), inner.Height);
+            int ih = Math.Max(14, inner.PreferredHeight);
+            int y = Math.Max(4, (Height - ih) / 2);
+            inner.SetBounds(11, y, Math.Max(40, Width - 22), ih);
         }
+
+        protected override void OnPaintBackground(PaintEventArgs e) { }
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
             Color hostBg = Parent != null ? Parent.BackColor : palette.Card;
-            using (var bg = new SolidBrush(hostBg)) g.FillRectangle(bg, ClientRectangle);
+            g.Clear(hostBg);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
-            var rect = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
-            Color fill = VisualDesign.HighContrast ? SystemColors.Window : palette.RaisedSurface;
+            var rect = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
+            Color fill = FieldFill(focused);
             CompactRenderer.Fill(g, rect, fill, ControlCenterTokens.RadiusControl);
 
             Color border = VisualDesign.HighContrast
                 ? (focused ? SystemColors.Highlight : SystemColors.WindowText)
-                : (focused ? palette.Foreground : hovered ? palette.Muted : palette.Border);
+                : (focused ? palette.Selected : hovered ? palette.Muted : Color.FromArgb(dark ? 165 : 140, palette.Border));
             using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, ControlCenterTokens.RadiusControl))
-            using (var pen = new Pen(border, focused ? 1.5f : 1f)) g.DrawPath(pen, path);
+            using (var pen = new Pen(border, focused ? 1.4f : 1f)) g.DrawPath(pen, path);
+
+            // Fluent bottom accent bar when focused
+            if (focused && !VisualDesign.HighContrast) {
+                using (var accentPen = new Pen(palette.Selected, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round }) {
+                    g.DrawLine(accentPen, rect.Left + 5f, rect.Bottom - 0.5f, rect.Right - 5f, rect.Bottom - 0.5f);
+                }
+            }
         }
     }
 
@@ -524,9 +555,9 @@ namespace AtkBatteryTray {
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
             Color hostBg = Parent != null ? Parent.BackColor : BackColor;
-            DialogPaint.Background(this, e, hostBg);
+            g.Clear(hostBg);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             var rect = new RectangleF(1, 1, Math.Max(12, Width - 2), Math.Max(12, Height - 2));
             float radius = rect.Height / 2f;
             Color track = !Enabled ? palette.Track : isChecked ? palette.Selected : palette.Track;
@@ -700,9 +731,9 @@ namespace AtkBatteryTray {
         protected override void OnPaint(PaintEventArgs e) {
             LayoutItems();
             var g = e.Graphics;
+            g.Clear(palette.RailBackground);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            DialogPaint.Background(this, e, palette.RailBackground);
 
             // Right separator hairline
             using (var pen = new Pen(palette.Border, 1)) g.DrawLine(pen, Width - 1, 0, Width - 1, Height);
@@ -921,10 +952,10 @@ namespace AtkBatteryTray {
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
+            g.Clear(BackColor);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            DialogPaint.Background(this, e, BackColor);
-            var card = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
+            var card = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
             Color fill = hovered && !VisualDesign.HighContrast ? hostPalette.RaisedSurface : hostPalette.Card;
             CompactRenderer.Fill(g, card, fill, 8f);
             Color border = selected ? hostPalette.Foreground : hostPalette.Border;
@@ -980,9 +1011,9 @@ namespace AtkBatteryTray {
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
+            g.Clear(palette.WindowBackground);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            DialogPaint.Background(this, e, palette.WindowBackground);
             var layout = WirelessLayout.Build(owner, 0, Math.Max(220, Height - 24));
             var size = layout.Size;
             float availW = Math.Max(100, Width - 18);
@@ -1032,10 +1063,10 @@ namespace AtkBatteryTray {
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
+            g.Clear(palette.Card);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            DialogPaint.Background(this, e, palette.Card);
-            var box = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
+            var box = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
             using (var clip = VisualDesign.RoundRect(box.X, box.Y, box.Width, box.Height, ControlCenterTokens.RadiusCard)) {
                 var state = g.Save();
                 g.SetClip(clip);
@@ -1112,6 +1143,8 @@ namespace AtkBatteryTray {
         readonly ThemePalette palette;
         readonly Font font, boldFont;
         readonly RectangleF[] rects;
+        readonly float[] naturalWidths;
+        readonly int naturalTotalWidth;
         int hovered = -1;
 
         internal ControlCenterSegments(string[] labels, int selectedIndex, Action<int> onSelect, ThemePalette palette, Font font, Font boldFont) {
@@ -1122,21 +1155,54 @@ namespace AtkBatteryTray {
             this.font = font;
             this.boldFont = boldFont;
             this.rects = new RectangleF[labels.Length];
+            this.naturalWidths = new float[labels.Length];
             TabStop = true;
             Cursor = Cursors.Hand;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
             BackColor = palette.Card;
 
-            float x = 3f;
             int h = VisualDesign.LargeFont ? 34 : ControlCenterTokens.ButtonHeight;
+            float sum = 3f;
             for (int i = 0; i < labels.Length; i++) {
                 var sz = TextRenderer.MeasureText(labels[i], boldFont, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-                float w = Math.Max(42f, sz.Width + 20f);
-                rects[i] = new RectangleF(x, 3f, w, h - 6f);
-                x += w + 2f;
+                naturalWidths[i] = Math.Max(40f, sz.Width + 18f);
+                sum += naturalWidths[i] + 2f;
             }
-            Size = new Size((int)Math.Ceiling(x + 1f), h);
+            naturalTotalWidth = (int)Math.Ceiling(sum + 2f);
+            Size = new Size(naturalTotalWidth, h);
+            LayoutSegments();
+        }
+
+        internal int NaturalWidth { get { return naturalTotalWidth; } }
+
+        internal void FitMaxWidth(int maxWidth) {
+            int target = Math.Max(120, Math.Min(naturalTotalWidth, maxWidth));
+            if (Width != target) {
+                Width = target;
+                LayoutSegments();
+                Invalidate();
+            }
+        }
+
+        void LayoutSegments() {
+            float avail = Math.Max(40f, Width - 6f - Math.Max(0, labels.Length - 1) * 2f);
+            float totalNat = 0f;
+            for (int i = 0; i < naturalWidths.Length; i++) totalNat += naturalWidths[i];
+            float scale = totalNat > 0f && avail < totalNat ? (avail / totalNat) : 1f;
+            float x = 3f;
+            float segH = Math.Max(18f, Height - 6f);
+            for (int i = 0; i < labels.Length; i++) {
+                float w = (float)Math.Floor(naturalWidths[i] * scale);
+                if (i == labels.Length - 1 && scale < 1f) w = Math.Max(22f, Width - 3f - x);
+                rects[i] = new RectangleF(x, 3f, Math.Max(22f, w), segH);
+                x += rects[i].Width + 2f;
+            }
+        }
+
+        protected override void OnResize(EventArgs e) {
+            base.OnResize(e);
+            LayoutSegments();
         }
 
         int Hit(Point p) {
@@ -1162,11 +1228,11 @@ namespace AtkBatteryTray {
 
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            g.Clear(hostBg);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
-            DialogPaint.Background(this, e, hostBg);
-            var outer = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
+            var outer = new RectangleF(1f, 1f, Width - 2f, Height - 2f);
             CompactRenderer.Fill(g, outer, palette.RaisedSurface, 7f);
             using (var path = VisualDesign.RoundRect(outer.X, outer.Y, outer.Width, outer.Height, 7f))
             using (var pen = new Pen(palette.Border, 1)) g.DrawPath(pen, path);
@@ -1182,7 +1248,7 @@ namespace AtkBatteryTray {
                     CompactRenderer.Fill(g, r, ThemePalette.Blend(palette.RaisedSurface, overlay, overlay.A), 5f);
                 }
                 Color fg = active ? palette.SelectedForeground : hov ? palette.Foreground : palette.Muted;
-                CompactRenderer.DrawLabel(g, labels[i], r, VisualDesign.LargeFont ? 13f : 12f, active, fg, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, labels[i], r, VisualDesign.LargeFont ? 12.5f : 11.5f, active, fg, StringAlignment.Center);
             }
         }
     }
@@ -1205,6 +1271,7 @@ namespace AtkBatteryTray {
         ControlCenterPage currentPage;
         string selectedDeviceKey;
         int selectedPlacementCard;
+        bool showNoBatteryDevices;
         bool loadingBounds, closing, rebuilding, deferredDataRefresh;
         string lastDataSignature;
 
@@ -1289,7 +1356,7 @@ namespace AtkBatteryTray {
             noticeLabel.ForeColor = palette.Foreground;
             noticeLabel.Font = subFont;
             rail.ApplyTheme(palette, dark);
-            if (IsHandleCreated) ThemedTitleBar.Apply(Handle, dialogTheme);
+            if (IsHandleCreated) ThemedTitleBar.Apply(Handle, dialogTheme, palette.WindowBackground);
         }
 
         internal static Rectangle ClampToWorkArea(Rectangle requested, Rectangle workArea, Size minSize) {
@@ -1336,7 +1403,7 @@ namespace AtkBatteryTray {
 
         protected override void OnHandleCreated(EventArgs e) {
             base.OnHandleCreated(e);
-            ThemedTitleBar.Apply(Handle, dialogTheme);
+            ThemedTitleBar.Apply(Handle, dialogTheme, palette.WindowBackground);
         }
 
         protected override void WndProc(ref Message m) {
@@ -1555,10 +1622,14 @@ namespace AtkBatteryTray {
             }
         }
 
+        Panel CreateSpacer(int height, Color? backColor = null) {
+            return new Panel { Dock = DockStyle.Top, Height = Math.Max(1, height), BackColor = backColor ?? palette.WindowBackground };
+        }
+
         Panel CreatePageRoot(string title, string subtitle = null, Control headerRight = null) {
             var root = new Panel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = palette.WindowBackground };
-            int headH = String.IsNullOrEmpty(subtitle) ? 46 : 62;
-            var head = new Panel { Dock = DockStyle.Top, Height = headH, BackColor = palette.WindowBackground, Margin = new Padding(0, 0, 0, 12) };
+            int headH = String.IsNullOrEmpty(subtitle) ? 54 : 72;
+            var head = new Panel { Dock = DockStyle.Top, Height = headH, BackColor = palette.WindowBackground };
             var lbl = new Label { Text = title, Font = titleFont, ForeColor = palette.Foreground, BackColor = palette.WindowBackground, AutoSize = true, Location = new Point(0, 2) };
             head.Controls.Add(lbl);
             if (!String.IsNullOrEmpty(subtitle)) {
@@ -1592,18 +1663,20 @@ namespace AtkBatteryTray {
             return new ControlCenterCard(palette, dark, pad);
         }
 
-        Panel CreateSettingRow(string title, string subtitle, Control rightControl, bool topBorder) {
+        Panel CreateSettingRow(string title, string subtitle, Control rightControl, bool topBorder, bool preferStacked = false) {
             bool hoveredRow = false;
-            var row = new Panel { Dock = DockStyle.Top, Height = String.IsNullOrEmpty(subtitle) ? 54 : 64, BackColor = palette.Card, Padding = new Padding(0, 6, 0, 6) };
+            int singleRowH = String.IsNullOrEmpty(subtitle) ? 54 : 64;
+            var row = new Panel { Dock = DockStyle.Top, Height = singleRowH, BackColor = palette.Card, Padding = new Padding(0, 6, 0, 6) };
             row.Paint += delegate(object sender, PaintEventArgs e) {
                 var g = e.Graphics;
+                g.Clear(palette.Card);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 if (hoveredRow && !VisualDesign.HighContrast) {
                     CompactRenderer.Fill(g, new RectangleF(4, 2, Math.Max(10, row.Width - 8), Math.Max(10, row.Height - 4)), Color.FromArgb(dark ? 10 : 8, palette.Foreground), 6f);
                 }
                 if (topBorder) {
                     using (var pen = new Pen(Color.FromArgb(dark ? 45 : 35, palette.Border), 1)) {
-                        g.DrawLine(pen, 8, 0, Math.Max(8, row.Width - 8), 0);
+                        g.DrawLine(pen, 10, 0, Math.Max(10, row.Width - 10), 0);
                     }
                 }
             };
@@ -1618,14 +1691,40 @@ namespace AtkBatteryTray {
                 row.Controls.Add(subLbl);
             }
             if (rightControl != null) {
-                rightControl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 row.Controls.Add(rightControl);
+                var segs = rightControl as ControlCenterSegments;
                 Action position = delegate {
-                    int rx = Math.Max(180, row.ClientSize.Width - rightControl.Width - 10);
-                    rightControl.Location = new Point(rx, (row.Height - rightControl.Height) / 2);
-                    int maxTextW = Math.Max(120, rx - 22);
-                    titleLbl.MaximumSize = new Size(maxTextW, 24);
-                    if (subLbl != null) subLbl.MaximumSize = new Size(maxTextW, 20);
+                    int cw = row.ClientSize.Width;
+                    if (cw <= 0) return;
+                    int naturalW = segs != null ? segs.NaturalWidth : rightControl.Width;
+                    bool shouldStack = preferStacked || (cw - naturalW - 28 < 185 && naturalW > 130);
+                    if (shouldStack) {
+                        int maxW = Math.Max(120, cw - 20);
+                        if (segs != null) segs.FitMaxWidth(maxW);
+                        else if (rightControl.Width > maxW) rightControl.Width = maxW;
+                        int ctrlTop = String.IsNullOrEmpty(subtitle) ? 40 : 58;
+                        int desiredH = ctrlTop + rightControl.Height + 12;
+                        if (row.Height != desiredH) row.Height = desiredH;
+                        titleLbl.Location = new Point(10, 10);
+                        titleLbl.MaximumSize = new Size(maxW, 24);
+                        if (subLbl != null) {
+                            subLbl.Location = new Point(10, 32);
+                            subLbl.MaximumSize = new Size(maxW, 20);
+                        }
+                        rightControl.Location = new Point(10, ctrlTop);
+                    } else {
+                        if (segs != null) segs.FitMaxWidth(naturalW);
+                        if (row.Height != singleRowH) row.Height = singleRowH;
+                        titleLbl.Location = new Point(10, String.IsNullOrEmpty(subtitle) ? 17 : 11);
+                        int rx = Math.Max(160, cw - rightControl.Width - 10);
+                        rightControl.Location = new Point(rx, (row.Height - rightControl.Height) / 2);
+                        int maxTextW = Math.Max(110, rx - 22);
+                        titleLbl.MaximumSize = new Size(maxTextW, 24);
+                        if (subLbl != null) {
+                            subLbl.Location = new Point(10, 34);
+                            subLbl.MaximumSize = new Size(maxTextW, 20);
+                        }
+                    }
                 };
                 row.Resize += delegate { position(); };
                 position();
@@ -1700,8 +1799,11 @@ namespace AtkBatteryTray {
                 foreach (var it in supported) left.Controls.Add(CreateDeviceListButton(it, it.Key == selected.Key));
             }
             if (noBat.Count > 0) {
-                left.Controls.Add(CreateGroupHeading("读不到电量 (" + noBat.Count + ")"));
-                foreach (var it in noBat) left.Controls.Add(CreateDeviceListButton(it, it.Key == selected.Key));
+                if (selected.Capability == DeviceBatteryCapability.NoBatteryPlaceholder) showNoBatteryDevices = true;
+                left.Controls.Add(CreateNoBatteryExpander(noBat.Count, showNoBatteryDevices));
+                if (showNoBatteryDevices) {
+                    foreach (var it in noBat) left.Controls.Add(CreateCompactNoBatteryItem(it, it.Key == selected.Key));
+                }
             }
 
             var right = BuildDeviceDetailCard(selected);
@@ -1712,6 +1814,74 @@ namespace AtkBatteryTray {
             root.Controls.Add(split);
             root.Controls.SetChildIndex(split, 0);
             return root;
+        }
+
+        Control CreateNoBatteryExpander(int count, bool expanded) {
+            bool hoveredExp = false;
+            var hdr = new Panel {
+                Width = 278,
+                Height = 32,
+                BackColor = palette.WindowBackground,
+                Margin = new Padding(0, 10, 0, 2),
+                Cursor = Cursors.Hand
+            };
+            hdr.MouseEnter += delegate { hoveredExp = true; hdr.Invalidate(); };
+            hdr.MouseLeave += delegate { hoveredExp = false; hdr.Invalidate(); };
+            hdr.Paint += delegate(object sender, PaintEventArgs e) {
+                var g = e.Graphics;
+                g.Clear(palette.WindowBackground);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                if (hoveredExp && !VisualDesign.HighContrast) {
+                    CompactRenderer.Fill(g, new RectangleF(1f, 2f, hdr.Width - 2f, hdr.Height - 4f), Color.FromArgb(dark ? 12 : 10, palette.Foreground), 6f);
+                }
+                string arrow = expanded ? "▾" : "▸";
+                Color muted = Color.FromArgb(dark ? 175 : 185, palette.Muted);
+                CompactRenderer.DrawLabel(g, arrow + "  其他未读到电量的设备 (" + count + ")", new RectangleF(8, 0, hdr.Width - 16, hdr.Height), 11.5f, false, hoveredExp ? palette.Foreground : muted, StringAlignment.Near);
+            };
+            hdr.Click += delegate {
+                showNoBatteryDevices = !showNoBatteryDevices;
+                RebuildCurrentPage();
+            };
+            return hdr;
+        }
+
+        Control CreateCompactNoBatteryItem(ControlCenterDeviceItem item, bool isSelected) {
+            bool hoveredRow = false;
+            var row = new Panel {
+                Width = 278,
+                Height = 34,
+                BackColor = palette.WindowBackground,
+                Margin = new Padding(0, 0, 0, 2),
+                Cursor = Cursors.Hand
+            };
+            row.MouseEnter += delegate { hoveredRow = true; row.Invalidate(); };
+            row.MouseLeave += delegate { hoveredRow = false; row.Invalidate(); };
+            row.Paint += delegate(object sender, PaintEventArgs e) {
+                var g = e.Graphics;
+                g.Clear(palette.WindowBackground);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                var rect = new RectangleF(1f, 1f, row.Width - 2f, row.Height - 2f);
+                if (isSelected) {
+                    CompactRenderer.Fill(g, rect, palette.Card, 6f);
+                    using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, 6f))
+                    using (var pen = new Pen(palette.Border, 1f)) g.DrawPath(pen, path);
+                } else if (hoveredRow && !VisualDesign.HighContrast) {
+                    CompactRenderer.Fill(g, rect, Color.FromArgb(dark ? 12 : 10, palette.Foreground), 6f);
+                }
+                Color iconColor = Color.FromArgb(dark ? 140 : 155, palette.Muted);
+                CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(item.Kind), new RectangleF(12, 10, 14, 14), iconColor);
+                CompactRenderer.DrawLabel(g, item.Name, new RectangleF(32, 0, 154, row.Height), 11.5f, false, isSelected ? palette.Foreground : palette.Muted, StringAlignment.Near);
+                CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(190, 0, 78, row.Height), 10.5f, false, iconColor, StringAlignment.Far);
+            };
+            row.Click += delegate {
+                if (selectedDeviceKey != item.Key) {
+                    selectedDeviceKey = item.Key;
+                    RebuildCurrentPage();
+                }
+            };
+            return row;
         }
 
         Label CreateGroupHeading(string text) {
@@ -1738,9 +1908,10 @@ namespace AtkBatteryTray {
             row.MouseLeave += delegate { hoveredRow = false; row.Invalidate(); };
             row.Paint += delegate(object sender, PaintEventArgs e) {
                 var g = e.Graphics;
+                g.Clear(palette.WindowBackground);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                var rect = new RectangleF(0.5f, 0.5f, row.Width - 1, row.Height - 1);
+                var rect = new RectangleF(1f, 1f, row.Width - 2f, row.Height - 2f);
                 if (isSelected) {
                     CompactRenderer.Fill(g, rect, palette.Card, 8f);
                     using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, 8f))
@@ -1805,7 +1976,7 @@ namespace AtkBatteryTray {
 
             var rows = new List<Control>();
             if (item.CanRename) {
-                var input = new ControlCenterTextBox(item.Name, palette, subFont, 186);
+                var input = new ControlCenterTextBox(item.Name, palette, dark, subFont, 196);
                 input.Committed += delegate {
                     if (rebuilding || closing || IsDisposed) return;
                     string trimmed = (input.ValueText ?? "").Trim();
@@ -1911,9 +2082,10 @@ namespace AtkBatteryTray {
                 UpdatePreference(delegate(AudioBindings p) { p.Theme = idx == 1 ? "light" : idx == 2 ? "dark" : "auto"; }, false, true);
             }), true);
 
-            int layoutIdx = pref.PanelLayout == "grid" ? 1 : 0;
-            var layoutRow = CreateSettingRow("主面板布局", "托盘点击展开面板的设备卡片排列方式", CreateSegmentedChoices(new[] { "环形列表", "方格卡片" }, layoutIdx, delegate(int idx) {
-                UpdatePreference(delegate(AudioBindings p) { p.PanelLayout = idx == 1 ? "grid" : "ring"; });
+            int layoutIdx = Array.IndexOf(PanelLayouts.Keys, PanelLayouts.Normalize(pref.PanelLayout));
+            if (layoutIdx < 0) layoutIdx = 0;
+            var layoutRow = CreateSettingRow("主面板布局", "环形、电量条或网格三种样式", CreateSegmentedChoices(PanelLayouts.Names, layoutIdx, delegate(int idx) {
+                UpdatePreference(delegate(AudioBindings p) { p.PanelLayout = PanelLayouts.Keys[idx]; });
             }), true);
 
             int fontIdx = pref.FontSize == "large" ? 1 : 0;
@@ -2059,15 +2231,19 @@ namespace AtkBatteryTray {
             }
 
             detailCard.Controls.Add(preview);
+            detailCard.Controls.Add(CreateSpacer(12, palette.Card));
             for (int i = rows.Count - 1; i >= 0; i--) {
                 rows[i].Dock = DockStyle.Top;
                 detailCard.Controls.Add(rows[i]);
             }
 
+            var gap = CreateSpacer(16);
             root.Controls.Add(detailCard);
+            root.Controls.Add(gap);
             root.Controls.Add(cardsGrid);
             root.Controls.SetChildIndex(detailCard, 0);
-            root.Controls.SetChildIndex(cardsGrid, 1);
+            root.Controls.SetChildIndex(gap, 1);
+            root.Controls.SetChildIndex(cardsGrid, 2);
             return root;
         }
 
@@ -2084,8 +2260,10 @@ namespace AtkBatteryTray {
             card.MouseLeave += delegate { hoveredCard = false; card.Invalidate(); };
             card.Paint += delegate(object sender, PaintEventArgs e) {
                 var g = e.Graphics;
+                g.Clear(palette.WindowBackground);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                var r = new RectangleF(0.5f, 0.5f, card.Width - 1, card.Height - 1);
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                var r = new RectangleF(1f, 1f, card.Width - 2f, card.Height - 2f);
                 Color fill = hoveredCard && !active && !VisualDesign.HighContrast ? palette.RaisedSurface : palette.Card;
                 CompactRenderer.Fill(g, r, fill, ControlCenterTokens.RadiusCard);
                 if (!VisualDesign.HighContrast && dark && active) {
