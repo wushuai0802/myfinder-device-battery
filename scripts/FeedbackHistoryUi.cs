@@ -172,11 +172,12 @@ namespace AtkBatteryTray {
     internal sealed class FeedbackSupplementDialog:ThemedDialog {
         readonly FeedbackReplies replies;readonly long number;readonly FeedbackReport report;
         readonly TextBox description=new TextBox();readonly CheckBox diagnostics;readonly LinkLabel preview;readonly Label remaining,status;readonly ThemedButton submit;
+        readonly FeedbackImageStrip imageStrip;
         CancellationTokenSource pending;bool busy,success;
         internal FeedbackSupplementDialog(FeedbackReplies service,long issue,FeedbackReport snapshot,bool dark):base(dark){
-            replies=service;number=issue;report=snapshot;Text="补充资料 · #"+number;ClientSize=new Size(540,440);ShowInTaskbar=false;
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            for(int i=0;i<5;i++)layout.RowStyles.Add(new RowStyle(i==0?SizeType.Percent:SizeType.AutoSize,i==0?100:0));
+            replies=service;number=issue;report=snapshot;Text="补充资料 · #"+number;ClientSize=new Size(540,492);ShowInTaskbar=false;AllowDrop=true;
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=6,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            for(int i=0;i<6;i++)layout.RowStyles.Add(new RowStyle(i==0?SizeType.Percent:SizeType.AutoSize,i==0?100:0));
             var content=new ThemedSection(Theme) {Dock=DockStyle.Fill};var contentLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=Padding.Empty};contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));contentLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             contentLayout.Controls.Add(Caption("描述（必填，5–2000 字）",false,false,true),0,0);
@@ -188,13 +189,58 @@ namespace AtkBatteryTray {
             preview=new LinkLabel {Name="ViewDiagnostics",Text="查看内容",AutoSize=true,LinkColor=Theme.Accent,BackColor=Theme.Card,Margin=new Padding(0,4,0,3)};
             preview.LinkClicked+=delegate{var record=replies.Store.Find(number);string text=record!=null&&record.Pending!=null?record.Pending.Diagnostics??"未附带诊断信息。":report.FullText;using(var dialog=FeedbackForm.CreateDiagnosticsDialog(Theme.Dark,text))dialog.ShowDialog(this);};
             row.Controls.AddRange(new Control[]{diagnostics,preview});diagnosticCard.Controls.Add(row);layout.Controls.Add(diagnosticCard,0,1);
-            var warning=Caption("补充内容会公开显示在 GitHub，请勿填写密码、账号等个人信息。",false,true);warning.Name="SupplementNotice";warning.Dock=DockStyle.Fill;layout.Controls.Add(warning,0,2);
-            status=Caption("",false,true);status.Name="SupplementStatus";status.Dock=DockStyle.Fill;layout.Controls.Add(status,0,3);
+            imageStrip=new FeedbackImageStrip(Theme) {Font=remaining.Font};
+            var imagesCard=new SupplementImageSection(Theme,imageStrip) {Name="SupplementImagesCard",Dock=DockStyle.Fill};
+            layout.Controls.Add(imagesCard,0,2);
+            imageStrip.ImagesChanged+=delegate{PerformLayout();};
+            imageStrip.StatusMessage+=delegate(string message){if(!busy)status.Text=message;};
+            DragEnter+=delegate(object s,DragEventArgs e){
+                if(imageStrip.Enabled&&e.Data!=null&&e.Data.GetDataPresent(DataFormats.FileDrop))e.Effect=DragDropEffects.Copy;
+                else e.Effect=DragDropEffects.None;
+            };
+            DragDrop+=delegate(object s,DragEventArgs e){
+                if(!imageStrip.Enabled||e.Data==null||!e.Data.GetDataPresent(DataFormats.FileDrop))return;
+                var files=e.Data.GetData(DataFormats.FileDrop) as string[];
+                string err;
+                imageStrip.TryAddFiles(files,out err);
+            };
+            var warning=Caption("补充内容会公开显示在 GitHub，请勿填写密码、账号等个人信息。",false,true);warning.Name="SupplementNotice";warning.Dock=DockStyle.Fill;layout.Controls.Add(warning,0,3);
+            status=Caption("",false,true);status.Name="SupplementStatus";status.Dock=DockStyle.Fill;layout.Controls.Add(status,0,4);
             var buttons=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,FlowDirection=FlowDirection.RightToLeft,Margin=Padding.Empty};
             submit=new ThemedButton(Theme,ThemedButtonKind.Primary) {Name="SubmitSupplement",Text="提交",AutoSize=true};submit.Click+=delegate{Submit();};
-            var cancel=new ThemedButton(Theme) {Text="关闭",AutoSize=true,DialogResult=DialogResult.Cancel};buttons.Controls.AddRange(new Control[]{submit,cancel});layout.Controls.Add(buttons,0,4);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
-            ConfigureLayout(layout,buttons,delegate(int width){return content.Padding.Vertical+content.Margin.Vertical+textCard.Padding.Vertical+5*description.Font.Height+remaining.Height+diagnosticCard.GetPreferredSize(new Size(width,0)).Height+diagnosticCard.Margin.Vertical+warning.GetPreferredSize(new Size(width,0)).Height+warning.Margin.Vertical+status.GetPreferredSize(new Size(width,0)).Height+status.Margin.Vertical+20;});
+            var cancel=new ThemedButton(Theme) {Text="关闭",AutoSize=true,DialogResult=DialogResult.Cancel};buttons.Controls.AddRange(new Control[]{submit,cancel});layout.Controls.Add(buttons,0,5);Controls.Add(layout);AcceptButton=submit;CancelButton=cancel;
+            ConfigureLayout(layout,buttons,delegate(int width){
+                int textWidth=Math.Max(1,width-content.Padding.Horizontal);
+                int minimum=content.Padding.Vertical;
+                foreach(Control child in contentLayout.Controls){
+                    minimum+=child.Margin.Vertical;
+                    minimum+=child is ThemedTextBox?3*description.Font.Height+child.Padding.Vertical+4:child.GetPreferredSize(new Size(textWidth,0)).Height;
+                }
+                return minimum+content.Margin.Vertical
+                    +diagnosticCard.GetPreferredSize(new Size(width,0)).Height+diagnosticCard.Margin.Vertical
+                    +imagesCard.GetPreferredSize(new Size(width,0)).Height+imagesCard.Margin.Vertical
+                    +warning.GetPreferredSize(new Size(width,0)).Height+warning.Margin.Vertical
+                    +status.GetPreferredSize(new Size(width,0)).Height+status.Margin.Vertical+20;
+            });
             FormClosing+=delegate{CancelPending();};RestorePending();
+        }
+        protected override bool ProcessCmdKey(ref Message msg,Keys keyData){
+            if(keyData==(Keys.Control|Keys.V)&&imageStrip.Enabled){
+                if(FeedbackClipboardHelper.TryPasteInto(imageStrip))return true;
+            }
+            return base.ProcessCmdKey(ref msg,keyData);
+        }
+        sealed class SupplementImageSection:ThemedSection {
+            readonly FeedbackImageStrip strip;
+            internal SupplementImageSection(DialogTheme theme,FeedbackImageStrip strip):base(theme){
+                this.strip=strip;strip.Dock=DockStyle.Fill;Controls.Add(strip);AutoSizeMode=AutoSizeMode.GrowAndShrink;AutoSize=true;
+            }
+            public override Size GetPreferredSize(Size proposedSize){
+                if(strip==null)return base.GetPreferredSize(proposedSize);
+                int width=proposedSize.Width>0?proposedSize.Width:Width;
+                int innerWidth=Math.Max(1,width-Padding.Horizontal);
+                return new Size(width,strip.GetPreferredSize(new Size(innerWidth,0)).Height+Padding.Vertical);
+            }
         }
         void RestorePending(){var record=replies.Store.Find(number);if(record!=null&&record.Pending!=null){description.Text=record.Pending.Description;diagnostics.Checked=record.Pending.Diagnostics!=null;status.Text="有待确认的补充，重试将使用原内容。";}ValidateInput();}
         void ValidateInput(){
@@ -202,15 +248,21 @@ namespace AtkBatteryTray {
             remaining.Text=length<5?"还需输入 "+(5-length)+" 字；还可输入 "+(2000-length)+" 字":length>2000?"已超出 "+(length-2000)+" 字（最多 2000 字）":"还可输入 "+(2000-length)+" 字";
             var record=replies.Store.Find(number);bool saved=record!=null&&record.Pending!=null;
             description.ReadOnly=busy||saved||success;diagnostics.Enabled=!busy&&!saved&&!success;preview.Enabled=!busy;
+            if(imageStrip!=null)imageStrip.Enabled=!busy&&!saved&&!success;
             submit.Text=success?"关闭":saved?"重试确认":"提交";submit.Enabled=!busy&&(success||record!=null&&record.MaySupplement&&(saved||FeedbackInput.Valid(record.Category,description.Text)));
         }
         void Submit(){
             if(success){Close();return;}if(busy||!submit.Enabled)return;
-            string text=description.Text,diagnosticText=diagnostics.Checked?report.FullText:null;busy=true;ValidateInput();status.Text="正在提交…";
+            string text=description.Text,diagnosticText=diagnostics.Checked?report.FullText:null;
+            var attachedImages=imageStrip.CloneAttachments();
+            busy=true;ValidateInput();status.Text=attachedImages.Count>0?"正在上传图片并提交…":"正在提交…";
             var cancellation=new CancellationTokenSource();pending=cancellation;var token=cancellation.Token;
             ThreadPool.QueueUserWorkItem(delegate{
-                try{var result=replies.Supplement(number,text,diagnosticText,token);if(!token.IsCancellationRequested)try{BeginInvoke((MethodInvoker)delegate{if(IsDisposed||Disposing||token.IsCancellationRequested)return;pending=null;busy=false;success=result.Kind==SupplementKind.Success;status.Text=result.Message;ValidateInput();});}catch(InvalidOperationException){}}
-                catch(OperationCanceledException){}finally{cancellation.Dispose();}
+                try{var result=replies.Supplement(number,text,diagnosticText,token,attachedImages);if(!token.IsCancellationRequested)try{BeginInvoke((MethodInvoker)delegate{if(IsDisposed||Disposing||token.IsCancellationRequested)return;pending=null;busy=false;success=result.Kind==SupplementKind.Success;status.Text=result.Message;ValidateInput();});}catch(InvalidOperationException){}}
+                catch(OperationCanceledException){}finally{
+                    for(int i=0;i<attachedImages.Count;i++)attachedImages[i].Dispose();
+                    cancellation.Dispose();
+                }
             });
         }
         void CancelPending(){if(pending!=null)try{pending.Cancel();}catch(ObjectDisposedException){}}

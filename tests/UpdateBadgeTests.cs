@@ -169,7 +169,7 @@ static class UpdateBadgeTests {
             if(source=="panel")Call(f.Popup,"PerformAction",f.Rows(PopupPage.More).Find(r=>r.Id==260));
             if(source=="menu"){
                 var menu=((NotifyIcon)Field(f.Owner,"tray")).ContextMenuStrip;Call(menu,"OnOpening",new System.ComponentModel.CancelEventArgs());
-                ToolStripMenuItem item=null;foreach(ToolStripItem candidate in menu.Items)if(candidate.Text=="查看新版本 99.0.1…")item=(ToolStripMenuItem)candidate;
+                ToolStripMenuItem item=null;foreach(ToolStripItem candidate in menu.Items)if(candidate.Text=="查看新版本 99.0.1")item=(ToolStripMenuItem)candidate;
                 Check(item!=null,"context menu names available version");item.PerformClick();
             }
             if(source=="balloon"){((TrayBalloonRoute)Field(f.Owner,"balloonRoute")).Set(TrayBalloonKind.Update);Call(Field(f.Owner,"tray"),"OnBalloonTipClicked");}

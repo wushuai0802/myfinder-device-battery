@@ -445,7 +445,7 @@ function Uninstall-DeviceBatteryStartup {
     if($RemoveProgram -and (Test-Path -LiteralPath (Join-Path $DataDirectory 'install.json'))){Remove-Item -LiteralPath (Join-Path $DataDirectory 'install.json') -Force}
     if($RemoveData) {
         # Delete only application-known leaf files, never recurse over user data.
-        foreach($relative in @('audio-settings.json','audio-settings.json.unread.bak','readings-cache.json','wireless-cache.json','family-memory.json','family-memory.json.corrupt','status.json','low-battery-state.txt',
+        foreach($relative in @('audio-settings.json','audio-settings.json.unread.bak','readings-cache.json','wireless-cache.json','family-memory.json','family-memory.json.corrupt','api-session.json','status.json','low-battery-state.txt',
             'active-ui-render.png','visual-status.json','diagnostics.json','diagnostics.log','diagnostics.log.1','diagnostics.log.2')) {
             $path=Resolve-DeviceBatteryPayloadPath $DataDirectory $relative
             if(Test-Path -LiteralPath $path -PathType Leaf){Remove-Item -LiteralPath $path -Force -ErrorAction Stop}

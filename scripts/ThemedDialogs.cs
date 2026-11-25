@@ -85,17 +85,24 @@ namespace AtkBatteryTray {
         }
         [DllImport("ntdll.dll",CharSet=CharSet.Unicode,ExactSpelling=true)] static extern int RtlGetVersion(ref NativeVersion version);
         internal static void Apply(IntPtr window,DialogTheme theme){
+            Apply(window,theme,theme==null?Color.Empty:theme.Card);
+        }
+        internal static void Apply(IntPtr window,DialogTheme theme,Color captionColor){
             if(VisualDesign.HighContrast||theme.HighContrast)return;
             try{
                 var version=new NativeVersion {Size=(uint)Marshal.SizeOf(typeof(NativeVersion)),ServicePack=String.Empty};
                 bool windows11=RtlGetVersion(ref version)==0&&version.Major>=10&&version.Build>=22000;
-                Apply(theme,windows11,delegate(int attribute,int value){return DwmSetWindowAttribute(window,attribute,ref value,4);});
+                Apply(theme,windows11,delegate(int attribute,int value){return DwmSetWindowAttribute(window,attribute,ref value,4);},captionColor);
             }catch(DllNotFoundException){}catch(EntryPointNotFoundException){}
         }
         internal static void Apply(DialogTheme theme,bool windows11,Func<int,int,int> set){
+            Apply(theme,windows11,set,theme==null?Color.Empty:theme.Card);
+        }
+        internal static void Apply(DialogTheme theme,bool windows11,Func<int,int,int> set,Color captionColor){
             if(VisualDesign.HighContrast||theme.HighContrast)return;
             int dark=theme.Dark?1:0;if(set(20,dark)!=0)set(19,dark);
-            if(windows11){set(33,2);set(35,ColorTranslator.ToWin32(theme.Card));set(36,ColorTranslator.ToWin32(theme.Foreground));}
+            Color cap=captionColor.IsEmpty?theme.Card:captionColor;
+            if(windows11){set(33,2);set(35,ColorTranslator.ToWin32(cap));set(36,ColorTranslator.ToWin32(theme.Foreground));}
         }
     }
 

@@ -15,8 +15,8 @@ using AtkBatteryTray;
 static class ThemeTests {
     const BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
     const BindingFlags Static=BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic;
-    static readonly string[] Styles={"ocean","native","amber","mist"};
-    static readonly string[] Names={"海蓝","原生","琥珀","青雾"};
+    static readonly string[] Styles={"ocean","native","amber","mist","graphite"};
+    static readonly string[] Names={"海蓝","原生","琥珀","青雾","石墨"};
     const string HistoryNotice="关闭保留不删除历史，清除需单独操作";
     static readonly string[] Roles={"Card","Border","Foreground","Muted","Track","Accent","Selected","SelectedForeground"};
     static readonly string[][] Colors={
@@ -27,7 +27,9 @@ static class ThemeTests {
         new[]{"231F1C","38322D","F3EFEA","A89E95","3D3631","E89150","E89150","1A1208"},
         new[]{"FFFDFA","E6DFD5","2A241F","6F665C","EEE8DF","A3521E","A3521E","FFFFFF"},
         new[]{"242B33","323C47","DDE3EA","98A4B3","36414C","5CC2C4","5CC2C4","0E171B"},
-        new[]{"FAFCFD","D9E2EC","1E293B","5A6A80","E4EBF1","1F7A7C","1F7A7C","FFFFFF"}
+        new[]{"FAFCFD","D9E2EC","1E293B","5A6A80","E4EBF1","1F7A7C","1F7A7C","FFFFFF"},
+        new[]{"232323","363636","F2F2F2","9B9B9B","3A3A3A","E9E9E9","E9E9E9","1A1A1A"},
+        new[]{"FFFFFF","EAEAEA","1A1A1A","666666","E3E3E3","1F1F1F","1F1F1F","FFFFFF"}
     };
     static int checks,failures;
     static string output;
@@ -50,7 +52,7 @@ static class ThemeTests {
         Check(Style(new AudioBindings())=="ocean","new configuration defaults to ocean");
         File.WriteAllText(path,"{\"SchemaVersion\":1,\"Theme\":\"dark\",\"MouseAlias\":\"保留名称\",\"WarningThreshold\":15}");
         var old=DeviceSettings.LoadBindings(path);Check(Style(old)=="ocean"&&old.Theme=="dark"&&old.MouseAlias=="保留名称"&&old.WarningThreshold==15,"old settings retain every other preference");
-        foreach(string style in new[]{"ocean","native","amber","mist","unknown",null}){
+        foreach(string style in new[]{"ocean","native","amber","mist","graphite","unknown",null}){
             var pref=old.Clone();Style(pref,style);DeviceSettings.SaveBindings(path,pref);var loaded=DeviceSettings.LoadBindings(path);
             Check(Style(loaded)==(Array.IndexOf(Styles,style)>=0?style:"ocean")&&loaded.Theme=="dark"&&loaded.MouseAlias==old.MouseAlias&&loaded.WarningThreshold==15,"round trip and unknown fallback preserve settings: "+style);
             Check(Style(loaded.Clone())==Style(loaded),"clone retains style");
@@ -72,8 +74,12 @@ static class ThemeTests {
             Check(PopupPages.Foreground(dark)==Role(palette,"Foreground")&&PopupPages.Muted(dark)==Role(palette,"Muted")&&PopupPages.Blue(dark)==Role(palette,"Accent")&&PopupPages.Track(dark)==Role(palette,"Track"),"popup colors use active palette");
         }
         foreach(bool dark in new[]{true,false})Check(Role(Palette("future",dark),"Card")==Role(Palette("ocean",dark),"Card"),"unknown palette falls back to ocean");
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle="ocean"});
         foreach(int value in new[]{10,30,80})Check(Level(value,true)==TrayGlyph.LevelColor(value,true),"deep semantic color unchanged");
         Check(Level(80,false).ToArgb()==Hex("1A8A50").ToArgb()&&Level(30,false).ToArgb()==Hex("9E6400").ToArgb()&&Level(10,false).ToArgb()==Hex("C92A22").ToArgb(),"light semantic colors are exact");
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {ThemeStyle="graphite"});
+        Check(Level(80,true).ToArgb()==Hex("7FD3A6").ToArgb()&&Level(30,true).ToArgb()==Hex("E2C56E").ToArgb()&&Level(10,true).ToArgb()==Hex("F07A72").ToArgb(),"graphite dark low-saturation battery colors are exact");
+        Check(Level(80,false).ToArgb()==Hex("1E8A57").ToArgb()&&Level(30,false).ToArgb()==Hex("A26A00").ToArgb()&&Level(10,false).ToArgb()==Hex("C42B1C").ToArgb(),"graphite light battery colors are exact");
     }
     static AudioReading Audio(){return new AudioReading {TimestampUtc=DateTime.UtcNow,SpeakerAvailable=true,SpeakerId="speaker",SpeakerName="桌面扬声器",HeadsetAvailable=true,HeadsetId="headset",HeadsetName="有线耳机",MicrophoneAvailable=true,MicrophoneId="mic",MicrophoneMuted=false,ActiveOutput="speaker",ConsoleOutputId="speaker",MultimediaOutputId="speaker",VolumeEndpointId="speaker",OutputVolumePercent=55,Devices=new[]{new AudioDeviceChoice {Id="headset",Name="有线耳机",Flow=0,FormFactor=3}}};}
     static DpiConfig Dpi(){var dpi=new DpiConfig {DeviceKey=MouseBattery.DeviceKey("theme-fixture"),TimestampUtc=DateTime.UtcNow,ActiveStage=1};foreach(int v in new[]{400,800,1600,3200})dpi.Stages.Add(new DpiStage {XDpi=v,YDpi=v});return dpi;}
@@ -168,7 +174,7 @@ static class ThemeTests {
         foreach(string style in Styles)foreach(bool dark in new[]{true,false})foreach(bool on in new[]{false,true})using(var f=new Fixture(style)){
             var nav=new PopupNavigation {Page=PopupPage.Preferences,VisibleChoices=100};var rows=PopupPages.Build(f.Owner,nav,false);var row=rows.Find(delegate(PopupControl c){return c.Id==212;});row.Checked=on;
             var p=ThemePalette.Current(dark);float left=row.Rect.Right-37,top=row.Rect.Y+(row.Rect.Height-18)/2,cx=left+(on?21:9),cy=top+9;
-            Color expected=on?(dark&&(style=="amber"||style=="mist")?p.SelectedForeground:Color.White):dark?p.Muted:Color.White;
+            Color expected=on?p.SelectedForeground:dark?p.Muted:Color.White;
             using(var image=RenderPanel(PopupPages.SizeFor(rows),scale,delegate(Graphics g){PopupPages.Paint(g,f.Owner,nav,rows,dark,-1,-1,-1);})){
                 Color center=Pixel(image,cx,cy,scale),track=Pixel(image,on?left+5:left+25,cy,scale);
                 Check(center.ToArgb()==expected.ToArgb(),"toggle knob color: "+style+" "+dark+" "+on);

@@ -205,7 +205,7 @@ namespace AtkBatteryTray {
             }else if(nav.Page==PopupPage.ChoosePreference) {
                 string[] labels;int first,selected;
                 if(nav.PreferenceAction==210){labels=new[]{"跟随系统","浅色","深色"};first=400;selected=pref.Theme=="auto"?0:pref.Theme=="light"?1:2;}
-                else if(nav.PreferenceAction==223){labels=new[]{"海蓝","原生","琥珀","青雾"};first=440;selected=Array.IndexOf(ThemePalette.Keys,ThemePalette.Normalize(pref.ThemeStyle));}
+                else if(nav.PreferenceAction==223){labels=ThemePalette.Names;first=440;selected=Array.IndexOf(ThemePalette.Keys,ThemePalette.Normalize(pref.ThemeStyle));}
                 else if(nav.PreferenceAction==228){labels=new[]{"标准","较大"};first=460;selected=pref.FontSize=="large"?1:0;}
                 else if(nav.PreferenceAction==229){labels=PanelLayouts.Names;first=470;selected=Array.IndexOf(PanelLayouts.Keys,PanelLayouts.Normalize(pref.PanelLayout));}
                 else if(nav.PreferenceAction==224){labels=new[]{"数字","设备图标"};first=450;selected=pref.TrayIconStyle=="device"?1:0;}
