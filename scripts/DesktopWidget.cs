@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Text;
@@ -100,6 +101,76 @@ namespace AtkBatteryTray {
         }
     }
 
+    // Pure spring/easing math for desktop widget edge-reveal, auto-hide, magnetic snap, and expand/collapse animations.
+    internal static class DesktopWidgetSpring {
+        internal static double Clamp01(double t) {
+            return t <= 0.0 ? 0.0 : (t >= 1.0 ? 1.0 : t);
+        }
+
+        // Underdamped overshoot curve: brisk launch, gentle ~7-9% spring overshoot, smooth settle.
+        internal static double EaseOutBack(double t, double overshoot = 1.45) {
+            double c = Clamp01(t);
+            if (c <= 0.0) return 0.0;
+            if (c >= 1.0) return 1.0;
+            double u = c - 1.0;
+            return 1.0 + (overshoot + 1.0) * u * u * u + overshoot * u * u;
+        }
+
+        internal static double EaseOutCubic(double t) {
+            double c = Clamp01(t);
+            double u = 1.0 - c;
+            return 1.0 - u * u * u;
+        }
+
+        internal static double EaseInOutCubic(double t) {
+            double c = Clamp01(t);
+            return c < 0.5 ? 4.0 * c * c * c : 1.0 - Math.Pow(-2.0 * c + 2.0, 3.0) / 2.0;
+        }
+
+        internal static double Evaluate(double t, bool bouncy, double overshoot = 1.45) {
+            return bouncy ? EaseOutBack(t, overshoot) : EaseInOutCubic(t);
+        }
+
+        internal static void InterpolateFrame(
+            Point startPos, Point targetPos,
+            Size startLogicalSize, Size targetLogicalSize,
+            byte startAlpha, byte targetAlpha,
+            Rectangle workArea, float dpiScale,
+            double t, bool bouncy, double overshoot,
+            out Point framePos, out Size frameLogicalSize, out byte frameAlpha) {
+
+            double c = Clamp01(t);
+            if (c >= 1.0) {
+                framePos = targetPos;
+                frameLogicalSize = targetLogicalSize;
+                frameAlpha = targetAlpha;
+                return;
+            }
+            double posFactor = Evaluate(c, bouncy, overshoot);
+            double sizeFactor = bouncy ? EaseOutBack(c, Math.Min(1.10, overshoot * 0.75)) : EaseInOutCubic(c);
+            double alphaFactor = EaseOutCubic(c);
+
+            int lw = Math.Max(10, (int)Math.Round(startLogicalSize.Width + (targetLogicalSize.Width - startLogicalSize.Width) * sizeFactor));
+            int lh = Math.Max(10, (int)Math.Round(startLogicalSize.Height + (targetLogicalSize.Height - startLogicalSize.Height) * sizeFactor));
+            frameLogicalSize = new Size(lw, lh);
+
+            Size phys = LayeredSurface.ComputePhysicalSize(frameLogicalSize, dpiScale);
+            int px = (int)Math.Round(startPos.X + (targetPos.X - startPos.X) * posFactor);
+            int py = (int)Math.Round(startPos.Y + (targetPos.Y - startPos.Y) * posFactor);
+
+            if (workArea.Width > 0 && workArea.Height > 0) {
+                int maxX = Math.Max(workArea.Left, workArea.Right - phys.Width);
+                int maxY = Math.Max(workArea.Top, workArea.Bottom - phys.Height);
+                px = Math.Max(workArea.Left, Math.Min(px, maxX));
+                py = Math.Max(workArea.Top, Math.Min(py, maxY));
+            }
+            framePos = new Point(px, py);
+
+            int a = (int)Math.Round(startAlpha + (targetAlpha - startAlpha) * alphaFactor);
+            frameAlpha = (byte)Math.Max(120, Math.Min(255, a));
+        }
+    }
+
     internal sealed class DesktopWidgetEntry {
         internal string Id;
         internal string Name;
@@ -117,14 +188,25 @@ namespace AtkBatteryTray {
                 PaintHiddenTab(g, logicalSize, entries, palette, dark, DesktopWidgetGeometry.NormalizeEdge(cfg != null ? cfg.DockEdge : "right"));
                 return;
             }
-            if (expanded) {
-                PaintExpanded(g, logicalSize, entries, palette, dark, hoveredRow);
-                return;
+            // Clip smoothly inside the rounded card surface during morph/spring frames so text never bleeds outside.
+            float clipRadius = expanded ? 12f : (edgeStripMode || DesktopWidgetGeometry.NormalizeStyle(cfg.Style) != "rings" ? Math.Min(logicalSize.Height / 2f, 22f) : 12f);
+            var clipRect = new RectangleF(0.5f, 0.5f, Math.Max(4f, logicalSize.Width - 1f), Math.Max(4f, logicalSize.Height - 1f));
+            var state = g.Save();
+            try {
+                using (var clipPath = VisualDesign.RoundRect(clipRect.X, clipRect.Y, clipRect.Width, clipRect.Height, Math.Max(2f, clipRadius))) {
+                    g.SetClip(clipPath, CombineMode.Intersect);
+                    if (expanded) {
+                        PaintExpanded(g, logicalSize, entries, palette, dark, hoveredRow);
+                    } else {
+                        string style = edgeStripMode ? "strip" : DesktopWidgetGeometry.NormalizeStyle(cfg.Style);
+                        if (style == "rings") PaintRings(g, logicalSize, entries, palette, dark);
+                        else if (style == "strip") PaintStrip(g, logicalSize, entries, palette, dark);
+                        else PaintCapsule(g, logicalSize, entries, palette, dark);
+                    }
+                }
+            } finally {
+                g.Restore(state);
             }
-            string style = edgeStripMode ? "strip" : DesktopWidgetGeometry.NormalizeStyle(cfg.Style);
-            if (style == "rings") PaintRings(g, logicalSize, entries, palette, dark);
-            else if (style == "strip") PaintStrip(g, logicalSize, entries, palette, dark);
-            else PaintCapsule(g, logicalSize, entries, palette, dark);
         }
 
         static void PaintSurface(Graphics g, SizeF size, float radius, ThemePalette palette, bool dark) {
@@ -369,19 +451,38 @@ namespace AtkBatteryTray {
         readonly TrayContext owner;
         readonly LayeredSurface surface = new LayeredSurface();
         readonly Timer watchTimer = new Timer { Interval = 650 };
-        readonly Timer hideDelayTimer = new Timer { Interval = 450 };
+        readonly Timer hoverWatchTimer = new Timer { Interval = 100 };
+        readonly Timer animTimer = new Timer { Interval = 15 };
+        readonly Stopwatch animClock = new Stopwatch();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
 
         bool expanded, hovered, dragging, dragMoved, disposed;
         bool autoHiddenOnEdge;
+        bool hasCommittedFrame;
+        DateTime lastCursorInsideUtc = DateTime.UtcNow;
         WidgetVisibilityMode visibilityMode = WidgetVisibilityMode.Normal;
         Point dragStartCursor, dragStartLocation, dragPhysicalLocation;
         Size logicalSize;
         Rectangle currentPhysicalBounds;
+        Point currentPhysicalPos;
+        byte currentAlpha = 255;
         float currentDpiScale = 1f;
         int hoveredRow = -1;
         string lastRenderSignature;
         List<DesktopWidgetEntry> cachedEntries = new List<DesktopWidgetEntry>();
+
+        // Spring animation state
+        bool animating;
+        Point animStartPos, animTargetPos;
+        Size animStartLogicalSize, animTargetLogicalSize;
+        byte animStartAlpha = 255, animTargetAlpha = 255;
+        int animDurationMs = 260;
+        bool animBouncy = true;
+        double animOvershoot = 1.45;
+        bool animTargetHiddenTab;
+        bool animTargetExpanded;
+        bool animTargetStripMode;
+        Rectangle animWorkArea;
 
         internal DesktopWidgetForm(TrayContext owner) {
             this.owner = owner;
@@ -393,15 +494,12 @@ namespace AtkBatteryTray {
 
             BuildContextMenu();
             watchTimer.Tick += delegate { EvaluateDisplayState(); };
-            hideDelayTimer.Tick += delegate {
-                hideDelayTimer.Stop();
-                if (!hovered && !dragging && !expanded && !menu.Visible) {
-                    var cfg = DeviceSettings.Current.DesktopWidget;
-                    if (cfg.AutoHideOnEdge && DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none") {
-                        autoHiddenOnEdge = true;
-                        RenderNow(true);
-                    }
-                }
+            hoverWatchTimer.Tick += delegate { EvaluateEdgeAutoHideTick(Cursor.Position, DateTime.UtcNow); };
+            animTimer.Tick += delegate { StepAnimation(); };
+            menu.Closed += delegate {
+                lastCursorInsideUtc = DateTime.UtcNow;
+                hovered = IsPointNearWidget(Cursor.Position, 8);
+                SyncHoverWatch();
             };
         }
 
@@ -420,8 +518,64 @@ namespace AtkBatteryTray {
 
         internal bool IsExpanded { get { return expanded; } }
         internal bool IsAutoHiddenOnEdge { get { return autoHiddenOnEdge; } }
+        internal bool IsAnimating { get { return animating; } }
         internal WidgetVisibilityMode CurrentVisibilityMode { get { return visibilityMode; } }
         internal Size LogicalSize { get { return logicalSize; } }
+
+        bool IsPointNearWidget(Point screenPoint, int inflatePx) {
+            if (currentPhysicalBounds.IsEmpty) return false;
+            var hit = Rectangle.Inflate(currentPhysicalBounds, inflatePx, inflatePx);
+            return hit.Contains(screenPoint);
+        }
+
+        void SyncHoverWatch() {
+            if (disposed || IsDisposed) return;
+            var cfg = DeviceSettings.Current.DesktopWidget;
+            bool shouldWatch = cfg != null && cfg.AutoHideOnEdge && DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none" && !autoHiddenOnEdge && !dragging;
+            if (shouldWatch) {
+                if (!hoverWatchTimer.Enabled) hoverWatchTimer.Start();
+            } else {
+                if (hoverWatchTimer.Enabled) hoverWatchTimer.Stop();
+            }
+        }
+
+        // Exposed internally so deterministic tests can verify auto-hide even when Windows drops WM_MOUSELEAVE.
+        internal void EvaluateEdgeAutoHideTick(Point cursorPos, DateTime utcNow) {
+            if (disposed || IsDisposed || dragging) return;
+            var cfg = DeviceSettings.Current.DesktopWidget;
+            if (cfg == null || !cfg.AutoHideOnEdge || DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) == "none") {
+                if (hoverWatchTimer.Enabled) hoverWatchTimer.Stop();
+                return;
+            }
+            if (autoHiddenOnEdge) {
+                if (hoverWatchTimer.Enabled) hoverWatchTimer.Stop();
+                return;
+            }
+            if (menu.Visible) {
+                lastCursorInsideUtc = utcNow;
+                return;
+            }
+            bool inside = IsPointNearWidget(cursorPos, 8);
+            if (inside) {
+                hovered = true;
+                lastCursorInsideUtc = utcNow;
+                return;
+            }
+            if (hovered) {
+                hovered = false;
+                hoveredRow = -1;
+                lastCursorInsideUtc = utcNow;
+                if (expanded) RenderNow(false);
+                return;
+            }
+            if (expanded) return;
+            // After cursor stays outside for 380ms, smoothly retract back to the edge handle.
+            if ((utcNow - lastCursorInsideUtc).TotalMilliseconds >= 380.0) {
+                autoHiddenOnEdge = true;
+                if (hoverWatchTimer.Enabled) hoverWatchTimer.Stop();
+                TransitionToCurrentState(230, false, 1.0);
+            }
+        }
 
         void BuildContextMenu() {
             ThemedContextMenu.Apply(menu);
@@ -510,8 +664,118 @@ namespace AtkBatteryTray {
             var cfg = DeviceSettings.Current.DesktopWidget;
             autoHiddenOnEdge = cfg.AutoHideOnEdge && DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none";
             RenderNow(true);
+            SyncHoverWatch();
             if (!watchTimer.Enabled) watchTimer.Start();
         }
+
+        void StopAnimation() {
+            animating = false;
+            if (animTimer.Enabled) animTimer.Stop();
+            if (animClock.IsRunning) animClock.Stop();
+        }
+
+        void ComputeTargetState(out DesktopWidgetSettings cfg, out bool dark, out ThemePalette palette, out bool hiddenTab, out bool stripMode, out Rectangle workArea, out Size targetLogical, out Point targetPos, out byte targetAlpha) {
+            cfg = DeviceSettings.Current.DesktopWidget;
+            int maxDev = expanded ? 6 : Math.Max(1, Math.Min(4, cfg.MaxDevices));
+            cachedEntries = CollectEntries(maxDev);
+
+            dark = Style.Dark;
+            palette = ThemePalette.Current(dark);
+            hiddenTab = !expanded && autoHiddenOnEdge && DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none";
+            stripMode = visibilityMode == WidgetVisibilityMode.EdgeStrip;
+
+            var screen = ResolveTargetScreen(cfg);
+            workArea = screen.WorkingArea;
+            currentDpiScale = NativeDisplay.ScaleAt(new Point(workArea.Left + workArea.Width / 2, workArea.Top + workArea.Height / 2));
+
+            targetLogical = expanded
+                ? DesktopWidgetGeometry.ExpandedLogicalSize(cachedEntries.Count, VisualDesign.LargeFont)
+                : DesktopWidgetGeometry.CollapsedLogicalSize(stripMode ? "strip" : cfg.Style, cachedEntries.Count, VisualDesign.LargeFont, cfg.DockEdge, hiddenTab);
+
+            var physSize = LayeredSurface.ComputePhysicalSize(targetLogical, currentDpiScale);
+            targetPos = dragging ? dragPhysicalLocation : DesktopWidgetGeometry.ComputePhysicalLocation(cfg.DockEdge, physSize, workArea, cfg.AnchorXRatio, cfg.AnchorYRatio, hiddenTab);
+
+            targetAlpha = (byte)Math.Max(140, Math.Min(255, (int)Math.Round(cfg.OpacityPercent * 2.55)));
+            if (hiddenTab) targetAlpha = 215;
+        }
+
+        void TransitionToCurrentState(int durationMs, bool bouncy, double overshoot) {
+            if (disposed || IsDisposed || !IsHandleCreated) return;
+            if (visibilityMode == WidgetVisibilityMode.Hidden) return;
+
+            DesktopWidgetSettings cfg; bool dark, hiddenTab, stripMode; ThemePalette palette; Rectangle workArea; Size targetLogical; Point targetPos; byte targetAlpha;
+            ComputeTargetState(out cfg, out dark, out palette, out hiddenTab, out stripMode, out workArea, out targetLogical, out targetPos, out targetAlpha);
+
+            if (!hasCommittedFrame || dragging || DeviceSettings.Current.ReducedMotion || durationMs <= 0 ||
+                (currentPhysicalPos == targetPos && logicalSize == targetLogical && currentAlpha == targetAlpha)) {
+                StopAnimation();
+                RenderNow(true);
+                SyncHoverWatch();
+                return;
+            }
+
+            animStartPos = currentPhysicalPos;
+            animTargetPos = targetPos;
+            animStartLogicalSize = logicalSize.Width > 0 && logicalSize.Height > 0 ? logicalSize : targetLogical;
+            animTargetLogicalSize = targetLogical;
+            animStartAlpha = currentAlpha;
+            animTargetAlpha = targetAlpha;
+            animDurationMs = durationMs;
+            animBouncy = bouncy;
+            animOvershoot = overshoot;
+            animTargetHiddenTab = hiddenTab;
+            animTargetExpanded = expanded;
+            animTargetStripMode = stripMode;
+            animWorkArea = workArea;
+            animating = true;
+            lastRenderSignature = null;
+            animClock.Reset();
+            animClock.Start();
+            if (!animTimer.Enabled) animTimer.Start();
+            StepAnimation();
+        }
+
+        void StepAnimation() {
+            if (!animating || disposed || IsDisposed || !IsHandleCreated) {
+                StopAnimation();
+                return;
+            }
+            double t = animDurationMs <= 0 ? 1.0 : animClock.ElapsedMilliseconds / (double)animDurationMs;
+            if (t >= 1.0) {
+                StopAnimation();
+                RenderNow(true);
+                SyncHoverWatch();
+                return;
+            }
+
+            Point framePos; Size frameLogical; byte frameAlpha;
+            DesktopWidgetSpring.InterpolateFrame(
+                animStartPos, animTargetPos,
+                animStartLogicalSize, animTargetLogicalSize,
+                animStartAlpha, animTargetAlpha,
+                animWorkArea, currentDpiScale,
+                t, animBouncy, animOvershoot,
+                out framePos, out frameLogical, out frameAlpha);
+
+            var cfg = DeviceSettings.Current.DesktopWidget;
+            bool dark = Style.Dark;
+            var palette = ThemePalette.Current(dark);
+            bool drawHiddenTab = animTargetHiddenTab
+                ? (t >= 0.72 || Math.Min(frameLogical.Width, frameLogical.Height) <= 16)
+                : (t < 0.22 && Math.Min(frameLogical.Width, frameLogical.Height) <= 18);
+
+            var physSize = LayeredSurface.ComputePhysicalSize(frameLogical, currentDpiScale);
+            surface.Commit(Handle, framePos, frameLogical, currentDpiScale, frameAlpha, delegate(Graphics g, SizeF sz) {
+                DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, animTargetExpanded && !drawHiddenTab, animTargetStripMode, drawHiddenTab, hoveredRow);
+            });
+            logicalSize = frameLogical;
+            currentPhysicalPos = framePos;
+            currentAlpha = frameAlpha;
+            currentPhysicalBounds = new Rectangle(framePos, physSize);
+            hasCommittedFrame = true;
+        }
+
+        bool pendingSnapAnim;
 
         internal void RefreshFromSettingsOrData(bool force) {
             if (disposed || IsDisposed || Disposing) return;
@@ -524,12 +788,27 @@ namespace AtkBatteryTray {
             var cfg = DeviceSettings.Current.DesktopWidget;
             if (TopMost != cfg.TopMost) TopMost = cfg.TopMost;
             bool docked = DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none";
+            bool wasHidden = autoHiddenOnEdge;
             if (!docked || !cfg.AutoHideOnEdge) {
                 autoHiddenOnEdge = false;
-                hideDelayTimer.Stop();
-            } else if (!expanded && !dragging && !hovered && !autoHiddenOnEdge) {
-                hideDelayTimer.Stop();
-                hideDelayTimer.Start();
+            } else if (!expanded && !dragging && !autoHiddenOnEdge) {
+                if (IsPointNearWidget(Cursor.Position, 8)) lastCursorInsideUtc = DateTime.UtcNow;
+            }
+            SyncHoverWatch();
+
+            if (pendingSnapAnim) {
+                pendingSnapAnim = false;
+                TransitionToCurrentState(260, true, 1.35);
+                return;
+            }
+            if (wasHidden && !autoHiddenOnEdge) {
+                TransitionToCurrentState(270, true, 1.40);
+                return;
+            }
+            if (animating) {
+                int maxDev = expanded ? 6 : Math.Max(1, Math.Min(4, cfg.MaxDevices));
+                cachedEntries = CollectEntries(maxDev);
+                return;
             }
             RenderNow(force);
         }
@@ -544,13 +823,14 @@ namespace AtkBatteryTray {
             if (nextMode != visibilityMode) {
                 visibilityMode = nextMode;
                 if (visibilityMode == WidgetVisibilityMode.Hidden) {
+                    StopAnimation();
                     expanded = false;
                     if (Visible) Hide();
                     return;
                 }
                 if (visibilityMode == WidgetVisibilityMode.EdgeStrip) expanded = false;
                 if (!Visible) Show();
-                RenderNow(true);
+                TransitionToCurrentState(220, false, 1.0);
             }
         }
 
@@ -558,39 +838,24 @@ namespace AtkBatteryTray {
             if (disposed || IsDisposed || !IsHandleCreated) return;
             if (visibilityMode == WidgetVisibilityMode.Hidden) return;
 
-            var cfg = DeviceSettings.Current.DesktopWidget;
-            int maxDev = expanded ? 6 : Math.Max(1, Math.Min(4, cfg.MaxDevices));
-            cachedEntries = CollectEntries(maxDev);
-
-            bool dark = Style.Dark;
-            var palette = ThemePalette.Current(dark);
-            bool hiddenTab = !expanded && !hovered && autoHiddenOnEdge && DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none";
-            bool stripMode = visibilityMode == WidgetVisibilityMode.EdgeStrip;
-
-            var screen = ResolveTargetScreen(cfg);
-            var workArea = screen.WorkingArea;
-            currentDpiScale = NativeDisplay.ScaleAt(new Point(workArea.Left + workArea.Width / 2, workArea.Top + workArea.Height / 2));
-
-            logicalSize = expanded
-                ? DesktopWidgetGeometry.ExpandedLogicalSize(cachedEntries.Count, VisualDesign.LargeFont)
-                : DesktopWidgetGeometry.CollapsedLogicalSize(stripMode ? "strip" : cfg.Style, cachedEntries.Count, VisualDesign.LargeFont, cfg.DockEdge, hiddenTab);
-
-            var physSize = LayeredSurface.ComputePhysicalSize(logicalSize, currentDpiScale);
-            Point physPos = dragging ? dragPhysicalLocation : DesktopWidgetGeometry.ComputePhysicalLocation(cfg.DockEdge, physSize, workArea, cfg.AnchorXRatio, cfg.AnchorYRatio, hiddenTab);
+            DesktopWidgetSettings cfg; bool dark, hiddenTab, stripMode; ThemePalette palette; Rectangle workArea; Size targetLogical; Point physPos; byte alpha;
+            ComputeTargetState(out cfg, out dark, out palette, out hiddenTab, out stripMode, out workArea, out targetLogical, out physPos, out alpha);
+            var physSize = LayeredSurface.ComputePhysicalSize(targetLogical, currentDpiScale);
 
             string sig = BuildRenderSignature(cfg, dark, hiddenTab, stripMode, physPos, physSize);
             if (!force && sig == lastRenderSignature) return;
             lastRenderSignature = sig;
 
-            byte alpha = (byte)Math.Max(140, Math.Min(255, (int)Math.Round(cfg.OpacityPercent * 2.55)));
-            if (hiddenTab) alpha = 210;
-
             // UpdateLayeredWindow atomically commits physical position, size and alpha.
             // Avoid redundant WinForms Location/Size writes that can trigger double-DPI scaling.
-            surface.Commit(Handle, physPos, logicalSize, currentDpiScale, alpha, delegate(Graphics g, SizeF sz) {
+            surface.Commit(Handle, physPos, targetLogical, currentDpiScale, alpha, delegate(Graphics g, SizeF sz) {
                 DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, expanded, stripMode, hiddenTab, hoveredRow);
             });
+            logicalSize = targetLogical;
+            currentPhysicalPos = physPos;
+            currentAlpha = alpha;
             currentPhysicalBounds = new Rectangle(physPos, physSize);
+            hasCommittedFrame = true;
         }
 
         string BuildRenderSignature(DesktopWidgetSettings cfg, bool dark, bool hiddenTab, bool stripMode, Point pos, Size size) {
@@ -610,11 +875,11 @@ namespace AtkBatteryTray {
             if (m.Msg == 0x007E || m.Msg == 0x02E0) { // WM_DISPLAYCHANGE / WM_DPICHANGED
                 if (m.Msg == 0x02E0) {
                     m.Result = IntPtr.Zero;
-                    if (!dragging) RenderNow(true);
+                    if (!dragging) { StopAnimation(); RenderNow(true); }
                     return;
                 }
                 base.WndProc(ref m);
-                if (!dragging) RenderNow(true);
+                if (!dragging) { StopAnimation(); RenderNow(true); }
                 return;
             }
             base.WndProc(ref m);
@@ -623,26 +888,25 @@ namespace AtkBatteryTray {
         protected override void OnMouseEnter(EventArgs e) {
             base.OnMouseEnter(e);
             hovered = true;
-            hideDelayTimer.Stop();
+            lastCursorInsideUtc = DateTime.UtcNow;
             if (autoHiddenOnEdge) {
                 autoHiddenOnEdge = false;
-                RenderNow(true);
+                TransitionToCurrentState(280, true, 1.45);
             }
+            SyncHoverWatch();
         }
 
         protected override void OnMouseLeave(EventArgs e) {
             base.OnMouseLeave(e);
-            if (!dragging && !currentPhysicalBounds.IsEmpty && currentPhysicalBounds.Contains(Cursor.Position)) {
-                return;
+            if (dragging) return;
+            if (!IsPointNearWidget(Cursor.Position, 6)) {
+                hovered = false;
+                hoveredRow = -1;
+                lastCursorInsideUtc = DateTime.UtcNow;
+                if (expanded && !animating) RenderNow(false);
             }
-            hovered = false;
-            hoveredRow = -1;
-            if (expanded) RenderNow(false);
-            var cfg = DeviceSettings.Current.DesktopWidget;
-            if (!expanded && cfg.AutoHideOnEdge && DesktopWidgetGeometry.NormalizeEdge(cfg.DockEdge) != "none") {
-                hideDelayTimer.Stop();
-                hideDelayTimer.Start();
-            }
+            // Always keep hoverWatchTimer active while revealed on a docked edge so dropped WM_MOUSELEAVE never stalls auto-hide.
+            SyncHoverWatch();
         }
 
         protected override void OnMouseDown(MouseEventArgs e) {
@@ -652,12 +916,14 @@ namespace AtkBatteryTray {
                 return;
             }
             if (e.Button == MouseButtons.Left) {
+                StopAnimation();
                 dragging = true;
                 dragMoved = false;
                 dragStartCursor = Cursor.Position;
                 dragStartLocation = currentPhysicalBounds.IsEmpty ? Location : currentPhysicalBounds.Location;
                 dragPhysicalLocation = dragStartLocation;
                 Capture = true;
+                SyncHoverWatch();
             }
         }
 
@@ -674,7 +940,8 @@ namespace AtkBatteryTray {
                 }
                 return;
             }
-            if (expanded) {
+            lastCursorInsideUtc = DateTime.UtcNow;
+            if (expanded && !animating) {
                 float ly = e.Y / Math.Max(1f, currentDpiScale);
                 int headerH = VisualDesign.LargeFont ? 32 : 28;
                 int rowH = VisualDesign.LargeFont ? 50 : 44;
@@ -710,20 +977,16 @@ namespace AtkBatteryTray {
                 }
                 double rx, ry;
                 DesktopWidgetGeometry.ComputeAnchorRatios(physRect.Location, physRect.Size, workArea, out rx, out ry);
+                pendingSnapAnim = snapped != "none";
                 UpdateWidgetConfig(delegate(DesktopWidgetSettings w) {
                     w.DockEdge = snapped;
                     w.AnchorXRatio = rx;
                     w.AnchorYRatio = ry;
                     w.MonitorDeviceName = screen.DeviceName;
                 });
-                var latest = DeviceSettings.Current.DesktopWidget;
-                if (snapped != "none" && latest.AutoHideOnEdge && !expanded) {
-                    hovered = !currentPhysicalBounds.IsEmpty && currentPhysicalBounds.Contains(Cursor.Position);
-                    if (!hovered) {
-                        hideDelayTimer.Stop();
-                        hideDelayTimer.Start();
-                    }
-                }
+                lastCursorInsideUtc = DateTime.UtcNow;
+                hovered = IsPointNearWidget(Cursor.Position, 8);
+                SyncHoverWatch();
                 return;
             }
             HandleClick(e.Location);
@@ -734,7 +997,8 @@ namespace AtkBatteryTray {
             float ly = physicalPoint.Y / Math.Max(1f, currentDpiScale);
             if (!expanded) {
                 expanded = true;
-                RenderNow(true);
+                autoHiddenOnEdge = false;
+                TransitionToCurrentState(270, true, 1.35);
                 return;
             }
             int headerH = VisualDesign.LargeFont ? 32 : 28;
@@ -742,20 +1006,39 @@ namespace AtkBatteryTray {
             int footerH = VisualDesign.LargeFont ? 34 : 30;
             if (ly < headerH) {
                 expanded = false;
-                RenderNow(true);
+                hoveredRow = -1;
+                lastCursorInsideUtc = DateTime.UtcNow;
+                TransitionToCurrentState(210, false, 1.0);
+                SyncHoverWatch();
                 return;
             }
             if (ly >= logicalSize.Height - footerH - 4) {
-                if (lx < logicalSize.Width / 2f) owner.RefreshBattery(true);
-                else owner.ShowControlCenter(ControlCenterPage.Devices);
+                if (lx < logicalSize.Width / 2f) {
+                    owner.RefreshBattery(true);
+                } else {
+                    expanded = false;
+                    hoveredRow = -1;
+                    lastCursorInsideUtc = DateTime.UtcNow;
+                    TransitionToCurrentState(210, false, 1.0);
+                    SyncHoverWatch();
+                    owner.ShowControlCenter(ControlCenterPage.Devices);
+                }
                 return;
             }
             int idx = (int)((ly - headerH - 2) / rowH);
             if (idx >= 0 && idx < cachedEntries.Count) {
+                expanded = false;
+                hoveredRow = -1;
+                lastCursorInsideUtc = DateTime.UtcNow;
+                TransitionToCurrentState(210, false, 1.0);
+                SyncHoverWatch();
                 owner.ShowControlCenter(ControlCenterPage.Devices);
             } else {
                 expanded = false;
-                RenderNow(true);
+                hoveredRow = -1;
+                lastCursorInsideUtc = DateTime.UtcNow;
+                TransitionToCurrentState(210, false, 1.0);
+                SyncHoverWatch();
             }
         }
 
@@ -763,10 +1046,12 @@ namespace AtkBatteryTray {
             if (disposed) return;
             disposed = true;
             if (disposing) {
+                StopAnimation();
                 watchTimer.Stop();
                 watchTimer.Dispose();
-                hideDelayTimer.Stop();
-                hideDelayTimer.Dispose();
+                hoverWatchTimer.Stop();
+                hoverWatchTimer.Dispose();
+                animTimer.Dispose();
                 menu.Dispose();
                 surface.Dispose();
             }

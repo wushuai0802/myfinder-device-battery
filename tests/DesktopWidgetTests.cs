@@ -96,6 +96,20 @@ static class DesktopWidgetTests {
         double rx, ry;
         DesktopWidgetGeometry.ComputeAnchorRatios(new Point(960, 520), new Size(200, 36), workArea, out rx, out ry);
         Check(rx > 0.4 && rx < 0.6 && ry > 0.4 && ry < 0.6, "relative ratios stay bounded in [0,1]");
+
+        // Spring curve & bounded frame interpolation checks
+        Check(DesktopWidgetSpring.EaseOutBack(0.0) == 0.0 && DesktopWidgetSpring.EaseOutBack(1.0) == 1.0, "spring EaseOutBack starts at 0 and settles at 1");
+        Check(DesktopWidgetSpring.EaseOutBack(0.65) > 1.0, "spring EaseOutBack exhibits gentle overshoot (> 1.0) mid-flight");
+        Check(DesktopWidgetSpring.EaseInOutCubic(0.0) == 0.0 && DesktopWidgetSpring.EaseInOutCubic(1.0) == 1.0 && DesktopWidgetSpring.EaseInOutCubic(0.5) == 0.5, "EaseInOutCubic is smooth and symmetric");
+
+        Point midPos; Size midSize; byte midAlpha;
+        DesktopWidgetSpring.InterpolateFrame(
+            new Point(workArea.Right - 10, 400), new Point(workArea.Right - 200 - 6, 400),
+            new Size(10, 72), new Size(200, 36),
+            215, 245, workArea, 1.0f, 0.68, true, 1.45,
+            out midPos, out midSize, out midAlpha);
+        Check(midPos.X >= workArea.Left && midPos.X + midSize.Width <= workArea.Right && midPos.Y >= workArea.Top && midPos.Y + midSize.Height <= workArea.Bottom, "spring overshoot stays strictly clamped inside workArea");
+        Check(midPos.X < workArea.Right - 200 - 6, "right-edge reveal springs inward past resting margin before settling");
     }
 
     static void DisplayWatchStateMachine() {
@@ -156,6 +170,21 @@ static class DesktopWidgetTests {
             var form = owner.ActiveDesktopWidget;
             for (int i = 0; i < 6; i++) form.RenderNow(true);
             Check(!form.IsDisposed && form.LogicalSize.Width > 0 && form.LogicalSize.Height > 0, "repeated LayeredSurface commits succeed cleanly");
+
+            // Dock to right edge with AutoHideOnEdge -> cursor watchdog must reliably retract even without WM_MOUSELEAVE
+            next = DeviceSettings.Current;
+            next.DesktopWidget.DockEdge = "right";
+            next.DesktopWidget.AutoHideOnEdge = true;
+            owner.SavePreferences(next);
+            owner.ConfigurationChanged(false);
+            Application.DoEvents();
+            Check(!form.IsAutoHiddenOnEdge, "newly docked widget starts revealed");
+            var t0 = DateTime.UtcNow;
+            var farAway = new Point(-9999, -9999);
+            form.EvaluateEdgeAutoHideTick(farAway, t0);
+            form.EvaluateEdgeAutoHideTick(farAway, t0.AddMilliseconds(500));
+            Application.DoEvents();
+            Check(form.IsAutoHiddenOnEdge && form.LogicalSize.Width == 10 && form.LogicalSize.Height == 72, "cursor watchdog retracts docked widget to edge handle even if WM_MOUSELEAVE is dropped");
 
             // Disable widget -> disposes completely
             next = DeviceSettings.Current;
