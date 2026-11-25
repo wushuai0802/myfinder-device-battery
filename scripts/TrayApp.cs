@@ -872,6 +872,7 @@ namespace AtkBatteryTray {
         readonly ControlCenterController controlCenter;
         readonly DesktopWidgetController desktopWidget;
         readonly LocalApiController localApi;
+        readonly TaskbarBatteryOverlayController taskbarOverlay;
         internal UnadaptedDevice[] UnadaptedDevicesSnapshot {get{return unadaptedDevices??new UnadaptedDevice[0];}}
         public void ShowControlCenter(ControlCenterPage page=ControlCenterPage.Devices){if(!disposed&&controlCenter!=null)controlCenter.Show(page);}
         internal bool ControlCenterOpen {get{return controlCenter!=null&&controlCenter.IsOpen;}}
@@ -882,6 +883,11 @@ namespace AtkBatteryTray {
         internal int LocalApiPort {get{return localApi==null?0:localApi.ListeningPort;}}
         internal string LocalApiSessionPath {get{return localApi==null?"":localApi.SessionFilePath;}}
         internal string LocalApiError {get{return localApi==null?null:localApi.LastError;}}
+        internal bool TaskbarOverlayRunning {get{return taskbarOverlay!=null&&taskbarOverlay.IsRunning;}}
+        internal string TaskbarOverlayStatusCode {get{return taskbarOverlay==null?"disabled":taskbarOverlay.StatusCode;}}
+        internal string TaskbarOverlayStatusMessage {get{return taskbarOverlay==null?"默认关闭":taskbarOverlay.StatusMessage;}}
+        internal TaskbarBatteryOverlayForm ActiveTaskbarOverlay {get{return taskbarOverlay==null?null:taskbarOverlay.ActiveForm;}}
+        internal void ShowDetailsFromOverlay(){if(!disposed)ShowDetails(false);}
         internal void OpenFeedbackFromHost(IWin32Window parent,bool missingDevice,Action<string> copyText,Action<string> openLink){
             if(disposed)return;
             using(var dialog=new FeedbackForm(CreateFeedbackReport(),missingDevice,Style.Dark,copyText,openLink,feedbackReplies:FeedbackReplies,openMyFeedback:OpenMyFeedback)){
@@ -1074,7 +1080,7 @@ namespace AtkBatteryTray {
             FeedbackReplies=new FeedbackReplies(FeedbackStore.Current,new FeedbackHttp());
             feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);tray.ShowBalloonTip(5000,balloon.Title,balloon.Text,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
-            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed&&!systemShuttingDown){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();if(controlCenter!=null)controlCenter.NotifyThemeChanged();if(desktopWidget!=null)desktopWidget.NotifyThemeChanged();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else if(!systemShuttingDown){deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();},HandleSessionEnding,HandleEndSession);
+            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed&&!systemShuttingDown){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();if(controlCenter!=null)controlCenter.NotifyThemeChanged();if(desktopWidget!=null)desktopWidget.NotifyThemeChanged();if(taskbarOverlay!=null)taskbarOverlay.NotifyThemeChanged();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else if(!systemShuttingDown){deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed){trayIcons.RecreateAll();if(taskbarOverlay!=null)taskbarOverlay.NotifyTaskbarRecreated();}},HandleSessionEnding,HandleEndSession);
             sessionEndingHandler=delegate{SystemShutdown.NotifySessionEnding();if(genericWorker!=null)genericWorker.MarkShuttingDown();};
             Microsoft.Win32.SystemEvents.SessionEnding+=sessionEndingHandler;
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
@@ -1097,6 +1103,7 @@ namespace AtkBatteryTray {
             controlCenter=new ControlCenterController(this);
             desktopWidget=new DesktopWidgetController(this);
             localApi=new LocalApiController(this,dataDirectory);
+            taskbarOverlay=new TaskbarBatteryOverlayController(this);
             activityTimer.Tick+=delegate{activityTimer.Stop();DrainActivityRefresh();};
             readLeftButton=leftButtonReader??new Func<bool>(NativeDisplay.IsLeftButtonPressed);
             if(diagnostics){if(genericWorker==null){
@@ -1129,6 +1136,7 @@ namespace AtkBatteryTray {
             UpdateIcon();
             if(desktopWidget!=null)desktopWidget.ApplySettings();
             if(localApi!=null)localApi.ApplySettings();
+            if(taskbarOverlay!=null)taskbarOverlay.ApplySettings();
             refresh.Interval=DeviceSettings.Current.BackgroundSeconds*1000;refresh.Tick+=delegate {if(!panelOpen){RequestRead(true,false);RequestHeadsetRead(false);RequestAudioRead(false);RequestWirelessRead(false);}};refresh.Start();
             expiryTimer.Tick+=delegate{expiryTimer.Stop();UpdateIcon();};
             operationTimer.Interval=500;operationTimer.Tick+=delegate{if(audioBusy!=0&&(DateTime.UtcNow-audioOperationStarted).TotalSeconds>4){audioActionFailure="音频响应较慢，结果尚未确认";audioFailureAt=DateTime.UtcNow;if(details!=null&&!details.IsDisposed)details.Invalidate();}};
@@ -1219,6 +1227,7 @@ namespace AtkBatteryTray {
             if(feedbackChecks!=null)feedbackChecks.ConfigurationChanged();
             if(desktopWidget!=null)desktopWidget.ApplySettings();
             if(localApi!=null)localApi.ApplySettings();
+            if(taskbarOverlay!=null)taskbarOverlay.ApplySettings();
             refresh.Interval=sessionLocked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;
             if(refreshAudio){
                 Interlocked.Increment(ref audioGeneration);ClearPendingAudioCommands();audioNeedsReconcile=true;
@@ -1277,6 +1286,7 @@ namespace AtkBatteryTray {
             if(controlCenter!=null)controlCenter.NotifyDataChanged();
             if(desktopWidget!=null)desktopWidget.NotifyDataChanged();
             if(localApi!=null)localApi.NotifyDataChanged();
+            if(taskbarOverlay!=null)taskbarOverlay.NotifyDataChanged();
             if(persistStatus&&preferences.LowBatteryNotifications)EvaluateLowBattery(mouse,headset);
             ScheduleExpiry();
             SaveStatus();
@@ -1926,6 +1936,7 @@ namespace AtkBatteryTray {
             if(controlCenter!=null)controlCenter.Dispose();
             if(desktopWidget!=null)desktopWidget.Dispose();
             if(localApi!=null)localApi.Dispose();
+            if(taskbarOverlay!=null)taskbarOverlay.Dispose();
             if(devicePackChecks!=null)devicePackChecks.Dispose();
             if(updatedPanelRequest!=null)updatedPanelRequest.Dispose();
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;

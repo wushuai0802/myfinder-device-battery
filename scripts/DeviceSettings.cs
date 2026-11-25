@@ -71,6 +71,21 @@ namespace AtkBattery {
         }
     }
     [DataContract]
+    public sealed class TaskbarOverlaySettings {
+        [DataMember(Order=0, EmitDefaultValue=false)] public bool Enabled;
+        [DataMember(Order=1)] public bool ShowIcons = true;
+        [DataMember(Order=2)] public int MaxDevices = 3;
+        [DataMember(Order=3, EmitDefaultValue=false)] public int OffsetX;
+        [OnDeserializing] void Defaults(StreamingContext context) {
+            ShowIcons=true;MaxDevices=3;
+        }
+        public TaskbarOverlaySettings Clone(){return (TaskbarOverlaySettings)MemberwiseClone();}
+        internal void Normalize() {
+            MaxDevices=Math.Max(1,Math.Min(3,MaxDevices));
+            OffsetX=Math.Max(-400,Math.Min(400,OffsetX));
+        }
+    }
+    [DataContract]
     public sealed class AudioEndpointBindings {
         [DataMember(Order=0, EmitDefaultValue=false)] public string SpeakerEndpointId;
         [DataMember(Order=1, EmitDefaultValue=false)] public string HeadsetEndpointId;
@@ -124,6 +139,7 @@ namespace AtkBattery {
         [DataMember(Order=32, EmitDefaultValue=false)] public WindowBoundsState ControlCenterBounds;
         [DataMember(Order=33, EmitDefaultValue=false)] public DesktopWidgetSettings DesktopWidget = new DesktopWidgetSettings();
         [DataMember(Order=34, EmitDefaultValue=false)] public LocalApiSettings LocalApi = new LocalApiSettings();
+        [DataMember(Order=35, EmitDefaultValue=false)] public TaskbarOverlaySettings TaskbarOverlay = new TaskbarOverlaySettings();
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;AutoDetectMoreDevices=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
@@ -132,6 +148,7 @@ namespace AtkBattery {
             TrayGroups=new List<TrayGroup>();TrayIconStyle="number";
             DesktopWidget=new DesktopWidgetSettings();
             LocalApi=new LocalApiSettings();
+            TaskbarOverlay=new TaskbarOverlaySettings();
         }
 
         public AudioBindings Clone() {
@@ -148,6 +165,7 @@ namespace AtkBattery {
             copy.ControlCenterBounds=ControlCenterBounds==null?null:ControlCenterBounds.Clone();
             copy.DesktopWidget=DesktopWidget==null?new DesktopWidgetSettings():DesktopWidget.Clone();
             copy.LocalApi=LocalApi==null?new LocalApiSettings():LocalApi.Clone();
+            copy.TaskbarOverlay=TaskbarOverlay==null?new TaskbarOverlaySettings():TaskbarOverlay.Clone();
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
         }
@@ -274,6 +292,8 @@ namespace AtkBattery {
             if(settings.AudioDeviceBindings==null)settings.AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
             if(settings.AudioDeviceBindings.Count>128)throw new InvalidDataException("Too many device audio bindings");
             foreach(var pair in settings.AudioDeviceBindings){ValidateDeviceId(pair.Key);if(pair.Value==null)throw new InvalidDataException("Invalid device audio bindings");foreach(string role in new[]{"speaker","headset","microphone"})pair.Value.SetEndpoint(role,pair.Value.EndpointFor(role));}
+            if(settings.TaskbarOverlay==null)settings.TaskbarOverlay=new TaskbarOverlaySettings();
+            settings.TaskbarOverlay.Normalize();
         }
         static void ValidateDeviceIds(List<string> ids) {
             if(ids.Count>128)throw new InvalidDataException("Too many device identifiers");

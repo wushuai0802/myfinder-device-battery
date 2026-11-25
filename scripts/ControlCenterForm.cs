@@ -968,6 +968,11 @@ namespace AtkBatteryTray {
                 sb.Append(w.Enabled).Append('|').Append(w.Style).Append('|').Append(w.DockEdge).Append('|').Append(w.AutoHideOnEdge).Append('|').Append(w.TopMost).Append('|').Append(w.FullscreenPolicy).Append('|').Append(w.CompactOnMaximized).Append('|').Append(w.MaxDevices).Append('|');
             }
             sb.Append(pref.LocalApi != null && pref.LocalApi.Enabled).Append('|').Append(owner.LocalApiRunning).Append('|').Append(owner.LocalApiPort).Append('|');
+            if (pref.TaskbarOverlay != null) {
+                var tb = pref.TaskbarOverlay;
+                sb.Append(tb.Enabled).Append('|').Append(tb.ShowIcons).Append('|').Append(tb.MaxDevices).Append('|').Append(tb.OffsetX).Append('|');
+            }
+            sb.Append(owner.TaskbarOverlayStatusCode).Append('|');
             sb.Append(owner.StoppedFamilyDeviceCount).Append('|').Append(owner.IsProbeToggleBusy).Append('|').Append(owner.IsFamilyOpBusy).Append('|');
             sb.Append(owner.GenericReady).Append('|').Append(owner.GenericError ?? "").Append('|').Append(owner.GenericHealthSummary ?? "").Append('|');
             sb.Append(owner.Current != null ? owner.Current.Percent.ToString() : "-").Append('|');
@@ -1476,7 +1481,7 @@ namespace AtkBatteryTray {
 
             cardsGrid.Controls.Add(CreatePlacementOptionCard(0, "托盘图标", "通知区域显示电量数字，点击打开主面板", "已启用"), 0, 0);
             cardsGrid.Controls.Add(CreatePlacementOptionCard(1, "桌面小组件", "常驻桌面、胶囊收起、贴边隐藏、全屏防打扰", pref.DesktopWidget.Enabled ? "已启用" : "未启用"), 1, 0);
-            cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏旁直接显示几台设备的电量", "实验 · Wave 4"), 2, 0);
+            cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏旁直接显示几台设备的电量", pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled ? "已启用 · 实验" : "未启用 · 实验"), 2, 0);
 
             var detailCard = CreateCard(new Padding(22, 16, 22, 18));
             detailCard.Dock = DockStyle.Top;
@@ -1546,8 +1551,32 @@ namespace AtkBatteryTray {
                     UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.MaxDevices = maxOpts[idx]; });
                 }), true));
             } else {
-                var info = new Label { Text = "将在 Wave 4 作为实验功能提供：采用纯净室独立无焦点贴合浮层，不支持环境（如自动隐藏/侧边任务栏）将自动降级隐藏并提示原因。", Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true, MaximumSize = new Size(760, 0), Padding = new Padding(0, 4, 0, 12) };
-                rows.Add(info);
+                var tb = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
+                var tbEnable = new ControlCenterToggle(palette, dark) { Checked = tb.Enabled };
+                tbEnable.Toggled += delegate {
+                    UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.Enabled = tbEnable.Checked; });
+                };
+                rows.Add(CreateSettingRow("启用任务栏电量（实验）", "采用独立无焦点贴合层，绝不注入或劫持 Explorer 进程；不支持环境会自动降级隐藏", tbEnable, false));
+
+                rows.Add(CreateSettingRow("显示样式", "在任务栏通知区左侧紧凑显示设备电量条", CreateSegmentedChoices(new[] { "图标 + 数字", "仅数字" }, tb.ShowIcons ? 0 : 1, delegate(int idx) {
+                    UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.ShowIcons = idx == 0; });
+                }), true));
+
+                int[] tbMaxOpts = { 1, 2, 3 };
+                int tbMaxIdx = Array.IndexOf(tbMaxOpts, tb.MaxDevices);
+                if (tbMaxIdx < 0) tbMaxIdx = 2;
+                rows.Add(CreateSettingRow("最多显示设备数", null, CreateSegmentedChoices(new[] { "1 台", "2 台", "3 台" }, tbMaxIdx, delegate(int idx) {
+                    UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.MaxDevices = tbMaxOpts[idx]; });
+                }), true));
+
+                int[] offOpts = { 0, -40, -100 };
+                int offIdx = tb.OffsetX <= -70 ? 2 : tb.OffsetX <= -20 ? 1 : 0;
+                rows.Add(CreateSettingRow("水平微调", "如紧邻其他任务栏插件，可向左微调避让（自动限制在安全区内）", CreateSegmentedChoices(new[] { "紧邻通知区", "左移 40px", "左移 100px" }, offIdx, delegate(int idx) {
+                    UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.OffsetX = offOpts[idx]; });
+                }), true));
+
+                var diagLbl = new Label { Text = owner.TaskbarOverlayStatusMessage, Font = subFont, ForeColor = owner.TaskbarOverlayStatusCode == "ready" ? ThemePalette.LevelColor(90, dark) : palette.Muted, BackColor = palette.Card, AutoSize = true, MaximumSize = new Size(440, 0) };
+                rows.Add(CreateSettingRow("当前环境状态", "自动检测底部任务栏、自动隐藏与全屏遮挡", diagLbl, true));
             }
 
             detailCard.Controls.Add(preview);
