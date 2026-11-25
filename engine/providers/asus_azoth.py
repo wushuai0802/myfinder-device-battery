@@ -1,4 +1,5 @@
 """ROG keyboard battery pages for the original Azoth receiver and typed OMNI slots."""
+from dataclasses import replace
 import re
 import time
 
@@ -7,7 +8,12 @@ from battery_hid import BatteryHidProvider
 
 VID = 0x0B05
 PIDS = {0x1A85: "ROG Azoth", 0x1ACE: "ROG OMNI 接收器（键盘）"}
-KEYBOARDS = {0x1A85: "ROG Azoth", 0x1B06: "ROG Falchion RX Low Profile"}
+KEYBOARDS = {
+    0x1A85: "ROG Azoth",
+    0x1B06: "ROG Falchion RX Low Profile",
+    0x1AB0: "ROG Strix Scope II 96 Wireless",
+}
+_UNVERIFIED_CHARGING_NAMES = frozenset({KEYBOARDS[0x1AB0]})
 _PRODUCTS = {0x1A85: "ROG AZOTH", 0x1ACE: "ROG OMNI RECEIVER"}
 _MOUSE_PIDS = {0x1C0E, 0x1A94, 0x1B68, 0x1B69, 0x1B1A, 0x1B18,
                0x1AD7, 0x1B65, 0x1A68, 0x1A6A, 0x1A72}
@@ -159,6 +165,14 @@ class AsusAzothProvider(BatteryHidProvider):
 
     def device_name(self, info):
         return KEYBOARDS[info.get("keyboard_pid", info["product_id"])]
+
+    def poll(self):
+        statuses = super().poll()
+        return [
+            replace(status, charging=False, charging_known=False)
+            if status.name in _UNVERIFIED_CHARGING_NAMES else status
+            for status in statuses
+        ]
 
     def _query(self, dev, info):
         omni = info["product_id"] == 0x1ACE

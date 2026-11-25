@@ -654,16 +654,16 @@ class PulsarTest(unittest.TestCase):
             for pid in pids:
                 with self.subTest(vid=vid, pid=pid):
                     frame = bytearray(reply(33))
-                    if (vid, pid) == P.FB3E_ID:
+                    if (vid, pid) in P.STRICT_REPORT8_PREFIXES:
                         frame[5] = 2
                         frame[-1] = P.checksum(frame[:-1])
                     bus = FakeBus(vid, pid, [frame])
-                    if (vid, pid) in ((0x3710, 0x5501), P.FB3E_ID):
+                    if (vid, pid) == (0x3710, 0x5501) or (vid, pid) in P.STRICT_REPORT8_PREFIXES:
                         for col in bus.cols:
                             col.info.update(input_report_length=17, output_report_length=17,
                                             input_report_sizes={"8": 17}, output_report_sizes={"8": 17})
-                            if (vid, pid) == P.FB3E_ID:
-                                col.info["physical_id"] = r"pnp:usb\vid_3554&pid_fb3e\fixture"
+                            if (vid, pid) in P.STRICT_REPORT8_PREFIXES:
+                                col.info["physical_id"] = rf"pnp:usb\vid_{vid:04x}&pid_{pid:04x}\fixture"
                     # Newly admitted CompX IDs require descriptor evidence; legacy models still
                     # exercise the established unknown-length allowance here.
                     strict = (vid, pid) in ((0x3554, 0xF517), (0x3554, 0xFB56),

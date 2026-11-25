@@ -116,6 +116,12 @@ CONTROL_USAGE = (0xFF02, 0x0002)   # the collection the OpenMouse ATK/VXE panel 
 LINK8K_ID = (0x3710, 0x5501)
 FB3E_ID = (0x3554, 0xFB3E)
 FB3E_KEY_PREFIX = "pulsar:3554fb3e:"
+F3_MASTERGT_ID = (0x391D, 0x1A1A)
+F3_MASTERGT_KEY_PREFIX = "pulsar:391d1a1a:"
+STRICT_REPORT8_PREFIXES = {
+    FB3E_ID: FB3E_KEY_PREFIX,
+    F3_MASTERGT_ID: F3_MASTERGT_KEY_PREFIX,
+}
 # Exact N9 identities use serial/Bolutek, never the broad ATK mouse fallback.
 ATK_HEADSET_PIDS = {0x1204, 0x1262, 0x12D6}
 
@@ -210,6 +216,9 @@ PIDS: Dict[int, Dict[int, str]] = {
         0x5406: "Pulsar X2 CrazyLight Mini (2.4 GHz)",
         0x3414: "Pulsar X2 CrazyLight Mini (wired)",
         0x5501: "Pulsar Link 8K Dongle",  # #134 + Pulsar web snapshot; 待实机验证
+    },
+    0x391D: {
+        0x1A1A: "VGN Dragonfly 3 MasterGT",  # PR #66 contributor capture; C / 待实机验证
     },
 }
 
@@ -585,16 +594,17 @@ def parse_link8k_power(r) -> Optional[Tuple[int, bool]]:
     return (parsed[0], r[POWER_INDEX] == 1) if parsed is not None else None
 
 
-def pick_fb3e(infos):
-    """Select the single observed MI_01 control collection of one USB receiver."""
-    exact = [d for d in infos if (d.get("vendor_id"), d.get("product_id")) == FB3E_ID]
+def pick_strict_report8(infos, target_id):
+    """Select the single observed MI_01 control collection of one exact USB receiver."""
+    vid, pid = target_id
+    exact = [d for d in infos if (d.get("vendor_id"), d.get("product_id")) == target_id]
     controls = [d for d in exact if (d.get("usage_page"), d.get("usage")) == CONTROL_USAGE]
     if len(controls) != 1:
         return None
     info = controls[0]
     parent = info.get("physical_id")
     if (not isinstance(parent, str) or not re.fullmatch(
-            r"pnp:usb\\vid_3554&pid_fb3e(?:&rev_[0-9a-f]{4})?\\[^\\\s]+", parent, re.I)
+            rf"pnp:usb\\vid_{vid:04x}&pid_{pid:04x}(?:&rev_[0-9a-f]{{4}})?\\[^\\\s]+", parent, re.I)
             or any(d.get("physical_id") != parent for d in exact)
             or type(info.get("interface_number")) is not int
             or info["interface_number"] != CONTROL_INTERFACE or not info.get("path")):
@@ -606,6 +616,11 @@ def pick_fb3e(infos):
                 or sizes != {"8": PAYLOAD_LEN} or type(sizes["8"]) is not int):
             return None
     return info
+
+
+def pick_fb3e(infos):
+    """Select the single observed MI_01 control collection of one USB receiver."""
+    return pick_strict_report8(infos, FB3E_ID)
 
 
 def parse_fb3e_power(raw):
@@ -796,14 +811,15 @@ class PulsarProvider(Provider):
                 reader_diag_start = len(self._reader_diag)
                 key = f"pulsar:{vid:04x}{pid:04x}"
                 link8k = (vid, pid) == LINK8K_ID
-                fb3e = (vid, pid) == FB3E_ID
+                strict_r8 = (vid, pid) in STRICT_REPORT8_PREFIXES
                 parse_reply = parse_link8k_power if link8k else parse_power
-                if fb3e:
-                    d = pick_fb3e(mine)
+                if strict_r8:
+                    d = pick_strict_report8(mine, (vid, pid))
                     if d is None:
-                        self._note_reader("FB3E receiver or report 08/17 unproven; nothing sent")
+                        label = "FB3E" if (vid, pid) == FB3E_ID else f"{vid:04X}:{pid:04X}"
+                        self._note_reader(f"{label} receiver or report 08/17 unproven; nothing sent")
                         continue
-                    key = FB3E_KEY_PREFIX + d["physical_id"]
+                    key = STRICT_REPORT8_PREFIXES[(vid, pid)] + d["physical_id"]
                     present.add(key)
                     name = pids[pid]
                     parse_reply = parse_fb3e_power
@@ -850,7 +866,7 @@ class PulsarProvider(Provider):
                         self._note_reader("output=17 unproven; nothing sent" if has_control
                                           else "FF02:0002 missing; nothing sent")
                     continue
-                out_length = d["output_report_length"] if link8k or fb3e else output_length(d["path"])
+                out_length = d["output_report_length"] if link8k or strict_r8 else output_length(d["path"])
                 self._diag.append(f"[Pulsar] pid={vid:04x}:{pid:04x} '{name}' "
                                   f"iface={d.get('interface_number')} "
                                   f"{d.get('usage_page', 0):04x}:{d.get('usage', 0):04x}"
@@ -874,11 +890,11 @@ class PulsarProvider(Provider):
                 pack = self._device_pack
                 pack_model = bool(pack and pack.loaded and any(
                     entry.provider == self.name and entry.match.matches(d) for entry in pack.entries))
-                dpi, target = (None, None) if pack_model or link8k or fb3e else _capture_dpi(d, self._dpi_cache)
+                dpi, target = (None, None) if pack_model or link8k or strict_r8 else _capture_dpi(d, self._dpi_cache)
                 out.append(DeviceStatus(key, name, level, on_cable, True, "pulsar",
                                         kind="mouse", dpi=dpi, dpi_target=target,
-                                        physical_id=d["physical_id"] if fb3e else "",
-                                        charging_known=False if fb3e else None,
+                                        physical_id=d["physical_id"] if strict_r8 else "",
+                                        charging_known=False if strict_r8 else None,
                                         model_source="pack" if pack_model else "builtin"))
         # A mouse that stopped answering is not necessarily a mouse that went away
         # (idle it stops answering - see the docstring), so its last reading stays
@@ -894,11 +910,11 @@ class PulsarProvider(Provider):
                 self._diag.append(f"[Pulsar] {name} did not answer; keeping {level}%"
                                   f"{' (charging)' if charging else ''} greyed "
                                   f"(its receiver is still plugged in)")
-                fb3e = key.startswith(FB3E_KEY_PREFIX)
+                matched_prefix = next((p for p in STRICT_REPORT8_PREFIXES.values() if key.startswith(p)), "")
                 out.append(DeviceStatus(key, name, level, charging, False, "pulsar",
                                         kind="mouse", wake_on_input=True,
-                                        physical_id=key[len(FB3E_KEY_PREFIX):] if fb3e else "",
-                                        charging_known=False if fb3e else None))
+                                        physical_id=key[len(matched_prefix):] if matched_prefix else "",
+                                        charging_known=False if matched_prefix else None))
             else:
                 del self._last[key]
         return out

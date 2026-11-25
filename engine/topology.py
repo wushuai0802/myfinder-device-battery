@@ -483,6 +483,7 @@ def discover(paths, excluded=(), *, full=False):
                     (0x3710, 0x5501, 0xFF02, 0x0002),
                     (0x3554, 0xFB26, 0xFF02, 0x0002),
                     (0x3554, 0xFB3E, 0xFF02, 0x0002),
+                    (0x391D, 0x1A1A, 0xFF02, 0x0002),
                     (0x41E4, 0x2001, 0xFF04, 0x0002),
                     (0x41E4, 0x2001, 0xFF02, 0x0002),
                     (0x3554, 0xFA09, 0xFF02, 0x0002),
@@ -499,7 +500,7 @@ def discover(paths, excluded=(), *, full=False):
                         (0x3837, 0x1016),
                         (0x373B, 0x12F5),
                         (0x41E4, 0x2001), (0x3554, 0xFA09), (0x3554, 0xFB26),
-                        (0x3554, 0xFB3E)):
+                        (0x3554, 0xFB3E), (0x391D, 0x1A1A)):
                     # The alternate 1018 collection is useful only at 4D/64.
                     # Do not repeatedly open a known 41-byte/zero-capacity TLC
                     # for raw metadata. Keep all prior primary/provider gates.

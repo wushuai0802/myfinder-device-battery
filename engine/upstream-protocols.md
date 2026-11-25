@@ -4628,3 +4628,17 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - Narrowed scope & why other PR #901 entries were excluded: `0C45:FEFE` is shared across brands (including `eweadn_x87`'s `"2.4G Dongle"` already on `main`), and PR #901's 16 other PIDs lacked hardware verification (11 of them also relied on wildcard `0xFF00..0xFFFF` matching and dual-stack `0x10`/`0xA0` probing). To keep the engine fail-closed and collision-free, only the hardware-evidenced `0C45:FEFE` `"MINI 60 HE PRO Dongle"` is enrolled directly inside `engine/providers/aula_keyboard.py`.
 - Gate & transport: exact `0C45:FEFE`, exact product string `"MINI 60 HE PRO Dongle"`, `MI_03`, unique `FF60:0061`, resolved USB parent, and runtime descriptor proof (HidP `battery_caps` with strict raw-descriptor fallback) of sole unnumbered 33-byte Input/Output report `0`.
 - Single-write read-only query: sends `00 AA 10 18 00` + 28 zero bytes once per poll (no retry, no `0xA0` probe), expects 32-byte unnumbered reply starting `55 10 18 00` with `reply[25]` (payload[17]) in `1..100`. A `0%` / all-zero asleep payload emits no reading; charging state remains unknown (`charging_known = False`). Contributor live observation (2026-11-19): awake reply returned `76%` (`payload[18] = 0x02`, unverified and ignored); asleep unit returned silence on `0x10`.
+
+## ROG Strix Scope II 96 Wireless via OMNI (`0B05:1AB0`, PR #123)
+
+**Verification C: read-only candidate ported from PR #123 (`Xineyu123`) into existing `engine/providers/asus_azoth.py`; pending maintainer hardware verification.**
+
+- Enrolled directly under `asus_azoth.KEYBOARDS` (`0x1AB0: "ROG Strix Scope II 96 Wireless"`), reusing the existing `0B05:1ACE` OMNI dual-collection gate: `MI_02&Col01` (Report 1/64 proven) sends `01 A0` to verify `0x1AB0` is the sole paired keyboard, and `MI_02&Col02` (`FF00:0001`, Report 2/64 proven) sends `02 12 01`.
+- Contributor live capture (#123): paired frame `01 A0 00 01 00 B0 1A 02 04 ...`, battery frame `02 12 01 00 00 00 2E FF 00 00 ...` (`reply[6] = 46%`, `reply[9] = 0`, matching user's ~40% reference). Because charging was not hardware-tested, `AsusAzothProvider` keeps `charging_known = False` and `charging = False` for `0x1AB0` while preserving existing behavior for Azoth (`0x1A85`) and Falchion RX LP (`0x1B06`).
+
+## VGN Dragonfly 3 MasterGT (`391D:1A1A`, PR #66)
+
+**Verification C: read-only candidate ported and hardened from PR #66 (`jigongke`) into `engine/providers/pulsar.py`; pending maintainer hardware verification.**
+
+- Strict identity & descriptor proof (matching `3554:FB3E`'s highest guard level): exact `391D:1A1A` only, `MI_01`, unique `FF02:0002` per resolved `pnp:usb\vid_391d&pid_1a1a\...` USB parent, and runtime HidP `battery_caps` / strict raw-descriptor proof (`topology.py`) of sole 17-byte Input/Output report `08`. Other `391D` devices (e.g., `vgn_dragonfly3`, `vgn_ry_ms`, `vgn_beiying`) are never queried by `pulsar` and produce `0` candidate count.
+- Contributor live capture (#66, `"Dragonfly 3 MasterGT"`, manufacturer `Compx`): request `08 04 00 ... 49` (`0x55 - 0x0C = 0x49`), three consecutive identical replies `08 04 00 00 00 02 64 00 10 2c 00 00 00 00 00 00 a7` (`byte6 = 100%`, `byte7 = 0`, `4140 mV`, CompX `0x55 - sum(0..15) = 0xA7`). Parsed via strict `parse_fb3e_power`, keeping `charging_known = False`, DPI disabled, and per-receiver history retention on idle silence until removal.
