@@ -118,7 +118,7 @@ namespace AtkBatteryTray {
         internal static int DpiStageCount(WirelessDevice device){return device!=null&&device.Kind=="mouse"&&device.Dpi!=null&&device.Dpi.Supported&&device.Dpi.Stages!=null?Math.Min(8,device.Dpi.Stages.Length):0;}
         internal static string DpiLabel(WirelessDevice device){return device!=null&&device.Dpi!=null&&device.Dpi.StageSource=="quick"?"快捷DPI":"DPI";}
         internal static bool DpiFresh(WirelessDevice device) {
-            return device!=null&&device.Dpi!=null&&device.Dpi.Supported&&device.Dpi.Current.HasValue&&WirelessDpi.ValidValue(device.Dpi.Current.Value)&&String.IsNullOrEmpty(device.Dpi.Error)&&WirelessDpi.ValidToken(device.Dpi.TargetToken)&&device.Online&&device.ConnectionState=="connected"&&UiState.Recent(device.Dpi.CheckedTime,DateTime.UtcNow,90);
+            return device!=null&&device.Dpi!=null&&device.Dpi.Supported&&device.Dpi.Current.HasValue&&WirelessDpi.ValidValue(device.Dpi.Current.Value)&&String.IsNullOrEmpty(device.Dpi.Error)&&(!device.Dpi.CanSet||WirelessDpi.ValidToken(device.Dpi.TargetToken))&&device.Online&&device.ConnectionState=="connected"&&UiState.Recent(device.Dpi.CheckedTime,DateTime.UtcNow,90);
         }
         internal static string DpiSubtitle(WirelessDevice device,int? pending,string failure) {
             string label=DpiLabel(device);if(pending.HasValue)return label+" · 等待 "+pending.Value;
