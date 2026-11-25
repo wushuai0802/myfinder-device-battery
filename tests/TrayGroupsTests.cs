@@ -292,12 +292,27 @@ static class TrayGroupsTests {
             }
         }
     }
+    static void ApproximateTrayBadgePolish(){
+        // #1139: approximate readings omit the tiny "~" prefix in 16-32px tray number badges so digits stay full-sized
+        // and never resemble a minus sign ("-"), while tooltips still disclose approximation ("约80%").
+        foreach(int size in new[]{16,20,24,32})foreach(int level in new[]{80,100}){
+            using(var exact=TrayGlyph.Render(level,false,true,false,size,false))
+            using(var approx=TrayGlyph.Render(level,false,true,false,size,true)){
+                bool same=exact.Width==approx.Width&&exact.Height==approx.Height;
+                for(int y=0;same&&y<exact.Height;y++)for(int x=0;same&&x<exact.Width;x++)if(exact.GetPixel(x,y)!=approx.GetPixel(x,y))same=false;
+                Check(same,"approximate tray number glyph matches exact digit size without leading ~/- at "+size+"px ("+level+"%)");
+            }
+        }
+        var approxCard=Card("approx","mouse",80);approxCard.Battery.Approximate=true;approxCard.Name="Logitech G";
+        Check(TraySelection.Present(new List<WirelessCard>{approxCard},approxCard,"设备").Tooltip.Contains("约80%"),"tray tooltip still discloses approximate battery reading");
+    }
     [STAThread] static int Main(string[] args){
         output=args.Length>0?args[0]:Path.GetDirectoryName(Application.ExecutablePath);
         var previous=DeviceSettings.Current;
         try {
             Run("configuration contract",Contracts);Run("selection contract",SelectionContract);Run("lifecycle contract",LifecycleContract);Run("device style contract",DeviceStyleContract);Run("preferences entry",PreferencesEntry);
             Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("hidden candidates without extra groups",delegate{HiddenCandidates(false);});Run("hidden candidates with extra groups",delegate{HiddenCandidates(true);});Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
+            Run("approximate tray badge omits tiny tilde prefix (#1139)",ApproximateTrayBadgePolish);
             foreach(int size in new[]{16,20,24,32}){int pixels=size;Run("battery bars at "+pixels+"px",delegate{BatteryBars(pixels);});}
             Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}

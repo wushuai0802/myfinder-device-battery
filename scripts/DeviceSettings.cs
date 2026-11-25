@@ -142,6 +142,7 @@ namespace AtkBattery {
         [DataMember(Order=33, EmitDefaultValue=false)] public DesktopWidgetSettings DesktopWidget = new DesktopWidgetSettings();
         [DataMember(Order=34, EmitDefaultValue=false)] public LocalApiSettings LocalApi = new LocalApiSettings();
         [DataMember(Order=35, EmitDefaultValue=false)] public TaskbarOverlaySettings TaskbarOverlay = new TaskbarOverlaySettings();
+        [DataMember(Order=36, EmitDefaultValue=false)] public bool HideTrayIcon;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;AutoDetectMoreDevices=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
@@ -168,6 +169,7 @@ namespace AtkBattery {
             copy.DesktopWidget=DesktopWidget==null?new DesktopWidgetSettings():DesktopWidget.Clone();
             copy.LocalApi=LocalApi==null?new LocalApiSettings():LocalApi.Clone();
             copy.TaskbarOverlay=TaskbarOverlay==null?new TaskbarOverlaySettings():TaskbarOverlay.Clone();
+            copy.HideTrayIcon=HideTrayIcon;
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
         }
@@ -296,6 +298,7 @@ namespace AtkBattery {
             foreach(var pair in settings.AudioDeviceBindings){ValidateDeviceId(pair.Key);if(pair.Value==null)throw new InvalidDataException("Invalid device audio bindings");foreach(string role in new[]{"speaker","headset","microphone"})pair.Value.SetEndpoint(role,pair.Value.EndpointFor(role));}
             if(settings.TaskbarOverlay==null)settings.TaskbarOverlay=new TaskbarOverlaySettings();
             settings.TaskbarOverlay.Normalize();
+            if(settings.HideTrayIcon&&!settings.DesktopWidget.Enabled&&!settings.TaskbarOverlay.Enabled)settings.HideTrayIcon=false;
         }
         static void ValidateDeviceIds(List<string> ids) {
             if(ids.Count>128)throw new InvalidDataException("Too many device identifiers");
@@ -333,6 +336,7 @@ namespace AtkBattery {
                 // A malformed layout value must not discard the other settings.
                 while(document.DocumentElement["PanelLayout"]!=null&&document.DocumentElement["PanelLayout"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["PanelLayout"]);
                 while(document.DocumentElement["AutoDetectMoreDevices"]!=null&&document.DocumentElement["AutoDetectMoreDevices"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["AutoDetectMoreDevices"]);
+                while(document.DocumentElement["HideTrayIcon"]!=null&&document.DocumentElement["HideTrayIcon"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["HideTrayIcon"]);
                 var fields=new AudioBindings();TrayConfiguration.ReadFields(document.DocumentElement,fields);
                 AudioBindings settings;
                 using(var reader=new XmlNodeReader(document))settings=serializer.ReadObject(reader) as AudioBindings;

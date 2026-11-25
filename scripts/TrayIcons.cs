@@ -47,15 +47,41 @@ namespace AtkBatteryTray {
         }
         static string Fit(string value,int length){value=value??"无线设备";if(value.Length<=length)return value;int take=Math.Max(0,length-1);if(take>0&&Char.IsHighSurrogate(value[take-1]))take--;return value.Substring(0,take)+"…";}
     }
+    internal static class TrayVisibilityPolicy {
+        internal static bool HasAlternativeSurface(AudioBindings pref){
+            if(pref==null)return false;
+            bool widget=pref.DesktopWidget!=null&&pref.DesktopWidget.Enabled;
+            bool taskbar=pref.TaskbarOverlay!=null&&pref.TaskbarOverlay.Enabled;
+            return widget||taskbar;
+        }
+        internal static bool IsTaskbarSafeToHideTray(string statusCode){
+            return statusCode=="ready"||statusCode=="ready_avoided"||statusCode=="fullscreen_hidden";
+        }
+        internal static bool ShouldShowTrayIcon(AudioBindings pref,string taskbarStatusCode){
+            if(pref==null||!pref.HideTrayIcon)return true;
+            if(pref.DesktopWidget!=null&&pref.DesktopWidget.Enabled)return false;
+            if(pref.TaskbarOverlay!=null&&pref.TaskbarOverlay.Enabled&&IsTaskbarSafeToHideTray(taskbarStatusCode))return false;
+            // Fail-safe: keep primary tray icon visible whenever taskbar overlay is uninitialized,
+            // disabled, unknown, or persistently degraded (e.g. auto-hide/non-bottom/plugin conflict).
+            return true;
+        }
+    }
     internal interface ITrayIcon:IDisposable {
         bool Update(TrayView view,string style,bool dark,int size);
         void Recreate();
     }
     internal sealed class NativeTrayIcon:ITrayIcon {
-        readonly NotifyIcon tray;readonly bool visible;
+        readonly NotifyIcon tray;readonly bool hostAllowed;
+        bool userVisible=true;
         Icon icon;string lastKey,lastTooltip;
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
-        internal NativeTrayIcon(NotifyIcon tray,bool visible){this.tray=tray;this.visible=visible;}
+        internal bool UserVisible {get{return userVisible;}}
+        internal NativeTrayIcon(NotifyIcon tray,bool visible){this.tray=tray;this.hostAllowed=visible;}
+        internal void SetUserVisible(bool show){
+            if(userVisible==show)return;
+            userVisible=show;
+            tray.Visible=hostAllowed&&userVisible&&icon!=null;
+        }
         public bool Update(TrayView view,string style,bool dark,int size){
             var battery=view.Battery;bool taskbarDark=Style.TaskbarDark;
             string key=battery.Key+"|"+style+"|"+view.DeviceKind+"|"+dark+"|"+size+"|"+view.UpdateBadge+"|"+(view.UpdateBadge?view.UpdateColor.ToArgb():0)+"|"+taskbarDark;bool changed=key!=lastKey;
@@ -68,9 +94,9 @@ namespace AtkBatteryTray {
                 lastKey=key;
             }
             if(view.Tooltip!=lastTooltip){tray.Text=view.Tooltip;lastTooltip=view.Tooltip;}
-            tray.Visible=visible;return changed;
+            tray.Visible=hostAllowed&&userVisible;return changed;
         }
-        public void Recreate(){tray.Visible=false;tray.Visible=visible&&icon!=null;}
+        public void Recreate(){tray.Visible=false;tray.Visible=hostAllowed&&userVisible&&icon!=null;}
         public void Dispose(){tray.Visible=false;tray.Dispose();if(icon!=null){icon.Dispose();icon=null;}}
     }
     // Owns the original icon for its entire lifetime. Only changed IDs are created
@@ -79,12 +105,22 @@ namespace AtkBatteryTray {
         internal readonly ITrayIcon First;
         readonly Func<string,ITrayIcon> factory;
         readonly Dictionary<string,ITrayIcon> extras=new Dictionary<string,ITrayIcon>(StringComparer.Ordinal);
-        bool disposed;
+        bool disposed,userVisible=true;
         internal TrayIconSet(ITrayIcon first,Func<string,ITrayIcon> create){First=first;factory=create;}
         internal void Sync(IEnumerable<TrayGroup> groups){
             if(disposed)return;var ids=new HashSet<string>(StringComparer.Ordinal);foreach(var group in groups)ids.Add(group.Id);
             foreach(string id in new List<string>(extras.Keys))if(!ids.Contains(id)){extras[id].Dispose();extras.Remove(id);}
-            foreach(var group in groups)if(!extras.ContainsKey(group.Id))extras.Add(group.Id,factory(group.Id));
+            foreach(var group in groups)if(!extras.ContainsKey(group.Id)){
+                var created=factory(group.Id);
+                var native=created as NativeTrayIcon;if(native!=null)native.SetUserVisible(userVisible);
+                extras.Add(group.Id,created);
+            }
+        }
+        internal void SetAllUserVisible(bool show){
+            if(disposed)return;
+            userVisible=show;
+            var firstNative=First as NativeTrayIcon;if(firstNative!=null)firstNative.SetUserVisible(show);
+            foreach(var icon in extras.Values){var native=icon as NativeTrayIcon;if(native!=null)native.SetUserVisible(show);}
         }
         internal ITrayIcon For(string id){return id==TrayConfiguration.FirstId?First:extras[id];}
         internal void RecreateAll(){if(disposed)return;First.Recreate();foreach(var icon in extras.Values)icon.Recreate();}
