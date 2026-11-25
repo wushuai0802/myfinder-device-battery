@@ -22,6 +22,15 @@ namespace AtkBattery {
         }
     }
     [DataContract]
+    public sealed class WindowBoundsState {
+        [DataMember(Order=0)] public int X;
+        [DataMember(Order=1)] public int Y;
+        [DataMember(Order=2)] public int Width;
+        [DataMember(Order=3)] public int Height;
+        [DataMember(Order=4, EmitDefaultValue=false)] public bool HasPosition;
+        public WindowBoundsState Clone(){return (WindowBoundsState)MemberwiseClone();}
+    }
+    [DataContract]
     public sealed class AudioEndpointBindings {
         [DataMember(Order=0, EmitDefaultValue=false)] public string SpeakerEndpointId;
         [DataMember(Order=1, EmitDefaultValue=false)] public string HeadsetEndpointId;
@@ -72,6 +81,7 @@ namespace AtkBattery {
         [DataMember(Order=29)] public string FontSize = "normal";
         [DataMember(Order=30)] public string PanelLayout = "ring";
         [DataMember(Order=31)] public bool AutoDetectMoreDevices = true;
+        [DataMember(Order=32, EmitDefaultValue=false)] public WindowBoundsState ControlCenterBounds;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;AutoDetectMoreDevices=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
@@ -91,6 +101,7 @@ namespace AtkBattery {
             if(AudioDeviceBindings!=null)foreach(var pair in AudioDeviceBindings)copy.AudioDeviceBindings[pair.Key]=pair.Value==null?null:pair.Value.Clone();
             copy.TrayIconStyle=TrayIconStyle;copy.TrayGroupHintShown=TrayGroupHintShown;
             copy.LastTrayIconPosition=LastTrayIconPosition==null?null:LastTrayIconPosition.Clone();
+            copy.ControlCenterBounds=ControlCenterBounds==null?null:ControlCenterBounds.Clone();
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
         }

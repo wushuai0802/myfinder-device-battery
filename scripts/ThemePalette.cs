@@ -6,23 +6,27 @@ namespace AtkBatteryTray {
     // Shared panel/dialog colors. TrayGlyph keeps its theme-independent badge.
     internal sealed class ThemePalette {
         internal readonly Color Card,Border,Foreground,Muted,Track,Accent,Selected,SelectedForeground;
+        internal readonly string StyleKey;
         readonly bool dark;
-        internal static readonly string[] Keys={"ocean","native","amber","mist"};
-        static readonly string[] Names={"海蓝","原生","琥珀","青雾"};
+        internal static readonly string[] Keys={"ocean","native","amber","mist","graphite"};
+        internal static readonly string[] Names={"海蓝","原生","琥珀","青雾","石墨"};
         static readonly ThemePalette[] Palettes={
-            new ThemePalette(true, 0x2C3038,0x4B535E,0xF4F6F8,0xA7B1C1,0x424852,0x4D9BFF,0x1F6FEB,0xFFFFFF),
-            new ThemePalette(false,0xFFFFFF,0xDCE2EB,0x1B2430,0x5F6B7C,0xE7EBF1,0x0865D6,0x0865D6,0xFFFFFF),
-            new ThemePalette(true, 0x2B2B2B,0x3E3E3E,0xFFFFFF,0xABABAB,0x454545,0x60CDFF,0x0067C0,0xFFFFFF),
-            new ThemePalette(false,0xFFFFFF,0xE5E5E5,0x1A1A1A,0x666666,0xE6E6E6,0x005FB8,0x005FB8,0xFFFFFF),
-            new ThemePalette(true, 0x231F1C,0x38322D,0xF3EFEA,0xA89E95,0x3D3631,0xE89150,0xE89150,0x1A1208),
-            new ThemePalette(false,0xFFFDFA,0xE6DFD5,0x2A241F,0x6F665C,0xEEE8DF,0xA3521E,0xA3521E,0xFFFFFF),
-            new ThemePalette(true, 0x242B33,0x323C47,0xDDE3EA,0x98A4B3,0x36414C,0x5CC2C4,0x5CC2C4,0x0E171B),
-            new ThemePalette(false,0xFAFCFD,0xD9E2EC,0x1E293B,0x5A6A80,0xE4EBF1,0x1F7A7C,0x1F7A7C,0xFFFFFF)
+            new ThemePalette("ocean",true, 0x2C3038,0x4B535E,0xF4F6F8,0xA7B1C1,0x424852,0x4D9BFF,0x1F6FEB,0xFFFFFF),
+            new ThemePalette("ocean",false,0xFFFFFF,0xDCE2EB,0x1B2430,0x5F6B7C,0xE7EBF1,0x0865D6,0x0865D6,0xFFFFFF),
+            new ThemePalette("native",true, 0x2B2B2B,0x3E3E3E,0xFFFFFF,0xABABAB,0x454545,0x60CDFF,0x0067C0,0xFFFFFF),
+            new ThemePalette("native",false,0xFFFFFF,0xE5E5E5,0x1A1A1A,0x666666,0xE6E6E6,0x005FB8,0x005FB8,0xFFFFFF),
+            new ThemePalette("amber",true, 0x231F1C,0x38322D,0xF3EFEA,0xA89E95,0x3D3631,0xE89150,0xE89150,0x1A1208),
+            new ThemePalette("amber",false,0xFFFDFA,0xE6DFD5,0x2A241F,0x6F665C,0xEEE8DF,0xA3521E,0xA3521E,0xFFFFFF),
+            new ThemePalette("mist",true, 0x242B33,0x323C47,0xDDE3EA,0x98A4B3,0x36414C,0x5CC2C4,0x5CC2C4,0x0E171B),
+            new ThemePalette("mist",false,0xFAFCFD,0xD9E2EC,0x1E293B,0x5A6A80,0xE4EBF1,0x1F7A7C,0x1F7A7C,0xFFFFFF),
+            new ThemePalette("graphite",true, 0x232323,0x363636,0xF2F2F2,0x9B9B9B,0x3A3A3A,0xE9E9E9,0xE9E9E9,0x1A1A1A),
+            new ThemePalette("graphite",false,0xFFFFFF,0xEAEAEA,0x1A1A1A,0x666666,0xE3E3E3,0x1F1F1F,0x1F1F1F,0xFFFFFF)
         };
-        ThemePalette(bool dark,int card,int border,int foreground,int muted,int track,int accent,int selected,int selectedForeground) {
-            this.dark=dark;Card=Rgb(card);Border=Rgb(border);Foreground=Rgb(foreground);Muted=Rgb(muted);Track=Rgb(track);Accent=Rgb(accent);Selected=Rgb(selected);SelectedForeground=Rgb(selectedForeground);
+        ThemePalette(string styleKey,bool dark,int card,int border,int foreground,int muted,int track,int accent,int selected,int selectedForeground) {
+            StyleKey=styleKey;this.dark=dark;Card=Rgb(card);Border=Rgb(border);Foreground=Rgb(foreground);Muted=Rgb(muted);Track=Rgb(track);Accent=Rgb(accent);Selected=Rgb(selected);SelectedForeground=Rgb(selectedForeground);
         }
         ThemePalette() {
+            StyleKey="high-contrast";
             Card=SystemColors.Window;Border=SystemColors.WindowText;Foreground=SystemColors.WindowText;Muted=SystemColors.GrayText;
             Track=SystemColors.Control;Accent=SystemColors.Highlight;Selected=SystemColors.Highlight;SelectedForeground=SystemColors.HighlightText;
         }
@@ -35,15 +39,25 @@ namespace AtkBatteryTray {
             return Palettes[Array.IndexOf(Keys,Normalize(style))*2+(dark?0:1)];
         }
         internal static ThemePalette Current(bool dark){return For(DeviceSettings.Current.ThemeStyle,dark);}
+        internal Color WindowBackground {get{if(VisualDesign.HighContrast)return SystemColors.Window;if(StyleKey=="graphite")return Rgb(dark?0x1C1C1C:0xF3F3F3);return Blend(Card,dark?Color.Black:Track,dark?46:85);}}
+        internal Color RailBackground {get{if(VisualDesign.HighContrast)return SystemColors.Control;if(StyleKey=="graphite")return Rgb(dark?0x191919:0xEBEBEB);return Blend(WindowBackground,dark?Color.Black:Border,dark?28:55);}}
+        internal Color RaisedSurface {get{if(VisualDesign.HighContrast)return SystemColors.Control;if(StyleKey=="graphite")return Rgb(dark?0x2C2C2C:0xF6F6F6);return dark?Blend(Card,Track,130):Blend(Card,Track,120);}}
         internal Color Interaction(bool pressed){return VisualDesign.HighContrast?Selected:Color.FromArgb(pressed?(dark?30:19):(dark?18:10),Foreground);}
         internal Color IconFill {get{return VisualDesign.HighContrast?Track:Color.FromArgb(dark?9:5,Foreground);}}
         internal Color SyncFill {get{return VisualDesign.HighContrast?Card:Color.FromArgb(225,Card);}}
         internal Color Knob {get{return VisualDesign.HighContrast?SystemColors.Window:dark?Foreground:Color.White;}}
-        internal static Color LevelColor(int? percent,bool dark) {
+        internal static Color LevelColorFor(string style,int? percent,bool dark) {
             if(VisualDesign.HighContrast)return percent.HasValue?SystemColors.WindowText:SystemColors.GrayText;
-            if(!percent.HasValue)return Current(dark).Muted;
+            if(!percent.HasValue)return For(style,dark).Muted;
+            if(Normalize(style)=="graphite"){
+                if(dark)return Rgb(percent.Value<20?0xF07A72:percent.Value<50?0xE2C56E:0x7FD3A6);
+                return Rgb(percent.Value<20?0xC42B1C:percent.Value<50?0xA26A00:0x1E8A57);
+            }
             if(dark)return TrayGlyph.LevelColor(percent,true);
             return Rgb(percent.Value<20?0xC92A22:percent.Value<50?0x9E6400:0x1A8A50);
+        }
+        internal static Color LevelColor(int? percent,bool dark) {
+            return LevelColorFor(DeviceSettings.Current.ThemeStyle,percent,dark);
         }
         internal static bool IsLow(BatteryView reading,int threshold){return reading!=null&&reading.Fresh&&reading.Percent.HasValue&&reading.Percent.Value<threshold;}
         internal static Color WarningOverlay(bool dark){return VisualDesign.HighContrast?Color.Transparent:Color.FromArgb(dark?26:16,LevelColor(0,dark));}

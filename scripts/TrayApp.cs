@@ -379,7 +379,7 @@ namespace AtkBatteryTray {
                 }
                 if((id==460||id==461)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==228){pref.FontSize=id==461?"large":"normal";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
                 if((id==450||id==451)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){pref.TrayIconStyle=id==450?"number":"device";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
-                if(id>=440&&id<=443&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==223) {
+                if(id>=440&&id<440+ThemePalette.Keys.Length&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==223) {
                     pref.ThemeStyle=ThemePalette.Keys[id-440];owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
                 if(id>=400&&id<=432) {
@@ -869,6 +869,22 @@ namespace AtkBatteryTray {
         readonly TrayBalloonRoute balloonRoute=new TrayBalloonRoute();
         internal FeedbackReplies FeedbackReplies=new FeedbackReplies(new FeedbackStore(null),new FeedbackHttp());
         FeedbackReplyController feedbackChecks;MyFeedbackDialog feedbackDialog;
+        readonly ControlCenterController controlCenter;
+        internal UnadaptedDevice[] UnadaptedDevicesSnapshot {get{return unadaptedDevices??new UnadaptedDevice[0];}}
+        public void ShowControlCenter(ControlCenterPage page=ControlCenterPage.Devices){if(!disposed&&controlCenter!=null)controlCenter.Show(page);}
+        internal bool ControlCenterOpen {get{return controlCenter!=null&&controlCenter.IsOpen;}}
+        internal ControlCenterForm ActiveControlCenter {get{return controlCenter==null?null:controlCenter.ActiveForm;}}
+        internal void OpenFeedbackFromHost(IWin32Window parent,bool missingDevice,Action<string> copyText,Action<string> openLink){
+            if(disposed)return;
+            using(var dialog=new FeedbackForm(CreateFeedbackReport(),missingDevice,Style.Dark,copyText,openLink,feedbackReplies:FeedbackReplies,openMyFeedback:OpenMyFeedback)){
+                dialog.ShowDialog(parent);
+                dialog.OpenRequestedHistory();
+            }
+        }
+        internal void SavePreferencesIfLoaded(AudioBindings preferences){
+            try{if(saveConfiguration==(Action<AudioBindings>)DeviceSettings.SaveConfiguration)DeviceSettings.SaveConfigurationIfLoaded(preferences);else saveConfiguration(preferences);}
+            catch(Exception){SafeDiagnostic.Transition("control_center_bounds","save_failed");}
+        }
         // Direct entries retain restore/activation behavior. Submission forms
         // defer this entry until their modal loop has returned.
         internal void OpenMyFeedback(long number=0){
@@ -1050,7 +1066,7 @@ namespace AtkBatteryTray {
             FeedbackReplies=new FeedbackReplies(FeedbackStore.Current,new FeedbackHttp());
             feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);tray.ShowBalloonTip(5000,balloon.Title,balloon.Text,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
-            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed&&!systemShuttingDown){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else if(!systemShuttingDown){deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();},HandleSessionEnding,HandleEndSession);
+            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed&&!systemShuttingDown){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();if(controlCenter!=null)controlCenter.NotifyThemeChanged();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else if(!systemShuttingDown){deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();},HandleSessionEnding,HandleEndSession);
             sessionEndingHandler=delegate{SystemShutdown.NotifySessionEnding();if(genericWorker!=null)genericWorker.MarkShuttingDown();};
             Microsoft.Win32.SystemEvents.SessionEnding+=sessionEndingHandler;
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
@@ -1070,6 +1086,7 @@ namespace AtkBatteryTray {
             genericWorker=wirelessReader;
             activityClock=activityTime??new Func<DateTime>(delegate{return DateTime.UtcNow;});
             saveConfiguration=configurationWriter??DeviceSettings.SaveConfiguration;
+            controlCenter=new ControlCenterController(this);
             activityTimer.Tick+=delegate{activityTimer.Stop();DrainActivityRefresh();};
             readLeftButton=leftButtonReader??new Func<bool>(NativeDisplay.IsLeftButtonPressed);
             if(diagnostics){if(genericWorker==null){
@@ -1085,6 +1102,7 @@ namespace AtkBatteryTray {
             var unused=dispatch.Handle;
             var menu=new ContextMenuStrip();
             var detail=new ToolStripMenuItem("设备电量与音频");detail.Click+=delegate {ShowDetails();};menu.Items.Add(detail);
+            var controlCenterItem=new ToolStripMenuItem("控制中心…");controlCenterItem.Click+=delegate {ShowControlCenter();};menu.Items.Add(controlCenterItem);
             var update=new ToolStripMenuItem("\u5237\u65b0");update.Click+=delegate {RefreshBattery();};menu.Items.Add(update);
             menu.Items.Add(audioSettingsMenu);menu.Opening+=delegate {BuildAudioSettingsMenu();};
             var settingsItem=new ToolStripMenuItem("设置…");settingsItem.Click+=delegate {ShowSettings();};menu.Items.Add(settingsItem);
@@ -1242,6 +1260,7 @@ namespace AtkBatteryTray {
                 }
             }
             if(details!=null&&!details.IsDisposed)details.SyncDevices();
+            if(controlCenter!=null)controlCenter.NotifyDataChanged();
             if(persistStatus&&preferences.LowBatteryNotifications)EvaluateLowBattery(mouse,headset);
             ScheduleExpiry();
             SaveStatus();
@@ -1888,6 +1907,7 @@ namespace AtkBatteryTray {
             if(sessionEndingHandler!=null){try{Microsoft.Win32.SystemEvents.SessionEnding-=sessionEndingHandler;}catch(Exception){}sessionEndingHandler=null;}
             if(updates!=null)updates.Dispose();
             if(feedbackChecks!=null)feedbackChecks.Dispose();if(feedbackDialog!=null&&!feedbackDialog.IsDisposed)feedbackDialog.Close();
+            if(controlCenter!=null)controlCenter.Dispose();
             if(devicePackChecks!=null)devicePackChecks.Dispose();
             if(updatedPanelRequest!=null)updatedPanelRequest.Dispose();
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
