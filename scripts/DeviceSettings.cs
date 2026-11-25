@@ -84,7 +84,7 @@ namespace AtkBattery {
         public TaskbarOverlaySettings Clone(){return (TaskbarOverlaySettings)MemberwiseClone();}
         internal void Normalize() {
             MaxDevices=Math.Max(1,Math.Min(3,MaxDevices));
-            OffsetX=Math.Max(-400,Math.Min(400,OffsetX));
+            OffsetX=Math.Max(-320,Math.Min(0,OffsetX));
         }
     }
     [DataContract]

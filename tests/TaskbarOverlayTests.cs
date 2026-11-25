@@ -58,13 +58,13 @@ static class TaskbarOverlayTests {
         var cfg = new TaskbarOverlaySettings { Enabled = true, ShowIcons = false, MaxDevices = 99, OffsetX = -9999 };
         cfg.Normalize();
         Check(cfg.MaxDevices == 3, "MaxDevices clamped upper to 3");
-        Check(cfg.OffsetX == -400, "OffsetX clamped lower to -400");
+        Check(cfg.OffsetX == -320, "OffsetX clamped lower to -320");
 
         cfg.MaxDevices = 0;
         cfg.OffsetX = 9999;
         cfg.Normalize();
         Check(cfg.MaxDevices == 1, "MaxDevices clamped lower to 1");
-        Check(cfg.OffsetX == 400, "OffsetX clamped upper to 400");
+        Check(cfg.OffsetX == 0, "OffsetX clamped upper to 0 (flush against notification area)");
 
         var cloned = b.Clone();
         cloned.TaskbarOverlay.Enabled = true;
@@ -117,9 +117,9 @@ static class TaskbarOverlayTests {
         Check(r6.PhysicalLocation.X == 1680 - 10 - 220, "placed 10px left of TrayNotifyWnd");
         Check(r6.PhysicalLocation.Y == 1032 + (48 - 28) / 2, "vertically centered inside taskbar");
 
-        // 7. Offset clamping keeps overlay inside safe zone
+        // 7. Offset clamping keeps overlay inside safe zone ([-320, 0])
         var r7Left = TaskbarOverlayEvaluator.Evaluate(s6, overlaySize, -400);
-        Check(r7Left.CanDisplay && r7Left.PhysicalLocation.X == 1680 - 10 - 220 - 400, "negative offset shifts left within safe area");
+        Check(r7Left.CanDisplay && r7Left.PhysicalLocation.X == 1680 - 10 - 220 - 320, "negative offset shifts left and clamps at -320 within safe area");
         var r7Right = TaskbarOverlayEvaluator.Evaluate(s6, overlaySize, 200);
         Check(r7Right.CanDisplay && r7Right.PhysicalLocation.X == 1680 - 10 - 220, "positive offset never overlaps TrayNotifyWnd");
     }

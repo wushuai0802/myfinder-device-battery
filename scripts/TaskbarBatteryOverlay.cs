@@ -175,7 +175,7 @@ namespace AtkBatteryTray {
                 return Fail("insufficient_space", "任务栏通知区左侧空间不足，已自动隐藏以避免遮挡图标。");
             }
 
-            int clampedOffset = Math.Max(-400, Math.Min(400, offsetX));
+            int clampedOffset = Math.Max(-320, Math.Min(0, offsetX));
             int x = maxAllowedX + clampedOffset;
             x = Math.Max(safeMinX, Math.Min(maxAllowedX, x));
             int y = bar.Top + (bar.Height - h) / 2;

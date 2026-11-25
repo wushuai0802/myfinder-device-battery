@@ -331,6 +331,23 @@ static class DesktopWidgetTests {
             }
         }
         Check(morphFrames == tinySizes.Length * DesktopWidgetGeometry.StyleKeys.Length * 2, "all extreme mid-animation morph frames render cleanly without GDI+ ArgumentException");
+
+        // Verify all 3 hidden edge styles have non-zero alpha on screen-edge boundary pixels (no cursor fling pass-through deadzone)
+        // and render safely at extreme tiny sizes without GDI+ ArgumentException.
+        foreach (string hs in DesktopWidgetGeometry.HiddenStyleKeys) {
+            var hsSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true, hs);
+            var hsCfg = new DesktopWidgetSettings { DockEdge = "right", HiddenStyle = hs };
+            using (var hb = LayeredSurface.RenderToBitmap(hsSize, 1.0f, delegate(Graphics g, SizeF lsz) {
+                DesktopWidgetRenderer.Paint(g, lsz, edgeEntriesFull, darkPal, true, hsCfg, false, false, true, -1);
+            })) {
+                Check(hb.GetPixel(hb.Width - 1, hb.Height / 2).A >= 1, "hidden style " + hs + " keeps non-zero hit-test alpha right at screen edge");
+            }
+            using (var tinyHb = LayeredSurface.RenderToBitmap(new Size(10, 10), 1.0f, delegate(Graphics g, SizeF lsz) {
+                DesktopWidgetRenderer.Paint(g, lsz, edgeEntriesFull, darkPal, true, hsCfg, false, false, true, -1);
+            })) {
+                Check(tinyHb.Width == 10 && tinyHb.Height == 10, "hidden style " + hs + " renders safely at tiny 10x10 frame");
+            }
+        }
     }
 
     [STAThread]

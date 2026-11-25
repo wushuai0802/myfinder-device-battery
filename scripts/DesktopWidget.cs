@@ -257,10 +257,10 @@ namespace AtkBatteryTray {
             float l = bounds.Left, t = bounds.Top, r = bounds.Right, b = bounds.Bottom;
             float w = Math.Max(8f, bounds.Width), h = Math.Max(8f, bounds.Height);
             if (edge == "right") {
-                float fl = Math.Min(flare, h * 0.24f);
-                float rad = Math.Min(tipRadius, Math.Min(w * 0.6f, (h - fl * 2f) * 0.45f));
+                float fl = Math.Max(1f, Math.Min(flare, h * 0.24f));
+                float rad = Math.Max(1.5f, Math.Min(tipRadius, Math.Min(w * 0.6f, (h - fl * 2f) * 0.45f)));
                 float bodyTop = t + fl;
-                float bodyBot = b - fl;
+                float bodyBot = Math.Max(bodyTop + rad * 2f, b - fl);
                 float bodyLeft = l;
                 p.AddBezier(r, t, r, t + fl * 0.62f, r - Math.Min(w * 0.48f, fl * 0.9f), bodyTop, bodyLeft + rad, bodyTop);
                 p.AddArc(bodyLeft, bodyTop, rad * 2f, rad * 2f, 270, -90);
@@ -269,10 +269,10 @@ namespace AtkBatteryTray {
                 p.AddBezier(bodyLeft + rad, bodyBot, r - Math.Min(w * 0.48f, fl * 0.9f), bodyBot, r, b - fl * 0.62f, r, b);
                 p.AddLine(r, b, r, t);
             } else if (edge == "left") {
-                float fl = Math.Min(flare, h * 0.24f);
-                float rad = Math.Min(tipRadius, Math.Min(w * 0.6f, (h - fl * 2f) * 0.45f));
+                float fl = Math.Max(1f, Math.Min(flare, h * 0.24f));
+                float rad = Math.Max(1.5f, Math.Min(tipRadius, Math.Min(w * 0.6f, (h - fl * 2f) * 0.45f)));
                 float bodyTop = t + fl;
-                float bodyBot = b - fl;
+                float bodyBot = Math.Max(bodyTop + rad * 2f, b - fl);
                 float bodyRight = r;
                 p.AddBezier(l, t, l, t + fl * 0.62f, l + Math.Min(w * 0.48f, fl * 0.9f), bodyTop, bodyRight - rad, bodyTop);
                 p.AddArc(bodyRight - rad * 2f, bodyTop, rad * 2f, rad * 2f, 270, 90);
@@ -281,10 +281,10 @@ namespace AtkBatteryTray {
                 p.AddBezier(bodyRight - rad, bodyBot, l + Math.Min(w * 0.48f, fl * 0.9f), bodyBot, l, b - fl * 0.62f, l, b);
                 p.AddLine(l, b, l, t);
             } else if (edge == "top") {
-                float fl = Math.Min(flare, w * 0.22f);
-                float rad = Math.Min(tipRadius, Math.Min(h * 0.6f, (w - fl * 2f) * 0.45f));
+                float fl = Math.Max(1f, Math.Min(flare, w * 0.22f));
+                float rad = Math.Max(1.5f, Math.Min(tipRadius, Math.Min(h * 0.6f, (w - fl * 2f) * 0.45f)));
                 float bodyLeft = l + fl;
-                float bodyRight = r - fl;
+                float bodyRight = Math.Max(bodyLeft + rad * 2f, r - fl);
                 float bodyBot = b;
                 p.AddBezier(l, t, l + fl * 0.62f, t, bodyLeft, t + Math.Min(h * 0.48f, fl * 0.9f), bodyLeft, bodyBot - rad);
                 p.AddArc(bodyLeft, bodyBot - rad * 2f, rad * 2f, rad * 2f, 180, -90);
@@ -293,10 +293,10 @@ namespace AtkBatteryTray {
                 p.AddBezier(bodyRight, bodyBot - rad, bodyRight, t + Math.Min(h * 0.48f, fl * 0.9f), r - fl * 0.62f, t, r, t);
                 p.AddLine(r, t, l, t);
             } else {
-                float fl = Math.Min(flare, w * 0.22f);
-                float rad = Math.Min(tipRadius, Math.Min(h * 0.6f, (w - fl * 2f) * 0.45f));
+                float fl = Math.Max(1f, Math.Min(flare, w * 0.22f));
+                float rad = Math.Max(1.5f, Math.Min(tipRadius, Math.Min(h * 0.6f, (w - fl * 2f) * 0.45f)));
                 float bodyLeft = l + fl;
-                float bodyRight = r - fl;
+                float bodyRight = Math.Max(bodyLeft + rad * 2f, r - fl);
                 float bodyTop = t;
                 p.AddBezier(l, b, l + fl * 0.62f, b, bodyLeft, b - Math.Min(h * 0.48f, fl * 0.9f), bodyLeft, bodyTop + rad);
                 p.AddArc(bodyLeft, bodyTop, rad * 2f, rad * 2f, 180, 90);
@@ -352,6 +352,11 @@ namespace AtkBatteryTray {
         // - peek ("灵动耳翼"): S-curve concave-fillet notch anchored to edge with crisp embedded mini battery ring
         // - dot ("微光露珠"): floating frosted micro-capsule with radial-glow liquid battery jewel
         static void PaintHiddenTab(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, string edge, string hiddenStyle) {
+            // Paint an invisible alpha=1 hit-test film across the edge-anchored canvas so flinging the cursor
+            // right onto the 0px screen boundary always triggers WM_MOUSEENTER (never passes through alpha=0 gaps).
+            using (var hitFilm = new SolidBrush(Color.FromArgb(1, 0, 0, 0))) {
+                g.FillRectangle(hitFilm, 0f, 0f, size.Width, size.Height);
+            }
             int? primaryPct; bool anyLow, anyCharging; Color coreColor;
             ResolveEdgeBatterySummary(entries, out primaryPct, out anyLow, out anyCharging, out coreColor);
             string style = DesktopWidgetGeometry.NormalizeHiddenStyle(hiddenStyle);
@@ -1274,14 +1279,14 @@ namespace AtkBatteryTray {
                 m.Result = new IntPtr(3); // MA_NOACTIVATE
                 return;
             }
-            if (m.Msg == 0x007E || m.Msg == 0x02E0) { // WM_DISPLAYCHANGE / WM_DPICHANGED
+            if (m.Msg == 0x007E || m.Msg == 0x02E0 || m.Msg == 0x0218) { // WM_DISPLAYCHANGE / WM_DPICHANGED / WM_POWERBROADCAST
                 if (m.Msg == 0x02E0) {
                     m.Result = IntPtr.Zero;
-                    if (!dragging) { StopAnimation(); RenderNow(true); }
+                    if (!dragging) { StopAnimation(); lastRenderSignature = null; RenderNow(true); SyncHoverWatch(); }
                     return;
                 }
                 base.WndProc(ref m);
-                if (!dragging) { StopAnimation(); RenderNow(true); }
+                if (!dragging) { StopAnimation(); lastRenderSignature = null; RenderNow(true); SyncHoverWatch(); }
                 return;
             }
             base.WndProc(ref m);
