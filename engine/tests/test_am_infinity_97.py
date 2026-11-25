@@ -498,10 +498,36 @@ class FailClosedTests(unittest.TestCase):
                 self.assert_no_io([entry(path=path)])
 
     def test_extra_report_ids_do_not_block_proven_ones(self):
-        with fixture([report(answer(52))],
-                     inventory=[entry(input_report_sizes={"7": 62, "1": 8},
-                                      output_report_sizes={"6": 62, "2": 8})]):
-            self.assertEqual(P().poll()[0].level, 52)
+        for extra_sizes in (
+            dict(input_report_sizes={"7": 62, "1": 8},
+                 output_report_sizes={"6": 62, "2": 8}),
+            dict(input_report_length=64, output_report_length=64,
+                 input_report_sizes={"7": 62, "8": 64},
+                 output_report_sizes={"6": 62, "8": 64}),
+        ):
+            with self.subTest(extra_sizes=extra_sizes), fixture(
+                    [report(answer(52))], inventory=[entry(**extra_sizes)]):
+                self.assertEqual(P().poll()[0].level, 52)
+
+    def test_report_proof_failure_projects_safe_health_summary(self):
+        import server
+        bad = entry(input_report_sizes=None, output_report_sizes=None,
+                    input_report_proof="failed", output_report_proof="failed",
+                    report_descriptor_error="collection not found",
+                    declared_report_sizes={"output": {"6": 64}, "input": {"7": 62}, "feature": {}})
+        with fixture(inventory=[bad]):
+            provider = P()
+            self.assertEqual(provider.poll(), [])
+        diag = provider.diagnostics()
+        self.assertTrue(any("; declared=out:06/64,in:07/62,feature:none" in d for d in diag))
+        engine = server.BatteryEngine(providers=[])
+        engine._accept("device:am97", "am_infinity_97", [], server.utcnow(),
+                       physical=PHYSICAL, candidate_count=1, diagnostics=diag)
+        snap = engine._snapshot(1, 1, True)
+        row, = [h for h in snap["health"] if h["provider"] == "am_infinity_97"]
+        self.assertEqual(row["state"], "unavailable")
+        self.assertEqual(row["errorCode"], "06 unproven;declared=out:06/64,in:07/62,...")
+        self.assertLessEqual(len(row["errorCode"]), server.READER_HEALTH_LIMIT)
 
     def test_hid_error_during_enumeration_is_quiet(self):
         provider = P()

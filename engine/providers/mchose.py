@@ -117,6 +117,9 @@ LEGACY_3837_PIDS = frozenset({
 A5V2_VID, A5V2_PID = 0x3837, 0x100C
 A5V2_NAME = "MCHOSE A5 V2 Ultra"
 A5V2_ATTEMPTS, A5V2_TIMEOUT, A5V2_GAP = 20, 2.0, 0.09
+# Official M HUB maps 3837:1001 ("MCHOSE K7 Ultra") to V2 Feature 0x11/0x06.
+K7_ULTRA_VID, K7_ULTRA_PID = 0x3837, 0x1001
+K7_ULTRA_NAME = "MCHOSE K7 Ultra"
 
 # Read-only V3 subset, adapted 2026-11-04 from OpenMouse mouse-protocol
 # 30d6ad37d0ecc9fff53f86d5058d67a88e07150d, src/mchose/v3.ts and
@@ -301,7 +304,7 @@ def device_key(vid: int, pid: int) -> str:
     G7's 0xA8A5, and the newer 0x3837 receivers (the A7 V2 Ultra in issue #4) - which is
     what keeps two MCHOSE devices on one machine off a single shared icon.
     """
-    if ((vid, pid) in ((A5V2_VID, A5V2_PID), (V7_VID, V7_PID))
+    if ((vid, pid) in ((A5V2_VID, A5V2_PID), (K7_ULTRA_VID, K7_ULTRA_PID), (V7_VID, V7_PID))
             or vid == V3_VID and pid in V3_PIDS):
         return f"mchose:{vid:04x}:{pid:04x}"
     return "mchose" if vid == MEASURED_VID else f"mchose:{vid:04x}"
@@ -430,6 +433,18 @@ def _a5v2_path(path):
     return path.lower()
 
 
+def _k7_ultra_path(path):
+    if isinstance(path, bytes):
+        try:
+            path = path.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    if (not isinstance(path, str) or "\0" in path
+            or re.search(r"(?:^|[#\\&])vid_3837&pid_1001(?:$|[#\\&])", path, re.I) is None):
+        return None
+    return path.lower()
+
+
 def make_a5v2_request(length):
     """20 inverted logical body bytes, then untouched zero padding, plus ID."""
     if type(length) is not int or length not in (21, 65):
@@ -437,7 +452,7 @@ def make_a5v2_request(length):
     return b"\x11\xf9" + b"\xff" * 19 + b"\x00" * (length - 21)
 
 
-def parse_a5v2(resp, length):
+def parse_a5v2(resp, length, *, valid_vids=(A5V2_VID,)):
     """Only the 11 meaningful bytes, retaining firmware/flags for stability.
 
     The PID is the mouse's own, not necessarily the receiver's. flags=09 is
@@ -454,7 +469,7 @@ def parse_a5v2(resp, length):
         return None
     payload = _invert(raw[2:13])
     if (len(payload) != 11 or not any(payload)
-            or int.from_bytes(payload[:2], "little") != A5V2_VID
+            or int.from_bytes(payload[:2], "little") not in valid_vids
             or int.from_bytes(payload[2:4], "little") == 0 or payload[9] > 100):
         return None
     return payload
@@ -994,12 +1009,56 @@ class MchoseProvider(Provider):
             return None
         return info
 
-    def _read_a5v2(self, info):
+    def _note_k7_ultra(self, code):
+        message = "K7ULTRA " + code
+        self._a5v2_diag.append(message)
+        self._diag.append(message)
+
+    def _pick_k7_ultra(self, ifaces):
+        if not ifaces:
+            self._note_k7_ultra("topology_unproven")
+            return None
+        parents = {d.get("physical_id") for d in ifaces}
+        if len(parents) != 1:
+            self._note_k7_ultra("topology_unproven")
+            return None
+        parent = next(iter(parents))
+        paths = [_k7_ultra_path(d.get("path")) for d in ifaces]
+        if (not isinstance(parent, str)
+                or re.fullmatch(r"pnp:usb\\vid_3837&pid_1001(?:&rev_[0-9a-f]{4})?\\[^\\\s]+", parent, re.I) is None
+                or any(p is None for p in paths) or len(paths) != len(set(paths))
+                or any(type(d.get("vendor_id")) is not int or type(d.get("product_id")) is not int
+                       or (d["vendor_id"], d["product_id"]) != (K7_ULTRA_VID, K7_ULTRA_PID)
+                       for d in ifaces)):
+            self._note_k7_ultra("topology_unproven")
+            return None
+        cols = [d for d in ifaces if (d.get("usage_page"), d.get("usage")) == V3_USAGE]
+        if len(cols) != 1:
+            self._note_k7_ultra("collection_ambiguous")
+            return None
+        info = cols[0]
+        product = info.get("product_string")
+        if not isinstance(product, str) or product.strip() != K7_ULTRA_NAME:
+            self._note_k7_ultra("topology_unproven")
+            return None
+        maximum, sizes = info.get("feature_report_length"), info.get("feature_report_sizes")
+        if (type(maximum) is not int or maximum not in (21, 65)
+                or not isinstance(sizes, dict) or not sizes
+                or any(not isinstance(k, str) or not k.isascii() or not k.isdecimal()
+                       or len(k) > 3 or str(int(k)) != k or not 0 <= int(k) <= 255
+                       or type(n) is not int or not 2 <= n <= maximum for k, n in sizes.items())
+                or sizes.get("17") not in (21, 65) or max(sizes.values()) != maximum
+                or info.get("feature_report_proof") not in ("caps", "descriptor")
+                or info.get("report_descriptor_error")):
+            self._note_k7_ultra("feature_unproven")
+            return None
+        return info, sizes["17"]
+
+    def _read_v2_feature(self, info, *, length, valid_vids, note_fn):
         # A soft deadline cannot cancel a blocking native call. The existing
         # isolated worker's 7 s budget remains the hard containment boundary.
         deadline = time.monotonic() + A5V2_TIMEOUT
         previous, dev = None, None
-        length = info["feature_report_length"]
         request = make_a5v2_request(length)
         try:
             dev = hid.device()
@@ -1009,7 +1068,7 @@ class MchoseProvider(Provider):
                     break
                 written = dev.send_feature_report(request)
                 if type(written) is not int or written != length:
-                    self._note_a5v2("set_failed")
+                    note_fn("set_failed")
                     return None
                 # Do not shorten the sourced 90 ms wait to fit another GET.
                 if deadline - time.monotonic() < A5V2_GAP:
@@ -1024,17 +1083,17 @@ class MchoseProvider(Provider):
                     continue
                 if time.monotonic() >= deadline:
                     break
-                payload = parse_a5v2(response, length)
+                payload = parse_a5v2(response, length, valid_vids=valid_vids)
                 if payload is None:
                     previous = None
                     continue
                 if payload == previous:
-                    self._note_a5v2("stable_reply_C_pending_hardware")
+                    note_fn("stable_reply_C_pending_hardware")
                     return payload[9], bool(payload[10])
                 previous = payload
-            self._note_a5v2("no_stable_reply")
+            note_fn("no_stable_reply")
         except Exception:
-            self._note_a5v2("io_failed")
+            note_fn("io_failed")
         finally:
             if dev is not None:
                 try:
@@ -1042,6 +1101,16 @@ class MchoseProvider(Provider):
                 except Exception:
                     pass
         return None
+
+    def _read_a5v2(self, info):
+        return self._read_v2_feature(
+            info, length=info["feature_report_length"],
+            valid_vids=(A5V2_VID,), note_fn=self._note_a5v2)
+
+    def _read_k7_ultra(self, info, report_len):
+        return self._read_v2_feature(
+            info, length=report_len,
+            valid_vids=MCHOSE_VIDS, note_fn=self._note_k7_ultra)
 
     @staticmethod
     def _v3_report_proven(info, direction, *, alternate=False):
@@ -1248,6 +1317,7 @@ class MchoseProvider(Provider):
         # Candidate failures/absence never publish an old candidate value.
         # Other MCHOSE models retain their original sleep/cache policy.
         self._last.pop(device_key(A5V2_VID, A5V2_PID), None)
+        self._last.pop(device_key(K7_ULTRA_VID, K7_ULTRA_PID), None)
         infos: List[dict] = []
         for vid in MCHOSE_VIDS + (G7_VID, A5_VID):
             try:
@@ -1262,10 +1332,12 @@ class MchoseProvider(Provider):
         groups: Dict[Tuple[int, int], List[dict]] = {}
         for d in infos:
             identity = (d["vendor_id"], d["product_id"])
-            # A path advertising 100C with inconsistent attrs is quarantined
+            # A path advertising 100C / 1001 with inconsistent attrs is quarantined
             # here too; it must not accidentally reach another legacy group.
             if _a5v2_path(d.get("path")) is not None:
                 identity = (A5V2_VID, A5V2_PID)
+            elif _k7_ultra_path(d.get("path")) is not None:
+                identity = (K7_ULTRA_VID, K7_ULTRA_PID)
             groups.setdefault(identity, []).append(d)
 
         found: Dict[str, List[Tuple[int, bool, int, int, Optional[dict]]]] = {}   # key -> readings
@@ -1278,6 +1350,14 @@ class MchoseProvider(Provider):
                 if got is not None:
                     found.setdefault(key, []).append((got[0], got[1], A5V2_PID, 0, None))
                 continue  # Exclusive, including failure: no legacy/CFU/12.
+            if (vid, pid) == (K7_ULTRA_VID, K7_ULTRA_PID):
+                key = device_key(K7_ULTRA_VID, K7_ULTRA_PID)
+                self._names[key] = K7_ULTRA_NAME
+                picked = self._pick_k7_ultra(ifaces)
+                got = self._read_k7_ultra(*picked) if picked is not None else None
+                if got is not None:
+                    found.setdefault(key, []).append((got[0], got[1], K7_ULTRA_PID, 0, None))
+                continue  # Exclusive V2 Feature 0x11 read-only candidate.
             if (vid, pid) == (0x3837, 0x4245):
                 # The G-series receiver has its own reader, including when its report proof fails.
                 continue
@@ -1382,7 +1462,7 @@ class MchoseProvider(Provider):
             # charging, and one icon either way
             readings.sort(key=lambda r: (not r[1],))
             level, charge, pid, model, winning_info = readings[0]
-            if key != device_key(A5V2_VID, A5V2_PID):
+            if key not in (device_key(A5V2_VID, A5V2_PID), device_key(K7_ULTRA_VID, K7_ULTRA_PID)):
                 self._diag.append(f"  -> {key} pid={pid:04x}"
                                   + (f" model=0x{model:04x}" if model else "")
                                   + f": {level}%{' (charging)' if charge else ''}")

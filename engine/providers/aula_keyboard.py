@@ -35,6 +35,9 @@ INTERFACE = 3
 F108_VID = 0x05AC
 F108_PID = 0x024F
 F108_PRODUCT = "F108Pro Dongle"
+F108_GENERIC = "2.4G Dongle"
+F108_PRODUCTS = (F108_PRODUCT, F108_GENERIC)
+F108_GENERIC_NAME = "2.4G 无线键盘（05AC:024F）"
 F108_REQUEST = [0x00, 0x20, 0x01] + [0] * 29 + [0x21]
 
 
@@ -68,7 +71,7 @@ def parse_f108_reply(reply):
 
 
 class AulaF108ProProvider(BatteryHidProvider):
-    """Isolated AULA F108 Pro 2.4 GHz receiver battery reader."""
+    """Isolated AULA F108 Pro / generic Sonix 2.4 GHz receiver battery reader."""
     name = "aula_keyboard"
     vid, pids = F108_VID, {F108_PID: "AULA F108 Pro"}
     collection = (0xFF60, 0x0061)
@@ -80,7 +83,30 @@ class AulaF108ProProvider(BatteryHidProvider):
     make_request = staticmethod(make_f108_request)
     parse_reply = staticmethod(parse_f108_reply)
 
+    def device_name(self, info):
+        if info.get("product_string") == F108_GENERIC:
+            return F108_GENERIC_NAME
+        return self.pids[info["product_id"]]
+
     def _pick(self, infos):
+        vendor_cols = [
+            i for i in infos
+            if i.get("vendor_id") == F108_VID and i.get("product_id") == F108_PID
+            and (i.get("usage_page"), i.get("usage")) == self.collection
+        ]
+        if any(i.get("product_string") == F108_GENERIC for i in vendor_cols):
+            if any(i.get("product_string") != F108_GENERIC for i in vendor_cols):
+                self._diag.append("unverified AULA F108 product: nothing sent")
+                return None
+            # Narrow generic "2.4G Dongle" candidates strictly to MI_03 before
+            # candidate uniqueness check so MI_04 (65B) is excluded while
+            # duplicate MI_03 collections (including unproven ones) still fail.
+            infos = [
+                i for i in infos
+                if not (i.get("vendor_id") == F108_VID and i.get("product_id") == F108_PID
+                        and (i.get("usage_page"), i.get("usage")) == self.collection)
+                or (type(i.get("interface_number")) is int and i["interface_number"] == INTERFACE)
+            ]
         info = super()._pick(infos)
         if info is None:
             return None
@@ -89,10 +115,16 @@ class AulaF108ProProvider(BatteryHidProvider):
                 or physical.startswith("collection:")):
             self._diag.append("physical parent unresolved; uniqueness unknown: nothing sent")
             return None
-        if info.get("product_string") != F108_PRODUCT:
-            self._diag.append("unverified AULA F108 product: nothing sent")
-            return None
-        return info
+        product = info.get("product_string")
+        if product == F108_PRODUCT:
+            return info
+        if product == F108_GENERIC:
+            if type(info.get("interface_number")) is not int or info["interface_number"] != INTERFACE:
+                self._diag.append("unverified AULA F108 product: nothing sent")
+                return None
+            return info
+        self._diag.append("unverified AULA F108 product: nothing sent")
+        return None
 
 
 class AulaKeyboardProvider(BatteryHidProvider):
@@ -113,12 +145,12 @@ class AulaKeyboardProvider(BatteryHidProvider):
             inventory = hidlist.enumerate(F99_VID)
         except OSError:
             return result
-        if any(info.get("product_string") == "F99 MAX Dongle"
+        if any(info.get("product_id") == F108_PID and info.get("product_string") == "F99 MAX Dongle"
                for info in inventory):
             f99 = AulaF99MaxProvider()
             result.extend(f99.poll())
             self._diag.extend(f99.diagnostics())
-        if any(info.get("product_string") == F108_PRODUCT
+        if any(info.get("product_id") == F108_PID and info.get("product_string") in F108_PRODUCTS
                for info in inventory):
             f108 = AulaF108ProProvider()
             result.extend(f108.poll())

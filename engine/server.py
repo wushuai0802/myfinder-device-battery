@@ -846,6 +846,11 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                            if d.get("product_id") in module.NANO_PIDS.get(d.get("vendor_id"), {})}
     v3_candidates = ({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                       if d.get("vendor_id") == module.V3_VID and d.get("product_id") in module.V3_PIDS}
+                     | ({(module.K7_ULTRA_VID, module.K7_ULTRA_PID)}
+                        if any(d.get("vendor_id") == module.K7_ULTRA_VID
+                               and d.get("product_id") == module.K7_ULTRA_PID
+                               for d in inventory)
+                        else set())
                      if name == "mchose" else set())
     for field in ("PIDS", "KNOWN", "DONGLES", "RECEIVERS", "HEADSETS", "WIRED", "BRAGI_PIDS", "MOUSE_MODELS", "MODELS", "CLASSIC_MODELS"):
         value = getattr(module, field, ())
@@ -1072,7 +1077,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "mchose", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "am_infinity_97", "mchose", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -1160,7 +1165,7 @@ class BatteryEngine:
                     self.health[reader_key]["diagnosticSummary"] = ASUS_OMNI_DIAGNOSTICS[diagnostics[0]]
             self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
             if name == "mchose" and not measured:
-                # V3-only protocol-owned failures outrank the identity/proof notes.
+                # V3-only / K7ULTRA protocol-owned failures outrank identity/proof notes.
                 # The full safe proof stays in diagnostics, the first clause fits feedback.
                 for line in diagnostics:
                     if isinstance(line, str) and line.startswith((
@@ -1177,6 +1182,9 @@ class BatteryEngine:
                             self.health[reader_key]["diagnosticSummary"] = reader_health_summary(compact)
                         else:
                             self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
+                        break
+                    if isinstance(line, str) and line.startswith("K7ULTRA ") and line != "K7ULTRA stable_reply_C_pending_hardware":
+                        self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line)
                         break
             if name == "pulsar":
                 # A cached card can keep the existing health state ok while this
@@ -1230,6 +1238,36 @@ class BatteryEngine:
                            for line in diagnostics if isinstance(line, str)):
                         self.health[reader_key]["diagnosticSummary"] = summary
                         break
+            if name == "am_infinity_97" and not measured:
+                for line in diagnostics:
+                    if not isinstance(line, str):
+                        continue
+                    if line.startswith("numbered OUT 6 / IN 7 report (62 bytes) unproven: nothing sent"):
+                        if "; declared=" in line:
+                            declared = line[line.index("; declared="):]
+                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(
+                                "report 06 unproven" + declared)
+                        else:
+                            self.health[reader_key]["diagnosticSummary"] = "report sizes unproven"
+                        break
+                else:
+                    for message, summary in (
+                        ("target USB parent unresolved; uniqueness unknown: nothing sent", "physical parent unresolved"),
+                        ("ambiguous target collection: nothing sent", "collection ambiguous"),
+                        ("product string/path unproven: nothing sent", "product or path unproven"),
+                        ("input queue did not drain within bounds: nothing sent", "input queue did not drain"),
+                        ("short/failed battery query write; no retry", "battery query write short/failed"),
+                        ("battery I/O failed; connection unknown", "battery I/O failed"),
+                        ("receiver reports no mouse; level unavailable", "receiver reports no mouse"),
+                        ("battery answer rejected (out of range or malformed)", "battery reply rejected"),
+                        ("no valid battery answer within bounds", "no valid battery reply"),
+                        ("enumeration failed; retaining history", "enumeration failed"),
+                        ("HID handle close failed", "HID handle close failed"),
+                    ):
+                        if any(line == message or line.startswith(message + ";")
+                               for line in diagnostics if isinstance(line, str)):
+                            self.health[reader_key]["diagnosticSummary"] = summary
+                            break
             if name in ("mchose_glw_keyboard", "mchose_qhw_keyboard") and not measured:
                 for message, summary in (
                     ("exact product name mismatch or missing: nothing sent", "product name mismatch"),

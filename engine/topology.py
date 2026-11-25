@@ -373,7 +373,7 @@ def discover(paths, excluded=(), *, full=False):
                     from battery_hid import battery_caps
                     info.update(input_report_length=caps.input,
                                 output_report_length=caps.output)
-                    info.update(battery_caps(hid, data, caps))
+                    info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
                     _descriptor_fallback(info, caps, ("input", "output"))
                     # Retain collections whose report proof failed: the reader
                     # must count duplicates before deciding whether it may query.
@@ -469,13 +469,28 @@ def discover(paths, excluded=(), *, full=False):
                 caps_complete = all(info[d + "_report_sizes"] is not None for d in ("input", "output"))
 
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
+                    (0x373B, 0x1262, 0xFF90, 0x0001),
+                    (0x373B, 0x12D6, 0xFF90, 0x0001)):
+                from battery_hid import battery_caps
+                info.update(battery_caps(hid, data, caps, allow_fixed_usage=True))
+                if (caps.output == 64 and caps.ob == 0 and caps.ov == 0
+                        and info.get("output_report_sizes") is None):
+                    info["output_constant_only"] = True
+                if (22 <= caps.input <= 64 and caps.output == 64
+                        and (info.get("input_report_sizes") is None
+                             or (info.get("output_report_sizes") is None
+                                 and info.get("output_constant_only") is not True))):
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = (
+                    all(info.get(key) is not None for key in ("input_report_sizes", "output_report_sizes"))
+                    or (info.get("input_report_sizes") is not None
+                        and info.get("output_constant_only") is True))
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) in (
                     (0x3837, 0x1018, 0xFF01, 0x0001),
                     (0x3837, 0x101D, 0xFF01, 0x0001),
                     (0x3837, 0x1018, 0xFF0B, 0x00C4),
                     (0x3837, 0x1014, 0xFF01, 0x0001),
                     (0x3837, 0x1016, 0xFF01, 0x0001),
-                    (0x373B, 0x1262, 0xFF90, 0x0001),
-                    (0x373B, 0x12D6, 0xFF90, 0x0001),
                     (0x373B, 0x1216, 0xFF05, 0x0001),
                     (0x373B, 0x12F5, 0xFF05, 0x0001),
                     (0x35D8, 0x0133, 0xFF02, 0x0002),
@@ -771,9 +786,24 @@ def discover(paths, excluded=(), *, full=False):
                     caps_complete = all(info.get(key) is not None
                                         for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete
+                    and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                        0x3837, 0x1001, 0xFF01, 0x0001)
+                    and info["product_string"].strip() == "MCHOSE K7 Ultra"):
+                from battery_hid import byte_report_sizes
+                sizes = byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True)
+                info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
+                _descriptor_fallback(info, caps, ("feature",))
+                sizes = info.get("feature_report_sizes")
+                caps_complete = bool(
+                    isinstance(sizes, dict) and sizes
+                    and sizes.get("17") in (21, 65)
+                    and max(sizes.values()) == caps.feature)
+            if (caps_complete
                     and (attrs.vendor, attrs.product, caps.page, caps.usage) ==
                     (0x05AC, 0x024F, 0xFF60, 0x0061)
-                    and info["product_string"] == "F108Pro Dongle"
+                    and (info["product_string"] == "F108Pro Dongle"
+                         or (info["product_string"] == "2.4G Dongle"
+                             and info.get("interface_number") == 3))
                     and caps.input == caps.output == 33):
                 from battery_hid import battery_caps
                 info.update(battery_caps(hid, data, caps))

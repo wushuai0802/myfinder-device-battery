@@ -104,6 +104,45 @@ class AulaF108ProTests(unittest.TestCase):
         self.assertEqual([packet for _, packet in bus.writes],
                          [F.F108_REQUEST])
 
+    def test_generic_24g_dongle_reads_mi03_and_ignores_mi04(self):
+        mi03 = entry(product_string=F.F108_GENERIC, interface_number=3, path=b"f108-mi03")
+        mi04 = entry(product_string=F.F108_GENERIC, interface_number=4,
+                     input_report_length=65, output_report_length=65,
+                     input_report_sizes={"0": 65}, output_report_sizes={"0": 65},
+                     path=b"f108-mi04")
+        # Real PR #1146 Windows 11 capture: 100% (0x64), checksum 0x85.
+        capture = [0x20, 0x01, 0x00, 0x64] + [0] * 27 + [0x85]
+        with fixture([capture], [mi04, mi03]) as bus:
+            status, = F.AulaKeyboardProvider().poll()
+        self.assertEqual((status.name, status.level, status.kind, status.source),
+                         (F.F108_GENERIC_NAME, 100, "keyboard", "aula_keyboard"))
+        self.assertFalse(status.charging_known)
+        self.assertEqual(bus.opened, [b"f108-mi03"])
+        self.assertEqual([packet for _, packet in bus.writes], [F.F108_REQUEST])
+        self.assertEqual(bus.opened, bus.closed)
+
+    def test_generic_24g_dongle_bad_interface_duplicate_or_mixed_products_never_write(self):
+        def base(**kw):
+            params = dict(product_string=F.F108_GENERIC, interface_number=3)
+            params.update(kw)
+            return entry(**params)
+        cases = [
+            [base(interface_number=4)],
+            [base(interface_number=-1)],
+            [base(interface_number=True)],
+            [base(interface_number="3")],
+            [base(input_report_length=65, output_report_length=65,
+                  input_report_sizes={"0": 65}, output_report_sizes={"0": 65})],
+            [base(input_report_sizes=None)],
+            [base(path=b"mi03-a"), base(path=b"mi03-b")],
+            [base(path=b"mi03-a"), base(path=b"mi03-unproven", input_report_sizes=None)],
+            [base(path=b"mi03-a"), entry(path=b"f108pro")],
+        ]
+        for inventory in cases:
+            with self.subTest(inventory=inventory), fixture([reply(100)], inventory) as bus:
+                self.assertEqual(F.AulaKeyboardProvider().poll(), [])
+                self.assertEqual((bus.opened, bus.writes), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()
