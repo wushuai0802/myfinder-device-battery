@@ -80,14 +80,14 @@ static class DesktopWidgetTests {
         Check(DesktopWidgetGeometry.DetectSnapEdge(new Rectangle(500, 500, 200, 36), workArea) == "none", "center stays undocked");
 
         var hiddenRight = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "right", true);
-        Check(hiddenRight.Width == 8 && hiddenRight.Height == 68, "vertical hidden edge tab is slim 8x68");
+        Check(hiddenRight.Width == 10 && hiddenRight.Height == 72, "vertical hidden edge tab is slim 10x72");
         var hiddenTop = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 3, false, "top", true);
-        Check(hiddenTop.Width == 68 && hiddenTop.Height == 8, "horizontal hidden edge tab is slim 68x8");
+        Check(hiddenTop.Width == 72 && hiddenTop.Height == 10, "horizontal hidden edge tab is slim 72x10");
 
         var locRight = DesktopWidgetGeometry.ComputePhysicalLocation("right", new Size(200, 36), workArea, 0.5, 0.5, false);
         Check(locRight.X == workArea.Right - 200 - 6 && locRight.Y >= workArea.Top && locRight.Y + 36 <= workArea.Bottom, "right docked widget hugs right edge within workArea");
-        var locHiddenRight = DesktopWidgetGeometry.ComputePhysicalLocation("right", new Size(8, 68), workArea, 0.5, 0.5, true);
-        Check(locHiddenRight.X == workArea.Right - 8, "hidden right edge tab sits flush against screen edge");
+        var locHiddenRight = DesktopWidgetGeometry.ComputePhysicalLocation("right", new Size(10, 72), workArea, 0.5, 0.5, true);
+        Check(locHiddenRight.X == workArea.Right - 10, "hidden right edge tab sits flush against screen edge");
 
         double rx, ry;
         DesktopWidgetGeometry.ComputeAnchorRatios(new Point(960, 520), new Size(200, 36), workArea, out rx, out ry);
@@ -203,6 +203,52 @@ static class DesktopWidgetTests {
             string file = Path.Combine(dir, "t50-widget-showcase-graphite.png");
             sheet.Save(file, ImageFormat.Png);
             Check(File.Exists(file) && new FileInfo(file).Length > 2000, "widget showcase screenshot rendered");
+        }
+
+        // Render extreme wallpaper contrast verification sheet for edge-hidden tab (white/black/vivid green/vivid red/vivid blue)
+        Color[] wallpapers = {
+            Color.FromArgb(255, 255, 255),
+            Color.FromArgb(10, 12, 16),
+            Color.FromArgb(46, 204, 113),
+            Color.FromArgb(231, 76, 60),
+            Color.FromArgb(52, 152, 219)
+        };
+        string[] wpNames = { "Pure White", "Pure Black", "Vivid Green", "Vivid Red", "Sky Blue" };
+        var edgeEntriesFull = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m1", Kind = "mouse", Percent = 92, Fresh = true } };
+        var edgeEntriesWarn = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m2", Kind = "mouse", Percent = 26, Fresh = true, Charging = true } };
+        var edgeEntriesLow = new List<DesktopWidgetEntry> { new DesktopWidgetEntry { Id = "m3", Kind = "mouse", Percent = 12, Fresh = true, Low = true } };
+        var rightTabSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "right", true);
+        var topTabSize = DesktopWidgetGeometry.CollapsedLogicalSize("capsule", 1, false, "top", true);
+        var cfgRight = new DesktopWidgetSettings { DockEdge = "right" };
+        var cfgTop = new DesktopWidgetSettings { DockEdge = "top" };
+        var darkPal = ThemePalette.For("graphite", true);
+
+        using (var wpSheet = new Bitmap(900, 300, PixelFormat.Format32bppArgb))
+        using (var wg = Graphics.FromImage(wpSheet)) {
+            wg.Clear(Color.FromArgb(24, 26, 30));
+            using (var lblFont = new Font("Segoe UI", 12f, FontStyle.Bold, GraphicsUnit.Pixel))
+            for (int i = 0; i < wallpapers.Length; i++) {
+                int x = 15 + i * 176;
+                var panel = new Rectangle(x, 16, 164, 268);
+                using (var b = new SolidBrush(wallpapers[i])) wg.FillRectangle(b, panel);
+                Color labelCol = i == 0 ? Color.FromArgb(30, 34, 40) : Color.White;
+                using (var tb = new SolidBrush(labelCol)) wg.DrawString(wpNames[i], lblFont, tb, x + 10, 34);
+
+                using (var topTab = LayeredSurface.RenderToBitmap(topTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, darkPal, true, cfgTop, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(topTab, x + (panel.Width - topTab.Width) / 2, panel.Top);
+
+                using (var rFull = LayeredSurface.RenderToBitmap(rightTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesFull, darkPal, true, cfgRight, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rFull, panel.Right - rFull.Width, panel.Top + 40);
+
+                using (var rWarn = LayeredSurface.RenderToBitmap(rightTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesWarn, darkPal, true, cfgRight, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rWarn, panel.Right - rWarn.Width, panel.Top + 154);
+
+                using (var rLow = LayeredSurface.RenderToBitmap(rightTabSize, 1.5f, delegate(Graphics g, SizeF sz) { DesktopWidgetRenderer.Paint(g, sz, edgeEntriesLow, darkPal, true, new DesktopWidgetSettings { DockEdge = "left" }, false, false, true, -1); }))
+                    wg.DrawImageUnscaled(rLow, panel.Left, panel.Top + 98);
+            }
+            string wpFile = Path.Combine(dir, "t50-edge-wallpapers-contrast.png");
+            wpSheet.Save(wpFile, ImageFormat.Png);
+            Check(File.Exists(wpFile) && new FileInfo(wpFile).Length > 2000, "wallpaper contrast edge-tab screenshot rendered");
         }
     }
 

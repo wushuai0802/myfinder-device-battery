@@ -29,7 +29,7 @@ namespace AtkBatteryTray {
             string edge = NormalizeEdge(dockEdge);
             if (hiddenEdgeTab && edge != "none") {
                 bool vertical = edge == "left" || edge == "right";
-                return vertical ? new Size(8, 68) : new Size(68, 8);
+                return vertical ? new Size(10, 72) : new Size(72, 10);
             }
             string s = NormalizeStyle(style);
             int count = Math.Max(1, Math.Min(4, deviceCount));
@@ -113,7 +113,7 @@ namespace AtkBatteryTray {
     internal sealed class DesktopWidgetRenderer {
         internal static void Paint(Graphics g, SizeF logicalSize, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, DesktopWidgetSettings cfg, bool expanded, bool edgeStripMode, bool hiddenEdgeTab, int hoveredRow) {
             if (hiddenEdgeTab) {
-                PaintHiddenTab(g, logicalSize, entries, palette, dark);
+                PaintHiddenTab(g, logicalSize, entries, palette, dark, DesktopWidgetGeometry.NormalizeEdge(cfg != null ? cfg.DockEdge : "right"));
                 return;
             }
             if (expanded) {
@@ -127,32 +127,114 @@ namespace AtkBatteryTray {
         }
 
         static void PaintSurface(Graphics g, SizeF size, float radius, ThemePalette palette, bool dark) {
-            var rect = new RectangleF(1f, 1f, Math.Max(4, size.Width - 2f), Math.Max(4, size.Height - 2f));
+            var rect = new RectangleF(1.5f, 1.5f, Math.Max(4, size.Width - 3f), Math.Max(4, size.Height - 3f));
             if (!VisualDesign.HighContrast) {
+                // Dual-layer halo ensures legibility on both light and dark wallpapers
                 var shadow = new RectangleF(rect.X, rect.Y + 1f, rect.Width, rect.Height);
-                CompactRenderer.Fill(g, shadow, palette.PanelShadowNear, radius);
+                CompactRenderer.Fill(g, shadow, Color.FromArgb(dark ? 115 : 68, 0, 0, 0), radius);
             }
             CompactRenderer.Fill(g, rect, palette.Card, radius);
+            if (!VisualDesign.HighContrast && dark) {
+                using (var inner = VisualDesign.RoundRect(rect.X + 1f, rect.Y + 1f, rect.Width - 2f, rect.Height - 2f, Math.Max(2f, radius - 1f)))
+                using (var rim = new Pen(Color.FromArgb(26, 255, 255, 255), 1f)) {
+                    g.DrawPath(rim, inner);
+                }
+            }
+            Color borderColor = VisualDesign.HighContrast
+                ? palette.Foreground
+                : (dark ? Color.FromArgb(145, 0, 0, 0) : Color.FromArgb(130, palette.Border));
             using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, radius))
-            using (var pen = new Pen(VisualDesign.HighContrast ? palette.Foreground : palette.Border, 1f)) {
+            using (var pen = new Pen(borderColor, 1f)) {
                 g.DrawPath(pen, path);
             }
         }
 
-        static void PaintHiddenTab(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark) {
-            var rect = new RectangleF(1f, 1f, Math.Max(3, size.Width - 2f), Math.Max(3, size.Height - 2f));
-            float radius = Math.Min(rect.Width, rect.Height) / 2f;
+        static GraphicsPath CreateEdgeTabPath(RectangleF r, string edge, float radius) {
+            float rad = Math.Max(1.5f, Math.Min(radius, Math.Min(r.Width, r.Height) * 0.5f));
+            float d = rad * 2f;
+            bool roundTL = edge != "left" && edge != "top";
+            bool roundTR = edge != "right" && edge != "top";
+            bool roundBR = edge != "right" && edge != "bottom";
+            bool roundBL = edge != "left" && edge != "bottom";
+
+            var path = new GraphicsPath();
+            if (roundTL) path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            else path.AddLine(r.Left, r.Top, r.Left, r.Top);
+
+            if (roundTR) path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            else path.AddLine(r.Right, r.Top, r.Right, r.Top);
+
+            if (roundBR) path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            else path.AddLine(r.Right, r.Bottom, r.Right, r.Bottom);
+
+            if (roundBL) path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            else path.AddLine(r.Left, r.Bottom, r.Left, r.Bottom);
+
+            path.CloseFigure();
+            return path;
+        }
+
+        // Wallpaper-proof 3-layer edge handle:
+        // 1. Dark outer shadow outline (visible on pure white/bright wallpapers)
+        // 2. High-opacity neutral charcoal pill + luminous inner rim (visible on pure black/vivid wallpapers)
+        // 3. Centered battery-level status core bar (+ bright white center dot when charging)
+        static void PaintHiddenTab(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, string edge) {
+            bool vertical = edge == "left" || edge == "right" || size.Height > size.Width;
+            var outerRect = new RectangleF(0.5f, 0.5f, Math.Max(4, size.Width - 1f), Math.Max(4, size.Height - 1f));
+            float outerRadius = vertical ? Math.Min(5f, outerRect.Width * 0.65f) : Math.Min(5f, outerRect.Height * 0.65f);
+
             int? minPct = null;
             bool anyLow = false;
+            bool anyCharging = false;
             foreach (var e in entries) {
                 if (e.Percent.HasValue && e.Fresh) {
                     if (!minPct.HasValue || e.Percent.Value < minPct.Value) minPct = e.Percent.Value;
                     if (e.Low) anyLow = true;
+                    if (e.Charging) anyCharging = true;
                 }
             }
-            Color fill = anyLow ? ThemePalette.LevelColor(10, dark) :
-                minPct.HasValue ? ThemePalette.LevelColor(minPct, dark) : palette.Muted;
-            CompactRenderer.Fill(g, rect, fill, radius);
+            Color coreColor = anyLow
+                ? Color.FromArgb(248, 108, 108)
+                : minPct.HasValue
+                    ? (minPct.Value <= 30 ? Color.FromArgb(245, 192, 78) : Color.FromArgb(74, 218, 148))
+                    : Color.FromArgb(164, 174, 188);
+
+            Color shellFill = VisualDesign.HighContrast ? SystemColors.Window : Color.FromArgb(242, 24, 27, 34);
+            Color outerBorder = VisualDesign.HighContrast ? SystemColors.WindowText : Color.FromArgb(175, 0, 0, 0);
+            Color innerRim = VisualDesign.HighContrast ? SystemColors.Highlight : Color.FromArgb(95, 255, 255, 255);
+
+            using (var shellPath = CreateEdgeTabPath(outerRect, edge, outerRadius)) {
+                using (var fillBrush = new SolidBrush(shellFill)) g.FillPath(fillBrush, shellPath);
+                using (var outerPen = new Pen(outerBorder, 1f)) g.DrawPath(outerPen, shellPath);
+            }
+
+            var rimRect = new RectangleF(outerRect.X + 1f, outerRect.Y + 1f, Math.Max(2f, outerRect.Width - 2f), Math.Max(2f, outerRect.Height - 2f));
+            using (var rimPath = CreateEdgeTabPath(rimRect, edge, Math.Max(1.5f, outerRadius - 1f)))
+            using (var rimPen = new Pen(innerRim, 1f)) {
+                g.DrawPath(rimPen, rimPath);
+            }
+
+            // Centered vibrant battery status core pill
+            RectangleF coreRect;
+            if (vertical) {
+                float coreW = 3f;
+                float coreH = Math.Max(14f, outerRect.Height - 20f);
+                float coreX = edge == "left" ? outerRect.Right - coreW - 2.5f : edge == "right" ? outerRect.Left + 2.5f : outerRect.X + (outerRect.Width - coreW) / 2f;
+                coreRect = new RectangleF(coreX, outerRect.Y + (outerRect.Height - coreH) / 2f, coreW, coreH);
+            } else {
+                float coreH = 3f;
+                float coreW = Math.Max(14f, outerRect.Width - 20f);
+                float coreY = edge == "top" ? outerRect.Bottom - coreH - 2.5f : edge == "bottom" ? outerRect.Top + 2.5f : outerRect.Y + (outerRect.Height - coreH) / 2f;
+                coreRect = new RectangleF(outerRect.X + (outerRect.Width - coreW) / 2f, coreY, coreW, coreH);
+            }
+            CompactRenderer.Fill(g, coreRect, coreColor, 1.5f);
+
+            if (anyCharging) {
+                float dot = 3f;
+                using (var white = new SolidBrush(Color.White)) {
+                    g.FillEllipse(white, coreRect.X + (coreRect.Width - dot) / 2f, coreRect.Y + (coreRect.Height - dot) / 2f, dot, dot);
+                }
+            }
         }
 
         static void PaintCapsule(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark) {
@@ -167,23 +249,23 @@ namespace AtkBatteryTray {
                 var e = entries[i];
                 float x = padX + i * itemW;
                 if (i > 0) {
-                    using (var pen = new Pen(palette.Border, 1f)) g.DrawLine(pen, x, 8f, x, size.Height - 8f);
+                    using (var pen = new Pen(Color.FromArgb(dark ? 55 : 45, palette.Border), 1f)) g.DrawLine(pen, x, 8f, x, size.Height - 8f);
                 }
                 Color level = e.Percent.HasValue && e.Fresh ? ThemePalette.LevelColor(e.Percent, dark) : palette.Muted;
-                float ringSize = VisualDesign.LargeFont ? 20f : 18f;
+                float ringSize = VisualDesign.LargeFont ? 22f : 20f;
                 var ring = new RectangleF(x + 4f, (size.Height - ringSize) / 2f, ringSize, ringSize);
-                using (var trackPen = new Pen(palette.Track, 2.4f)) g.DrawEllipse(trackPen, ring);
+                using (var trackPen = new Pen(palette.Track, 2.2f)) g.DrawEllipse(trackPen, ring);
                 if (e.Percent.HasValue) {
                     float sweep = 360f * Math.Max(0, Math.Min(100, e.Percent.Value)) / 100f;
                     if (sweep > 0.5f) {
-                        using (var arcPen = new Pen(level, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawArc(arcPen, ring, -90f, sweep);
+                        using (var arcPen = new Pen(level, 2.2f) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawArc(arcPen, ring, -90f, sweep);
                     }
                 }
-                string glyph = e.Kind == "mouse" ? "鼠" : e.Kind == "headset" ? "耳" : e.Kind == "keyboard" ? "键" : e.Kind == "gamepad" ? "柄" : "设";
-                CompactRenderer.DrawLabel(g, glyph, ring, 8.5f, true, palette.Muted, StringAlignment.Center);
+                float symSize = VisualDesign.LargeFont ? 11f : 10f;
+                CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(e.Kind), new RectangleF(ring.X + (ring.Width - symSize) / 2f, ring.Y + (ring.Height - symSize) / 2f, symSize, symSize), e.Low ? level : palette.Foreground);
 
-                string txt = e.Percent.HasValue ? e.Percent.Value + "%" : "--";
-                CompactRenderer.DrawLabel(g, txt, new RectangleF(ring.Right + 3f, 0, Math.Max(20f, itemW - ringSize - 9f), size.Height), VisualDesign.LargeFont ? 13f : 12f, true, e.Low ? level : palette.Foreground, StringAlignment.Center);
+                string txt = e.Percent.HasValue ? (e.Charging ? e.Percent.Value + "%+" : e.Percent.Value + "%") : "--";
+                CompactRenderer.DrawLabel(g, txt, new RectangleF(ring.Right + 3f, 0, Math.Max(22f, itemW - ringSize - 8f), size.Height), VisualDesign.LargeFont ? 13f : 12f, true, e.Low ? level : palette.Foreground, StringAlignment.Center);
             }
         }
 
@@ -225,11 +307,13 @@ namespace AtkBatteryTray {
             for (int i = 0; i < entries.Count; i++) {
                 var e = entries[i];
                 float x = padX + i * itemW;
+                if (i > 0) {
+                    using (var sep = new Pen(Color.FromArgb(dark ? 50 : 40, palette.Border), 1f)) g.DrawLine(sep, x - 2f, 6f, x - 2f, size.Height - 6f);
+                }
                 Color level = e.Percent.HasValue && e.Fresh ? ThemePalette.LevelColor(e.Percent, dark) : palette.Muted;
-                using (var dotBrush = new SolidBrush(level)) g.FillEllipse(dotBrush, x + 2f, (size.Height - 6f) / 2f, 6f, 6f);
-                string shortKind = e.Kind == "mouse" ? "鼠" : e.Kind == "headset" ? "耳" : e.Kind == "keyboard" ? "键" : "设";
-                string txt = shortKind + " " + (e.Percent.HasValue ? e.Percent.Value + "%" : "--");
-                CompactRenderer.DrawLabel(g, txt, new RectangleF(x + 10f, 0, Math.Max(20f, itemW - 12f), size.Height), VisualDesign.LargeFont ? 12f : 11f, true, e.Low ? level : palette.Foreground, StringAlignment.Near);
+                CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(e.Kind), new RectangleF(x + 2f, (size.Height - 12f) / 2f, 12f, 12f), level);
+                string txt = e.Percent.HasValue ? (e.Charging ? e.Percent.Value + "%+" : e.Percent.Value + "%") : "--";
+                CompactRenderer.DrawLabel(g, txt, new RectangleF(x + 16f, 0, Math.Max(22f, itemW - 18f), size.Height), VisualDesign.LargeFont ? 12f : 11f, true, e.Low ? level : palette.Foreground, StringAlignment.Near);
             }
         }
 
@@ -256,8 +340,7 @@ namespace AtkBatteryTray {
                     Color level = e.Percent.HasValue && e.Fresh ? ThemePalette.LevelColor(e.Percent, dark) : palette.Muted;
                     var tile = new RectangleF(rowRect.X + 6, rowRect.Y + (rowRect.Height - 28) / 2f, 28, 28);
                     CompactRenderer.Fill(g, tile, palette.RaisedSurface, 7f);
-                    string glyph = e.Kind == "mouse" ? "鼠" : e.Kind == "headset" ? "耳" : e.Kind == "keyboard" ? "键" : e.Kind == "gamepad" ? "柄" : "设";
-                    CompactRenderer.DrawLabel(g, glyph, tile, 12f, true, palette.Foreground, StringAlignment.Center);
+                    CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(e.Kind), new RectangleF(tile.X + 6, tile.Y + 6, 16, 16), e.Low ? level : palette.Foreground);
 
                     CompactRenderer.DrawLabel(g, e.Name, new RectangleF(tile.Right + 8, rowRect.Y + 5, rowRect.Width - 104, 18), 12.5f, true, palette.Foreground, StringAlignment.Near);
                     CompactRenderer.DrawLabel(g, e.Subtitle ?? "", new RectangleF(tile.Right + 8, rowRect.Y + 23, rowRect.Width - 104, 16), 10.5f, false, palette.Muted, StringAlignment.Near);

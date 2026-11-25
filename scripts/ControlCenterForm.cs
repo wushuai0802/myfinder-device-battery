@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using AtkBattery;
@@ -11,6 +12,93 @@ namespace AtkBatteryTray {
     public enum ControlCenterPage { Devices, Appearance, Placement, Reminders, Diagnostics, Settings }
 
     internal enum DeviceBatteryCapability { Supported, NoBatteryPlaceholder }
+
+    internal static class ControlCenterTokens {
+        internal const float RadiusCard = 10f;
+        internal const float RadiusControl = 6f;
+        internal const float RadiusBadge = 10f;
+        internal const int SidebarWidth = 188;
+        internal const int ButtonHeight = 30;
+        internal const int InputHeight = 30;
+        internal const int DividerInset = 20;
+
+        internal static string SymbolForKind(string kind) {
+            if (kind == "mouse" || kind == "headset" || kind == "keyboard" || kind == "gamepad") return kind;
+            return "power";
+        }
+    }
+
+    internal static class ControlCenterIconLoader {
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern bool DestroyIcon(IntPtr hIcon);
+
+        internal static Icon LoadWindowIcon(out bool ownsIcon) {
+            ownsIcon = false;
+            try {
+                string exe = Application.ExecutablePath;
+                if (!String.IsNullOrEmpty(exe) && File.Exists(exe)) {
+                    string baseName = Path.GetFileName(exe);
+                    if (String.Equals(baseName, "AtkMouseBattery.exe", StringComparison.OrdinalIgnoreCase)) {
+                        var extracted = Icon.ExtractAssociatedIcon(exe);
+                        if (extracted != null) { ownsIcon = true; return extracted; }
+                    }
+                }
+            } catch (Exception) { }
+
+            try {
+                string dir = AppDomain.CurrentDomain.BaseDirectory;
+                for (int i = 0; i < 4 && !String.IsNullOrEmpty(dir); i++) {
+                    string candidate = Path.Combine(dir, @"assets\app-icon.ico");
+                    if (File.Exists(candidate)) {
+                        ownsIcon = true;
+                        return new Icon(candidate, new Size(32, 32));
+                    }
+                    dir = Path.GetDirectoryName(dir);
+                }
+            } catch (Exception) { }
+
+            // Crisp vector fallback matching assets/app-icon.ico when running inside standalone test EXEs
+            ownsIcon = true;
+            return RenderBrandIcon(32);
+        }
+
+        internal static Icon RenderBrandIcon(int size) {
+            using (var bmp = new Bitmap(size, size)) {
+                using (var g = Graphics.FromImage(bmp)) {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.Clear(Color.Transparent);
+                    DrawBrandGlyph(g, new RectangleF(1, 1, size - 2, size - 2), true);
+                }
+                IntPtr hIcon = bmp.GetHicon();
+                try {
+                    using (var temp = Icon.FromHandle(hIcon)) return (Icon)temp.Clone();
+                } finally {
+                    DestroyIcon(hIcon);
+                }
+            }
+        }
+
+        internal static void DrawBrandGlyph(Graphics g, RectangleF r, bool darkSurface) {
+            float rad = Math.Max(4f, r.Width * 0.24f);
+            Color bg = darkSurface ? Color.FromArgb(28, 33, 41) : Color.FromArgb(24, 30, 38);
+            CompactRenderer.Fill(g, r, bg, rad);
+            using (var borderPath = VisualDesign.RoundRect(r.X + 0.5f, r.Y + 0.5f, r.Width - 1f, r.Height - 1f, rad))
+            using (var borderPen = new Pen(Color.FromArgb(90, 255, 255, 255), 1f)) {
+                g.DrawPath(borderPen, borderPath);
+            }
+            float pad = r.Width * 0.22f;
+            var ring = new RectangleF(r.X + pad, r.Y + pad, r.Width - pad * 2f, r.Height - pad * 2f);
+            float stroke = Math.Max(2f, r.Width * 0.11f);
+            using (var trackPen = new Pen(Color.FromArgb(70, 255, 255, 255), stroke)) g.DrawEllipse(trackPen, ring);
+            using (var arcPen = new Pen(Color.FromArgb(74, 214, 146), stroke) { StartCap = LineCap.Round, EndCap = LineCap.Round }) {
+                g.DrawArc(arcPen, ring, -90f, 285f);
+            }
+            float dot = Math.Max(2.5f, r.Width * 0.14f);
+            using (var dotBrush = new SolidBrush(Color.FromArgb(238, 244, 248))) {
+                g.FillEllipse(dotBrush, r.X + (r.Width - dot) / 2f, r.Y + (r.Height - dot) / 2f, dot, dot);
+            }
+        }
+    }
 
     internal sealed class ControlCenterDeviceItem {
         internal string Key;
@@ -99,6 +187,287 @@ namespace AtkBatteryTray {
         }
     }
 
+    // Rounded Fluent/Linear surface card without jagged Region clipping.
+    internal sealed class ControlCenterCard : Panel {
+        ThemePalette palette;
+        bool dark;
+
+        internal ControlCenterCard(ThemePalette palette, bool dark, Padding padding) {
+            this.palette = palette;
+            this.dark = dark;
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            Padding = new Padding(padding.Left + 1, padding.Top + 1, padding.Right + 1, padding.Bottom + 1);
+            BackColor = VisualDesign.HighContrast ? SystemColors.Window : palette.Card;
+            ForeColor = palette.Foreground;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e) {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Color outerBg = Parent != null ? Parent.BackColor : palette.WindowBackground;
+            using (var outerBrush = new SolidBrush(outerBg)) g.FillRectangle(outerBrush, ClientRectangle);
+
+            var rect = new RectangleF(0.5f, 0.5f, Math.Max(4, Width - 1f), Math.Max(4, Height - 1f));
+            Color fill = VisualDesign.HighContrast ? SystemColors.Window : palette.Card;
+            CompactRenderer.Fill(g, rect, fill, ControlCenterTokens.RadiusCard);
+
+            if (!VisualDesign.HighContrast && dark) {
+                // Subtle top inner rim highlight for depth on dark surfaces
+                using (var rimPen = new Pen(Color.FromArgb(18, 255, 255, 255), 1f)) {
+                    g.DrawLine(rimPen, rect.Left + ControlCenterTokens.RadiusCard, rect.Top + 1f, rect.Right - ControlCenterTokens.RadiusCard, rect.Top + 1f);
+                }
+            }
+
+            using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, ControlCenterTokens.RadiusCard))
+            using (var pen = new Pen(VisualDesign.HighContrast ? palette.Foreground : palette.Border, 1f)) {
+                g.DrawPath(pen, path);
+            }
+        }
+    }
+
+    internal enum ControlCenterButtonVariant { Secondary, Primary, Danger }
+
+    internal sealed class ControlCenterButton : Control {
+        readonly ThemePalette palette;
+        readonly bool dark;
+        readonly ControlCenterButtonVariant variant;
+        readonly string symbolName;
+        readonly Font labelFont;
+        bool hovered, pressed;
+
+        internal ControlCenterButton(string text, ThemePalette palette, bool dark, Font font, ControlCenterButtonVariant variant = ControlCenterButtonVariant.Secondary, string symbolName = null) {
+            Text = text ?? "";
+            this.palette = palette;
+            this.dark = dark;
+            this.variant = variant;
+            this.symbolName = symbolName;
+            this.labelFont = font;
+            TabStop = true;
+            Cursor = Cursors.Hand;
+            AccessibleName = Text;
+            AccessibleRole = AccessibleRole.PushButton;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
+            BackColor = VisualDesign.HighContrast ? SystemColors.Window : palette.Card;
+
+            var measured = TextRenderer.MeasureText(Text, font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            int iconSpace = String.IsNullOrEmpty(symbolName) ? 0 : 18;
+            Size = new Size(Math.Max(68, measured.Width + iconSpace + 24), ControlCenterTokens.ButtonHeight);
+        }
+
+        void Trigger() {
+            if (!Enabled) return;
+            OnClick(EventArgs.Empty);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hovered = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left && Enabled) { pressed = true; Invalidate(); } base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) {
+            bool fire = pressed && Enabled && ClientRectangle.Contains(e.Location);
+            pressed = false;
+            Invalidate();
+            base.OnMouseUp(e);
+            if (fire) Trigger();
+        }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { pressed = false; Invalidate(); base.OnLostFocus(e); }
+        protected override void OnKeyDown(KeyEventArgs e) {
+            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) { e.Handled = true; Trigger(); }
+            base.OnKeyDown(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs e) {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            DialogPaint.Background(this, e, hostBg);
+
+            var rect = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+            Color fill, fg, border;
+            if (VisualDesign.HighContrast) {
+                fill = pressed || hovered ? SystemColors.Highlight : SystemColors.Window;
+                fg = !Enabled ? SystemColors.GrayText : (pressed || hovered ? SystemColors.HighlightText : SystemColors.WindowText);
+                border = SystemColors.WindowText;
+            } else if (variant == ControlCenterButtonVariant.Primary) {
+                fill = !Enabled ? palette.Track : palette.Selected;
+                fg = !Enabled ? palette.Muted : palette.SelectedForeground;
+                border = fill;
+                if (Enabled && (hovered || pressed)) {
+                    var ov = palette.Interaction(pressed);
+                    fill = ThemePalette.Blend(fill, ov, ov.A);
+                }
+            } else if (variant == ControlCenterButtonVariant.Danger) {
+                Color red = ThemePalette.LevelColor(10, dark);
+                fill = !Enabled ? palette.Card : (pressed ? Color.FromArgb(dark ? 42 : 28, red) : hovered ? Color.FromArgb(dark ? 28 : 18, red) : palette.Card);
+                fg = !Enabled ? palette.Muted : red;
+                border = !Enabled ? palette.Border : Color.FromArgb(dark ? 95 : 85, red);
+            } else {
+                fill = !Enabled ? palette.Card : palette.RaisedSurface;
+                fg = !Enabled ? palette.Muted : palette.Foreground;
+                border = palette.Border;
+                if (Enabled && (hovered || pressed)) {
+                    var ov = palette.Interaction(pressed);
+                    fill = ThemePalette.Blend(fill, ov, ov.A);
+                }
+            }
+
+            CompactRenderer.Fill(g, rect, fill, ControlCenterTokens.RadiusControl);
+            using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, ControlCenterTokens.RadiusControl))
+            using (var pen = new Pen(border, 1f)) g.DrawPath(pen, path);
+
+            if (!String.IsNullOrEmpty(symbolName)) {
+                var textSize = TextRenderer.MeasureText(Text, labelFont, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+                float totalW = 13f + 6f + textSize.Width;
+                float sx = Math.Max(8f, (Width - totalW) / 2f);
+                CompactRenderer.DrawSymbol(g, symbolName, new RectangleF(sx, (Height - 13f) / 2f, 13f, 13f), fg);
+                CompactRenderer.DrawLabel(g, Text, new RectangleF(sx + 18f, 0, Math.Max(20f, Width - sx - 24f), Height), labelFont.SizeInPoints * 1.33f, variant == ControlCenterButtonVariant.Primary, fg, StringAlignment.Near);
+            } else {
+                CompactRenderer.DrawLabel(g, Text, new RectangleF(6, 0, Width - 12, Height), labelFont.SizeInPoints * 1.33f, variant == ControlCenterButtonVariant.Primary, fg, StringAlignment.Center);
+            }
+
+            if (Focused && ShowFocusCues) {
+                CompactRenderer.Outline(g, rect, palette.Accent, 1f);
+            }
+        }
+    }
+
+    internal enum ControlCenterBadgeTone { Muted, Positive, Accent }
+
+    internal sealed class ControlCenterBadge : Control {
+        readonly ThemePalette palette;
+        readonly bool dark;
+        readonly ControlCenterBadgeTone tone;
+        readonly bool showDot;
+
+        internal ControlCenterBadge(string text, ThemePalette palette, bool dark, Font font, ControlCenterBadgeTone tone, bool showDot = false) {
+            Text = text ?? "";
+            this.palette = palette;
+            this.dark = dark;
+            this.tone = tone;
+            this.showDot = showDot;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
+            BackColor = palette.Card;
+
+            var sz = TextRenderer.MeasureText(Text, font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            int dotW = showDot ? 11 : 0;
+            Size = new Size(Math.Max(46, sz.Width + dotW + 18), 22);
+        }
+
+        protected override void OnPaint(PaintEventArgs e) {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            DialogPaint.Background(this, e, hostBg);
+
+            var rect = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+            Color fill, fg, dotColor;
+            if (VisualDesign.HighContrast) {
+                fill = SystemColors.Window;
+                fg = SystemColors.WindowText;
+                dotColor = SystemColors.Highlight;
+            } else if (tone == ControlCenterBadgeTone.Positive) {
+                dotColor = ThemePalette.LevelColor(90, dark);
+                fill = Color.FromArgb(dark ? 34 : 26, dotColor);
+                fg = dark ? Color.FromArgb(148, 232, 184) : Color.FromArgb(20, 118, 68);
+            } else if (tone == ControlCenterBadgeTone.Accent) {
+                dotColor = ThemePalette.LevelColor(40, dark);
+                fill = Color.FromArgb(dark ? 32 : 24, dotColor);
+                fg = dark ? Color.FromArgb(245, 206, 128) : Color.FromArgb(148, 92, 12);
+            } else {
+                dotColor = palette.Muted;
+                fill = palette.RaisedSurface;
+                fg = palette.Muted;
+            }
+
+            CompactRenderer.Fill(g, rect, fill, rect.Height / 2f);
+            if (VisualDesign.HighContrast) {
+                using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, rect.Height / 2f))
+                using (var pen = new Pen(SystemColors.WindowText, 1f)) g.DrawPath(pen, path);
+            }
+
+            float textLeft = showDot ? 18f : 8f;
+            if (showDot) {
+                using (var b = new SolidBrush(dotColor)) g.FillEllipse(b, 8f, (Height - 6f) / 2f, 6f, 6f);
+            }
+            CompactRenderer.DrawLabel(g, Text, new RectangleF(textLeft, 0, Math.Max(20f, Width - textLeft - 6f), Height), 11f, tone != ControlCenterBadgeTone.Muted, fg, showDot ? StringAlignment.Near : StringAlignment.Center);
+        }
+    }
+
+    // Hybrid owner-drawn rounded TextBox container wrapping a borderless native TextBox for full IME/accessibility.
+    internal sealed class ControlCenterTextBox : Panel {
+        readonly ThemePalette palette;
+        readonly TextBox inner;
+        bool hovered, focused;
+
+        internal event EventHandler Committed;
+
+        internal ControlCenterTextBox(string initialText, ThemePalette palette, Font font, int width = 220) {
+            this.palette = palette;
+            Size = new Size(width, ControlCenterTokens.InputHeight);
+            BackColor = palette.Card;
+            Cursor = Cursors.IBeam;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+
+            inner = new TextBox {
+                BorderStyle = BorderStyle.None,
+                Text = initialText ?? "",
+                Font = font,
+                BackColor = VisualDesign.HighContrast ? SystemColors.Window : palette.RaisedSurface,
+                ForeColor = VisualDesign.HighContrast ? SystemColors.WindowText : palette.Foreground,
+                Location = new Point(10, 6),
+                Width = Math.Max(40, width - 20)
+            };
+            inner.GotFocus += delegate { focused = true; Invalidate(); };
+            inner.LostFocus += delegate { focused = false; Invalidate(); if (Committed != null) Committed(this, EventArgs.Empty); };
+            inner.MouseEnter += delegate { hovered = true; Invalidate(); };
+            inner.MouseLeave += delegate { hovered = false; Invalidate(); };
+            inner.KeyDown += delegate(object sender, KeyEventArgs e) {
+                if (e.KeyCode == Keys.Enter) {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    if (Committed != null) Committed(this, EventArgs.Empty);
+                }
+            };
+            Controls.Add(inner);
+            Resize += delegate { PositionInner(); };
+            Click += delegate { inner.Focus(); };
+            MouseEnter += delegate { hovered = true; Invalidate(); };
+            MouseLeave += delegate { hovered = false; Invalidate(); };
+            PositionInner();
+        }
+
+        internal string ValueText { get { return inner.Text; } }
+        internal TextBox InnerBox { get { return inner; } }
+
+        void PositionInner() {
+            int y = Math.Max(4, (Height - inner.Height) / 2);
+            inner.SetBounds(10, y, Math.Max(40, Width - 20), inner.Height);
+        }
+
+        protected override void OnPaint(PaintEventArgs e) {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Color hostBg = Parent != null ? Parent.BackColor : palette.Card;
+            using (var bg = new SolidBrush(hostBg)) g.FillRectangle(bg, ClientRectangle);
+
+            var rect = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+            Color fill = VisualDesign.HighContrast ? SystemColors.Window : palette.RaisedSurface;
+            CompactRenderer.Fill(g, rect, fill, ControlCenterTokens.RadiusControl);
+
+            Color border = VisualDesign.HighContrast
+                ? (focused ? SystemColors.Highlight : SystemColors.WindowText)
+                : (focused ? palette.Foreground : hovered ? palette.Muted : palette.Border);
+            using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, ControlCenterTokens.RadiusControl))
+            using (var pen = new Pen(border, focused ? 1.5f : 1f)) g.DrawPath(pen, path);
+        }
+    }
+
     internal sealed class ControlCenterToggle : Control {
         bool isChecked, hovered, pressed;
         ThemePalette palette;
@@ -156,7 +525,8 @@ namespace AtkBatteryTray {
         protected override void OnPaint(PaintEventArgs e) {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            DialogPaint.Background(this, e, BackColor);
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            DialogPaint.Background(this, e, hostBg);
             var rect = new RectangleF(1, 1, Math.Max(12, Width - 2), Math.Max(12, Height - 2));
             float radius = rect.Height / 2f;
             Color track = !Enabled ? palette.Track : isChecked ? palette.Selected : palette.Track;
@@ -185,6 +555,7 @@ namespace AtkBatteryTray {
         }
     }
 
+    // Semantic Fluent/Linear navigation sidebar (188px wide) with brand header, icon+label rows, and live status dots.
     internal sealed class ControlCenterRail : Control {
         sealed class RailItem {
             internal ControlCenterPage Page;
@@ -195,9 +566,9 @@ namespace AtkBatteryTray {
         }
 
         readonly List<RailItem> items = new List<RailItem>();
-        readonly ToolTip tip = new ToolTip { InitialDelay = 250, ReshowDelay = 100 };
         ThemePalette palette;
         bool dark;
+        bool placementActiveDot, settingsActiveDot;
         ControlCenterPage selected = ControlCenterPage.Devices;
         int hovered = -1;
 
@@ -207,7 +578,7 @@ namespace AtkBatteryTray {
             this.palette = palette;
             this.dark = dark;
             TabStop = true;
-            Width = 60;
+            Width = ControlCenterTokens.SidebarWidth;
             Dock = DockStyle.Left;
             AccessibleName = "控制中心导航";
             AccessibleRole = AccessibleRole.List;
@@ -231,6 +602,13 @@ namespace AtkBatteryTray {
             }
         }
 
+        internal void UpdateIndicators(bool placementActive, bool apiRunning) {
+            if (placementActiveDot == placementActive && settingsActiveDot == apiRunning) return;
+            placementActiveDot = placementActive;
+            settingsActiveDot = apiRunning;
+            Invalidate();
+        }
+
         internal void ApplyTheme(ThemePalette next, bool isDark) {
             palette = next;
             dark = isDark;
@@ -239,23 +617,24 @@ namespace AtkBatteryTray {
         }
 
         void LayoutItems() {
-            int btnSize = Math.Max(36, Math.Min(44, Width - 16));
-            int x = (Width - btnSize) / 2;
-            int yTop = 12;
-            int gap = 6;
+            int padX = 12;
+            int itemW = Math.Max(40, Width - padX * 2);
+            int itemH = 38;
+            int gap = 4;
+            int yTop = 74;
             for (int i = 0; i < items.Count; i++) {
                 if (!items[i].Bottom) {
-                    items[i].Bounds = new Rectangle(x, yTop, btnSize, btnSize);
-                    yTop += btnSize + gap;
+                    items[i].Bounds = new Rectangle(padX, yTop, itemW, itemH);
+                    yTop += itemH + gap;
                 }
             }
             int bottomCount = 0;
             for (int i = 0; i < items.Count; i++) if (items[i].Bottom) bottomCount++;
-            int yBot = Math.Max(yTop + 12, Height - 12 - bottomCount * btnSize - Math.Max(0, bottomCount - 1) * gap);
+            int yBot = Math.Max(yTop + 22, Height - 14 - bottomCount * itemH - Math.Max(0, bottomCount - 1) * gap);
             for (int i = 0; i < items.Count; i++) {
                 if (items[i].Bottom) {
-                    items[i].Bounds = new Rectangle(x, yBot, btnSize, btnSize);
-                    yBot += btnSize + gap;
+                    items[i].Bounds = new Rectangle(padX, yBot, itemW, itemH);
+                    yBot += itemH + gap;
                 }
             }
         }
@@ -294,7 +673,6 @@ namespace AtkBatteryTray {
             if (next != hovered) {
                 hovered = next;
                 Cursor = hovered >= 0 ? Cursors.Hand : Cursors.Default;
-                tip.SetToolTip(this, hovered >= 0 ? items[hovered].Label : null);
                 Invalidate();
             }
             base.OnMouseMove(e);
@@ -303,7 +681,6 @@ namespace AtkBatteryTray {
         protected override void OnMouseLeave(EventArgs e) {
             hovered = -1;
             Cursor = Cursors.Default;
-            tip.SetToolTip(this, null);
             Invalidate();
             base.OnMouseLeave(e);
         }
@@ -324,71 +701,108 @@ namespace AtkBatteryTray {
             LayoutItems();
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             DialogPaint.Background(this, e, palette.RailBackground);
+
+            // Right separator hairline
             using (var pen = new Pen(palette.Border, 1)) g.DrawLine(pen, Width - 1, 0, Width - 1, Height);
+
+            // Brand header (top-left logo + title + version chip)
+            ControlCenterIconLoader.DrawBrandGlyph(g, new RectangleF(16, 18, 28, 28), dark);
+            CompactRenderer.DrawLabel(g, "MyFinder", new RectangleF(52, 16, Width - 64, 18), 14f, true, palette.Foreground, StringAlignment.Near);
+            string ver = AppRuntime.Version ?? "1.4";
+            if (ver.Length > 14) ver = ver.Substring(0, 14);
+            CompactRenderer.DrawLabel(g, "v" + ver, new RectangleF(52, 34, Width - 64, 14), 10.5f, false, palette.Muted, StringAlignment.Near);
+            using (var div = new Pen(Color.FromArgb(dark ? 28 : 22, palette.Foreground), 1)) {
+                g.DrawLine(div, 16, 60, Width - 16, 60);
+            }
+
+            // Divider before bottom group
+            int firstBottomY = -1;
+            for (int i = 0; i < items.Count; i++) {
+                if (items[i].Bottom) { firstBottomY = items[i].Bounds.Top - 10; break; }
+            }
+            if (firstBottomY > 0) {
+                using (var div = new Pen(Color.FromArgb(dark ? 28 : 22, palette.Foreground), 1)) {
+                    g.DrawLine(div, 16, firstBottomY, Width - 16, firstBottomY);
+                }
+            }
+
             for (int i = 0; i < items.Count; i++) {
                 var item = items[i];
                 bool isSel = item.Page == selected;
                 bool isHov = i == hovered;
                 var rect = new RectangleF(item.Bounds.X, item.Bounds.Y, item.Bounds.Width, item.Bounds.Height);
-                if (isSel || isHov) {
-                    Color fill = VisualDesign.HighContrast && isSel ? palette.Selected : palette.RaisedSurface;
-                    CompactRenderer.Fill(g, rect, fill, 8);
-                }
                 if (isSel) {
-                    var bar = new RectangleF(0, rect.Y + (rect.Height - 16) / 2f, 3, 16);
-                    CompactRenderer.Fill(g, bar, VisualDesign.HighContrast ? palette.Selected : palette.Foreground, 1.5f);
+                    Color fill = VisualDesign.HighContrast ? palette.Selected : palette.RaisedSurface;
+                    CompactRenderer.Fill(g, rect, fill, 7f);
+                    if (!VisualDesign.HighContrast) {
+                        using (var p = VisualDesign.RoundRect(rect.X + 0.5f, rect.Y + 0.5f, rect.Width - 1f, rect.Height - 1f, 7f))
+                        using (var pen = new Pen(Color.FromArgb(dark ? 32 : 42, palette.Border), 1f)) g.DrawPath(pen, p);
+                    }
+                    var bar = new RectangleF(rect.X, rect.Y + (rect.Height - 16) / 2f, 3f, 16f);
+                    CompactRenderer.Fill(g, bar, VisualDesign.HighContrast ? palette.SelectedForeground : palette.Foreground, 1.5f);
+                } else if (isHov) {
+                    Color hovFill = VisualDesign.HighContrast ? SystemColors.Highlight : Color.FromArgb(dark ? 14 : 12, palette.Foreground);
+                    CompactRenderer.Fill(g, rect, hovFill, 7f);
                 }
                 if (isSel && Focused && ShowFocusCues) {
-                    CompactRenderer.Outline(g, rect, palette.Accent, 1);
+                    CompactRenderer.Outline(g, rect, palette.Accent, 1f);
                 }
-                Color iconColor = isSel ? (VisualDesign.HighContrast ? palette.SelectedForeground : palette.Foreground) : palette.Muted;
-                DrawRailIcon(g, item.Icon, new RectangleF(rect.X + (rect.Width - 18) / 2f, rect.Y + (rect.Height - 18) / 2f, 18, 18), iconColor);
+
+                Color fg = isSel
+                    ? (VisualDesign.HighContrast ? palette.SelectedForeground : palette.Foreground)
+                    : (isHov ? (VisualDesign.HighContrast ? SystemColors.HighlightText : palette.Foreground) : palette.Muted);
+                DrawRailIcon(g, item.Icon, new RectangleF(rect.X + 12f, rect.Y + (rect.Height - 16f) / 2f, 16f, 16f), fg);
+                CompactRenderer.DrawLabel(g, item.Label, new RectangleF(rect.X + 36f, rect.Y, rect.Width - 52f, rect.Height), 13f, isSel, fg, StringAlignment.Near);
+
+                bool showDot = (item.Page == ControlCenterPage.Placement && placementActiveDot) || (item.Page == ControlCenterPage.Settings && settingsActiveDot);
+                if (showDot) {
+                    using (var db = new SolidBrush(ThemePalette.LevelColor(90, dark))) {
+                        g.FillEllipse(db, rect.Right - 14f, rect.Y + (rect.Height - 6f) / 2f, 6f, 6f);
+                    }
+                }
             }
         }
 
         static void DrawRailIcon(Graphics g, string kind, RectangleF r, Color color) {
-            using (var pen = new Pen(color, 1.6f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
+            if (kind == "settings") {
+                CompactRenderer.DrawSymbol(g, "settings", r, color);
+                return;
+            }
+            using (var pen = new Pen(color, 1.5f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
             using (var brush = new SolidBrush(color)) {
                 float x = r.X, y = r.Y, w = r.Width, h = r.Height;
                 if (kind == "devices") {
-                    using (var p = VisualDesign.RoundRect(x + 1, y + 2, w - 2, h - 7, 2)) g.DrawPath(pen, p);
-                    g.DrawLine(pen, x + w * 0.5f, y + h - 5, x + w * 0.5f, y + h - 2);
-                    g.DrawLine(pen, x + 5, y + h - 2, x + w - 5, y + h - 2);
+                    using (var p = VisualDesign.RoundRect(x + 1, y + 2, w - 2, h - 6.5f, 2)) g.DrawPath(pen, p);
+                    g.DrawLine(pen, x + w * 0.5f, y + h - 4.5f, x + w * 0.5f, y + h - 1.5f);
+                    g.DrawLine(pen, x + 4.5f, y + h - 1.5f, x + w - 4.5f, y + h - 1.5f);
                 } else if (kind == "look") {
                     g.DrawEllipse(pen, x + 1.5f, y + 1.5f, w - 3, h - 3);
-                    g.FillEllipse(brush, x + 5, y + 7, 2.6f, 2.6f);
-                    g.FillEllipse(brush, x + 8.5f, y + 4.5f, 2.6f, 2.6f);
-                    g.FillEllipse(brush, x + 11.5f, y + 8, 2.6f, 2.6f);
+                    g.FillEllipse(brush, x + 4.5f, y + 6.5f, 2.3f, 2.3f);
+                    g.FillEllipse(brush, x + 7.5f, y + 4.2f, 2.3f, 2.3f);
+                    g.FillEllipse(brush, x + 10.2f, y + 7.2f, 2.3f, 2.3f);
                 } else if (kind == "place") {
                     using (var p = VisualDesign.RoundRect(x + 1, y + 2, w - 2, h - 4, 2)) g.DrawPath(pen, p);
-                    g.DrawLine(pen, x + 1, y + h - 6, x + w - 1, y + h - 6);
-                    g.DrawLine(pen, x + w - 7, y + h - 4, x + w - 3, y + h - 4);
+                    g.DrawLine(pen, x + 1, y + h - 5.5f, x + w - 1, y + h - 5.5f);
+                    g.DrawLine(pen, x + w - 6.5f, y + h - 3.5f, x + w - 3, y + h - 3.5f);
                 } else if (kind == "remind") {
-                    g.DrawArc(pen, x + 4, y + 2.5f, w - 8, 9, 180, 180);
-                    g.DrawLine(pen, x + 4, y + 7, x + 4, y + 12.5f);
-                    g.DrawLine(pen, x + w - 4, y + 7, x + w - 4, y + 12.5f);
-                    g.DrawLine(pen, x + 2.5f, y + 13.5f, x + w - 2.5f, y + 13.5f);
-                    g.DrawArc(pen, x + w * 0.5f - 2, y + 13.5f, 4, 3, 0, 180);
-                } else if (kind == "diag") {
+                    g.DrawArc(pen, x + 3.5f, y + 2f, w - 7, 8, 180, 180);
+                    g.DrawLine(pen, x + 3.5f, y + 6f, x + 3.5f, y + 11.5f);
+                    g.DrawLine(pen, x + w - 3.5f, y + 6f, x + w - 3.5f, y + 11.5f);
+                    g.DrawLine(pen, x + 2f, y + 12f, x + w - 2f, y + 12f);
+                    g.DrawArc(pen, x + w * 0.5f - 2, y + 12f, 4, 2.8f, 0, 180);
+                } else {
                     g.DrawLines(pen, new[] {
                         new PointF(x + 1, y + h * 0.55f),
-                        new PointF(x + 4.5f, y + h * 0.55f),
-                        new PointF(x + 7, y + 4),
-                        new PointF(x + 10.5f, y + h - 4),
-                        new PointF(x + 13.5f, y + h * 0.55f),
+                        new PointF(x + 4f, y + h * 0.55f),
+                        new PointF(x + 6.5f, y + 3.5f),
+                        new PointF(x + 9.5f, y + h - 3.5f),
+                        new PointF(x + 12f, y + h * 0.55f),
                         new PointF(x + w - 1, y + h * 0.55f)
                     });
-                } else {
-                    g.DrawEllipse(pen, x + 6, y + 6, w - 12, h - 12);
-                    g.DrawEllipse(pen, x + 2.5f, y + 2.5f, w - 5, h - 5);
                 }
             }
-        }
-
-        protected override void Dispose(bool disposing) {
-            if (disposing) tip.Dispose();
-            base.Dispose(disposing);
         }
     }
 
@@ -401,7 +815,7 @@ namespace AtkBatteryTray {
         internal ControlCenterHeroRing(ThemePalette palette, bool dark) {
             this.palette = palette;
             this.dark = dark;
-            Size = new Size(96, 96);
+            Size = new Size(92, 92);
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
             BackColor = palette.Card;
@@ -420,25 +834,26 @@ namespace AtkBatteryTray {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            DialogPaint.Background(this, e, BackColor);
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            DialogPaint.Background(this, e, hostBg);
             float pad = 7f;
             var ring = new RectangleF(pad, pad, Math.Max(20, Width - pad * 2), Math.Max(20, Height - pad * 2));
-            using (var trackPen = new Pen(VisualDesign.HighContrast ? palette.Foreground : palette.Track, VisualDesign.HighContrast ? 2f : 7f)) {
+            using (var trackPen = new Pen(VisualDesign.HighContrast ? palette.Foreground : palette.Track, VisualDesign.HighContrast ? 2f : 6.5f)) {
                 g.DrawEllipse(trackPen, ring);
             }
             Color accent = percent.HasValue && fresh ? ThemePalette.LevelColor(percent, dark) : palette.Muted;
             if (percent.HasValue) {
                 float sweep = 360f * Math.Max(0, Math.Min(100, percent.Value)) / 100f;
                 if (sweep > 0.5f) {
-                    using (var arcPen = new Pen(accent, 7f) { StartCap = LineCap.Round, EndCap = LineCap.Round }) {
+                    using (var arcPen = new Pen(accent, 6.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round }) {
                         g.DrawArc(arcPen, ring, -90f, sweep);
                     }
                 }
             }
             string text = percent.HasValue ? percent.Value.ToString() : "—";
-            float digitSize = percent.HasValue ? (VisualDesign.LargeFont ? 26f : 24f) : 18f;
-            using (var font = new Font("Microsoft YaHei UI", digitSize, FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var pctFont = new Font("Microsoft YaHei UI", 12f, FontStyle.Regular, GraphicsUnit.Pixel))
+            float digitSize = percent.HasValue ? (VisualDesign.LargeFont ? 25f : 23f) : 18f;
+            using (var font = new Font("Segoe UI", digitSize, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var pctFont = new Font("Segoe UI", 11.5f, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var brush = new SolidBrush(percent.HasValue ? (fresh ? accent : palette.Muted) : palette.Muted))
             using (var mutedBrush = new SolidBrush(palette.Muted)) {
                 var numSize = g.MeasureString(text, font);
@@ -476,7 +891,7 @@ namespace AtkBatteryTray {
             Cursor = Cursors.Hand;
             AccessibleName = styleName + "配色";
             AccessibleRole = AccessibleRole.RadioButton;
-            Size = new Size(92, 74);
+            Size = new Size(92, 76);
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
             BackColor = hostPalette.Card;
@@ -511,16 +926,16 @@ namespace AtkBatteryTray {
             DialogPaint.Background(this, e, BackColor);
             var card = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
             Color fill = hovered && !VisualDesign.HighContrast ? hostPalette.RaisedSurface : hostPalette.Card;
-            CompactRenderer.Fill(g, card, fill, 8);
+            CompactRenderer.Fill(g, card, fill, 8f);
             Color border = selected ? hostPalette.Foreground : hostPalette.Border;
-            using (var path = VisualDesign.RoundRect(card.X, card.Y, card.Width, card.Height, 8))
+            using (var path = VisualDesign.RoundRect(card.X, card.Y, card.Width, card.Height, 8f))
             using (var pen = new Pen(border, selected ? 1.5f : 1f)) g.DrawPath(pen, path);
 
             var preview = ThemePalette.For(styleKey, dark);
             var chips = new RectangleF(8, 8, Width - 16, 34);
             if (!VisualDesign.HighContrast) {
                 float third = chips.Width / 3f;
-                using (var clip = VisualDesign.RoundRect(chips.X, chips.Y, chips.Width, chips.Height, 5)) {
+                using (var clip = VisualDesign.RoundRect(chips.X, chips.Y, chips.Width, chips.Height, 5f)) {
                     var state = g.Save();
                     g.SetClip(clip);
                     using (var b1 = new SolidBrush(preview.WindowBackground)) g.FillRectangle(b1, chips.X, chips.Y, third + 1, chips.Height);
@@ -529,12 +944,14 @@ namespace AtkBatteryTray {
                     using (var b3 = new SolidBrush(c3)) g.FillRectangle(b3, chips.X + third * 2, chips.Y, third + 2, chips.Height);
                     g.Restore(state);
                 }
+                using (var borderPath = VisualDesign.RoundRect(chips.X, chips.Y, chips.Width, chips.Height, 5f))
+                using (var pen = new Pen(Color.FromArgb(40, hostPalette.Border), 1f)) g.DrawPath(pen, borderPath);
             } else {
                 using (var pen = new Pen(hostPalette.Foreground, 1))
-                using (var path = VisualDesign.RoundRect(chips.X, chips.Y, chips.Width, chips.Height, 5)) g.DrawPath(pen, path);
+                using (var path = VisualDesign.RoundRect(chips.X, chips.Y, chips.Width, chips.Height, 5f)) g.DrawPath(pen, path);
             }
             string caption = isNew ? styleName + " · 新" : styleName;
-            CompactRenderer.DrawLabel(g, caption, new RectangleF(8, 46, Width - 16, 20), 12f, selected, selected ? hostPalette.Foreground : hostPalette.Muted, StringAlignment.Near);
+            CompactRenderer.DrawLabel(g, caption, new RectangleF(4, 46, Width - 8, 20), 11f, selected, selected ? hostPalette.Foreground : hostPalette.Muted, StringAlignment.Center);
             if (Focused && ShowFocusCues) CompactRenderer.Outline(g, card, hostPalette.Accent, 1);
         }
     }
@@ -550,7 +967,7 @@ namespace AtkBatteryTray {
             this.dark = dark;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
-            Size = new Size(310, 340);
+            Size = new Size(300, 340);
             BackColor = palette.WindowBackground;
         }
 
@@ -568,16 +985,16 @@ namespace AtkBatteryTray {
             DialogPaint.Background(this, e, palette.WindowBackground);
             var layout = WirelessLayout.Build(owner, 0, Math.Max(220, Height - 24));
             var size = layout.Size;
-            float availW = Math.Max(100, Width - 16);
-            float availH = Math.Max(100, Height - 16);
+            float availW = Math.Max(100, Width - 18);
+            float availH = Math.Max(100, Height - 18);
             float scale = Math.Min(1f, Math.Min(availW / Math.Max(1, size.Width), availH / Math.Max(1, size.Height)));
             float drawW = size.Width * scale;
             float drawH = size.Height * scale;
             float ox = Math.Max(8, (Width - drawW) / 2f);
             float oy = 8f;
-            var frame = new RectangleF(ox - 4, oy - 4, drawW + 8, drawH + 8);
-            CompactRenderer.Fill(g, frame, palette.WindowBackground, 10);
-            using (var border = VisualDesign.RoundRect(frame.X, frame.Y, frame.Width, frame.Height, 10))
+            var frame = new RectangleF(ox - 5, oy - 5, drawW + 10, drawH + 10);
+            CompactRenderer.Fill(g, frame, palette.WindowBackground, ControlCenterTokens.RadiusCard);
+            using (var border = VisualDesign.RoundRect(frame.X, frame.Y, frame.Width, frame.Height, ControlCenterTokens.RadiusCard))
             using (var pen = new Pen(palette.Border, 1)) g.DrawPath(pen, border);
             var state = g.Save();
             g.TranslateTransform(ox, oy);
@@ -599,7 +1016,7 @@ namespace AtkBatteryTray {
         internal ControlCenterPlacementPreview(ThemePalette palette, bool dark) {
             this.palette = palette;
             this.dark = dark;
-            Size = new Size(600, 152);
+            Size = new Size(600, 148);
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Opaque | ControlStyles.SupportsTransparentBackColor, false);
             BackColor = palette.Card;
@@ -619,43 +1036,72 @@ namespace AtkBatteryTray {
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             DialogPaint.Background(this, e, palette.Card);
             var box = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
-            using (var clip = VisualDesign.RoundRect(box.X, box.Y, box.Width, box.Height, 10)) {
+            using (var clip = VisualDesign.RoundRect(box.X, box.Y, box.Width, box.Height, ControlCenterTokens.RadiusCard)) {
                 var state = g.Save();
                 g.SetClip(clip);
-                Color top = dark ? Color.FromArgb(46, 58, 72) : Color.FromArgb(207, 217, 228);
-                Color bottom = dark ? Color.FromArgb(27, 34, 42) : Color.FromArgb(182, 197, 212);
+                Color top = dark ? Color.FromArgb(42, 54, 70) : Color.FromArgb(204, 218, 232);
+                Color bottom = dark ? Color.FromArgb(24, 30, 39) : Color.FromArgb(176, 194, 214);
                 using (var bg = new LinearGradientBrush(box, top, bottom, 145f)) g.FillRectangle(bg, box);
 
-                // Desktop widget illustration (top-right edge capsule)
+                // Subtle abstract wallpaper glow for depth
+                using (var glow = new SolidBrush(Color.FromArgb(dark ? 18 : 36, 110, 170, 235))) {
+                    g.FillEllipse(glow, Width * 0.12f, -30f, 220f, 150f);
+                }
+
+                // Desktop widget illustration (floating capsule + high-contrast edge handle preview)
                 if (selectedMode == 1) {
-                    var pill = new RectangleF(Width - 186, 18, 166, 38);
-                    CompactRenderer.Fill(g, pill, palette.Card, 19);
-                    using (var pp = VisualDesign.RoundRect(pill.X, pill.Y, pill.Width, pill.Height, 19))
-                    using (var pen = new Pen(palette.Border, 1)) g.DrawPath(pen, pp);
-                    CompactRenderer.DrawLabel(g, "鼠标 100%  ·  耳机 39%", pill, 12f, true, palette.Foreground, StringAlignment.Center);
+                    var pill = new RectangleF(Width - 208, 18, 184, 36);
+                    CompactRenderer.Fill(g, new RectangleF(pill.X, pill.Y + 2, pill.Width, pill.Height), Color.FromArgb(90, 0, 0, 0), 18f);
+                    CompactRenderer.Fill(g, pill, palette.Card, 18f);
+                    using (var pp = VisualDesign.RoundRect(pill.X, pill.Y, pill.Width, pill.Height, 18f))
+                    using (var pen = new Pen(palette.Border, 1f)) g.DrawPath(pen, pp);
+                    CompactRenderer.DrawSymbol(g, "mouse", new RectangleF(pill.X + 12, pill.Y + 11, 14, 14), ThemePalette.LevelColor(100, dark));
+                    CompactRenderer.DrawLabel(g, "100%", new RectangleF(pill.X + 28, pill.Y, 44, pill.Height), 12f, true, palette.Foreground, StringAlignment.Near);
+                    using (var sep = new Pen(palette.Border, 1f)) g.DrawLine(sep, pill.X + 86, pill.Y + 9, pill.X + 86, pill.Bottom - 9);
+                    CompactRenderer.DrawSymbol(g, "headset", new RectangleF(pill.X + 98, pill.Y + 11, 14, 14), ThemePalette.LevelColor(39, dark));
+                    CompactRenderer.DrawLabel(g, "39%", new RectangleF(pill.X + 115, pill.Y, 44, pill.Height), 12f, true, palette.Foreground, StringAlignment.Near);
+
+                    // Wallpaper-proof edge handle preview on right screen edge
+                    var edgeTab = new RectangleF(Width - 10, 62, 10, 38);
+                    CompactRenderer.Fill(g, edgeTab, Color.FromArgb(238, 24, 27, 34), 5f);
+                    using (var rim = new Pen(Color.FromArgb(90, 255, 255, 255), 1f)) g.DrawLine(rim, edgeTab.X + 1, edgeTab.Y + 4, edgeTab.X + 1, edgeTab.Bottom - 4);
+                    CompactRenderer.Fill(g, new RectangleF(edgeTab.X + 4, edgeTab.Y + 8, 3, 22), ThemePalette.LevelColor(90, true), 1.5f);
                 }
 
                 // Taskbar strip
                 var tb = new RectangleF(0, Height - 40, Width, 40);
-                using (var tbBrush = new SolidBrush(dark ? Color.FromArgb(236, 28, 28, 28) : Color.FromArgb(242, 243, 243, 243))) {
+                using (var tbBrush = new SolidBrush(dark ? Color.FromArgb(238, 26, 28, 32) : Color.FromArgb(244, 246, 249))) {
                     g.FillRectangle(tbBrush, tb);
                 }
-                Color tbFg = dark ? Color.FromArgb(242, 242, 242) : Color.FromArgb(26, 26, 26);
-                CompactRenderer.DrawLabel(g, "11:58\n2026/11/25", new RectangleF(Width - 82, Height - 38, 72, 36), 11f, false, tbFg, StringAlignment.Far);
+                using (var topLine = new Pen(Color.FromArgb(dark ? 28 : 22, dark ? Color.White : Color.Black), 1f)) {
+                    g.DrawLine(topLine, 0, Height - 40, Width, Height - 40);
+                }
+                // Center Win11 placeholder app icons
+                float cx = Width / 2f - 42f;
+                for (int i = 0; i < 4; i++) {
+                    CompactRenderer.Fill(g, new RectangleF(cx + i * 22f, Height - 28f, 16f, 16f), Color.FromArgb(dark ? 45 : 32, dark ? Color.White : Color.Black), 4f);
+                }
+                Color tbFg = dark ? Color.FromArgb(238, 240, 244) : Color.FromArgb(28, 32, 38);
+                CompactRenderer.DrawLabel(g, "11:58\n2026/11/25", new RectangleF(Width - 82, Height - 38, 72, 36), 10.5f, false, tbFg, StringAlignment.Far);
 
                 if (selectedMode == 2) {
-                    var bat = new RectangleF(Width - 246, Height - 32, 144, 24);
-                    CompactRenderer.Fill(g, bat, dark ? Color.FromArgb(22, 255, 255, 255) : Color.FromArgb(16, 0, 0, 0), 5);
-                    CompactRenderer.DrawLabel(g, "鼠 100%   耳 39%", bat, 11.5f, true, tbFg, StringAlignment.Center);
+                    var bat = new RectangleF(Width - 252, Height - 33, 152, 26);
+                    CompactRenderer.Fill(g, bat, dark ? Color.FromArgb(220, 36, 39, 46) : Color.FromArgb(235, 255, 255, 255), 6.5f);
+                    using (var bp = VisualDesign.RoundRect(bat.X, bat.Y, bat.Width, bat.Height, 6.5f))
+                    using (var pen = new Pen(Color.FromArgb(dark ? 70 : 45, palette.Border), 1f)) g.DrawPath(pen, bp);
+                    CompactRenderer.DrawSymbol(g, "mouse", new RectangleF(bat.X + 8, bat.Y + 6, 13, 13), ThemePalette.LevelColor(100, dark));
+                    CompactRenderer.DrawLabel(g, "100%", new RectangleF(bat.X + 24, bat.Y, 42, bat.Height), 11f, true, ThemePalette.LevelColor(100, dark), StringAlignment.Near);
+                    CompactRenderer.DrawSymbol(g, "headset", new RectangleF(bat.X + 76, bat.Y + 6, 13, 13), ThemePalette.LevelColor(39, dark));
+                    CompactRenderer.DrawLabel(g, "39%", new RectangleF(bat.X + 92, bat.Y, 42, bat.Height), 11f, true, ThemePalette.LevelColor(39, dark), StringAlignment.Near);
                 } else if (selectedMode == 0) {
-                    var badge = new RectangleF(Width - 122, Height - 30, 24, 20);
-                    CompactRenderer.Fill(g, badge, ThemePalette.LevelColor(85, dark), 4);
+                    var badge = new RectangleF(Width - 118, Height - 30, 24, 20);
+                    CompactRenderer.Fill(g, badge, ThemePalette.LevelColor(85, dark), 4.5f);
                     CompactRenderer.DrawLabel(g, "85", badge, 11f, true, Color.White, StringAlignment.Center);
                 }
                 g.Restore(state);
             }
             using (var pen = new Pen(palette.Border, 1))
-            using (var path = VisualDesign.RoundRect(box.X, box.Y, box.Width, box.Height, 10)) g.DrawPath(pen, path);
+            using (var path = VisualDesign.RoundRect(box.X, box.Y, box.Width, box.Height, ControlCenterTokens.RadiusCard)) g.DrawPath(pen, path);
         }
     }
 
@@ -683,15 +1129,12 @@ namespace AtkBatteryTray {
             BackColor = palette.Card;
 
             float x = 3f;
-            int h = VisualDesign.LargeFont ? 34 : 30;
-            using (var bmp = new Bitmap(1, 1))
-            using (var g = Graphics.FromImage(bmp)) {
-                for (int i = 0; i < labels.Length; i++) {
-                    var sz = TextRenderer.MeasureText(labels[i], boldFont, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-                    float w = Math.Max(42f, sz.Width + 20f);
-                    rects[i] = new RectangleF(x, 3f, w, h - 6f);
-                    x += w + 2f;
-                }
+            int h = VisualDesign.LargeFont ? 34 : ControlCenterTokens.ButtonHeight;
+            for (int i = 0; i < labels.Length; i++) {
+                var sz = TextRenderer.MeasureText(labels[i], boldFont, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+                float w = Math.Max(42f, sz.Width + 20f);
+                rects[i] = new RectangleF(x, 3f, w, h - 6f);
+                x += w + 2f;
             }
             Size = new Size((int)Math.Ceiling(x + 1f), h);
         }
@@ -721,7 +1164,8 @@ namespace AtkBatteryTray {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            DialogPaint.Background(this, e, BackColor);
+            Color hostBg = Parent != null ? Parent.BackColor : BackColor;
+            DialogPaint.Background(this, e, hostBg);
             var outer = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
             CompactRenderer.Fill(g, outer, palette.RaisedSurface, 7f);
             using (var path = VisualDesign.RoundRect(outer.X, outer.Y, outer.Width, outer.Height, 7f))
@@ -752,6 +1196,8 @@ namespace AtkBatteryTray {
         readonly Panel noticeBar;
         readonly Label noticeLabel;
         readonly Timer noticeTimer = new Timer { Interval = 3600 };
+        readonly bool ownsWindowIcon;
+        readonly Icon windowIcon;
 
         ThemePalette palette;
         DialogTheme dialogTheme;
@@ -777,25 +1223,29 @@ namespace AtkBatteryTray {
             MaximizeBox = true;
             MinimizeBox = true;
             ShowInTaskbar = true;
+            ShowIcon = true;
             KeyPreview = true;
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96, 96);
 
+            windowIcon = ControlCenterIconLoader.LoadWindowIcon(out ownsWindowIcon);
+            if (windowIcon != null) Icon = windowIcon;
+
             LoadTheme();
             RebuildFonts();
-            MinimumSize = new Size(820, 560);
+            MinimumSize = new Size(860, 580);
             ApplyInitialBounds();
 
             rail = new ControlCenterRail(palette, dark);
             rail.SelectedPage = currentPage;
             rail.PageSelected += delegate(object sender, ControlCenterPage page) { SelectPage(page); };
 
-            noticeBar = new Panel { Dock = DockStyle.Bottom, Height = 30, Visible = false, Padding = new Padding(24, 5, 24, 5) };
+            noticeBar = new Panel { Dock = DockStyle.Bottom, Height = 32, Visible = false, Padding = new Padding(28, 5, 28, 5) };
             noticeLabel = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
             noticeBar.Controls.Add(noticeLabel);
             noticeTimer.Tick += delegate { noticeTimer.Stop(); if (!IsDisposed) noticeBar.Visible = false; };
 
-            pageHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(28, 22, 28, 22) };
+            pageHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(30, 22, 30, 24) };
             DialogScrollbars.Track(pageHost, dialogTheme);
 
             Controls.Add(pageHost);
@@ -822,12 +1272,11 @@ namespace AtkBatteryTray {
             if (subFont != null) subFont.Dispose();
             if (boldFont != null) boldFont.Dispose();
             float scale = VisualDesign.LargeFont ? 1.12f : 1f;
-            titleFont = new Font("Microsoft YaHei UI", 22f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+            titleFont = new Font("Microsoft YaHei UI", 20f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             headingFont = new Font("Microsoft YaHei UI", 16f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             bodyFont = new Font("Microsoft YaHei UI", 13.5f * scale, FontStyle.Regular, GraphicsUnit.Pixel);
-            boldFont = new Font("Microsoft YaHei UI", 13.5f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+            boldFont = new Font("Microsoft YaHei UI", 13f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             subFont = new Font("Microsoft YaHei UI", 12f * scale, FontStyle.Regular, GraphicsUnit.Pixel);
-            Font = bodyFont;
         }
 
         void ApplyChromeColors() {
@@ -843,38 +1292,37 @@ namespace AtkBatteryTray {
             if (IsHandleCreated) ThemedTitleBar.Apply(Handle, dialogTheme);
         }
 
+        internal static Rectangle ClampToWorkArea(Rectangle requested, Rectangle workArea, Size minSize) {
+            int w = Math.Max(Math.Min(minSize.Width, workArea.Width), Math.Min(requested.Width, workArea.Width));
+            int h = Math.Max(Math.Min(minSize.Height, workArea.Height), Math.Min(requested.Height, workArea.Height));
+            int x = Math.Max(workArea.Left, Math.Min(requested.X, workArea.Right - w));
+            int y = Math.Max(workArea.Top, Math.Min(requested.Y, workArea.Bottom - h));
+            return new Rectangle(x, y, w, h);
+        }
+
         void ApplyInitialBounds() {
             loadingBounds = true;
             try {
-                var area = ThemedDialog.WorkingAreaProvider(this);
-                if (area.Width <= 0 || area.Height <= 0) area = Screen.PrimaryScreen.WorkingArea;
                 var saved = DeviceSettings.Current.ControlCenterBounds;
-                int w = saved != null && saved.Width >= 820 ? saved.Width : 1000;
-                int h = saved != null && saved.Height >= 560 ? saved.Height : 660;
-                w = Math.Min(w, Math.Max(MinimumSize.Width, area.Width));
-                h = Math.Min(h, Math.Max(MinimumSize.Height, area.Height));
-                int x = saved != null && saved.HasPosition ? saved.X : area.Left + (area.Width - w) / 2;
-                int y = saved != null && saved.HasPosition ? saved.Y : area.Top + (area.Height - h) / 2;
-                var clamped = ClampToWorkArea(new Rectangle(x, y, w, h), area, MinimumSize);
-                Bounds = clamped;
+                Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+                Rectangle target;
+                if (saved != null && saved.HasPosition && saved.Width >= 600 && saved.Height >= 420) {
+                    var savedRect = new Rectangle(saved.X, saved.Y, saved.Width, saved.Height);
+                    area = Screen.FromRectangle(savedRect).WorkingArea;
+                    target = ClampToWorkArea(savedRect, area, MinimumSize);
+                } else {
+                    int w = Math.Min(1040, area.Width - 40);
+                    int h = Math.Min(680, area.Height - 40);
+                    target = ClampToWorkArea(new Rectangle(area.Left + (area.Width - w) / 2, area.Top + (area.Height - h) / 2, w, h), area, MinimumSize);
+                }
+                Bounds = target;
             } finally {
                 loadingBounds = false;
             }
         }
 
-        internal static Rectangle ClampToWorkArea(Rectangle bounds, Rectangle workArea, Size minSize) {
-            if (workArea.Width <= 0 || workArea.Height <= 0) return bounds;
-            int maxW = Math.Max(1, workArea.Width);
-            int maxH = Math.Max(1, workArea.Height);
-            int w = Math.Min(Math.Max(bounds.Width, Math.Min(minSize.Width, maxW)), maxW);
-            int h = Math.Min(Math.Max(bounds.Height, Math.Min(minSize.Height, maxH)), maxH);
-            int x = Math.Max(workArea.Left, Math.Min(bounds.X, workArea.Right - w));
-            int y = Math.Max(workArea.Top, Math.Min(bounds.Y, workArea.Bottom - h));
-            return new Rectangle(x, y, w, h);
-        }
-
         void PersistBounds() {
-            if (loadingBounds || closing || IsDisposed || WindowState != FormWindowState.Normal) return;
+            if (loadingBounds || WindowState != FormWindowState.Normal || Width < 600 || Height < 420) return;
             bool defaults;
             var pref = DeviceSettings.ReadSnapshot(out defaults);
             if (defaults) return;
@@ -893,9 +1341,7 @@ namespace AtkBatteryTray {
 
         protected override void WndProc(ref Message m) {
             base.WndProc(ref m);
-            if (m.Msg == 0x0232) { // WM_EXITSIZEMOVE
-                PersistBounds();
-            }
+            if (m.Msg == 0x0232) PersistBounds();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e) {
@@ -1000,32 +1446,34 @@ namespace AtkBatteryTray {
                 var item = new ControlCenterDeviceItem {
                     Key = card.Id,
                     Name = card.Name,
-                    Kind = card.Kind ?? "device",
-                    Capability = isNoBat ? DeviceBatteryCapability.NoBatteryPlaceholder : DeviceBatteryCapability.Supported,
+                    Kind = card.Kind ?? "other",
                     Battery = card.Battery,
                     Card = card,
                     IsNativeMouse = card.NativeMouse,
                     IsNativeHeadset = card.NativeHeadset,
-                    Hidden = card.Hidden,
+                    Hidden = pref.HiddenDeviceIds.Contains(card.Id),
+                    PinnedTray = pref.TrayDeviceId == card.Id,
                     CanRename = !card.AudioOnly && (card.NativeMouse || card.NativeHeadset || card.Device != null),
                     CanHide = !card.AudioOnly,
-                    CanPinTray = !card.AudioOnly && (card.NativeMouse || card.NativeHeadset || card.Device != null),
-                    PinnedTray = pref.TrayDeviceId == card.Id
+                    CanPinTray = !card.AudioOnly,
+                    Capability = isNoBat ? DeviceBatteryCapability.NoBatteryPlaceholder : DeviceBatteryCapability.Supported
                 };
                 if (card.AudioOnly) {
                     item.Transport = "仅音频控制";
-                    item.StateText = card.Subtitle ?? "已连接";
+                    item.StateText = card.Subtitle ?? "不提供电池读数";
                     item.NoBatteryReason = "无电量读取";
-                    item.VerificationText = "系统音频端点";
+                    item.VerificationText = "系统音频通道";
                 } else if (card.NativeMouse) {
                     item.Transport = "2.4 GHz 接收器";
-                    item.StateText = card.Battery != null && card.Battery.Fresh ? "在线 · " + card.Battery.TimeText : (card.Battery != null && card.Battery.Percent.HasValue ? "上次确认 " + card.Battery.TimeText : "暂未取得读数");
+                    item.StateText = card.Battery != null && card.Battery.Fresh ? "在线 · " + card.Battery.TimeText : "暂未取得读数";
                     item.VerificationText = "本项目已实机验证（A 级）";
                     if (owner.Dpi != null && owner.Dpi.Stages != null && owner.Dpi.Stages.Count > 0) {
-                        item.HasWritableDpi = true;
-                        item.DpiStages = new int[owner.Dpi.Stages.Count];
-                        for (int i = 0; i < owner.Dpi.Stages.Count; i++) item.DpiStages[i] = owner.Dpi.Stages[i].XDpi;
+                        var arr = new int[owner.Dpi.Stages.Count];
+                        for (int i = 0; i < owner.Dpi.Stages.Count; i++) arr[i] = owner.Dpi.Stages[i].XDpi;
+                        item.DpiStages = arr;
                         item.ActiveDpiIndex = owner.Dpi.ActiveStage;
+                        item.CurrentDpi = owner.Dpi.ActiveStage >= 0 && owner.Dpi.ActiveStage < arr.Length ? (int?)arr[owner.Dpi.ActiveStage] : null;
+                        item.HasWritableDpi = owner.CanSetNativeDpi;
                         item.DpiTargetToken = owner.NativeDpiToken;
                     }
                 } else if (card.NativeHeadset) {
@@ -1082,6 +1530,9 @@ namespace AtkBatteryTray {
             rebuilding = true;
             deferredDataRefresh = false;
             lastDataSignature = ComputeDataSignature();
+            var pref = DeviceSettings.Current;
+            rail.UpdateIndicators((pref.DesktopWidget != null && pref.DesktopWidget.Enabled) || (pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled), owner.LocalApiRunning);
+
             pageHost.SuspendLayout();
             try {
                 while (pageHost.Controls.Count > 0) {
@@ -1104,48 +1555,77 @@ namespace AtkBatteryTray {
             }
         }
 
-        Panel CreatePageRoot(string title, Control headerRight = null) {
+        Panel CreatePageRoot(string title, string subtitle = null, Control headerRight = null) {
             var root = new Panel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = palette.WindowBackground };
-            var head = new Panel { Dock = DockStyle.Top, Height = 48, BackColor = palette.WindowBackground, Margin = new Padding(0, 0, 0, 12) };
-            var lbl = new Label { Text = title, Font = titleFont, ForeColor = palette.Foreground, BackColor = palette.WindowBackground, AutoSize = true, Location = new Point(0, 4) };
+            int headH = String.IsNullOrEmpty(subtitle) ? 46 : 62;
+            var head = new Panel { Dock = DockStyle.Top, Height = headH, BackColor = palette.WindowBackground, Margin = new Padding(0, 0, 0, 12) };
+            var lbl = new Label { Text = title, Font = titleFont, ForeColor = palette.Foreground, BackColor = palette.WindowBackground, AutoSize = true, Location = new Point(0, 2) };
             head.Controls.Add(lbl);
+            if (!String.IsNullOrEmpty(subtitle)) {
+                var sub = new Label { Text = subtitle, Font = subFont, ForeColor = palette.Muted, BackColor = palette.WindowBackground, AutoSize = true, Location = new Point(1, 34) };
+                head.Controls.Add(sub);
+            }
             if (headerRight != null) {
                 headerRight.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 head.Controls.Add(headerRight);
-                head.Resize += delegate { headerRight.Location = new Point(Math.Max(0, head.ClientSize.Width - headerRight.Width), 4); };
-                headerRight.Location = new Point(Math.Max(0, head.ClientSize.Width - headerRight.Width), 4);
+                Action place = delegate { headerRight.Location = new Point(Math.Max(0, head.ClientSize.Width - headerRight.Width), 6); };
+                head.Resize += delegate { place(); };
+                place();
             }
             root.Controls.Add(head);
             return root;
         }
 
-        Panel CreateCard(Padding pad) {
-            var card = new Panel { BackColor = palette.Card, ForeColor = palette.Foreground, Padding = pad, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
-            card.Paint += delegate(object sender, PaintEventArgs e) {
-                var p = (Panel)sender;
-                using (var pen = new Pen(palette.Border, 1)) e.Graphics.DrawRectangle(pen, 0, 0, p.Width - 1, p.Height - 1);
+        Label CreateSectionHeading(string text, int topSpace = 14) {
+            return new Label {
+                Text = text,
+                Font = subFont,
+                ForeColor = palette.Muted,
+                BackColor = palette.WindowBackground,
+                AutoSize = true,
+                Dock = DockStyle.Top,
+                Padding = new Padding(4, topSpace, 0, 8)
             };
-            return card;
+        }
+
+        ControlCenterCard CreateCard(Padding pad) {
+            return new ControlCenterCard(palette, dark, pad);
         }
 
         Panel CreateSettingRow(string title, string subtitle, Control rightControl, bool topBorder) {
-            var row = new Panel { Dock = DockStyle.Top, Height = String.IsNullOrEmpty(subtitle) ? 50 : 62, BackColor = palette.Card, Padding = new Padding(0, 8, 0, 8) };
-            if (topBorder) {
-                row.Paint += delegate(object sender, PaintEventArgs e) {
-                    using (var pen = new Pen(palette.Border, 1)) e.Graphics.DrawLine(pen, 0, 0, row.Width, 0);
-                };
-            }
-            var titleLbl = new Label { Text = title, Font = bodyFont, ForeColor = palette.Foreground, BackColor = palette.Card, AutoSize = true, Location = new Point(0, String.IsNullOrEmpty(subtitle) ? 15 : 10) };
+            bool hoveredRow = false;
+            var row = new Panel { Dock = DockStyle.Top, Height = String.IsNullOrEmpty(subtitle) ? 54 : 64, BackColor = palette.Card, Padding = new Padding(0, 6, 0, 6) };
+            row.Paint += delegate(object sender, PaintEventArgs e) {
+                var g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                if (hoveredRow && !VisualDesign.HighContrast) {
+                    CompactRenderer.Fill(g, new RectangleF(4, 2, Math.Max(10, row.Width - 8), Math.Max(10, row.Height - 4)), Color.FromArgb(dark ? 10 : 8, palette.Foreground), 6f);
+                }
+                if (topBorder) {
+                    using (var pen = new Pen(Color.FromArgb(dark ? 45 : 35, palette.Border), 1)) {
+                        g.DrawLine(pen, 8, 0, Math.Max(8, row.Width - 8), 0);
+                    }
+                }
+            };
+            row.MouseEnter += delegate { hoveredRow = true; row.Invalidate(); };
+            row.MouseLeave += delegate { hoveredRow = false; row.Invalidate(); };
+
+            var titleLbl = new Label { Text = title, Font = bodyFont, ForeColor = palette.Foreground, BackColor = Color.Transparent, AutoSize = true, Location = new Point(10, String.IsNullOrEmpty(subtitle) ? 17 : 11) };
             row.Controls.Add(titleLbl);
+            Label subLbl = null;
             if (!String.IsNullOrEmpty(subtitle)) {
-                var subLbl = new Label { Text = subtitle, Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true, Location = new Point(0, 32) };
+                subLbl = new Label { Text = subtitle, Font = subFont, ForeColor = palette.Muted, BackColor = Color.Transparent, AutoSize = true, AutoEllipsis = true, Location = new Point(10, 34) };
                 row.Controls.Add(subLbl);
             }
             if (rightControl != null) {
                 rightControl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 row.Controls.Add(rightControl);
                 Action position = delegate {
-                    rightControl.Location = new Point(Math.Max(180, row.ClientSize.Width - rightControl.Width), (row.Height - rightControl.Height) / 2);
+                    int rx = Math.Max(180, row.ClientSize.Width - rightControl.Width - 10);
+                    rightControl.Location = new Point(rx, (row.Height - rightControl.Height) / 2);
+                    int maxTextW = Math.Max(120, rx - 22);
+                    titleLbl.MaximumSize = new Size(maxTextW, 24);
+                    if (subLbl != null) subLbl.MaximumSize = new Size(maxTextW, 20);
                 };
                 row.Resize += delegate { position(); };
                 position();
@@ -1157,19 +1637,9 @@ namespace AtkBatteryTray {
             return new ControlCenterSegments(labels, selectedIndex, onSelect, palette, subFont, boldFont);
         }
 
-        Button CreateActionButton(string text, EventHandler onClick, bool danger = false) {
-            var btn = new Button {
-                Text = text,
-                AutoSize = true,
-                FlatStyle = FlatStyle.Flat,
-                Font = subFont,
-                BackColor = danger ? palette.Card : palette.RaisedSurface,
-                ForeColor = danger ? ThemePalette.LevelColor(10, dark) : palette.Foreground,
-                Padding = new Padding(12, 5, 12, 5),
-                Cursor = Cursors.Hand
-            };
-            btn.FlatAppearance.BorderSize = danger ? 0 : 1;
-            btn.FlatAppearance.BorderColor = palette.Border;
+        ControlCenterButton CreateActionButton(string text, EventHandler onClick, bool danger = false, bool primary = false, string symbolName = null) {
+            var variant = danger ? ControlCenterButtonVariant.Danger : primary ? ControlCenterButtonVariant.Primary : ControlCenterButtonVariant.Secondary;
+            var btn = new ControlCenterButton(text, palette, dark, subFont, variant, symbolName);
             btn.Click += onClick;
             return btn;
         }
@@ -1192,8 +1662,8 @@ namespace AtkBatteryTray {
             var refreshBtn = CreateActionButton("刷新电量", delegate {
                 owner.RefreshBattery(true);
                 ShowNotice("正在刷新全部设备电量…");
-            });
-            var root = CreatePageRoot("设备", refreshBtn);
+            }, false, false, "refresh");
+            var root = CreatePageRoot("设备", "查看无线外设实时电量，管理显示名称、板载 DPI 与托盘固定", refreshBtn);
 
             var items = BuildDeviceItems();
             if (items.Count == 0) {
@@ -1217,25 +1687,23 @@ namespace AtkBatteryTray {
             var selected = items.Find(delegate(ControlCenterDeviceItem it) { return it.Key == selectedDeviceKey; });
 
             var split = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, RowCount = 1, AutoSize = true, BackColor = palette.WindowBackground, Margin = Padding.Empty };
-            split.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 320));
+            split.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 296));
             split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             split.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            // Left list grouped by capability
-            var left = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = palette.WindowBackground, Padding = new Padding(0, 0, 16, 0) };
+            var left = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = palette.WindowBackground, Padding = new Padding(0, 0, 14, 0) };
             var supported = items.FindAll(delegate(ControlCenterDeviceItem it) { return it.Capability == DeviceBatteryCapability.Supported; });
             var noBat = items.FindAll(delegate(ControlCenterDeviceItem it) { return it.Capability == DeviceBatteryCapability.NoBatteryPlaceholder; });
 
             if (supported.Count > 0) {
-                left.Controls.Add(CreateGroupHeading("在线 / 已识别设备"));
+                left.Controls.Add(CreateGroupHeading("在线 / 已识别设备 (" + supported.Count + ")"));
                 foreach (var it in supported) left.Controls.Add(CreateDeviceListButton(it, it.Key == selected.Key));
             }
             if (noBat.Count > 0) {
-                left.Controls.Add(CreateGroupHeading("读不到电量"));
+                left.Controls.Add(CreateGroupHeading("读不到电量 (" + noBat.Count + ")"));
                 foreach (var it in noBat) left.Controls.Add(CreateDeviceListButton(it, it.Key == selected.Key));
             }
 
-            // Right detail panel
             var right = BuildDeviceDetailCard(selected);
             right.Dock = DockStyle.Top;
 
@@ -1253,47 +1721,56 @@ namespace AtkBatteryTray {
                 ForeColor = palette.Muted,
                 BackColor = palette.WindowBackground,
                 AutoSize = true,
-                Margin = new Padding(4, 6, 0, 6)
+                Margin = new Padding(6, 6, 0, 6)
             };
         }
 
         Control CreateDeviceListButton(ControlCenterDeviceItem item, bool isSelected) {
+            bool hoveredRow = false;
             var row = new Panel {
-                Width = 300,
-                Height = 58,
-                BackColor = isSelected ? palette.Card : palette.WindowBackground,
+                Width = 278,
+                Height = 60,
+                BackColor = palette.WindowBackground,
                 Margin = new Padding(0, 0, 0, 4),
                 Cursor = Cursors.Hand
             };
+            row.MouseEnter += delegate { hoveredRow = true; row.Invalidate(); };
+            row.MouseLeave += delegate { hoveredRow = false; row.Invalidate(); };
             row.Paint += delegate(object sender, PaintEventArgs e) {
                 var g = e.Graphics;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                 var rect = new RectangleF(0.5f, 0.5f, row.Width - 1, row.Height - 1);
                 if (isSelected) {
-                    CompactRenderer.Fill(g, rect, palette.Card, 8);
-                    using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, 8))
-                    using (var pen = new Pen(palette.Border, 1)) g.DrawPath(pen, path);
+                    CompactRenderer.Fill(g, rect, palette.Card, 8f);
+                    using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, 8f))
+                    using (var pen = new Pen(palette.Border, 1f)) g.DrawPath(pen, path);
+                    CompactRenderer.Fill(g, new RectangleF(1f, rect.Y + 14f, 3f, rect.Height - 28f), palette.Foreground, 1.5f);
+                } else if (hoveredRow && !VisualDesign.HighContrast) {
+                    CompactRenderer.Fill(g, rect, Color.FromArgb(dark ? 14 : 12, palette.Foreground), 8f);
                 }
-                var tile = new RectangleF(10, 11, 36, 36);
-                CompactRenderer.Fill(g, tile, palette.RaisedSurface, 8);
-                string kindGlyph = item.Kind == "mouse" ? "鼠" : item.Kind == "headset" ? "耳" : item.Kind == "keyboard" ? "键" : item.Kind == "gamepad" ? "柄" : "设";
-                CompactRenderer.DrawLabel(g, kindGlyph, tile, 14f, true, palette.Foreground, StringAlignment.Center);
 
-                CompactRenderer.DrawLabel(g, item.Name, new RectangleF(56, 10, 152, 20), 13.5f, true, palette.Foreground, StringAlignment.Near);
-                CompactRenderer.DrawLabel(g, item.Transport, new RectangleF(56, 31, 152, 18), 11.5f, false, palette.Muted, StringAlignment.Near);
+                var tile = new RectangleF(12, 12, 36, 36);
+                CompactRenderer.Fill(g, tile, palette.RaisedSurface, 8f);
+                Color symColor = item.Battery != null && item.Battery.Fresh && ThemePalette.IsLow(item.Battery, DeviceSettings.Current.WarningThreshold)
+                    ? ThemePalette.LevelColor(10, dark)
+                    : (isSelected ? palette.Foreground : palette.Muted);
+                CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(item.Kind), new RectangleF(tile.X + 9, tile.Y + 9, 18, 18), symColor);
+
+                CompactRenderer.DrawLabel(g, item.Name, new RectangleF(58, 11, 134, 20), 13f, true, palette.Foreground, StringAlignment.Near);
+                CompactRenderer.DrawLabel(g, item.Transport, new RectangleF(58, 32, 134, 18), 11f, false, palette.Muted, StringAlignment.Near);
 
                 if (item.Capability == DeviceBatteryCapability.NoBatteryPlaceholder) {
-                    CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(208, 18, 82, 20), 11.5f, false, palette.Muted, StringAlignment.Far);
+                    CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(192, 19, 76, 20), 11f, false, palette.Muted, StringAlignment.Far);
                 } else if (item.Battery != null && item.Battery.Percent.HasValue) {
                     Color level = item.Battery.Fresh ? ThemePalette.LevelColor(item.Battery.Percent, dark) : palette.Muted;
-                    CompactRenderer.DrawLabel(g, item.Battery.Percent.Value + "%", new RectangleF(214, 10, 76, 22), 16f, true, level, StringAlignment.Far);
-                    var bar = new RectangleF(226, 38, 64, 3);
-                    CompactRenderer.Fill(g, bar, palette.Track, 1.5f);
+                    CompactRenderer.DrawLabel(g, item.Battery.Percent.Value + "%", new RectangleF(196, 10, 70, 22), 15.5f, true, level, StringAlignment.Far);
+                    var bar = new RectangleF(206, 38, 60, 3.5f);
+                    CompactRenderer.Fill(g, bar, palette.Track, 1.75f);
                     float fw = bar.Width * Math.Max(0, Math.Min(100, item.Battery.Percent.Value)) / 100f;
-                    if (fw > 0) CompactRenderer.Fill(g, new RectangleF(bar.X, bar.Y, fw, bar.Height), level, 1.5f);
+                    if (fw > 0) CompactRenderer.Fill(g, new RectangleF(bar.X, bar.Y, fw, bar.Height), level, 1.75f);
                 } else {
-                    CompactRenderer.DrawLabel(g, "—", new RectangleF(214, 16, 76, 22), 14f, false, palette.Muted, StringAlignment.Far);
+                    CompactRenderer.DrawLabel(g, "—", new RectangleF(196, 17, 70, 22), 14f, false, palette.Muted, StringAlignment.Far);
                 }
             };
             row.Click += delegate {
@@ -1306,27 +1783,32 @@ namespace AtkBatteryTray {
         }
 
         Control BuildDeviceDetailCard(ControlCenterDeviceItem item) {
-            var card = CreateCard(new Padding(22, 18, 22, 18));
+            var card = CreateCard(new Padding(16, 16, 16, 14));
 
-            var hero = new Panel { Dock = DockStyle.Top, Height = 108, BackColor = palette.Card };
-            var ring = new ControlCenterHeroRing(palette, dark) { Location = new Point(0, 4) };
+            var hero = new Panel { Dock = DockStyle.Top, Height = 112, BackColor = palette.Card, Padding = new Padding(8, 4, 8, 8) };
+            var ring = new ControlCenterHeroRing(palette, dark) { Location = new Point(8, 6) };
             ring.UpdateValue(palette, dark, item.Battery != null ? item.Battery.Percent : (int?)null, item.Battery != null && item.Battery.Fresh);
             hero.Controls.Add(ring);
 
             var hName = new Label { Text = item.Name, Font = headingFont, ForeColor = palette.Foreground, BackColor = palette.Card, AutoSize = true, Location = new Point(116, 12) };
             string kindCn = item.Kind == "mouse" ? "鼠标" : item.Kind == "headset" ? "耳机" : item.Kind == "keyboard" ? "键盘" : item.Kind == "gamepad" ? "手柄" : "外设";
-            var hMeta = new Label { Text = kindCn + "，" + item.Transport, Font = bodyFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true, Location = new Point(116, 40) };
-            var hState = new Label { Text = "●  " + item.StateText, Font = subFont, ForeColor = item.Battery != null && item.Battery.Fresh && ThemePalette.IsLow(item.Battery, DeviceSettings.Current.WarningThreshold) ? ThemePalette.LevelColor(10, dark) : palette.Muted, BackColor = palette.Card, AutoSize = true, Location = new Point(116, 68) };
+            var hMeta = new Label { Text = kindCn + " · " + item.Transport, Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true, Location = new Point(116, 40) };
+
+            bool isFresh = item.Battery != null && item.Battery.Fresh;
+            bool isLow = isFresh && ThemePalette.IsLow(item.Battery, DeviceSettings.Current.WarningThreshold);
+            var badgeTone = isLow ? ControlCenterBadgeTone.Accent : isFresh ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;
+            var stateBadge = new ControlCenterBadge(item.StateText, palette, dark, subFont, badgeTone, true) { Location = new Point(116, 66) };
+
             hero.Controls.Add(hName);
             hero.Controls.Add(hMeta);
-            hero.Controls.Add(hState);
+            hero.Controls.Add(stateBadge);
 
             var rows = new List<Control>();
             if (item.CanRename) {
-                var box = new TextBox { Width = 200, Text = item.Name, BackColor = palette.RaisedSurface, ForeColor = palette.Foreground, BorderStyle = BorderStyle.FixedSingle, Font = subFont };
-                Action saveAlias = delegate {
+                var input = new ControlCenterTextBox(item.Name, palette, subFont, 186);
+                input.Committed += delegate {
                     if (rebuilding || closing || IsDisposed) return;
-                    string trimmed = (box.Text ?? "").Trim();
+                    string trimmed = (input.ValueText ?? "").Trim();
                     if (trimmed == item.Name) {
                         if (deferredDataRefresh) RefreshData();
                         return;
@@ -1339,9 +1821,7 @@ namespace AtkBatteryTray {
                     });
                     ShowNotice("显示名称已保存");
                 };
-                box.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.Handled = true; e.SuppressKeyPress = true; saveAlias(); } };
-                box.Leave += delegate { saveAlias(); };
-                rows.Add(CreateSettingRow("显示名称", "留空时恢复设备默认名称（按回车或失焦保存）", box, true));
+                rows.Add(CreateSettingRow("显示名称", "留空恢复默认名，回车或失焦保存", input, true));
             }
 
             if (item.DpiStages != null && item.DpiStages.Length > 0) {
@@ -1353,7 +1833,7 @@ namespace AtkBatteryTray {
                     else owner.SelectWirelessDpi(item.Key, item.DpiTargetToken, item.DpiStages[idx]);
                     ShowNotice("已请求切换 DPI 至 " + item.DpiStages[idx]);
                 });
-                rows.Add(CreateSettingRow("DPI 档位", item.HasWritableDpi ? "设备板载档位，点击即切换" : "当前仅支持读取 DPI", dpiCtrl, true));
+                rows.Add(CreateSettingRow("DPI 档位", item.HasWritableDpi ? "设备板载档位，点击即时切换" : "当前仅支持读取 DPI", dpiCtrl, true));
             }
 
             if (item.CanHide) {
@@ -1372,8 +1852,8 @@ namespace AtkBatteryTray {
                 rows.Add(CreateSettingRow("固定为托盘图标", "主托盘图标始终显示这台设备的电量", pinToggle, true));
             }
 
-            var verLbl = new Label { Text = item.VerificationText, Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, AutoSize = true };
-            rows.Add(CreateSettingRow("适配验证", null, verLbl, true));
+            var verBadge = new ControlCenterBadge(item.VerificationText, palette, dark, subFont, item.VerificationText.Contains("A 级") ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted, false);
+            rows.Add(CreateSettingRow("适配验证", "设备电量协议的实机校验等级", verBadge, true));
 
             if (item.CanStopFamily) {
                 var stopBtn = CreateActionButton("停止读取…", delegate {
@@ -1386,7 +1866,6 @@ namespace AtkBatteryTray {
                 rows.Add(CreateSettingRow("停止读取此设备", "不再向它发送查询，可在「设置」里随时恢复", stopBtn, true));
             }
 
-            // WinForms DockStyle.Top stacks bottom-to-top by control order
             for (int i = rows.Count - 1; i >= 0; i--) card.Controls.Add(rows[i]);
             card.Controls.Add(hero);
             return card;
@@ -1394,23 +1873,22 @@ namespace AtkBatteryTray {
 
         // ==================== PAGE 2: APPEARANCE ====================
         Control BuildAppearancePage() {
-            var root = CreatePageRoot("外观");
+            var root = CreatePageRoot("外观", "自定义配色主题、深浅模式、面板布局与字体大小，右侧实时预览");
             var pref = DeviceSettings.Current;
             string currentStyle = ThemePalette.Normalize(pref.ThemeStyle);
 
             var grid = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, RowCount = 1, AutoSize = true, BackColor = palette.WindowBackground };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 326));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 294));
             grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            var leftCard = CreateCard(new Padding(22, 16, 22, 16));
+            var leftCard = CreateCard(new Padding(14, 14, 14, 10));
             leftCard.Dock = DockStyle.Top;
-            leftCard.Margin = new Padding(0, 0, 18, 0);
+            leftCard.Margin = new Padding(0, 0, 14, 0);
 
-            // Swatches header + 5 equal-width swatch cards (graphite first with "新" badge)
-            var swatchSection = new Panel { Dock = DockStyle.Top, Height = 114, BackColor = palette.Card };
-            swatchSection.Controls.Add(new Label { Text = "配色", Font = bodyFont, ForeColor = palette.Foreground, BackColor = palette.Card, AutoSize = true, Location = new Point(0, 4) });
-            var swatchGrid = new TableLayoutPanel { Location = new Point(0, 30), Height = 76, Width = 460, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, ColumnCount = 5, RowCount = 1, BackColor = palette.Card, Margin = Padding.Empty };
+            var swatchSection = new Panel { Dock = DockStyle.Top, Height = 112, BackColor = palette.Card, Padding = new Padding(10, 4, 10, 6) };
+            var swatchTitle = new Label { Text = "主题配色", Font = bodyFont, ForeColor = palette.Foreground, BackColor = palette.Card, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 8) };
+            var swatchGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1, BackColor = palette.Card, Margin = Padding.Empty };
             for (int c = 0; c < 5; c++) swatchGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f));
             swatchGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             string[] displayOrder = { "graphite", "ocean", "native", "amber", "mist" };
@@ -1419,35 +1897,35 @@ namespace AtkBatteryTray {
                 var card = new ControlCenterSwatchCard(k, ThemePalette.Name(k), k == "graphite", palette, dark);
                 card.Dock = DockStyle.Fill;
                 card.UpdateState(palette, dark, currentStyle == k);
-                card.Margin = new Padding(0, 0, i < 4 ? 8 : 0, 0);
+                card.Margin = new Padding(0, 0, i < 4 ? 6 : 0, 0);
                 card.Chosen += delegate {
                     UpdatePreference(delegate(AudioBindings p) { p.ThemeStyle = k; }, false, true);
                 };
                 swatchGrid.Controls.Add(card, i, 0);
             }
-            swatchSection.Resize += delegate { swatchGrid.Width = Math.Max(320, swatchSection.ClientSize.Width); };
             swatchSection.Controls.Add(swatchGrid);
+            swatchSection.Controls.Add(swatchTitle);
 
-            int themeIdx = pref.Theme == "auto" ? 0 : pref.Theme == "light" ? 1 : 2;
-            var themeRow = CreateSettingRow("浅色 / 深色", null, CreateSegmentedChoices(new[] { "跟随系统", "浅色", "深色" }, themeIdx, delegate(int idx) {
-                UpdatePreference(delegate(AudioBindings p) { p.Theme = idx == 0 ? "auto" : idx == 1 ? "light" : "dark"; }, false, true);
+            int themeIdx = pref.Theme == "light" ? 1 : pref.Theme == "dark" ? 2 : 0;
+            var themeRow = CreateSettingRow("明暗模式", "跟随系统深浅色或手动锁定", CreateSegmentedChoices(new[] { "跟随系统", "浅色", "深色" }, themeIdx, delegate(int idx) {
+                UpdatePreference(delegate(AudioBindings p) { p.Theme = idx == 1 ? "light" : idx == 2 ? "dark" : "auto"; }, false, true);
             }), true);
 
-            int layoutIdx = Array.IndexOf(PanelLayouts.Keys, PanelLayouts.Normalize(pref.PanelLayout));
-            var layoutRow = CreateSettingRow("主面板布局", null, CreateSegmentedChoices(PanelLayouts.Names, layoutIdx, delegate(int idx) {
-                UpdatePreference(delegate(AudioBindings p) { p.PanelLayout = PanelLayouts.Keys[idx]; }, false, false);
+            int layoutIdx = pref.PanelLayout == "grid" ? 1 : 0;
+            var layoutRow = CreateSettingRow("主面板布局", "托盘点击展开面板的设备卡片排列方式", CreateSegmentedChoices(new[] { "环形列表", "方格卡片" }, layoutIdx, delegate(int idx) {
+                UpdatePreference(delegate(AudioBindings p) { p.PanelLayout = idx == 1 ? "grid" : "ring"; });
             }), true);
 
             int fontIdx = pref.FontSize == "large" ? 1 : 0;
-            var fontRow = CreateSettingRow("字号", null, CreateSegmentedChoices(new[] { "标准", "较大" }, fontIdx, delegate(int idx) {
+            var fontRow = CreateSettingRow("字体大小", "同步缩放托盘弹出面板与控制中心文字", CreateSegmentedChoices(new[] { "标准", "偏大" }, fontIdx, delegate(int idx) {
                 UpdatePreference(delegate(AudioBindings p) { p.FontSize = idx == 1 ? "large" : "normal"; }, false, true);
             }), true);
 
             var motionToggle = new ControlCenterToggle(palette, dark) { Checked = pref.ReducedMotion };
             motionToggle.Toggled += delegate {
-                UpdatePreference(delegate(AudioBindings p) { p.ReducedMotion = motionToggle.Checked; }, false, false);
+                UpdatePreference(delegate(AudioBindings p) { p.ReducedMotion = motionToggle.Checked; });
             };
-            var motionRow = CreateSettingRow("减弱动效", "关闭面板展开与电量填充过渡动画", motionToggle, true);
+            var motionRow = CreateSettingRow("减弱动画效果", "减少面板展开、切换与进度条过渡动画", motionToggle, true);
 
             leftCard.Controls.Add(motionRow);
             leftCard.Controls.Add(fontRow);
@@ -1455,9 +1933,8 @@ namespace AtkBatteryTray {
             leftCard.Controls.Add(themeRow);
             leftCard.Controls.Add(swatchSection);
 
-            // Right live preview
             var rightWrap = new Panel { Dock = DockStyle.Top, AutoSize = true, BackColor = palette.WindowBackground };
-            var previewLbl = new Label { Text = "实时预览（当前主面板）", Font = subFont, ForeColor = palette.Muted, BackColor = palette.WindowBackground, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(2, 0, 0, 8) };
+            var previewLbl = new Label { Text = "实时预览（当前主面板）", Font = subFont, ForeColor = palette.Muted, BackColor = palette.WindowBackground, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(4, 0, 0, 8) };
             var preview = new ControlCenterLivePreview(owner, palette, dark) { Dock = DockStyle.Top, Height = 360 };
             rightWrap.Controls.Add(preview);
             rightWrap.Controls.Add(previewLbl);
@@ -1471,28 +1948,29 @@ namespace AtkBatteryTray {
 
         // ==================== PAGE 3: PLACEMENT ====================
         Control BuildPlacementPage() {
-            var root = CreatePageRoot("显示位置");
+            var root = CreatePageRoot("显示位置", "选择在系统托盘、桌面悬浮胶囊或任务栏旁查看外设电量");
             var pref = DeviceSettings.Current;
 
-            var cardsGrid = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 3, RowCount = 1, Height = 122, BackColor = palette.WindowBackground, Margin = new Padding(0, 0, 0, 16) };
+            var cardsGrid = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 3, RowCount = 1, Height = 124, BackColor = palette.WindowBackground, Margin = new Padding(0, 0, 0, 14) };
             cardsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
             cardsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
             cardsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
 
-            cardsGrid.Controls.Add(CreatePlacementOptionCard(0, "托盘图标", "通知区域显示电量数字，点击打开主面板", "已启用"), 0, 0);
-            cardsGrid.Controls.Add(CreatePlacementOptionCard(1, "桌面小组件", "常驻桌面、胶囊收起、贴边隐藏、全屏防打扰", pref.DesktopWidget.Enabled ? "已启用" : "未启用"), 1, 0);
-            cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏旁直接显示几台设备的电量", pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled ? "已启用 · 实验" : "未启用 · 实验"), 2, 0);
+            cardsGrid.Controls.Add(CreatePlacementOptionCard(0, "托盘图标", "通知区域显示电量数字，点击打开主面板", "已启用", ControlCenterBadgeTone.Positive), 0, 0);
+            cardsGrid.Controls.Add(CreatePlacementOptionCard(1, "桌面小组件", "悬浮电量胶囊、全壁纸贴边隐藏与全屏防打扰", pref.DesktopWidget.Enabled ? "已启用" : "未启用", pref.DesktopWidget.Enabled ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted), 1, 0);
+            bool tbOn = pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled;
+            cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏通知区左侧以无焦点层直接显示电量", tbOn ? "已启用 · 实验" : "未启用 · 实验", tbOn ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Accent), 2, 0);
 
-            var detailCard = CreateCard(new Padding(22, 16, 22, 18));
+            var detailCard = CreateCard(new Padding(16, 14, 16, 16));
             detailCard.Dock = DockStyle.Top;
 
-            var preview = new ControlCenterPlacementPreview(palette, dark) { Dock = DockStyle.Top, Height = 152, Margin = new Padding(0, 12, 0, 0) };
+            var preview = new ControlCenterPlacementPreview(palette, dark) { Dock = DockStyle.Top, Height = 148, Margin = new Padding(8, 12, 8, 2) };
             preview.UpdatePreview(palette, dark, selectedPlacementCard);
 
             var rows = new List<Control>();
             if (selectedPlacementCard == 0) {
                 int iconStyleIdx = pref.TrayIconStyle == "device" ? 1 : 0;
-                rows.Add(CreateSettingRow("托盘图标样式", "选择在系统托盘直接显示数字或设备图标", CreateSegmentedChoices(new[] { "数字", "设备图标" }, iconStyleIdx, delegate(int idx) {
+                rows.Add(CreateSettingRow("托盘图标样式", "选择在系统托盘直接显示电量数字或设备图标", CreateSegmentedChoices(new[] { "数字", "设备图标" }, iconStyleIdx, delegate(int idx) {
                     UpdatePreference(delegate(AudioBindings p) { p.TrayIconStyle = idx == 1 ? "device" : "number"; });
                 }), false));
                 string[] ruleKeys = { "active", "lowest", "auto", "mouse", "headset", "keyboard" };
@@ -1523,7 +2001,7 @@ namespace AtkBatteryTray {
                 autoHideToggle.Toggled += delegate {
                     UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.AutoHideOnEdge = autoHideToggle.Checked; });
                 };
-                rows.Add(CreateSettingRow("贴边自动隐藏", "贴靠边缘时缩为细指示条，鼠标移到边缘立即滑出", autoHideToggle, true));
+                rows.Add(CreateSettingRow("贴边自动隐藏", "缩为全壁纸高反差边缘把手，鼠标移近立即滑出", autoHideToggle, true));
 
                 var topToggle = new ControlCenterToggle(palette, dark) { Checked = w.TopMost };
                 topToggle.Toggled += delegate {
@@ -1556,7 +2034,7 @@ namespace AtkBatteryTray {
                 tbEnable.Toggled += delegate {
                     UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.Enabled = tbEnable.Checked; });
                 };
-                rows.Add(CreateSettingRow("启用任务栏电量（实验）", "采用独立无焦点贴合层，绝不注入或劫持 Explorer 进程；不支持环境会自动降级隐藏", tbEnable, false));
+                rows.Add(CreateSettingRow("启用任务栏电量（实验）", "采用独立无焦点贴合层，绝不注入 Explorer；不支持环境自动降级隐藏", tbEnable, false));
 
                 rows.Add(CreateSettingRow("显示样式", "在任务栏通知区左侧紧凑显示设备电量条", CreateSegmentedChoices(new[] { "图标 + 数字", "仅数字" }, tb.ShowIcons ? 0 : 1, delegate(int idx) {
                     UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.ShowIcons = idx == 0; });
@@ -1575,8 +2053,9 @@ namespace AtkBatteryTray {
                     UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.OffsetX = offOpts[idx]; });
                 }), true));
 
-                var diagLbl = new Label { Text = owner.TaskbarOverlayStatusMessage, Font = subFont, ForeColor = owner.TaskbarOverlayStatusCode == "ready" ? ThemePalette.LevelColor(90, dark) : palette.Muted, BackColor = palette.Card, AutoSize = true, MaximumSize = new Size(440, 0) };
-                rows.Add(CreateSettingRow("当前环境状态", "自动检测底部任务栏、自动隐藏与全屏遮挡", diagLbl, true));
+                var statusTone = owner.TaskbarOverlayStatusCode == "ready" ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;
+                var diagBadge = new ControlCenterBadge(owner.TaskbarOverlayStatusCode == "ready" ? "环境就绪" : (tb.Enabled ? "已自动降级" : "未开启"), palette, dark, subFont, statusTone, true);
+                rows.Add(CreateSettingRow("当前环境状态", owner.TaskbarOverlayStatusMessage, diagBadge, true));
             }
 
             detailCard.Controls.Add(preview);
@@ -1592,49 +2071,58 @@ namespace AtkBatteryTray {
             return root;
         }
 
-        Control CreatePlacementOptionCard(int mode, string title, string desc, string tag) {
+        Control CreatePlacementOptionCard(int mode, string title, string desc, string tag, ControlCenterBadgeTone tone) {
             bool active = selectedPlacementCard == mode;
+            bool hoveredCard = false;
             var card = new Panel {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(mode == 0 ? 0 : 6, 0, mode == 2 ? 0 : 6, 0),
-                BackColor = palette.Card,
-                Cursor = Cursors.Hand,
-                Padding = new Padding(14, 12, 14, 12)
+                BackColor = palette.WindowBackground,
+                Cursor = Cursors.Hand
             };
+            card.MouseEnter += delegate { hoveredCard = true; card.Invalidate(); };
+            card.MouseLeave += delegate { hoveredCard = false; card.Invalidate(); };
             card.Paint += delegate(object sender, PaintEventArgs e) {
                 var g = e.Graphics;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 var r = new RectangleF(0.5f, 0.5f, card.Width - 1, card.Height - 1);
-                CompactRenderer.Fill(g, r, palette.Card, 10);
-                using (var p = VisualDesign.RoundRect(r.X, r.Y, r.Width, r.Height, 10))
+                Color fill = hoveredCard && !active && !VisualDesign.HighContrast ? palette.RaisedSurface : palette.Card;
+                CompactRenderer.Fill(g, r, fill, ControlCenterTokens.RadiusCard);
+                if (!VisualDesign.HighContrast && dark && active) {
+                    using (var rim = new Pen(Color.FromArgb(24, 255, 255, 255), 1f)) g.DrawLine(rim, r.Left + 10, r.Top + 1, r.Right - 10, r.Top + 1);
+                }
+                using (var p = VisualDesign.RoundRect(r.X, r.Y, r.Width, r.Height, ControlCenterTokens.RadiusCard))
                 using (var pen = new Pen(active ? palette.Foreground : palette.Border, active ? 1.5f : 1f)) g.DrawPath(pen, p);
+                if (active) {
+                    using (var b = new SolidBrush(palette.Foreground)) g.FillEllipse(b, card.Width - 20f, 14f, 6f, 6f);
+                }
             };
-            var lblT = new Label { Text = title, Font = boldFont, ForeColor = palette.Foreground, BackColor = palette.Card, AutoSize = true, Location = new Point(14, 12), Cursor = Cursors.Hand };
-            var lblD = new Label { Text = desc, Font = subFont, ForeColor = palette.Muted, BackColor = palette.Card, MaximumSize = new Size(220, 44), AutoSize = true, Location = new Point(14, 36), Cursor = Cursors.Hand };
-            var lblTag = new Label { Text = tag, Font = subFont, ForeColor = active ? palette.Foreground : palette.Muted, BackColor = palette.RaisedSurface, AutoSize = true, Padding = new Padding(6, 2, 6, 2), Location = new Point(14, 84), Cursor = Cursors.Hand };
+            var lblT = new Label { Text = title, Font = boldFont, ForeColor = palette.Foreground, BackColor = Color.Transparent, AutoSize = true, Location = new Point(16, 14), Cursor = Cursors.Hand };
+            var lblD = new Label { Text = desc, Font = subFont, ForeColor = palette.Muted, BackColor = Color.Transparent, MaximumSize = new Size(216, 42), AutoSize = true, Location = new Point(16, 38), Cursor = Cursors.Hand };
+            var badge = new ControlCenterBadge(tag, palette, dark, subFont, tone, tone == ControlCenterBadgeTone.Positive) { Location = new Point(16, 86), Cursor = Cursors.Hand };
             EventHandler click = delegate {
                 if (selectedPlacementCard != mode) { selectedPlacementCard = mode; RebuildCurrentPage(); }
             };
-            card.Click += click; lblT.Click += click; lblD.Click += click; lblTag.Click += click;
-            card.Controls.Add(lblT); card.Controls.Add(lblD); card.Controls.Add(lblTag);
+            card.Click += click; lblT.Click += click; lblD.Click += click; badge.Click += click;
+            card.Controls.Add(lblT); card.Controls.Add(lblD); card.Controls.Add(badge);
             return card;
         }
 
         // ==================== PAGE 4: REMINDERS ====================
         Control BuildRemindersPage() {
-            var root = CreatePageRoot("提醒");
+            var root = CreatePageRoot("提醒", "配置低电量系统通知与全设备统一的提醒阈值");
             var pref = DeviceSettings.Current;
-            var card = CreateCard(new Padding(22, 8, 22, 8));
+            var card = CreateCard(new Padding(16, 8, 16, 8));
             card.Dock = DockStyle.Top;
 
             var lowToggle = new ControlCenterToggle(palette, dark) { Checked = pref.LowBatteryNotifications };
             lowToggle.Toggled += delegate {
                 UpdatePreference(delegate(AudioBindings p) { p.LowBatteryNotifications = lowToggle.Checked; });
             };
-            var row1 = CreateSettingRow("低电量提醒", "电量低于阈值时弹出一次系统通知", lowToggle, false);
+            var row1 = CreateSettingRow("低电量提醒", "任意外设电量低于阈值时弹出一次系统通知", lowToggle, false);
 
             int threshIdx = pref.WarningThreshold == 10 ? 0 : pref.WarningThreshold == 15 ? 1 : 2;
-            var row2 = CreateSettingRow("提醒阈值", "所有无线外设共用此低电量提醒门槛", CreateSegmentedChoices(new[] { "10%", "15%", "20%" }, threshIdx, delegate(int idx) {
+            var row2 = CreateSettingRow("提醒阈值", "所有无线外设共用此低电量提醒与警示色门槛", CreateSegmentedChoices(new[] { "10%", "15%", "20%" }, threshIdx, delegate(int idx) {
                 UpdatePreference(delegate(AudioBindings p) { p.WarningThreshold = idx == 0 ? 10 : idx == 1 ? 15 : 20; });
             }), true);
 
@@ -1647,8 +2135,8 @@ namespace AtkBatteryTray {
 
         // ==================== PAGE 5: DIAGNOSTICS & FEEDBACK ====================
         Control BuildDiagnosticsPage() {
-            var root = CreatePageRoot("诊断与反馈");
-            var card = CreateCard(new Padding(22, 8, 22, 8));
+            var root = CreatePageRoot("诊断与反馈", "查看读取组件运行健康度、提交设备适配请求或追踪回复");
+            var card = CreateCard(new Padding(16, 8, 16, 8));
             card.Dock = DockStyle.Top;
 
             string healthText = !String.IsNullOrEmpty(owner.GenericError) ? owner.GenericError :
@@ -1658,11 +2146,11 @@ namespace AtkBatteryTray {
             var r1 = CreateSettingRow("读取组件状态", healthText + " · 型号数据包：" + owner.DevicePackDiagnostic, CreateActionButton("重新刷新", delegate {
                 owner.RefreshBattery(true);
                 ShowNotice("已触发设备与组件刷新");
-            }), false);
+            }, false, false, "refresh"), false);
 
             var r2 = CreateSettingRow("反馈问题", "在程序内提交新设备请求或异常，不需要 GitHub 账号", CreateActionButton("写反馈", delegate {
                 owner.OpenFeedbackFromHost(this, false, copyText, openLink);
-            }), true);
+            }, false, true), true);
 
             var r3 = CreateSettingRow("我的反馈", owner.FeedbackReplies.Store.MenuText, CreateActionButton("查看", delegate {
                 owner.OpenMyFeedback();
@@ -1689,12 +2177,13 @@ namespace AtkBatteryTray {
 
         // ==================== PAGE 6: SETTINGS ====================
         Control BuildSettingsPage() {
-            var root = CreatePageRoot("设置");
+            var root = CreatePageRoot("设置", "管理后台同步节奏、自动识别与更新策略，以及本机只读开放接口");
             var pref = DeviceSettings.Current;
-            var card = CreateCard(new Padding(22, 8, 22, 8));
-            card.Dock = DockStyle.Top;
 
-            var rows = new List<Control>();
+            // Group 1: General & Devices
+            var generalCard = CreateCard(new Padding(16, 8, 16, 8));
+            generalCard.Dock = DockStyle.Top;
+            var genRows = new List<Control>();
 
             var probeToggle = new ControlCenterToggle(palette, dark) { Checked = pref.AutoDetectMoreDevices, Enabled = !owner.IsProbeToggleBusy };
             probeToggle.Toggled += delegate {
@@ -1712,7 +2201,7 @@ namespace AtkBatteryTray {
                     RebuildCurrentPage();
                 });
             };
-            rows.Add(CreateSettingRow("自动识别更多设备", "实验功能 · 只发送读取电量的查询；更改后将重启读取组件", probeToggle, false));
+            genRows.Add(CreateSettingRow("自动识别更多设备", "实验功能 · 只发送读取电量的查询；更改后将重启读取组件", probeToggle, false));
 
             var stopped = owner.StoppedFamilyDevices;
             if (stopped.Count > 0) {
@@ -1725,12 +2214,12 @@ namespace AtkBatteryTray {
                         });
                     });
                     btn.Enabled = !owner.IsFamilyOpBusy;
-                    rows.Add(CreateSettingRow("已停止读取：" + target.DisplayName, "点击右侧按钮恢复对此设备的电量查询", btn, true));
+                    genRows.Add(CreateSettingRow("已停止读取：" + target.DisplayName, "点击右侧按钮恢复对此设备的电量查询", btn, true));
                 }
             }
 
             int bgIdx = pref.BackgroundSeconds == 60 ? 0 : pref.BackgroundSeconds == 120 ? 1 : 2;
-            rows.Add(CreateSettingRow("后台同步间隔", null, CreateSegmentedChoices(new[] { "1 分钟", "2 分钟", "5 分钟" }, bgIdx, delegate(int idx) {
+            genRows.Add(CreateSettingRow("后台同步间隔", "托盘面板收起时的后台轮询频率", CreateSegmentedChoices(new[] { "1 分钟", "2 分钟", "5 分钟" }, bgIdx, delegate(int idx) {
                 UpdatePreference(delegate(AudioBindings p) { p.BackgroundSeconds = idx == 0 ? 60 : idx == 1 ? 120 : 300; });
             }), true));
 
@@ -1738,46 +2227,62 @@ namespace AtkBatteryTray {
             rememberToggle.Toggled += delegate {
                 UpdatePreference(delegate(AudioBindings p) { p.RememberReadings = rememberToggle.Checked; });
             };
-            rows.Add(CreateSettingRow("跨重启保留读数", "关闭保留不删除已有历史，需通过下方按钮单独清除", rememberToggle, true));
+            genRows.Add(CreateSettingRow("跨重启保留读数", "关闭保留不删除已有历史，需通过下方按钮单独清除", rememberToggle, true));
 
-            rows.Add(CreateSettingRow("清除历史读数", "清空本地缓存的上次电量记录", CreateActionButton("清除", delegate {
+            genRows.Add(CreateSettingRow("清除历史读数", "清空本地缓存的上次电量记录", CreateActionButton("清除", delegate {
                 owner.ClearReadingHistory();
                 ShowNotice("正在清除历史读数…");
             }), true));
+            for (int i = genRows.Count - 1; i >= 0; i--) generalCard.Controls.Add(genRows[i]);
+
+            // Group 2: Updates & Local API
+            var extCard = CreateCard(new Padding(16, 8, 16, 8));
+            extCard.Dock = DockStyle.Top;
+            var extRows = new List<Control>();
 
             var autoUpdate = new ControlCenterToggle(palette, dark) { Checked = pref.AutoCheckUpdates };
             autoUpdate.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.AutoCheckUpdates = autoUpdate.Checked; }); };
-            rows.Add(CreateSettingRow("自动检查更新", null, autoUpdate, true));
+            extRows.Add(CreateSettingRow("自动检查更新", "定期检查 GitHub 签名版本更新", autoUpdate, false));
 
             var badgeToggle = new ControlCenterToggle(palette, dark) { Checked = pref.ShowUpdateBadge };
             badgeToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.ShowUpdateBadge = badgeToggle.Checked; }); };
-            rows.Add(CreateSettingRow("托盘图标显示更新角标", null, badgeToggle, true));
+            extRows.Add(CreateSettingRow("托盘图标显示更新角标", null, badgeToggle, true));
 
             var betaToggle = new ControlCenterToggle(palette, dark) { Checked = pref.IncludeBetaUpdates };
             betaToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.IncludeBetaUpdates = betaToggle.Checked; }); };
-            rows.Add(CreateSettingRow("提醒测试版更新", "接收 1.4 测试版新设备与功能更新通知", betaToggle, true));
+            extRows.Add(CreateSettingRow("提醒测试版更新", "接收 1.4 测试版新设备与功能更新通知", betaToggle, true));
 
             var replyToggle = new ControlCenterToggle(palette, dark) { Checked = pref.CheckFeedbackReplies };
             replyToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.CheckFeedbackReplies = replyToggle.Checked; }); };
-            rows.Add(CreateSettingRow("自动检查反馈回复", null, replyToggle, true));
+            extRows.Add(CreateSettingRow("自动检查反馈回复", null, replyToggle, true));
 
             var apiToggle = new ControlCenterToggle(palette, dark) { Checked = pref.LocalApi != null && pref.LocalApi.Enabled };
             apiToggle.Toggled += delegate { UpdatePreference(delegate(AudioBindings p) { p.LocalApi.Enabled = apiToggle.Checked; }); };
             string apiSub = owner.LocalApiRunning
                 ? "已监听 127.0.0.1:" + owner.LocalApiPort + "（仅本机只读 JSON-RPC 2.0 / SSE，凭据仅当前用户可读）"
                 : !String.IsNullOrEmpty(owner.LocalApiError) ? "启动失败：" + owner.LocalApiError : "默认关闭 · 开启后供 MyDockFinder / Rainmeter / OBS 等读取电量";
-            rows.Add(CreateSettingRow("本机只读开放接口（JSON-RPC 2.0）", apiSub, apiToggle, true));
+            extRows.Add(CreateSettingRow("本机只读开放接口（JSON-RPC 2.0）", apiSub, apiToggle, true));
 
             if (owner.LocalApiRunning) {
-                rows.Add(CreateSettingRow("接口连接信息", "凭据文件仅当前 Windows 用户可读，不含写入权限", CreateActionButton("复制文件路径", delegate {
+                extRows.Add(CreateSettingRow("接口连接信息", "凭据文件仅当前 Windows 用户可读，不含写入权限", CreateActionButton("复制文件路径", delegate {
                     copyText(owner.LocalApiSessionPath);
                     ShowNotice("已复制 api-session.json 路径（令牌请从受保护文件读取）");
                 }), true));
             }
+            for (int i = extRows.Count - 1; i >= 0; i--) extCard.Controls.Add(extRows[i]);
 
-            for (int i = rows.Count - 1; i >= 0; i--) card.Controls.Add(rows[i]);
-            root.Controls.Add(card);
-            root.Controls.SetChildIndex(card, 0);
+            var h1 = CreateSectionHeading("设备与后台同步", 2);
+            var h2 = CreateSectionHeading("更新与开放接口", 16);
+
+            // DockStyle.Top stacks bottom-to-top in child order
+            root.Controls.Add(extCard);
+            root.Controls.Add(h2);
+            root.Controls.Add(generalCard);
+            root.Controls.Add(h1);
+            root.Controls.SetChildIndex(extCard, 0);
+            root.Controls.SetChildIndex(h2, 1);
+            root.Controls.SetChildIndex(generalCard, 2);
+            root.Controls.SetChildIndex(h1, 3);
             return root;
         }
 
@@ -1789,6 +2294,7 @@ namespace AtkBatteryTray {
                 if (bodyFont != null) bodyFont.Dispose();
                 if (subFont != null) subFont.Dispose();
                 if (boldFont != null) boldFont.Dispose();
+                if (ownsWindowIcon && windowIcon != null) windowIcon.Dispose();
             }
             base.Dispose(disposing);
         }

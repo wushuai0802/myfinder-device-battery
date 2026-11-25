@@ -266,12 +266,11 @@ namespace AtkBatteryTray {
                 float textX = x;
                 float textW = itemW;
                 if (showIcons) {
-                    string glyph = it.Kind == "mouse" ? "鼠" : it.Kind == "headset" ? "耳" : it.Kind == "keyboard" ? "键" : it.Kind == "gamepad" ? "柄" : "设";
                     var badge = new RectangleF(x, 5f, 18f, 18f);
                     Color badgeBg = VisualDesign.HighContrast ? SystemColors.Highlight : palette.RaisedSurface;
-                    Color badgeFg = VisualDesign.HighContrast ? SystemColors.HighlightText : palette.Foreground;
+                    Color badgeFg = VisualDesign.HighContrast ? SystemColors.HighlightText : (it.Low ? fg : palette.Foreground);
                     CompactRenderer.Fill(g, badge, badgeBg, 4.5f);
-                    CompactRenderer.DrawLabel(g, glyph, badge, 10f, true, badgeFg, StringAlignment.Center);
+                    CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(it.Kind), new RectangleF(badge.X + 3f, badge.Y + 3f, 12f, 12f), badgeFg);
                     textX = x + 20f;
                     textW = itemW - 20f;
                 }

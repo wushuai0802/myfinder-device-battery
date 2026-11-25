@@ -128,6 +128,7 @@ static class ControlCenterTests {
             Check(f.Owner.ControlCenterOpen, "control center opens");
             var first = f.Owner.ActiveControlCenter;
             Check(first != null && !first.IsDisposed, "active form reference valid");
+            Check(first.Icon != null && first.ShowIcon, "control center assigns a crisp top-left window icon");
             f.Owner.ShowControlCenter(ControlCenterPage.Appearance);
             Application.DoEvents();
             Check(ReferenceEquals(first, f.Owner.ActiveControlCenter), "repeated Show reuses single instance");
@@ -222,12 +223,12 @@ static class ControlCenterTests {
         string shotDir = Path.Combine(output, "ui02-screenshots");
         Directory.CreateDirectory(shotDir);
         string[] themes = { "dark", "light" };
-        ControlCenterPage[] pages = { ControlCenterPage.Devices, ControlCenterPage.Appearance, ControlCenterPage.Placement };
+        ControlCenterPage[] pages = { ControlCenterPage.Devices, ControlCenterPage.Appearance, ControlCenterPage.Placement, ControlCenterPage.Settings };
         foreach (string theme in themes) {
             using (var f = new Fixture("graphite", theme)) {
                 f.Owner.ShowControlCenter(ControlCenterPage.Devices);
                 var form = f.Owner.ActiveControlCenter;
-                form.Size = new Size(1000, 660);
+                form.Size = new Size(1040, 680);
                 Application.DoEvents();
                 foreach (var page in pages) {
                     form.SelectPage(page);
