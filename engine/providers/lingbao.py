@@ -2,7 +2,8 @@
 
 Contributor frames are grade C, pending maintainer hardware validation.
 Only one descriptor-proven Feature 0F/33 is fetched; no device commands.
-Receiver replies do not prove RF freshness, mouse connectivity or sample time.
+Byte 3 / byte 21 do carry one measured link flag - see link_state and
+docs/lingbao-m1pro.md. Sample freshness is still not proven by a reply.
 """
 try:
     import hid
@@ -18,6 +19,15 @@ PRODUCT = "Wireless-Receiver"
 REPORT_ID = 0x0F
 REPORT_BYTES = 33
 
+# Byte 3 / byte 21 are a strictly inverted pair that tracks whether the
+# receiver has heard from the mouse recently: 00/01 while traffic is recent,
+# 02/00 after 75-107 s of silence, back within 2 s of input. Host GetFeature
+# traffic does not refresh it. The stale value cannot tell a sleeping mouse
+# from one that is out of range or switched off, so it is only ever positive
+# evidence of a live link - never evidence of a disconnect.
+LINK_LIVE = (0x00, 0x01)
+LINK_STALE = (0x02, 0x00)
+
 
 def _valid_reply(reply):
     return (isinstance(reply, (bytes, bytearray, list, tuple))
@@ -28,9 +38,20 @@ def _valid_reply(reply):
             and list(reply[13:15]) == [0x4C, 0x58])
 
 
+def link_state(reply):
+    """True while the receiver reports recent mouse traffic; None if unproven."""
+    if not _valid_reply(reply):
+        return None
+    if (reply[3], reply[21]) == LINK_LIVE:
+        return True
+    if (reply[3], reply[21]) == LINK_STALE:
+        return False
+    return None
+
+
 def parse_reply(reply):
     # Flag 1 carries a charging placeholder, not a newly measured percentage.
-    # Neither header echoes nor byte 21 have an established state contract.
+    # No other byte, including the header echoes, has a state contract here.
     if not _valid_reply(reply) or reply[19] != 0 or not 1 <= reply[18] <= 100:
         return None
     return reply[18], False, ""
@@ -111,10 +132,14 @@ class LingbaoProvider(Provider):
                     except Exception:
                         self._diag.append("HID handle close failed")
             if reading is not None:
+                # A live link pair is the only connection evidence the frame
+                # carries; a stale one stays unknown instead of claiming a
+                # disconnect the receiver never reported.
                 result.append(DeviceStatus(
                     key=f"{self.name}:{physical}", name=PIDS[info["product_id"]],
                     level=reading[0], source=self.name, kind="mouse", physical_id=physical,
-                    connection_known=False, charging_known=False, verification_level="C"))
+                    connection_known=link_state(reply) is True,
+                    charging_known=False, verification_level="C"))
         return result
 
     def diagnostics(self):
