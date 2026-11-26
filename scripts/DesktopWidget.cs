@@ -73,6 +73,23 @@ namespace AtkBatteryTray {
             return new Size(width, headerH + count * rowH + footerH + 14);
         }
 
+        internal static Size ExpandedLogicalSize(List<DesktopWidgetEntry> entries, DesktopWidgetAudioState audio, bool largeFont) {
+            return DesktopWidgetExpandedLayout.Build(entries, audio, largeFont).LogicalSize;
+        }
+
+        internal static int SelectScreenIndex(string savedMonitorName, string[] availableMonitorNames, int primaryIndex) {
+            if (availableMonitorNames == null || availableMonitorNames.Length == 0) return -1;
+            int fallback = primaryIndex >= 0 && primaryIndex < availableMonitorNames.Length ? primaryIndex : 0;
+            if (!String.IsNullOrEmpty(savedMonitorName)) {
+                for (int i = 0; i < availableMonitorNames.Length; i++) {
+                    if (String.Equals(availableMonitorNames[i], savedMonitorName, StringComparison.OrdinalIgnoreCase)) return i;
+                }
+                // Saved secondary monitor was disconnected: fall back cleanly to the primary monitor.
+                return fallback;
+            }
+            return -1;
+        }
+
         internal static string DetectSnapEdge(Rectangle physicalRect, Rectangle workArea, int threshold = 32) {
             if (workArea.Width <= 0 || workArea.Height <= 0) return "none";
             // Treat dragging slightly past a screen edge as distance 0 so pushing against an edge always snaps.
@@ -196,10 +213,173 @@ namespace AtkBatteryTray {
         internal bool Fresh;
         internal bool Charging;
         internal bool Low;
+        internal int[] DpiStages;
+        internal int ActiveDpiIndex = -1;
+        internal int? PendingDpiIndex;
+        internal bool CanSetDpi;
+        internal bool IsNativeDpi;
+        internal string DpiTargetToken;
+        internal bool HasWritableDpi { get { return CanSetDpi && DpiStages != null && DpiStages.Length > 1; } }
+    }
+
+    internal sealed class DesktopWidgetAudioState {
+        internal bool SpeakerAvailable;
+        internal bool HeadsetAvailable;
+        internal bool MicrophoneAvailable;
+        internal bool? MicrophoneMuted;
+        internal string ActiveOutput;
+        internal string PendingOutput;
+        internal string SpeakerName;
+        internal string HeadsetName;
+        internal bool ShowOutputBar { get { return SpeakerAvailable || HeadsetAvailable; } }
+    }
+
+    internal enum DesktopWidgetExpandedHitKind {
+        None, Header, DeviceRow, DpiStage, AudioSpeaker, AudioHeadset, MicMute, Refresh, ControlCenter
+    }
+
+    internal struct DesktopWidgetExpandedHit {
+        internal DesktopWidgetExpandedHitKind Kind;
+        internal int RowIndex;
+        internal int StageIndex;
+
+        internal static DesktopWidgetExpandedHit Empty {
+            get { return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.None, RowIndex = -1, StageIndex = -1 }; }
+        }
+
+        internal bool SameAs(DesktopWidgetExpandedHit other) {
+            return Kind == other.Kind && RowIndex == other.RowIndex && StageIndex == other.StageIndex;
+        }
+    }
+
+    // Single source of truth for expanded widget geometry: shared by renderer, hit-testing and unit tests.
+    internal sealed class DesktopWidgetExpandedLayout {
+        internal Size LogicalSize;
+        internal RectangleF HeaderRect;
+        internal readonly List<RectangleF> RowRects = new List<RectangleF>();
+        internal readonly List<RectangleF[]> RowDpiRects = new List<RectangleF[]>();
+        internal bool HasAudioBar;
+        internal RectangleF AudioBarRect;
+        internal RectangleF AudioSpeakerRect;
+        internal RectangleF AudioHeadsetRect;
+        internal RectangleF MicMuteRect;
+        internal float FooterDividerY;
+        internal RectangleF RefreshRect;
+        internal RectangleF ControlCenterRect;
+
+        internal static DesktopWidgetExpandedLayout Build(List<DesktopWidgetEntry> entries, DesktopWidgetAudioState audio, bool largeFont) {
+            var layout = new DesktopWidgetExpandedLayout();
+            int width = largeFont ? 284 : 254;
+            int headerH = largeFont ? 32 : 28;
+            int baseRowH = largeFont ? 50 : 44;
+            int dpiPillH = largeFont ? 24 : 21;
+            int dpiRowGap = 4;
+            int footerH = largeFont ? 34 : 30;
+            int audioBarH = largeFont ? 36 : 32;
+
+            layout.HeaderRect = new RectangleF(0, 0, width, headerH);
+            float y = headerH + 2f;
+
+            if (entries == null || entries.Count == 0) {
+                y += baseRowH;
+            } else {
+                for (int i = 0; i < entries.Count; i++) {
+                    var e = entries[i];
+                    int dpiCount = e != null && e.HasWritableDpi ? Math.Min(8, e.DpiStages.Length) : 0;
+                    int dpiRows = dpiCount == 0 ? 0 : (dpiCount <= 4 ? 1 : 2);
+                    float dpiExtra = dpiRows > 0 ? (dpiRows * dpiPillH + (dpiRows - 1) * dpiRowGap + 6f) : 0f;
+                    float rowTotalH = baseRowH + dpiExtra;
+                    var rowRect = new RectangleF(8f, y, Math.Max(20f, width - 16f), rowTotalH - 2f);
+                    layout.RowRects.Add(rowRect);
+
+                    if (dpiCount > 0) {
+                        var rects = new RectangleF[dpiCount];
+                        int firstRowCols = dpiRows == 1 ? dpiCount : (dpiCount + 1) / 2;
+                        float innerX = rowRect.X + 6f;
+                        float innerW = Math.Max(24f, rowRect.Width - 12f);
+                        float gap = 4f;
+                        float pillTop = rowRect.Y + baseRowH - 2f;
+                        for (int s = 0; s < dpiCount; s++) {
+                            int rIdx = dpiRows == 1 ? 0 : (s < firstRowCols ? 0 : 1);
+                            int cIdx = rIdx == 0 ? s : (s - firstRowCols);
+                            int colsInRow = rIdx == 0 ? firstRowCols : (dpiCount - firstRowCols);
+                            float pillW = Math.Max(18f, (innerW - gap * (colsInRow - 1)) / colsInRow);
+                            rects[s] = new RectangleF(innerX + cIdx * (pillW + gap), pillTop + rIdx * (dpiPillH + dpiRowGap), pillW, dpiPillH);
+                        }
+                        layout.RowDpiRects.Add(rects);
+                    } else {
+                        layout.RowDpiRects.Add(null);
+                    }
+                    y += rowTotalH;
+                }
+            }
+
+            if (audio != null && audio.ShowOutputBar) {
+                layout.HasAudioBar = true;
+                y += 4f;
+                layout.AudioBarRect = new RectangleF(10f, y, Math.Max(40f, width - 20f), audioBarH);
+                float btnH = audioBarH - 6f;
+                float btnY = y + 3f;
+                float gap = 6f;
+                float micW = audio.MicrophoneAvailable ? (largeFont ? 38f : 34f) : 0f;
+                float outputsW = Math.Max(40f, layout.AudioBarRect.Width - (micW > 0 ? micW + gap : 0f));
+                float half = (outputsW - gap) / 2f;
+                layout.AudioSpeakerRect = new RectangleF(layout.AudioBarRect.X, btnY, half, btnH);
+                layout.AudioHeadsetRect = new RectangleF(layout.AudioBarRect.X + half + gap, btnY, half, btnH);
+                if (micW > 0) {
+                    layout.MicMuteRect = new RectangleF(layout.AudioHeadsetRect.Right + gap, btnY, micW, btnH);
+                }
+                y += audioBarH + 4f;
+            }
+
+            layout.FooterDividerY = y + 2f;
+            float halfW = Math.Max(20f, (width - 24f) / 2f);
+            layout.RefreshRect = new RectangleF(12f, layout.FooterDividerY + 2f, halfW, footerH - 2f);
+            layout.ControlCenterRect = new RectangleF(12f + halfW, layout.FooterDividerY + 2f, halfW, footerH - 2f);
+            int totalH = (int)Math.Ceiling(layout.FooterDividerY + footerH + 6f);
+            layout.LogicalSize = new Size(width, totalH);
+            return layout;
+        }
+
+        internal DesktopWidgetExpandedHit HitTest(float lx, float ly) {
+            if (HeaderRect.Contains(lx, ly)) {
+                return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.Header, RowIndex = -1, StageIndex = -1 };
+            }
+            for (int i = 0; i < RowRects.Count; i++) {
+                var dpiRects = i < RowDpiRects.Count ? RowDpiRects[i] : null;
+                if (dpiRects != null) {
+                    for (int s = 0; s < dpiRects.Length; s++) {
+                        if (dpiRects[s].Contains(lx, ly)) {
+                            return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.DpiStage, RowIndex = i, StageIndex = s };
+                        }
+                    }
+                }
+                if (RowRects[i].Contains(lx, ly)) {
+                    return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.DeviceRow, RowIndex = i, StageIndex = -1 };
+                }
+            }
+            if (HasAudioBar) {
+                if (AudioSpeakerRect.Contains(lx, ly)) return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.AudioSpeaker, RowIndex = -1, StageIndex = -1 };
+                if (AudioHeadsetRect.Contains(lx, ly)) return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.AudioHeadset, RowIndex = -1, StageIndex = -1 };
+                if (!MicMuteRect.IsEmpty && MicMuteRect.Contains(lx, ly)) return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.MicMute, RowIndex = -1, StageIndex = -1 };
+            }
+            if (ly >= FooterDividerY) {
+                if (lx < LogicalSize.Width / 2f) return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.Refresh, RowIndex = -1, StageIndex = -1 };
+                return new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.ControlCenter, RowIndex = -1, StageIndex = -1 };
+            }
+            return DesktopWidgetExpandedHit.Empty;
+        }
     }
 
     internal sealed class DesktopWidgetRenderer {
         internal static void Paint(Graphics g, SizeF logicalSize, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, DesktopWidgetSettings cfg, bool expanded, bool edgeStripMode, bool hiddenEdgeTab, int hoveredRow) {
+            var hit = hoveredRow >= 0
+                ? new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.DeviceRow, RowIndex = hoveredRow, StageIndex = -1 }
+                : DesktopWidgetExpandedHit.Empty;
+            Paint(g, logicalSize, entries, palette, dark, cfg, expanded, edgeStripMode, hiddenEdgeTab, null, hit);
+        }
+
+        internal static void Paint(Graphics g, SizeF logicalSize, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, DesktopWidgetSettings cfg, bool expanded, bool edgeStripMode, bool hiddenEdgeTab, DesktopWidgetAudioState audio, DesktopWidgetExpandedHit hoverHit) {
             if (hiddenEdgeTab) {
                 string edge = DesktopWidgetGeometry.NormalizeEdge(cfg != null ? cfg.DockEdge : "right");
                 string hiddenStyle = DesktopWidgetGeometry.NormalizeHiddenStyle(cfg != null ? cfg.HiddenStyle : "handle");
@@ -214,7 +394,7 @@ namespace AtkBatteryTray {
                 using (var clipPath = VisualDesign.RoundRect(clipRect.X, clipRect.Y, clipRect.Width, clipRect.Height, Math.Max(2f, clipRadius))) {
                     g.SetClip(clipPath, CombineMode.Intersect);
                     if (expanded) {
-                        PaintExpanded(g, logicalSize, entries, palette, dark, hoveredRow);
+                        PaintExpanded(g, logicalSize, entries, audio, palette, dark, hoverHit);
                     } else {
                         string style = edgeStripMode ? "strip" : DesktopWidgetGeometry.NormalizeStyle(cfg.Style);
                         if (style == "rings") PaintRings(g, logicalSize, entries, palette, dark);
@@ -790,29 +970,28 @@ namespace AtkBatteryTray {
             }
         }
 
-        static void PaintExpanded(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, ThemePalette palette, bool dark, int hoveredRow) {
+        static void PaintExpanded(Graphics g, SizeF size, List<DesktopWidgetEntry> entries, DesktopWidgetAudioState audio, ThemePalette palette, bool dark, DesktopWidgetExpandedHit hoverHit) {
             PaintSurface(g, size, 12f, palette, dark);
             if (size.Width < 140f || size.Height < 64f) return;
-            int headerH = VisualDesign.LargeFont ? 32 : 28;
-            int rowH = VisualDesign.LargeFont ? 50 : 44;
-            int footerH = VisualDesign.LargeFont ? 34 : 30;
+            var layout = DesktopWidgetExpandedLayout.Build(entries, audio, VisualDesign.LargeFont);
+            int headerH = (int)layout.HeaderRect.Height;
+            int baseRowH = VisualDesign.LargeFont ? 50 : 44;
 
             CompactRenderer.DrawLabel(g, "外设电量", new RectangleF(14, 6, Math.Max(20f, size.Width - 80), headerH - 4), 13f, true, palette.Foreground, StringAlignment.Near);
             CompactRenderer.DrawLabel(g, "点击收起", new RectangleF(Math.Max(14f, size.Width - 78), 6, 66, headerH - 4), 11f, false, palette.Muted, StringAlignment.Far);
 
-            float y = headerH + 2f;
-            if (entries.Count == 0) {
-                CompactRenderer.DrawLabel(g, "暂未检测到兼容设备", new RectangleF(14, y, Math.Max(20f, size.Width - 28), rowH), 12.5f, false, palette.Muted, StringAlignment.Center);
-                y += rowH;
+            if (entries == null || entries.Count == 0) {
+                CompactRenderer.DrawLabel(g, "暂未检测到兼容设备", new RectangleF(14, headerH + 2f, Math.Max(20f, size.Width - 28), baseRowH), 12.5f, false, palette.Muted, StringAlignment.Center);
             } else {
-                for (int i = 0; i < entries.Count; i++) {
+                for (int i = 0; i < entries.Count && i < layout.RowRects.Count; i++) {
                     var e = entries[i];
-                    var rowRect = new RectangleF(8, y, Math.Max(20f, size.Width - 16), rowH - 2);
-                    if (hoveredRow == i && !VisualDesign.HighContrast) {
+                    var rowRect = layout.RowRects[i];
+                    bool rowHovered = hoverHit.Kind == DesktopWidgetExpandedHitKind.DeviceRow && hoverHit.RowIndex == i;
+                    if (rowHovered && !VisualDesign.HighContrast) {
                         CompactRenderer.Fill(g, rowRect, palette.RaisedSurface, 8f);
                     }
                     Color level = e.Percent.HasValue && e.Fresh ? ThemePalette.LevelColor(e.Percent, dark) : palette.Muted;
-                    var tile = new RectangleF(rowRect.X + 6, rowRect.Y + (rowRect.Height - 28) / 2f, 28, 28);
+                    var tile = new RectangleF(rowRect.X + 6, rowRect.Y + (baseRowH - 2 - 28) / 2f, 28, 28);
                     CompactRenderer.Fill(g, tile, palette.RaisedSurface, 7f);
                     CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(e.Kind), new RectangleF(tile.X + 6, tile.Y + 6, 16, 16), e.Low ? level : palette.Foreground);
 
@@ -828,20 +1007,94 @@ namespace AtkBatteryTray {
                         float fw = bar.Width * Math.Max(0, Math.Min(100, e.Percent.Value)) / 100f;
                         if (fw > 0) CompactRenderer.Fill(g, new RectangleF(bar.X, bar.Y, fw, bar.Height), level, 1.5f);
                     }
-                    y += rowH;
+
+                    // Inline DPI quick-switch pills for writable mice
+                    var dpiRects = i < layout.RowDpiRects.Count ? layout.RowDpiRects[i] : null;
+                    if (dpiRects != null && e.DpiStages != null) {
+                        float dpiFont = VisualDesign.LargeFont ? 11f : 10f;
+                        int highlightedIdx = e.PendingDpiIndex.HasValue ? e.PendingDpiIndex.Value : e.ActiveDpiIndex;
+                        for (int s = 0; s < dpiRects.Length && s < e.DpiStages.Length; s++) {
+                            var pr = dpiRects[s];
+                            bool active = s == highlightedIdx;
+                            bool hovered = hoverHit.Kind == DesktopWidgetExpandedHitKind.DpiStage && hoverHit.RowIndex == i && hoverHit.StageIndex == s;
+                            Color pillBg = active
+                                ? (VisualDesign.HighContrast ? palette.Selected : Color.FromArgb(dark ? 54 : 34, palette.Accent))
+                                : (hovered ? palette.RaisedSurface : palette.Track);
+                            Color pillBorder = active
+                                ? palette.Accent
+                                : (hovered ? Color.FromArgb(dark ? 150 : 120, palette.Accent) : Color.FromArgb(dark ? 65 : 55, palette.Border));
+                            Color pillFg = active
+                                ? (VisualDesign.HighContrast ? palette.SelectedForeground : palette.Accent)
+                                : (hovered ? palette.Foreground : palette.Muted);
+                            CompactRenderer.Fill(g, pr, pillBg, 5.5f);
+                            using (var path = VisualDesign.RoundRect(pr.X, pr.Y, pr.Width, pr.Height, 5.5f))
+                            using (var pen = new Pen(pillBorder, active ? 1.2f : 1f)) g.DrawPath(pen, path);
+                            CompactRenderer.DrawLabel(g, e.DpiStages[s].ToString(System.Globalization.CultureInfo.InvariantCulture), pr, dpiFont, active, pillFg, StringAlignment.Center);
+                        }
+                    }
                 }
             }
 
-            float footY = Math.Max(headerH + 4f, size.Height - footerH - 4);
-            using (var pen = new Pen(palette.Border, 1f)) g.DrawLine(pen, 12, footY, Math.Max(13f, size.Width - 12), footY);
-            float halfW = Math.Max(20f, (size.Width - 24) / 2f);
-            Color footerInk = VisualDesign.HighContrast ? palette.Foreground : Color.FromArgb(235, palette.Foreground);
-            CompactRenderer.DrawLabel(g, "刷新", new RectangleF(12, footY + 2, halfW, footerH - 2), 11.5f, false, footerInk, StringAlignment.Center);
-            CompactRenderer.DrawLabel(g, "控制中心", new RectangleF(12 + halfW, footY + 2, halfW, footerH - 2), 11.5f, false, footerInk, StringAlignment.Center);
-            using (var midPen = new Pen(VisualDesign.HighContrast ? palette.Border : Color.FromArgb(dark ? 70 : 60, palette.Border), 1f)) {
-                float midX = 12 + halfW;
-                g.DrawLine(midPen, midX, footY + 8f, midX, footY + footerH - 6f);
+            // Compact default audio output & mic mute bar
+            if (layout.HasAudioBar && audio != null) {
+                using (var sepPen = new Pen(Color.FromArgb(dark ? 65 : 55, palette.Border), 1f)) {
+                    g.DrawLine(sepPen, 12, layout.AudioBarRect.Top - 2f, Math.Max(13f, size.Width - 12), layout.AudioBarRect.Top - 2f);
+                }
+                string effectiveOut = !String.IsNullOrEmpty(audio.PendingOutput) ? audio.PendingOutput : audio.ActiveOutput;
+                PaintAudioPill(g, layout.AudioSpeakerRect, "扬声器", effectiveOut == "speaker", audio.SpeakerAvailable, hoverHit.Kind == DesktopWidgetExpandedHitKind.AudioSpeaker, palette, dark);
+                PaintAudioPill(g, layout.AudioHeadsetRect, "耳机", effectiveOut == "headset", audio.HeadsetAvailable, hoverHit.Kind == DesktopWidgetExpandedHitKind.AudioHeadset, palette, dark);
+                if (!layout.MicMuteRect.IsEmpty && audio.MicrophoneAvailable) {
+                    bool muted = audio.MicrophoneMuted == true;
+                    bool micHovered = hoverHit.Kind == DesktopWidgetExpandedHitKind.MicMute;
+                    Color lowRed = ThemePalette.LevelColor(5, dark);
+                    Color micBg = muted
+                        ? (VisualDesign.HighContrast ? palette.Selected : Color.FromArgb(dark ? 54 : 34, lowRed))
+                        : (micHovered ? palette.RaisedSurface : palette.Track);
+                    Color micBorder = muted ? lowRed : (micHovered ? palette.Accent : Color.FromArgb(dark ? 65 : 55, palette.Border));
+                    Color micFg = muted ? (VisualDesign.HighContrast ? palette.SelectedForeground : lowRed) : (micHovered ? palette.Foreground : palette.Muted);
+                    CompactRenderer.Fill(g, layout.MicMuteRect, micBg, 6f);
+                    using (var path = VisualDesign.RoundRect(layout.MicMuteRect.X, layout.MicMuteRect.Y, layout.MicMuteRect.Width, layout.MicMuteRect.Height, 6f))
+                    using (var pen = new Pen(micBorder, 1f)) g.DrawPath(pen, path);
+                    CompactRenderer.DrawLabel(g, muted ? "静" : "麦", layout.MicMuteRect, VisualDesign.LargeFont ? 11.5f : 10.5f, muted, micFg, StringAlignment.Center);
+                }
             }
+
+            float footY = layout.FooterDividerY;
+            using (var pen = new Pen(palette.Border, 1f)) g.DrawLine(pen, 12, footY, Math.Max(13f, size.Width - 12), footY);
+            Color footerInk = VisualDesign.HighContrast ? palette.Foreground : Color.FromArgb(235, palette.Foreground);
+            if (hoverHit.Kind == DesktopWidgetExpandedHitKind.Refresh && !VisualDesign.HighContrast) {
+                CompactRenderer.Fill(g, RectangleF.Inflate(layout.RefreshRect, -2f, -3f), palette.RaisedSurface, 6f);
+            } else if (hoverHit.Kind == DesktopWidgetExpandedHitKind.ControlCenter && !VisualDesign.HighContrast) {
+                CompactRenderer.Fill(g, RectangleF.Inflate(layout.ControlCenterRect, -2f, -3f), palette.RaisedSurface, 6f);
+            }
+            CompactRenderer.DrawLabel(g, "刷新", layout.RefreshRect, 11.5f, false, footerInk, StringAlignment.Center);
+            CompactRenderer.DrawLabel(g, "控制中心", layout.ControlCenterRect, 11.5f, false, footerInk, StringAlignment.Center);
+            using (var midPen = new Pen(VisualDesign.HighContrast ? palette.Border : Color.FromArgb(dark ? 70 : 60, palette.Border), 1f)) {
+                float midX = layout.RefreshRect.Right;
+                g.DrawLine(midPen, midX, footY + 8f, midX, layout.RefreshRect.Bottom - 6f);
+            }
+        }
+
+        static void PaintAudioPill(Graphics g, RectangleF rect, string label, bool active, bool available, bool hovered, ThemePalette palette, bool dark) {
+            Color bg = !available
+                ? Color.FromArgb(dark ? 32 : 24, palette.Track)
+                : active
+                    ? (VisualDesign.HighContrast ? palette.Selected : Color.FromArgb(dark ? 52 : 30, palette.Accent))
+                    : (hovered ? palette.RaisedSurface : palette.Track);
+            Color border = !available
+                ? Color.FromArgb(dark ? 38 : 30, palette.Border)
+                : active
+                    ? palette.Accent
+                    : (hovered ? Color.FromArgb(dark ? 140 : 110, palette.Accent) : Color.FromArgb(dark ? 65 : 55, palette.Border));
+            Color fg = !available
+                ? Color.FromArgb(120, palette.Muted)
+                : active
+                    ? (VisualDesign.HighContrast ? palette.SelectedForeground : palette.Accent)
+                    : (hovered ? palette.Foreground : palette.Muted);
+            CompactRenderer.Fill(g, rect, bg, 6f);
+            using (var path = VisualDesign.RoundRect(rect.X, rect.Y, rect.Width, rect.Height, 6f))
+            using (var pen = new Pen(border, active ? 1.2f : 1f)) g.DrawPath(pen, path);
+            CompactRenderer.DrawLabel(g, label, rect, VisualDesign.LargeFont ? 11.5f : 10.5f, active, fg, StringAlignment.Center);
         }
     }
 
@@ -865,9 +1118,10 @@ namespace AtkBatteryTray {
         Point currentPhysicalPos;
         byte currentAlpha = 255;
         float currentDpiScale = 1f;
-        int hoveredRow = -1;
+        DesktopWidgetExpandedHit hoverHit = DesktopWidgetExpandedHit.Empty;
         string lastRenderSignature;
         List<DesktopWidgetEntry> cachedEntries = new List<DesktopWidgetEntry>();
+        DesktopWidgetAudioState cachedAudio = new DesktopWidgetAudioState();
 
         // Spring animation state
         bool animating;
@@ -961,7 +1215,7 @@ namespace AtkBatteryTray {
             }
             if (hovered) {
                 hovered = false;
-                hoveredRow = -1;
+                hoverHit = DesktopWidgetExpandedHit.Empty;
                 lastCursorInsideUtc = utcNow;
                 if (expanded) RenderNow(false);
                 return;
@@ -980,6 +1234,60 @@ namespace AtkBatteryTray {
             menu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) {
                 menu.Items.Clear();
                 var cfg = DeviceSettings.Current.DesktopWidget;
+
+                // Quick actions: mouse DPI stages & audio output/mic switching
+                bool addedQuickSection = false;
+                var liveEntries = CollectEntries(6);
+                for (int i = 0; i < liveEntries.Count; i++) {
+                    var entry = liveEntries[i];
+                    if (entry == null || !entry.HasWritableDpi) continue;
+                    var dpiMenu = new ToolStripMenuItem("切换 DPI · " + (entry.Name ?? "鼠标").Replace("&", "&&"));
+                    int activeIdx = entry.PendingDpiIndex.HasValue ? entry.PendingDpiIndex.Value : entry.ActiveDpiIndex;
+                    for (int s = 0; s < entry.DpiStages.Length; s++) {
+                        int stageIdx = s;
+                        int dpiVal = entry.DpiStages[s];
+                        var capturedEntry = entry;
+                        var stageItem = new ToolStripMenuItem(dpiVal.ToString(System.Globalization.CultureInfo.InvariantCulture) + " DPI") { Checked = stageIdx == activeIdx };
+                        stageItem.Click += delegate { TriggerDpiSwitch(capturedEntry, stageIdx); };
+                        dpiMenu.DropDownItems.Add(stageItem);
+                    }
+                    menu.Items.Add(dpiMenu);
+                    addedQuickSection = true;
+                }
+
+                var audio = CollectAudioState();
+                if (audio.ShowOutputBar || audio.MicrophoneAvailable) {
+                    var audioMenu = new ToolStripMenuItem("音频快捷切换");
+                    string effectiveOut = !String.IsNullOrEmpty(audio.PendingOutput) ? audio.PendingOutput : audio.ActiveOutput;
+                    if (audio.ShowOutputBar) {
+                        string spkText = String.IsNullOrEmpty(audio.SpeakerName) ? "扬声器" : "扬声器 · " + ShortAudioLabel(audio.SpeakerName);
+                        var spkItem = new ToolStripMenuItem(spkText.Replace("&", "&&")) {
+                            Enabled = audio.SpeakerAvailable,
+                            Checked = audio.SpeakerAvailable && effectiveOut == "speaker"
+                        };
+                        spkItem.Click += delegate { owner.SelectAudioOutput("speaker"); RenderNow(false); };
+                        audioMenu.DropDownItems.Add(spkItem);
+
+                        string hsText = String.IsNullOrEmpty(audio.HeadsetName) ? "耳机" : "耳机 · " + ShortAudioLabel(audio.HeadsetName);
+                        var hsItem = new ToolStripMenuItem(hsText.Replace("&", "&&")) {
+                            Enabled = audio.HeadsetAvailable,
+                            Checked = audio.HeadsetAvailable && effectiveOut == "headset"
+                        };
+                        hsItem.Click += delegate { owner.SelectAudioOutput("headset"); RenderNow(false); };
+                        audioMenu.DropDownItems.Add(hsItem);
+                    }
+                    if (audio.MicrophoneAvailable) {
+                        if (audioMenu.DropDownItems.Count > 0) audioMenu.DropDownItems.Add(new ToolStripSeparator());
+                        var micItem = new ToolStripMenuItem("麦克风静音") { Checked = audio.MicrophoneMuted == true };
+                        micItem.Click += delegate { owner.ToggleMicrophoneMute(); RenderNow(false); };
+                        audioMenu.DropDownItems.Add(micItem);
+                    }
+                    menu.Items.Add(audioMenu);
+                    addedQuickSection = true;
+                }
+
+                if (addedQuickSection) menu.Items.Add(new ToolStripSeparator());
+
                 var styleMenu = new ToolStripMenuItem("收起形态");
                 for (int i = 0; i < DesktopWidgetGeometry.StyleKeys.Length; i++) {
                     string key = DesktopWidgetGeometry.StyleKeys[i];
@@ -1049,6 +1357,31 @@ namespace AtkBatteryTray {
             } catch (Exception) { }
         }
 
+        static string ShortAudioLabel(string raw) {
+            if (String.IsNullOrEmpty(raw)) return "";
+            string trimmed = raw.Trim();
+            return trimmed.Length > 22 ? trimmed.Substring(0, 21) + "…" : trimmed;
+        }
+
+        internal DesktopWidgetAudioState CollectAudioState() {
+            var state = new DesktopWidgetAudioState();
+            if (owner == null) return state;
+            var audio = owner.Audio;
+            if (audio == null) return state;
+            state.SpeakerAvailable = audio.SpeakerAvailable && !String.IsNullOrEmpty(audio.SpeakerId);
+            state.HeadsetAvailable = audio.HeadsetAvailable && !String.IsNullOrEmpty(audio.HeadsetId);
+            state.MicrophoneAvailable = audio.MicrophoneAvailable && !String.IsNullOrEmpty(audio.MicrophoneId) && audio.MicrophoneMuted.HasValue;
+            state.MicrophoneMuted = audio.MicrophoneMuted;
+            state.ActiveOutput = audio.ActiveOutput ?? "other";
+            state.SpeakerName = audio.SpeakerName;
+            state.HeadsetName = audio.HeadsetName;
+            try {
+                var fb = owner.GetFeedback();
+                if (fb != null) state.PendingOutput = fb.PendingOutput;
+            } catch (Exception) { }
+            return state;
+        }
+
         internal List<DesktopWidgetEntry> CollectEntries(int maxCount) {
             var list = new List<DesktopWidgetEntry>();
             var layout = WirelessLayout.Build(owner, 0, 100000, false);
@@ -1056,7 +1389,7 @@ namespace AtkBatteryTray {
             foreach (var card in layout.All) {
                 if (card == null || card.Id == "empty" || card.AudioOnly) continue;
                 var bv = card.Battery;
-                list.Add(new DesktopWidgetEntry {
+                var entry = new DesktopWidgetEntry {
                     Id = card.Id,
                     Name = card.Name,
                     Kind = card.Kind ?? "device",
@@ -1065,17 +1398,74 @@ namespace AtkBatteryTray {
                     Fresh = bv != null && bv.Fresh,
                     Charging = bv != null && bv.Charging,
                     Low = ThemePalette.IsLow(bv, threshold)
-                });
+                };
+
+                if (card.NativeMouse && card.Dpi != null && card.Dpi.Stages != null && card.Dpi.Stages.Count > 0) {
+                    int stageCount = Math.Min(8, card.Dpi.Stages.Count);
+                    var stages = new int[stageCount];
+                    for (int s = 0; s < stageCount; s++) stages[s] = card.Dpi.Stages[s].XDpi;
+                    entry.DpiStages = stages;
+                    entry.ActiveDpiIndex = card.Dpi.ActiveStage >= 0 && card.Dpi.ActiveStage < stageCount ? card.Dpi.ActiveStage : -1;
+                    int? nativePending = owner.PendingNativeDpiStage;
+                    entry.PendingDpiIndex = nativePending.HasValue && nativePending.Value >= 0 && nativePending.Value < stageCount ? nativePending : null;
+                    entry.IsNativeDpi = true;
+                    entry.CanSetDpi = owner.CanSetNativeDpi && stageCount > 1;
+                    entry.DpiTargetToken = owner.NativeDpiToken;
+                    if (!entry.CanSetDpi && entry.ActiveDpiIndex >= 0) {
+                        entry.Subtitle = (entry.Subtitle ?? "") + " · " + stages[entry.ActiveDpiIndex] + " DPI";
+                    }
+                } else if (card.Device != null && card.Device.Kind == "mouse" && card.Device.Dpi != null && card.Device.Dpi.Supported) {
+                    var wd = card.Device.Dpi;
+                    if (wd.Stages != null && wd.Stages.Length > 0) {
+                        int stageCount = Math.Min(8, wd.Stages.Length);
+                        var stages = new int[stageCount];
+                        int activeIdx = -1;
+                        int? pendingIdx = null;
+                        int? desired = owner.DesiredWirelessDpi(card.Device.Id, wd.TargetToken);
+                        for (int s = 0; s < stageCount; s++) {
+                            stages[s] = wd.Stages[s];
+                            if (wd.Current.HasValue && wd.Stages[s] == wd.Current.Value) activeIdx = s;
+                            if (desired.HasValue && wd.Stages[s] == desired.Value) pendingIdx = s;
+                        }
+                        entry.DpiStages = stages;
+                        entry.ActiveDpiIndex = activeIdx;
+                        entry.PendingDpiIndex = pendingIdx;
+                        entry.IsNativeDpi = false;
+                        entry.DpiTargetToken = wd.TargetToken;
+                        entry.CanSetDpi = stageCount > 1 && owner.CanSetWirelessDpi(card.Device.Id, wd.TargetToken);
+                    }
+                    if (!entry.HasWritableDpi && wd.Current.HasValue && WirelessDpi.ValidValue(wd.Current.Value)) {
+                        entry.Subtitle = (entry.Subtitle ?? "") + " · " + wd.Current.Value + " DPI";
+                    }
+                }
+
+                list.Add(entry);
                 if (list.Count >= maxCount) break;
             }
             return list;
         }
 
+        void TriggerDpiSwitch(DesktopWidgetEntry entry, int stageIndex) {
+            if (owner == null || entry == null || !entry.HasWritableDpi || stageIndex < 0 || stageIndex >= entry.DpiStages.Length) return;
+            if (entry.IsNativeDpi) {
+                owner.SelectDpiStage(stageIndex, entry.DpiTargetToken);
+            } else {
+                owner.SelectWirelessDpi(entry.Id, entry.DpiTargetToken, entry.DpiStages[stageIndex]);
+            }
+            RenderNow(true);
+        }
+
         Screen ResolveTargetScreen(DesktopWidgetSettings cfg) {
-            if (!String.IsNullOrEmpty(cfg.MonitorDeviceName)) {
-                foreach (var s in Screen.AllScreens) {
-                    if (String.Equals(s.DeviceName, cfg.MonitorDeviceName, StringComparison.OrdinalIgnoreCase)) return s;
+            var screens = Screen.AllScreens;
+            if (screens != null && screens.Length > 0) {
+                var names = new string[screens.Length];
+                int primaryIdx = 0;
+                for (int i = 0; i < screens.Length; i++) {
+                    names[i] = screens[i].DeviceName;
+                    if (screens[i].Primary) primaryIdx = i;
                 }
+                int selected = DesktopWidgetGeometry.SelectScreenIndex(cfg != null ? cfg.MonitorDeviceName : null, names, primaryIdx);
+                if (selected >= 0 && selected < screens.Length) return screens[selected];
             }
             return IsHandleCreated ? Screen.FromHandle(Handle) : Screen.PrimaryScreen;
         }
@@ -1099,6 +1489,7 @@ namespace AtkBatteryTray {
             cfg = DeviceSettings.Current.DesktopWidget;
             int maxDev = expanded ? 6 : Math.Max(1, Math.Min(4, cfg.MaxDevices));
             cachedEntries = CollectEntries(maxDev);
+            cachedAudio = CollectAudioState();
 
             dark = Style.Dark;
             palette = ThemePalette.Current(dark);
@@ -1110,7 +1501,7 @@ namespace AtkBatteryTray {
             currentDpiScale = NativeDisplay.ScaleAt(new Point(workArea.Left + workArea.Width / 2, workArea.Top + workArea.Height / 2));
 
             targetLogical = expanded
-                ? DesktopWidgetGeometry.ExpandedLogicalSize(cachedEntries.Count, VisualDesign.LargeFont)
+                ? DesktopWidgetGeometry.ExpandedLogicalSize(cachedEntries, cachedAudio, VisualDesign.LargeFont)
                 : DesktopWidgetGeometry.CollapsedLogicalSize(stripMode ? "strip" : cfg.Style, cachedEntries.Count, VisualDesign.LargeFont, cfg.DockEdge, hiddenTab, cfg.HiddenStyle);
 
             var physSize = LayeredSurface.ComputePhysicalSize(targetLogical, currentDpiScale);
@@ -1188,7 +1579,7 @@ namespace AtkBatteryTray {
             var physSize = LayeredSurface.ComputePhysicalSize(frameLogical, currentDpiScale);
             try {
                 surface.Commit(Handle, framePos, frameLogical, currentDpiScale, frameAlpha, delegate(Graphics g, SizeF sz) {
-                    DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, animTargetExpanded && !drawHiddenTab, animTargetStripMode, drawHiddenTab, hoveredRow);
+                    DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, animTargetExpanded && !drawHiddenTab, animTargetStripMode, drawHiddenTab, cachedAudio, hoverHit);
                 });
                 logicalSize = frameLogical;
                 currentPhysicalPos = framePos;
@@ -1234,6 +1625,7 @@ namespace AtkBatteryTray {
             if (animating) {
                 int maxDev = expanded ? 6 : Math.Max(1, Math.Min(4, cfg.MaxDevices));
                 cachedEntries = CollectEntries(maxDev);
+                cachedAudio = CollectAudioState();
                 return;
             }
             RenderNow(force);
@@ -1275,7 +1667,7 @@ namespace AtkBatteryTray {
             // UpdateLayeredWindow atomically commits physical position, size and alpha.
             // Avoid redundant WinForms Location/Size writes that can trigger double-DPI scaling.
             surface.Commit(Handle, physPos, targetLogical, currentDpiScale, alpha, delegate(Graphics g, SizeF sz) {
-                DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, expanded, stripMode, hiddenTab, hoveredRow);
+                DesktopWidgetRenderer.Paint(g, sz, cachedEntries, palette, dark, cfg, expanded, stripMode, hiddenTab, cachedAudio, hoverHit);
             });
             logicalSize = targetLogical;
             currentPhysicalPos = physPos;
@@ -1288,8 +1680,16 @@ namespace AtkBatteryTray {
             var sb = new StringBuilder();
             sb.Append(dark).Append('|').Append(DeviceSettings.Current.ThemeStyle).Append('|').Append(VisualDesign.LargeFont).Append('|').Append(VisualDesign.HighContrast).Append('|');
             sb.Append(cfg.Style).Append('|').Append(cfg.DockEdge).Append('|').Append(cfg.HiddenStyle).Append('|').Append(cfg.OpacityPercent).Append('|').Append(expanded).Append('|').Append(hiddenTab).Append('|').Append(stripMode).Append('|');
-            sb.Append(hoveredRow).Append('|').Append(pos.X).Append(',').Append(pos.Y).Append('|').Append(size.Width).Append('x').Append(size.Height).Append('|');
-            foreach (var e in cachedEntries) sb.Append(e.Id).Append(':').Append(e.Name).Append(':').Append(e.Percent).Append(':').Append(e.Fresh).Append(':').Append(e.Charging).Append(';');
+            sb.Append((int)hoverHit.Kind).Append(':').Append(hoverHit.RowIndex).Append(':').Append(hoverHit.StageIndex).Append('|').Append(pos.X).Append(',').Append(pos.Y).Append('|').Append(size.Width).Append('x').Append(size.Height).Append('|');
+            foreach (var e in cachedEntries) {
+                sb.Append(e.Id).Append(':').Append(e.Name).Append(':').Append(e.Percent).Append(':').Append(e.Fresh).Append(':').Append(e.Charging).Append(':')
+                  .Append(e.CanSetDpi).Append(':').Append(e.ActiveDpiIndex).Append(':').Append(e.PendingDpiIndex).Append(';');
+            }
+            if (cachedAudio != null) {
+                sb.Append("A:").Append(cachedAudio.SpeakerAvailable).Append(',').Append(cachedAudio.HeadsetAvailable).Append(',')
+                  .Append(cachedAudio.ActiveOutput).Append(',').Append(cachedAudio.PendingOutput).Append(',')
+                  .Append(cachedAudio.MicrophoneAvailable).Append(',').Append(cachedAudio.MicrophoneMuted);
+            }
             return sb.ToString();
         }
 
@@ -1327,7 +1727,7 @@ namespace AtkBatteryTray {
             if (dragging) return;
             if (!IsPointNearWidget(Cursor.Position, 6)) {
                 hovered = false;
-                hoveredRow = -1;
+                hoverHit = DesktopWidgetExpandedHit.Empty;
                 lastCursorInsideUtc = DateTime.UtcNow;
                 if (expanded && !animating) RenderNow(false);
             }
@@ -1368,13 +1768,16 @@ namespace AtkBatteryTray {
             }
             lastCursorInsideUtc = DateTime.UtcNow;
             if (expanded && !animating) {
+                float lx = e.X / Math.Max(1f, currentDpiScale);
                 float ly = e.Y / Math.Max(1f, currentDpiScale);
-                int headerH = VisualDesign.LargeFont ? 32 : 28;
-                int rowH = VisualDesign.LargeFont ? 50 : 44;
-                int nextRow = ly >= headerH + 2 && ly < headerH + 2 + cachedEntries.Count * rowH ? (int)((ly - headerH - 2) / rowH) : -1;
-                if (nextRow != hoveredRow) {
-                    hoveredRow = nextRow;
-                    Cursor = hoveredRow >= 0 ? Cursors.Hand : Cursors.Default;
+                var layout = DesktopWidgetExpandedLayout.Build(cachedEntries, cachedAudio, VisualDesign.LargeFont);
+                var nextHit = layout.HitTest(lx, ly);
+                if (!nextHit.SameAs(hoverHit)) {
+                    hoverHit = nextHit;
+                    bool interactive = nextHit.Kind != DesktopWidgetExpandedHitKind.None;
+                    if (nextHit.Kind == DesktopWidgetExpandedHitKind.AudioSpeaker && (cachedAudio == null || !cachedAudio.SpeakerAvailable)) interactive = false;
+                    if (nextHit.Kind == DesktopWidgetExpandedHitKind.AudioHeadset && (cachedAudio == null || !cachedAudio.HeadsetAvailable)) interactive = false;
+                    Cursor = interactive ? Cursors.Hand : Cursors.Default;
                     RenderNow(false);
                 }
             }
@@ -1418,7 +1821,15 @@ namespace AtkBatteryTray {
             HandleClick(e.Location);
         }
 
-        void HandleClick(Point physicalPoint) {
+        void CollapseExpanded() {
+            expanded = false;
+            hoverHit = DesktopWidgetExpandedHit.Empty;
+            lastCursorInsideUtc = DateTime.UtcNow;
+            TransitionToCurrentState(210, false, 1.0);
+            SyncHoverWatch();
+        }
+
+        internal void HandleClick(Point physicalPoint) {
             float lx = physicalPoint.X / Math.Max(1f, currentDpiScale);
             float ly = physicalPoint.Y / Math.Max(1f, currentDpiScale);
             if (!expanded) {
@@ -1427,44 +1838,43 @@ namespace AtkBatteryTray {
                 TransitionToCurrentState(270, true, 1.35);
                 return;
             }
-            int headerH = VisualDesign.LargeFont ? 32 : 28;
-            int rowH = VisualDesign.LargeFont ? 50 : 44;
-            int footerH = VisualDesign.LargeFont ? 34 : 30;
-            if (ly < headerH) {
-                expanded = false;
-                hoveredRow = -1;
-                lastCursorInsideUtc = DateTime.UtcNow;
-                TransitionToCurrentState(210, false, 1.0);
-                SyncHoverWatch();
-                return;
-            }
-            if (ly >= logicalSize.Height - footerH - 4) {
-                if (lx < logicalSize.Width / 2f) {
+            var layout = DesktopWidgetExpandedLayout.Build(cachedEntries, cachedAudio, VisualDesign.LargeFont);
+            var hit = layout.HitTest(lx, ly);
+            switch (hit.Kind) {
+                case DesktopWidgetExpandedHitKind.DpiStage:
+                    if (hit.RowIndex >= 0 && hit.RowIndex < cachedEntries.Count) {
+                        TriggerDpiSwitch(cachedEntries[hit.RowIndex], hit.StageIndex);
+                    }
+                    return;
+                case DesktopWidgetExpandedHitKind.AudioSpeaker:
+                    if (cachedAudio != null && cachedAudio.SpeakerAvailable) {
+                        owner.SelectAudioOutput("speaker");
+                        RenderNow(true);
+                    }
+                    return;
+                case DesktopWidgetExpandedHitKind.AudioHeadset:
+                    if (cachedAudio != null && cachedAudio.HeadsetAvailable) {
+                        owner.SelectAudioOutput("headset");
+                        RenderNow(true);
+                    }
+                    return;
+                case DesktopWidgetExpandedHitKind.MicMute:
+                    if (cachedAudio != null && cachedAudio.MicrophoneAvailable) {
+                        owner.ToggleMicrophoneMute();
+                        RenderNow(true);
+                    }
+                    return;
+                case DesktopWidgetExpandedHitKind.Refresh:
                     owner.RefreshBattery(true);
-                } else {
-                    expanded = false;
-                    hoveredRow = -1;
-                    lastCursorInsideUtc = DateTime.UtcNow;
-                    TransitionToCurrentState(210, false, 1.0);
-                    SyncHoverWatch();
+                    return;
+                case DesktopWidgetExpandedHitKind.ControlCenter:
+                case DesktopWidgetExpandedHitKind.DeviceRow:
+                    CollapseExpanded();
                     owner.ShowControlCenter(ControlCenterPage.Devices);
-                }
-                return;
-            }
-            int idx = (int)((ly - headerH - 2) / rowH);
-            if (idx >= 0 && idx < cachedEntries.Count) {
-                expanded = false;
-                hoveredRow = -1;
-                lastCursorInsideUtc = DateTime.UtcNow;
-                TransitionToCurrentState(210, false, 1.0);
-                SyncHoverWatch();
-                owner.ShowControlCenter(ControlCenterPage.Devices);
-            } else {
-                expanded = false;
-                hoveredRow = -1;
-                lastCursorInsideUtc = DateTime.UtcNow;
-                TransitionToCurrentState(210, false, 1.0);
-                SyncHoverWatch();
+                    return;
+                default:
+                    CollapseExpanded();
+                    return;
             }
         }
 

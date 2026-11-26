@@ -172,6 +172,23 @@ namespace AtkBatteryTray {
             return false;
         }
 
+        internal static int ResolveTaskbarEdge(int appBarEdge, Rectangle taskbarRect, Rectangle monitorBounds) {
+            if (taskbarRect.Width > 0 && taskbarRect.Height > 0 && monitorBounds.Width > 0 && monitorBounds.Height > 0) {
+                if (taskbarRect.Width > taskbarRect.Height) {
+                    bool nearTop = taskbarRect.Top <= monitorBounds.Top + 4 && taskbarRect.Bottom < monitorBounds.Bottom - 4;
+                    bool nearBottom = taskbarRect.Bottom >= monitorBounds.Bottom - 4 && taskbarRect.Top > monitorBounds.Top + 4;
+                    if (nearTop && !nearBottom) return EdgeTop;
+                    if (nearBottom && !nearTop) return EdgeBottom;
+                } else if (taskbarRect.Height > taskbarRect.Width) {
+                    bool nearLeft = taskbarRect.Left <= monitorBounds.Left + 4 && taskbarRect.Right < monitorBounds.Right - 4;
+                    bool nearRight = taskbarRect.Right >= monitorBounds.Right - 4 && taskbarRect.Left > monitorBounds.Left + 4;
+                    if (nearLeft && !nearRight) return EdgeLeft;
+                    if (nearRight && !nearLeft) return EdgeRight;
+                }
+            }
+            return appBarEdge;
+        }
+
         internal static bool IsFullscreenCoveringTaskbar(Rectangle windowRect, Rectangle monitorBounds, Rectangle taskbarRect) {
             if (monitorBounds.Width <= 0 || monitorBounds.Height <= 0 || taskbarRect.Width <= 0 || taskbarRect.Height <= 0) return false;
             bool coversFullMonitor =
@@ -310,10 +327,8 @@ namespace AtkBatteryTray {
                 }
             } catch (Exception) { }
 
-            if (snap.TaskbarEdge < 0 && snap.TaskbarRect.Width > 0 && snap.TaskbarRect.Height > 0) {
-                if (snap.TaskbarRect.Width > snap.TaskbarRect.Height && snap.TaskbarRect.Bottom >= snap.PrimaryMonitorBounds.Bottom - 4) {
-                    snap.TaskbarEdge = EdgeBottom;
-                }
+            if (snap.TaskbarRect.Width > 0 && snap.TaskbarRect.Height > 0) {
+                snap.TaskbarEdge = ResolveTaskbarEdge(snap.TaskbarEdge, snap.TaskbarRect, snap.PrimaryMonitorBounds);
             }
 
             try {
@@ -353,8 +368,9 @@ namespace AtkBatteryTray {
                 failure = Fail("auto_hide_taskbar", "当前系统启用了自动隐藏任务栏，为避免悬空遮挡已自动降级隐藏。");
                 return false;
             }
-            if (snap.TaskbarEdge != TaskbarEnvironmentProbe.EdgeBottom) {
-                failure = Fail("non_bottom_taskbar", "实验版仅支持底部水平任务栏，当前位置已自动降级隐藏。");
+            if (snap.TaskbarEdge != TaskbarEnvironmentProbe.EdgeBottom &&
+                snap.TaskbarEdge != TaskbarEnvironmentProbe.EdgeTop) {
+                failure = Fail("non_horizontal_taskbar", "实验版仅支持底部或顶部水平任务栏，左/右侧垂直任务栏已自动降级隐藏。");
                 return false;
             }
             Rectangle bar = snap.TaskbarRect;
@@ -430,10 +446,13 @@ namespace AtkBatteryTray {
                 }
             }
 
+            string edgeText = snap.TaskbarEdge == TaskbarEnvironmentProbe.EdgeTop ? "顶部" : "底部";
             return new TaskbarOverlayPlacement {
                 CanDisplay = true,
                 StatusCode = avoided ? "ready_avoided" : "ready",
-                StatusMessage = avoided ? "运行正常 · 已自动避让任务栏其他插件" : "运行正常 · 已贴合在主屏底部任务栏通知区左侧（独立无焦点层）",
+                StatusMessage = avoided
+                    ? "运行正常 · 已自动避让" + edgeText + "任务栏其他插件"
+                    : "运行正常 · 已贴合在主屏" + edgeText + "任务栏通知区左侧（独立无焦点层）",
                 PhysicalLocation = new Point(x, y)
             };
         }
@@ -865,7 +884,7 @@ namespace AtkBatteryTray {
 
         internal string StatusMessage {
             get {
-                if (disposed || form == null || form.IsDisposed) return "默认关闭 · 开启后在主屏底部任务栏通知区左侧以独立无焦点浮层显示";
+                if (disposed || form == null || form.IsDisposed) return "默认关闭 · 开启后在主屏底部或顶部水平任务栏通知区左侧以独立无焦点浮层显示";
                 return form.LastPlacement != null ? form.LastPlacement.StatusMessage : "初始化中";
             }
         }

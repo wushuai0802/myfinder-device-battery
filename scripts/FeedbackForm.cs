@@ -627,7 +627,7 @@ namespace AtkBatteryTray {
                 EnableInputs(true);
                 fallback.Visible=copyReport.Visible=true;
                 if(result.Kind==FeedbackResultKind.RateLimited)SetStatus("提交太频繁，请过一会儿再试。");
-                else if(result.Failure==FeedbackFailure.ImagesUnavailable)SetStatus("提交失败：当前反馈服务暂未开启图片上传，请先移除图片后再提交，或改用浏览器提交。");
+                else if(result.Failure==FeedbackFailure.ImagesUnavailable)SetStatus("提交失败：当前图片上传暂时不可用（可能已达本月限额或维护中），请先移除图片后再提交，或改用浏览器提交。");
                 else{
                     string reason="暂时无法提交";
                     if(result.Failure==FeedbackFailure.Connection)reason="连不上反馈服务";

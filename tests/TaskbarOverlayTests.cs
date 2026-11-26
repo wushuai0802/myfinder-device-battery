@@ -47,6 +47,20 @@ static class TaskbarOverlayTests {
         };
     }
 
+    static TaskbarEnvironmentSnapshot MakeValidTopBar() {
+        return new TaskbarEnvironmentSnapshot {
+            HasTaskbarWindow = true,
+            TaskbarVisible = true,
+            AutoHideEnabled = false,
+            TaskbarEdge = TaskbarEnvironmentProbe.EdgeTop,
+            TaskbarRect = new Rectangle(0, 0, 1920, 48),
+            HasTrayNotifyRect = true,
+            TrayNotifyRect = new Rectangle(1680, 0, 240, 48),
+            PrimaryMonitorBounds = new Rectangle(0, 0, 1920, 1080),
+            Obstruction = DisplayObstruction.None
+        };
+    }
+
     static void SettingsDefaultsAndNormalization() {
         var b = new AudioBindings();
         Check(b.TaskbarOverlay != null, "TaskbarOverlay defaults non-null");
@@ -87,6 +101,7 @@ static class TaskbarOverlayTests {
         Check(!TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "ready_avoided"), "tray icon stays hidden when taskbar overlay is ready_avoided");
         Check(!TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "fullscreen_hidden"), "tray icon stays hidden during temporary fullscreen game hiding");
         Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "auto_hide_taskbar"), "tray icon auto-restores when taskbar overlay persistently degrades on auto-hide taskbar");
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "non_horizontal_taskbar"), "tray icon auto-restores when taskbar overlay persistently degrades on vertical taskbar");
         Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "plugin_conflict"), "tray icon auto-restores when taskbar overlay persistently degrades on plugin conflict");
         Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "disabled"), "tray icon stays visible while taskbar overlay is still disabled/uninitialized");
         Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, null), "tray icon fails safe to visible on null/unknown taskbar status");
@@ -114,16 +129,37 @@ static class TaskbarOverlayTests {
         var r2 = TaskbarOverlayEvaluator.Evaluate(s2, overlaySize, 0);
         Check(!r2.CanDisplay && r2.StatusCode == "auto_hide_taskbar", "auto-hide taskbar degrades cleanly");
 
-        // 3. Non-bottom taskbar (top / left / right)
-        var s3 = MakeValidBottomBar();
-        s3.TaskbarEdge = TaskbarEnvironmentProbe.EdgeLeft;
-        var r3 = TaskbarOverlayEvaluator.Evaluate(s3, overlaySize, 0);
-        Check(!r3.CanDisplay && r3.StatusCode == "non_bottom_taskbar", "left taskbar degrades cleanly");
+        // 3. Vertical taskbars (left / right) degrade cleanly; top horizontal taskbar (#1157) is supported
+        var s3Left = MakeValidBottomBar();
+        s3Left.TaskbarEdge = TaskbarEnvironmentProbe.EdgeLeft;
+        var r3Left = TaskbarOverlayEvaluator.Evaluate(s3Left, overlaySize, 0);
+        Check(!r3Left.CanDisplay && r3Left.StatusCode == "non_horizontal_taskbar", "left vertical taskbar degrades cleanly");
 
-        var s3Top = MakeValidBottomBar();
-        s3Top.TaskbarEdge = TaskbarEnvironmentProbe.EdgeTop;
+        var s3Right = MakeValidBottomBar();
+        s3Right.TaskbarEdge = TaskbarEnvironmentProbe.EdgeRight;
+        var r3Right = TaskbarOverlayEvaluator.Evaluate(s3Right, overlaySize, 0);
+        Check(!r3Right.CanDisplay && r3Right.StatusCode == "non_horizontal_taskbar", "right vertical taskbar degrades cleanly");
+
+        var s3Top = MakeValidTopBar();
         var r3Top = TaskbarOverlayEvaluator.Evaluate(s3Top, overlaySize, 0);
-        Check(!r3Top.CanDisplay && r3Top.StatusCode == "non_bottom_taskbar", "top taskbar degrades cleanly");
+        Check(r3Top.CanDisplay && r3Top.StatusCode == "ready", "top horizontal taskbar (#1157) is supported");
+        Check(r3Top.PhysicalLocation.X == 1680 - 10 - 220, "top taskbar places overlay 10px left of TrayNotifyWnd");
+        Check(r3Top.PhysicalLocation.Y == (48 - 28) / 2, "top taskbar vertically centers overlay inside top bar");
+        Check(r3Top.StatusMessage.Contains("顶部"), "top taskbar status message reports top edge");
+
+        // Top taskbar plugin avoidance and Windhawk/ExplorerPatcher edge geometry inference
+        var s3TopAvoid = MakeValidTopBar();
+        s3TopAvoid.OccupiedRects = new List<Rectangle> { new Rectangle(1500, 2, 160, 44) };
+        var r3TopAvoid = TaskbarOverlayEvaluator.Evaluate(s3TopAvoid, overlaySize, 0);
+        Check(r3TopAvoid.CanDisplay && r3TopAvoid.StatusCode == "ready_avoided" && r3TopAvoid.PhysicalLocation.X == 1500 - 8 - 220 && r3TopAvoid.PhysicalLocation.Y == 10, "top taskbar avoids third-party plugins cleanly");
+
+        var monBounds = new Rectangle(0, 0, 1920, 1080);
+        Check(TaskbarEnvironmentProbe.ResolveTaskbarEdge(TaskbarEnvironmentProbe.EdgeBottom, new Rectangle(0, 0, 1920, 48), monBounds) == TaskbarEnvironmentProbe.EdgeTop, "geometry overrides stale ABM bottom edge when Shell_TrayWnd sits on top (Windhawk/ExplorerPatcher)");
+        Check(TaskbarEnvironmentProbe.ResolveTaskbarEdge(-1, new Rectangle(0, 0, 1920, 48), monBounds) == TaskbarEnvironmentProbe.EdgeTop, "infers top edge when ABM_GETTASKBARPOS fails");
+        Check(TaskbarEnvironmentProbe.ResolveTaskbarEdge(-1, new Rectangle(0, 1032, 1920, 48), monBounds) == TaskbarEnvironmentProbe.EdgeBottom, "infers bottom edge when ABM_GETTASKBARPOS fails");
+        Check(TaskbarEnvironmentProbe.ResolveTaskbarEdge(-1, new Rectangle(0, 0, 62, 1080), monBounds) == TaskbarEnvironmentProbe.EdgeLeft, "infers left vertical edge from geometry");
+        Check(!TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(0, 48, 1920, 1032), monBounds, new Rectangle(0, 0, 1920, 48)), "maximized window below top taskbar does NOT count as fullscreen");
+        Check(TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(0, 0, 1920, 1080), monBounds, new Rectangle(0, 0, 1920, 48)), "fullscreen game covering top taskbar hides overlay");
 
         // 4. Fullscreen & game obstruction matrix
         var s4 = MakeValidBottomBar();

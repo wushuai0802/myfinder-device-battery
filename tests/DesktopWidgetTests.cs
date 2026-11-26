@@ -120,6 +120,149 @@ static class DesktopWidgetTests {
             out midPos, out midSize, out midAlpha);
         Check(midPos.X >= workArea.Left && midPos.X + midSize.Width <= workArea.Right && midPos.Y >= workArea.Top && midPos.Y + midSize.Height <= workArea.Bottom, "spring overshoot stays strictly clamped inside workArea");
         Check(midPos.X < workArea.Right - 200 - 6, "right-edge reveal springs inward past resting margin before settling");
+
+        // Multi-monitor hot-unplug fallback
+        var monitors = new[] { @"\\.\DISPLAY1", @"\\.\DISPLAY2" };
+        Check(DesktopWidgetGeometry.SelectScreenIndex(@"\\.\DISPLAY2", monitors, 0) == 1, "selects saved secondary monitor while connected");
+        Check(DesktopWidgetGeometry.SelectScreenIndex(@"\\.\DISPLAY3", monitors, 0) == 0, "falls back cleanly to primary monitor when saved secondary monitor is disconnected");
+        Check(DesktopWidgetGeometry.SelectScreenIndex("", monitors, 0) == -1, "empty monitor preference lets handle determine screen");
+    }
+
+    static void QuickActionsHitTestAndLiveDispatch() {
+        var entries = new List<DesktopWidgetEntry> {
+            new DesktopWidgetEntry {
+                Id = "native:mouse", Name = "ATK A9 Air+", Kind = "mouse", Subtitle = "2.4 GHz · 在线",
+                Percent = 82, Fresh = true, CanSetDpi = true, IsNativeDpi = true,
+                DpiStages = new[] { 400, 800, 1600, 3200 }, ActiveDpiIndex = 2, DpiTargetToken = "tok-1"
+            },
+            new DesktopWidgetEntry {
+                Id = "wireless:mouse2", Name = "GPW3", Kind = "mouse", Subtitle = "2.4 GHz · 已连接",
+                Percent = 64, Fresh = true, CanSetDpi = true, IsNativeDpi = false,
+                DpiStages = new[] { 400, 800, 1200, 1600, 2400, 3200 }, ActiveDpiIndex = 1, DpiTargetToken = "tok-2"
+            },
+            new DesktopWidgetEntry {
+                Id = "hs-1", Name = "ROG Delta II", Kind = "headset", Subtitle = "2.4 GHz · 充电中",
+                Percent = 18, Fresh = true, Charging = true, Low = true
+            }
+        };
+        var audio = new DesktopWidgetAudioState {
+            SpeakerAvailable = true, HeadsetAvailable = true, MicrophoneAvailable = true,
+            MicrophoneMuted = false, ActiveOutput = "headset", SpeakerName = "Realtek Audio", HeadsetName = "ROG Delta II"
+        };
+
+        // Verify shared layout geometry has zero overlap and accurate hit-testing across 4-stage, 6-stage, audio & mic
+        var layout = DesktopWidgetExpandedLayout.Build(entries, audio, false);
+        Check(layout.RowRects.Count == 3 && layout.RowDpiRects[0].Length == 4 && layout.RowDpiRects[1].Length == 6 && layout.RowDpiRects[2] == null, "expanded layout builds 4-stage and 6-stage DPI pill rows only for writable mice");
+        Check(layout.HasAudioBar && !layout.AudioSpeakerRect.IsEmpty && !layout.AudioHeadsetRect.IsEmpty && !layout.MicMuteRect.IsEmpty, "expanded layout builds audio output and mic mute bar");
+        Check(!layout.AudioSpeakerRect.IntersectsWith(layout.AudioHeadsetRect) && !layout.AudioHeadsetRect.IntersectsWith(layout.MicMuteRect), "audio bar pills never overlap");
+        Check(layout.RowRects[0].Bottom <= layout.RowRects[1].Top && layout.RowRects[1].Bottom <= layout.RowRects[2].Top && layout.RowRects[2].Bottom <= layout.AudioBarRect.Top, "expanded rows and audio bar stack cleanly without overlap");
+
+        var p0 = layout.RowDpiRects[0][3];
+        var hitDpi = layout.HitTest(p0.X + p0.Width / 2f, p0.Y + p0.Height / 2f);
+        Check(hitDpi.Kind == DesktopWidgetExpandedHitKind.DpiStage && hitDpi.RowIndex == 0 && hitDpi.StageIndex == 3, "HitTest resolves 4th DPI pill on row 0");
+
+        var p1 = layout.RowDpiRects[1][5];
+        var hitDpi2 = layout.HitTest(p1.X + p1.Width / 2f, p1.Y + p1.Height / 2f);
+        Check(hitDpi2.Kind == DesktopWidgetExpandedHitKind.DpiStage && hitDpi2.RowIndex == 1 && hitDpi2.StageIndex == 5, "HitTest resolves 6th DPI pill on 2nd DPI row");
+
+        var hitSpk = layout.HitTest(layout.AudioSpeakerRect.X + 10, layout.AudioSpeakerRect.Y + 10);
+        Check(hitSpk.Kind == DesktopWidgetExpandedHitKind.AudioSpeaker, "HitTest resolves speaker button");
+        var hitHs = layout.HitTest(layout.AudioHeadsetRect.X + 10, layout.AudioHeadsetRect.Y + 10);
+        Check(hitHs.Kind == DesktopWidgetExpandedHitKind.AudioHeadset, "HitTest resolves headset button");
+        var hitMic = layout.HitTest(layout.MicMuteRect.X + 8, layout.MicMuteRect.Y + 8);
+        Check(hitMic.Kind == DesktopWidgetExpandedHitKind.MicMute, "HitTest resolves mic mute button");
+
+        // Render light & dark expanded quick-action showcase PNGs for visual inspection
+        foreach (bool dark in new[] { false, true }) {
+            var pal = ThemePalette.Current(dark);
+            var cfg = new DesktopWidgetSettings { Style = "capsule", DockEdge = "right", HiddenStyle = "handle" };
+            var hover = new DesktopWidgetExpandedHit { Kind = DesktopWidgetExpandedHitKind.DpiStage, RowIndex = 0, StageIndex = 1 };
+            using (var bmp = LayeredSurface.RenderToBitmap(layout.LogicalSize, 1.5f, delegate(Graphics g, SizeF sz) {
+                DesktopWidgetRenderer.Paint(g, sz, entries, pal, dark, cfg, true, false, false, audio, hover);
+            })) {
+                string file = Path.Combine(output, dark ? "widget-expanded-quick-actions-dark.png" : "widget-expanded-quick-actions-light.png");
+                bmp.Save(file, ImageFormat.Png);
+                Check(File.Exists(file) && new FileInfo(file).Length > 1500, "expanded quick-actions screenshot rendered (" + (dark ? "dark" : "light") + ")");
+            }
+        }
+
+        // Live TrayContext click dispatch: DPI stage switch, Audio switch, Mic mute all fire WITHOUT collapsing expanded widget
+        var pref = new AudioBindings { ThemeStyle = "graphite", Theme = "dark", RememberReadings = false, ReducedMotion = true };
+        DeviceSettings.UseTransientConfiguration(pref);
+        int switchedDpiStage = -1;
+        string switchedAudioTarget = null;
+        bool? toggledMic = null;
+        var nativeDpi = new DpiConfig {
+            DeviceKey = "receiver-" + new string('a', 64),
+            ActiveStage = 1,
+            TimestampUtc = DateTime.UtcNow,
+            Stages = new List<DpiStage> {
+                new DpiStage { XDpi = 400, YDpi = 400 },
+                new DpiStage { XDpi = 800, YDpi = 800 },
+                new DpiStage { XDpi = 1600, YDpi = 1600 },
+                new DpiStage { XDpi = 3200, YDpi = 3200 }
+            }
+        };
+        var liveAudio = new AudioReading {
+            ActiveOutput = "headset", SpeakerAvailable = true, HeadsetAvailable = true, MicrophoneAvailable = true,
+            MicrophoneMuted = false, SpeakerId = "spk-1", HeadsetId = "hs-1", MicrophoneId = "mic-1",
+            SpeakerName = "Realtek Speakers", HeadsetName = "ROG Delta II", TimestampUtc = DateTime.UtcNow, OperationSucceeded = true
+        };
+        using (var owner = new TrayContext(false,
+            delegate(bool b) { return new MouseSnapshot { Battery = new BatteryReading { Percent = 82, TimestampUtc = DateTime.UtcNow }, Dpi = nativeDpi }; },
+            delegate(int stage) { switchedDpiStage = stage; return nativeDpi; },
+            null,
+            delegate { return liveAudio; },
+            false,
+            delegate(string target) { switchedAudioTarget = target; liveAudio.ActiveOutput = target; return liveAudio; },
+            delegate(bool mute) { toggledMic = mute; liveAudio.MicrophoneMuted = mute; return liveAudio; },
+            null,
+            delegate { return false; },
+            null, null, null,
+            delegate(NativeDpiRequest req) { switchedDpiStage = req.Stage; return new DpiConfig { DeviceKey = req.DeviceKey, ActiveStage = req.Stage, Stages = nativeDpi.Stages, TimestampUtc = DateTime.UtcNow }; })) {
+            ((System.Windows.Forms.Timer)Field(owner, "refresh")).Stop();
+            owner.Current = new BatteryReading { Percent = 82, TimestampUtc = DateTime.UtcNow };
+            owner.NativeMousePresent = true;
+            owner.Dpi = nativeDpi;
+            owner.Audio = liveAudio;
+
+            using (var form = new DesktopWidgetForm(owner)) {
+                form.Show();
+                form.StartWatching();
+                // 1st click expands widget
+                form.HandleClick(new Point(20, 15));
+                Check(form.IsExpanded, "clicking collapsed widget expands it");
+                var liveEntries = form.CollectEntries(6);
+                var liveAudioSnap = form.CollectAudioState();
+                Check(liveEntries.Count == 1 && liveEntries[0].HasWritableDpi && liveEntries[0].DpiStages.Length == 4, "CollectEntries populates native writable DPI stages");
+                var liveLayout = DesktopWidgetExpandedLayout.Build(liveEntries, liveAudioSnap, VisualDesign.LargeFont);
+                float scale = (float)Field(form, "currentDpiScale");
+
+                // Click 3rd DPI pill (1600 DPI, stage index 2)
+                var pill = liveLayout.RowDpiRects[0][2];
+                form.HandleClick(new Point((int)Math.Round((pill.X + pill.Width / 2f) * scale), (int)Math.Round((pill.Y + pill.Height / 2f) * scale)));
+                Check(form.IsExpanded, "clicking DPI pill keeps widget expanded");
+
+                // Click Speaker audio pill
+                var spk = liveLayout.AudioSpeakerRect;
+                form.HandleClick(new Point((int)Math.Round((spk.X + spk.Width / 2f) * scale), (int)Math.Round((spk.Y + spk.Height / 2f) * scale)));
+                Check(form.IsExpanded, "clicking speaker pill keeps widget expanded");
+
+                // Click Mic mute pill
+                var mic = liveLayout.MicMuteRect;
+                form.HandleClick(new Point((int)Math.Round((mic.X + mic.Width / 2f) * scale), (int)Math.Round((mic.Y + mic.Height / 2f) * scale)));
+                Check(form.IsExpanded, "clicking mic mute pill keeps widget expanded");
+
+                var deadline = DateTime.UtcNow.AddSeconds(3);
+                while ((switchedDpiStage < 0 || switchedAudioTarget == null || !toggledMic.HasValue) && DateTime.UtcNow < deadline) {
+                    Application.DoEvents();
+                    Thread.Sleep(10);
+                }
+                Check(switchedDpiStage == 2, "DPI click dispatched SelectDpiStage(2) to TrayContext");
+                Check(switchedAudioTarget == "speaker", "Audio click dispatched SelectAudioOutput(\"speaker\") to TrayContext");
+                Check(toggledMic == true, "Mic click dispatched ToggleMicrophoneMute() to TrayContext");
+            }
+        }
     }
 
     static void DisplayWatchStateMachine() {
@@ -363,6 +506,7 @@ static class DesktopWidgetTests {
         Run("widget geometry and 4-edge magnetic snap", GeometryAndEdgeSnap);
         Run("layered display watch fullscreen/maximized state machine", DisplayWatchStateMachine);
         Run("live widget lifecycle and LayeredSurface commits", LiveWidgetLifecycleAndSurface);
+        Run("expanded widget DPI/audio quick actions and hot-unplug fallback", QuickActionsHitTestAndLiveDispatch);
         Run("rendered widget showcase PNG", RenderWidgetShowcase);
 
         Console.WriteLine(checks + " checks, " + failures + " failed groups");
