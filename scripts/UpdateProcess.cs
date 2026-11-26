@@ -24,16 +24,29 @@ namespace AtkBattery {
             // Windows PowerShell must discover its own modules, even when the app came from pwsh.
             info.EnvironmentVariables.Remove("PSModulePath");return info;
         }
+        internal static bool HasMatchingStableReceipt(string executablePath,string dataDirectory){
+            try{
+                if(String.IsNullOrWhiteSpace(executablePath)||String.IsNullOrWhiteSpace(dataDirectory))return false;
+                string exe=Path.GetFullPath(executablePath);
+                string outputs=Path.GetDirectoryName(exe);
+                if(String.IsNullOrEmpty(outputs))return false;
+                string installRoot=Path.GetDirectoryName(outputs);
+                if(String.IsNullOrEmpty(installRoot))return false;
+                if(!File.Exists(Path.Combine(installRoot,@"scripts\Apply-Update.ps1")))return false;
+                string receipt=Path.Combine(dataDirectory,"install.json");
+                if(!File.Exists(receipt)||!File.Exists(Path.Combine(installRoot,".myfinder-device-battery-install.json")))return false;
+                UpdatePaths.NoLinks(receipt);
+                var properties=UpdateJson.Read<Dictionary<string,object>>(UpdateJson.ReadBytes(receipt,2097152),true);
+                string location=null;int matches=0;
+                foreach(var property in properties)if(property.Key.Equals("InstallDirectory",StringComparison.OrdinalIgnoreCase)){location=property.Value as string;matches++;}
+                return matches==1&&!String.IsNullOrWhiteSpace(location)&&Path.IsPathRooted(location)&&Path.GetFullPath(location).TrimEnd('\\').Equals(installRoot.TrimEnd('\\'),StringComparison.OrdinalIgnoreCase);
+            }catch(Exception){return false;}
+        }
         public bool IsStable(CancellationToken token){
             token.ThrowIfCancellationRequested();string script=Path.Combine(root,@"scripts\Apply-Update.ps1");if(!File.Exists(script))return false;
             // Negative prefilter only: ordinary portable copies never start even a probe process.
             // A matching location still requires the installer's complete receipt/marker decision.
-            try{
-                string receipt=Path.Combine(dataDirectory,"install.json");if(!File.Exists(receipt)||!File.Exists(Path.Combine(root,".myfinder-device-battery-install.json")))return false;
-                UpdatePaths.NoLinks(receipt);var properties=UpdateJson.Read<Dictionary<string,object>>(UpdateJson.ReadBytes(receipt,2097152),true);
-                string location=null;int matches=0;foreach(var property in properties)if(property.Key.Equals("InstallDirectory",StringComparison.OrdinalIgnoreCase)){location=property.Value as string;matches++;}
-                if(matches!=1||String.IsNullOrWhiteSpace(location)||!Path.IsPathRooted(location)||!Path.GetFullPath(location).TrimEnd('\\').Equals(root.TrimEnd('\\'),StringComparison.OrdinalIgnoreCase))return false;
-            }catch(Exception){return false;}
+            if(!HasMatchingStableReceipt(executable,dataDirectory))return false;
             var info=HelperStartInfo(script,new[]{"-Probe","-ExecutablePath",executable,"-DataDirectory",dataDirectory});info.RedirectStandardOutput=true;
             using(var process=Process.Start(info)){
                 var read=process.StandardOutput.ReadToEndAsync();var clock=Stopwatch.StartNew();
@@ -42,7 +55,7 @@ namespace AtkBattery {
             }
         }
         public void Start(PreparedUpdate update){
-            if(update.InstallDirectory!=root)throw new InvalidDataException("Update target changed.");
+            string target=String.IsNullOrWhiteSpace(update.InstallDirectory)?root:UpdateInstallPaths.ValidateTargetOrThrow(update.InstallDirectory,root,dataDirectory,true);
             string helper=Path.Combine(update.WorkDirectory,"helper");Directory.CreateDirectory(helper);
             // The currently installed helper survives the replacement. The downloaded installer is
             // executed only after the old binary independently re-verifies the signature and ZIP.
@@ -50,7 +63,9 @@ namespace AtkBattery {
                 string source=Path.Combine(root,"scripts",name);UpdatePaths.NoLinks(source);File.Copy(source,Path.Combine(helper,name),false);
             }
             using(var parent=Process.GetCurrentProcess()){
-                var info=HelperStartInfo(Path.Combine(helper,"Apply-Update.ps1"),new[]{"-ExecutablePath",executable,"-DataDirectory",dataDirectory,"-Version",update.Version,"-WorkDirectory",update.WorkDirectory,"-ParentId",parent.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),"-ParentStartUtc",parent.StartTime.ToUniversalTime().ToString("o")});
+                var args=new List<string>{"-ExecutablePath",executable,"-DataDirectory",dataDirectory,"-Version",update.Version,"-WorkDirectory",update.WorkDirectory,"-ParentId",parent.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),"-ParentStartUtc",parent.StartTime.ToUniversalTime().ToString("o")};
+                if(!UpdateInstallPaths.IsSameDirectory(target,root)){args.Add("-TargetInstallDirectory");args.Add(target);}
+                var info=HelperStartInfo(Path.Combine(helper,"Apply-Update.ps1"),args);
                 using(var process=Process.Start(info)){if(process==null)throw new IOException("Update helper could not start.");}
             }
         }

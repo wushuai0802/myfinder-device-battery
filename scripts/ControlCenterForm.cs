@@ -1465,6 +1465,8 @@ namespace AtkBatteryTray {
 
         internal ControlCenterPage CurrentPage { get { return currentPage; } }
         internal string SelectedDeviceKey { get { return selectedDeviceKey; } }
+        internal Func<string, string> BrowseInstallDirectory { get; set; }
+        readonly ToolTip installTip = new ToolTip();
 
         void LoadTheme() {
             dark = Style.Dark;
@@ -1620,6 +1622,7 @@ namespace AtkBatteryTray {
             sb.Append(pref.LowBatteryNotifications).Append('|').Append(pref.WarningThreshold).Append('|').Append(pref.BackgroundSeconds).Append('|');
             sb.Append(pref.RememberReadings).Append('|').Append(pref.AutoDetectMoreDevices).Append('|').Append(pref.AutoCheckUpdates).Append('|');
             sb.Append(pref.ShowUpdateBadge).Append('|').Append(pref.IncludeBetaUpdates).Append('|').Append(pref.CheckFeedbackReplies).Append('|');
+            sb.Append(pref.UpdateInstallDirectory ?? "").Append('|').Append(owner.IsStableInstalled).Append('|');
             if (pref.DesktopWidget != null) {
                 var w = pref.DesktopWidget;
                 sb.Append(w.Enabled).Append('|').Append(w.Style).Append('|').Append(w.DockEdge).Append('|').Append(w.AutoHideOnEdge).Append('|').Append(w.TopMost).Append('|').Append(w.FullscreenPolicy).Append('|').Append(w.CompactOnMaximized).Append('|').Append(w.MaxDevices).Append('|');
@@ -2738,6 +2741,80 @@ namespace AtkBatteryTray {
             betaToggle.Toggled += delegate { UpdatePreferenceInPlace(delegate(AudioBindings p) { p.IncludeBetaUpdates = betaToggle.Checked; }); };
             extRows.Add(CreateSettingRow("提醒测试版更新", "接收 1.4 测试版新设备与功能更新通知", betaToggle, true));
 
+            string currentInstallDir = owner.CurrentInstallDirectory ?? "";
+            bool stableInstall = owner.IsStableInstalled;
+            string pendingInstallDir = pref.UpdateInstallDirectory;
+            bool hasPendingMigration = stableInstall && !String.IsNullOrWhiteSpace(pendingInstallDir) && !UpdateInstallPaths.IsSameDirectory(pendingInstallDir, currentInstallDir);
+            string installSubtitle = hasPendingMigration
+                ? "下次自动更新迁移至：" + pendingInstallDir + "（当前：" + currentInstallDir + "）"
+                : stableInstall
+                    ? "当前：" + currentInstallDir + "（自动更新默认沿用此目录）"
+                    : "当前：" + currentInstallDir + "（绿色模式 · 自动更新将打开发布页）";
+            var installBtns = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty, Padding = Padding.Empty };
+            var openDirBtn = CreateActionButton("打开目录", delegate {
+                try {
+                    if (!String.IsNullOrWhiteSpace(currentInstallDir) && Directory.Exists(currentInstallDir)) {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(currentInstallDir) { UseShellExecute = true });
+                    } else {
+                        ShowNotice("当前安装目录不存在");
+                    }
+                } catch (Exception) {
+                    ShowNotice("无法打开安装目录");
+                }
+            });
+            openDirBtn.Name = "OpenInstallDirectoryButton";
+            openDirBtn.Margin = new Padding(0, 0, 8, 0);
+            installBtns.Controls.Add(openDirBtn);
+            if (stableInstall) {
+                var changeDirBtn = CreateActionButton("更改目录", delegate {
+                    string initial = hasPendingMigration ? pendingInstallDir : currentInstallDir;
+                    string chosen = null;
+                    if (BrowseInstallDirectory != null) {
+                        chosen = BrowseInstallDirectory(initial);
+                    } else {
+                        using (var browser = new FolderBrowserDialog { Description = "选择下次自动更新的安装目录（请选择空目录或新建独立文件夹）", ShowNewFolderButton = true }) {
+                            if (!String.IsNullOrWhiteSpace(initial) && Directory.Exists(initial)) browser.SelectedPath = initial;
+                            else if (!String.IsNullOrWhiteSpace(currentInstallDir) && Directory.Exists(currentInstallDir)) browser.SelectedPath = currentInstallDir;
+                            if (browser.ShowDialog(this) == DialogResult.OK) chosen = browser.SelectedPath;
+                        }
+                    }
+                    if (String.IsNullOrWhiteSpace(chosen)) return;
+                    string normalized, err;
+                    if (!owner.TryValidateInstallDirectory(chosen, out normalized, out err)) {
+                        ShowNotice(err);
+                        return;
+                    }
+                    bool sameAsCurrent = UpdateInstallPaths.IsSameDirectory(normalized, currentInstallDir);
+                    UpdatePreference(delegate(AudioBindings p) { p.UpdateInstallDirectory = sameAsCurrent ? null : normalized; });
+                    ShowNotice(sameAsCurrent ? "已恢复沿用当前安装目录" : "已保存，下次自动更新将迁移至：" + normalized);
+                });
+                changeDirBtn.Name = "ChangeInstallDirectoryButton";
+                changeDirBtn.Margin = new Padding(0, 0, hasPendingMigration ? 8 : 0, 0);
+                installBtns.Controls.Add(changeDirBtn);
+                if (hasPendingMigration) {
+                    var resetDirBtn = CreateActionButton("恢复当前", delegate {
+                        UpdatePreference(delegate(AudioBindings p) { p.UpdateInstallDirectory = null; });
+                        ShowNotice("已取消迁移，将继续沿用当前安装目录");
+                    });
+                    resetDirBtn.Name = "ResetInstallDirectoryButton";
+                    resetDirBtn.Margin = Padding.Empty;
+                    installBtns.Controls.Add(resetDirBtn);
+                }
+            }
+            installBtns.PerformLayout();
+            var prefSize = installBtns.GetPreferredSize(Size.Empty);
+            installBtns.Size = new Size(Math.Max(100, prefSize.Width + 4), Math.Max(30, prefSize.Height));
+            var installRow = CreateSettingRow("安装位置", installSubtitle, installBtns, true, true);
+            installRow.Name = "InstallLocationSettingRow";
+            string tipText = hasPendingMigration
+                ? "当前安装目录：" + currentInstallDir + "\r\n下次自动更新迁移目标：" + pendingInstallDir
+                : "当前安装目录：" + currentInstallDir;
+            installTip.SetToolTip(installRow, tipText);
+            foreach (Control child in installRow.Controls) {
+                if (child is Label) installTip.SetToolTip(child, tipText);
+            }
+            extRows.Add(installRow);
+
             var replyToggle = new ControlCenterToggle(palette, dark) { Checked = pref.CheckFeedbackReplies };
             replyToggle.Toggled += delegate { UpdatePreferenceInPlace(delegate(AudioBindings p) { p.CheckFeedbackReplies = replyToggle.Checked; }); };
             extRows.Add(CreateSettingRow("自动检查反馈回复", null, replyToggle, true));
@@ -2775,6 +2852,7 @@ namespace AtkBatteryTray {
         protected override void Dispose(bool disposing) {
             if (disposing) {
                 noticeTimer.Dispose();
+                installTip.Dispose();
                 if (titleFont != null) titleFont.Dispose();
                 if (headingFont != null) headingFont.Dispose();
                 if (bodyFont != null) bodyFont.Dispose();

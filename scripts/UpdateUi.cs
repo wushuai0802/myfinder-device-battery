@@ -14,18 +14,33 @@ using AtkBattery;
 namespace AtkBatteryTray {
     internal sealed class UpdateDialog:ThemedDialog {
         internal readonly string Version;
-        readonly ThemedButton install,skip,cancel;
+        readonly ThemedButton install,skip,cancel,changeLocation;
         readonly Label status;readonly ThemedProgress progress;readonly ThemedSection statusArea;
-        readonly ThemedSection versionCard;readonly Label title,current,next;readonly FlowLayoutPanel versions;
+        readonly ThemedSection versionCard,locationCard;readonly Label title,current,next,locationTitle,locationPath;readonly FlowLayoutPanel versions;
+        readonly ToolTip tips=new ToolTip();
+        readonly string currentInstallDirectory,defaultStatusText;
+        readonly Func<string,string> pickDirectory;
+        readonly Func<string,string> validateDirectory;
         bool downloading,handedOff,progressShown;
+        internal string SelectedInstallDirectory {get;private set;}
         internal event Action InstallRequested,SkipRequested,CancelRequested;
-        internal UpdateDialog(UpdateRelease release,bool stable):this(release,stable,false){}
-        internal UpdateDialog(UpdateRelease release,bool stable,bool cached){
+        internal event Action<string> InstallDirectoryChanged;
+        internal UpdateDialog(UpdateRelease release,bool stable):this(release,stable,false,null,null,null,null){}
+        internal UpdateDialog(UpdateRelease release,bool stable,bool cached):this(release,stable,cached,null,null,null,null){}
+        internal UpdateDialog(UpdateRelease release,bool stable,bool cached,string currentInstallDir,string targetInstallDir,Func<string,string> directoryPicker,Func<string,string> directoryValidator){
             Version=release.Version;
+            currentInstallDirectory=currentInstallDir;
+            SelectedInstallDirectory=!String.IsNullOrWhiteSpace(targetInstallDir)?targetInstallDir:currentInstallDir;
+            pickDirectory=directoryPicker;
+            validateDirectory=directoryValidator;
+            bool showLocation=stable&&!String.IsNullOrWhiteSpace(currentInstallDir);
             Text="MyFinder 设备电量 · 软件更新";StartPosition=FormStartPosition.CenterScreen;ShowInTaskbar=true;
-            ClientSize=new Size(380,340);
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            ClientSize=new Size(380,showLocation?396:340);
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=showLocation?5:4,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            if(showLocation)layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            int rowIndex=0;
             versionCard=new ThemedSection(Theme) {Name="VersionCard",Dock=DockStyle.Fill,Height=54};
             var versionLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
             versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));versionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -34,22 +49,41 @@ namespace AtkBatteryTray {
             versions=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,WrapContents=false,Margin=new Padding(0,4,0,0)};
             current=Caption("当前 "+AppRuntime.Version+" → ");current.Margin=Padding.Empty;
             next=Caption(release.Version);next.Name="NewVersion";next.ForeColor=Theme.Accent;next.Margin=Padding.Empty;
-            versions.Controls.AddRange(new Control[]{current,next});versionLayout.Controls.Add(versions,0,1);versionCard.Controls.Add(versionLayout);layout.Controls.Add(versionCard,0,0);
+            versions.Controls.AddRange(new Control[]{current,next});versionLayout.Controls.Add(versions,0,1);versionCard.Controls.Add(versionLayout);layout.Controls.Add(versionCard,0,rowIndex++);
+            if(showLocation){
+                locationCard=new ThemedSection(Theme) {Name="InstallLocationCard",Dock=DockStyle.Fill,Height=48};
+                var locLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=2,Margin=Padding.Empty};
+                locLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+                locLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                locLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                locLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                locationTitle=Caption("安装位置",true);locationTitle.Name="InstallLocationTitle";locationTitle.Margin=Padding.Empty;
+                locationPath=Caption(SelectedInstallDirectory,false,true);locationPath.Name="InstallLocationPath";locationPath.AutoSize=false;locationPath.AutoEllipsis=true;locationPath.Dock=DockStyle.Fill;locationPath.Margin=new Padding(0,3,8,0);
+                changeLocation=new ThemedButton(Theme,ThemedButtonKind.Secondary) {Name="ChangeInstallLocation",Text="更改…",AutoSize=true,Margin=new Padding(8,0,0,0),TabIndex=4};
+                changeLocation.Anchor=AnchorStyles.Right;
+                locLayout.Controls.Add(locationTitle,0,0);locLayout.Controls.Add(locationPath,0,1);
+                locLayout.Controls.Add(changeLocation,1,0);locLayout.SetRowSpan(changeLocation,2);
+                locationCard.Controls.Add(locLayout);
+                layout.Controls.Add(locationCard,0,rowIndex++);
+                changeLocation.Click+=delegate{ChooseInstallDirectory();};
+            }
             var notes=new ThemedReleaseNotes(Theme) {Name="ReleaseNotes",AccessibleName="发布说明",Text=Notes(release.Body),TabStop=true,Dock=DockStyle.Fill};
-            var section=new ThemedTextBox(Theme,notes) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};layout.Controls.Add(section,0,1);
-            status=Caption(cached?"这是已缓存的官方发布版本；下载时仍会重新校验签名和附件。":stable&&beta?"测试版含待实机验证的功能，不想试用可跳过此版本。":stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。",false,true);
+            var section=new ThemedTextBox(Theme,notes) {Name="ReleaseNotesCard",Dock=DockStyle.Fill};layout.Controls.Add(section,0,rowIndex++);
+            defaultStatusText=cached?"这是已缓存的官方发布版本；下载时仍会重新校验签名和附件。":stable&&beta?"测试版含待实机验证的功能，不想试用可跳过此版本。":stable?"点击更新后下载，签名与文件校验通过后安装。":"绿色模式：请打开发布页面下载安装。";
+            status=Caption(ReadyStatusText(),false,true);
             status.Name="UpdateStatus";status.AutoSize=false;status.AutoEllipsis=true;status.Dock=DockStyle.Fill;status.Margin=Padding.Empty;
             statusArea=new ThemedSection(Theme) {Name="UpdateStatusCard",Dock=DockStyle.Fill};
             progress=new ThemedProgress(Theme) {Name="UpdateProgress",Dock=DockStyle.Bottom,Visible=false};
-            statusArea.Controls.Add(status);statusArea.Controls.Add(progress);layout.Controls.Add(statusArea,0,2);
+            statusArea.Controls.Add(status);statusArea.Controls.Add(progress);layout.Controls.Add(statusArea,0,rowIndex++);
             install=new ThemedButton(Theme,ThemedButtonKind.Primary) {Name="InstallUpdate",Text=stable?"更新并重启":"打开发布页面",AutoSize=true,TabIndex=1};
             skip=new ThemedButton(Theme,ThemedButtonKind.Text) {Name="SkipUpdate",Text="跳过此版本",AutoSize=true,Margin=Padding.Empty,TabIndex=3};
-            cancel=new ThemedButton(Theme) {Name="LaterUpdate",Text="稍后",AutoSize=true,TabIndex=2};
+            cancel=new ThemedButton(Theme,ThemedButtonKind.Secondary) {Name="LaterUpdate",Text="稍后",AutoSize=true,TabIndex=2};
             var buttons=new TableLayoutPanel {Dock=DockStyle.Fill,AutoSize=true,ColumnCount=3,RowCount=1,Margin=Padding.Empty};
             buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             skip.Anchor=AnchorStyles.Left;buttons.Controls.Add(skip,0,0);buttons.Controls.Add(cancel,1,0);buttons.Controls.Add(install,2,0);
-            layout.Controls.Add(buttons,0,3);Controls.Add(layout);AcceptButton=install;CancelButton=cancel;ActiveControl=install;
-            Func<int> surrounding=delegate{SizeStatus();return versionCard.Height+versionCard.Margin.Vertical+statusArea.Height+statusArea.Margin.Vertical+section.Padding.Vertical+section.Margin.Vertical;};
+            layout.Controls.Add(buttons,0,rowIndex);Controls.Add(layout);AcceptButton=install;CancelButton=cancel;ActiveControl=install;
+            if(showLocation)RefreshLocationUi();
+            Func<int> surrounding=delegate{SizeStatus();return versionCard.Height+versionCard.Margin.Vertical+(locationCard!=null?locationCard.Height+locationCard.Margin.Vertical:0)+statusArea.Height+statusArea.Margin.Vertical+section.Padding.Vertical+section.Margin.Vertical;};
             ConfigureLayout(layout,buttons,delegate(int width){return surrounding()+2*notes.LineHeight+4;},delegate(int width){return surrounding()+notes.PreferredNotesHeight(width-section.Padding.Horizontal);});
             notes.TextChanged+=delegate{FitToWorkingArea(false);};
             Shown+=delegate{notes.Select(0,0);FocusAction(handedOff?null:downloading?cancel:install);};
@@ -57,6 +91,38 @@ namespace AtkBatteryTray {
             skip.Click+=delegate{if(SkipRequested!=null)SkipRequested();};
             cancel.Click+=delegate{if(downloading){if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";FocusAction(null);cancel.Enabled=false;}else Close();};
             FormClosing+=delegate(object sender,FormClosingEventArgs e){if(downloading&&!handedOff){e.Cancel=true;if(CancelRequested!=null)CancelRequested();status.Text="正在取消…";}};
+        }
+        bool IsMigratingLocation(){return !String.IsNullOrWhiteSpace(currentInstallDirectory)&&!String.IsNullOrWhiteSpace(SelectedInstallDirectory)&&!UpdateInstallPaths.IsSameDirectory(currentInstallDirectory,SelectedInstallDirectory);}
+        string ReadyStatusText(){return IsMigratingLocation()?"更新并重启后将迁移至所选目录，并清理旧目录程序文件。":defaultStatusText;}
+        void RefreshLocationUi(){
+            if(locationPath==null)return;
+            locationTitle.Text=IsMigratingLocation()?"安装位置（更新后迁移至此目录）":"安装位置";
+            locationPath.Text=SelectedInstallDirectory??"";
+            tips.SetToolTip(locationPath,SelectedInstallDirectory??"");
+        }
+        void ChooseInstallDirectory(){
+            if(downloading||handedOff)return;
+            string chosen=null;
+            if(pickDirectory!=null){chosen=pickDirectory(SelectedInstallDirectory);}
+            else{
+                using(var browser=new FolderBrowserDialog {Description="选择更新后的安装目录（请选择空目录或新建独立文件夹）",ShowNewFolderButton=true}){
+                    string initial=SelectedInstallDirectory;
+                    if(!String.IsNullOrWhiteSpace(initial)&&Directory.Exists(initial))browser.SelectedPath=initial;
+                    else if(!String.IsNullOrWhiteSpace(currentInstallDirectory)&&Directory.Exists(currentInstallDirectory))browser.SelectedPath=currentInstallDirectory;
+                    if(browser.ShowDialog(this)==DialogResult.OK)chosen=browser.SelectedPath;
+                }
+            }
+            if(String.IsNullOrWhiteSpace(chosen))return;
+            if(validateDirectory!=null){
+                string error=validateDirectory(chosen);
+                if(!String.IsNullOrEmpty(error)){status.ForeColor=Theme.Error;status.Text=error;return;}
+            }
+            string normalized=UpdateInstallPaths.Normalize(chosen)??chosen.Trim();
+            SelectedInstallDirectory=normalized;
+            RefreshLocationUi();
+            status.ForeColor=Theme.Muted;
+            status.Text=ReadyStatusText();
+            if(InstallDirectoryChanged!=null)InstallDirectoryChanged(normalized);
         }
         // The notes box is plain text: show GitHub's Markdown headings, bold and code marks as
         // readable text instead of raw symbols.
@@ -73,6 +139,10 @@ namespace AtkBatteryTray {
         }
         void SizeStatus(){
             versionCard.Height=Math.Max(54,versionCard.Padding.Vertical+title.PreferredHeight+versions.Margin.Vertical+Math.Max(current.PreferredHeight,next.PreferredHeight));
+            if(locationCard!=null){
+                int textHeight=locationTitle.PreferredHeight+locationPath.Margin.Vertical+locationPath.Font.Height;
+                locationCard.Height=Math.Max(48,locationCard.Padding.Vertical+Math.Max(textHeight,changeLocation.Height));
+            }
             int gap=progressShown?(int)Math.Round(12*DialogDpi.Scale(this)):0;
             status.Padding=new Padding(0,0,0,gap);
             statusArea.Height=statusArea.Padding.Vertical+status.Font.Height+(progressShown?progress.Height+gap:0);
@@ -83,15 +153,16 @@ namespace AtkBatteryTray {
             if(!ContainsFocus)return;
             if(ActiveControl!=null)ActiveControl.Focus();else Focus();
         }
-        internal void Downloading(){downloading=true;handedOff=false;cancel.Enabled=true;FocusAction(cancel);install.Enabled=false;skip.Enabled=false;status.ForeColor=Theme.Muted;status.Text="正在下载和校验…";ShowProgress(true);progress.Value=0;progress.Indeterminate=true;}
+        internal void Downloading(){downloading=true;handedOff=false;cancel.Enabled=true;FocusAction(cancel);install.Enabled=false;skip.Enabled=false;if(changeLocation!=null)changeLocation.Enabled=false;status.ForeColor=Theme.Muted;status.Text="正在下载和校验…";ShowProgress(true);progress.Value=0;progress.Indeterminate=true;}
         internal void Progress(long bytes,long total){
             if(IsDisposed)return;int percent=total>0?(int)Math.Max(0,Math.Min(100,bytes*100.0/total)):0;
             status.Text="已下载 "+(Math.Max(0,bytes)/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB"+(total>0?" / "+(total/1048576.0).ToString("F1",CultureInfo.InvariantCulture)+" MB（"+percent.ToString(CultureInfo.InvariantCulture)+"%）":"");
             progress.Indeterminate=total<=0;progress.Value=percent;
         }
-        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;status.ForeColor=text.StartsWith("已取消",StringComparison.Ordinal)||text.StartsWith("下载仍在本地等待",StringComparison.Ordinal)?Theme.Muted:Theme.Error;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;progress.Indeterminate=false;progress.Value=0;ShowProgress(false);FocusAction(install);}
-        internal void Handoff(){handedOff=true;FocusAction(null);cancel.Enabled=false;ShowProgress(true);progress.Indeterminate=false;progress.Value=100;status.ForeColor=Theme.Muted;status.Text="签名与文件校验通过，正在退出并安装…";}
+        internal void Finished(string text){downloading=false;handedOff=false;status.Text=text;status.ForeColor=text.StartsWith("已取消",StringComparison.Ordinal)||text.StartsWith("下载仍在本地等待",StringComparison.Ordinal)?Theme.Muted:Theme.Error;install.Enabled=true;skip.Enabled=true;cancel.Enabled=true;if(changeLocation!=null)changeLocation.Enabled=true;progress.Indeterminate=false;progress.Value=0;ShowProgress(false);FocusAction(install);}
+        internal void Handoff(){handedOff=true;FocusAction(null);cancel.Enabled=false;if(changeLocation!=null)changeLocation.Enabled=false;ShowProgress(true);progress.Indeterminate=false;progress.Value=100;status.ForeColor=Theme.Muted;status.Text=IsMigratingLocation()?"签名与文件校验通过，正在退出并迁移安装…":"签名与文件校验通过，正在退出并安装…";}
         internal void Shutdown(){handedOff=true;downloading=false;Close();}
+        protected override void Dispose(bool disposing){if(disposing)tips.Dispose();base.Dispose(disposing);}
     }
     [DataContract] internal sealed class UpdateResult {
         [DataMember(Name="schema")] public int Schema {get;set;}
@@ -103,7 +174,7 @@ namespace AtkBatteryTray {
     }
     internal sealed class UpdateController:IDisposable {
         readonly Control dispatch;readonly Action changed;readonly Action<string,string,bool> balloon;
-        readonly UpdateProcess installer;readonly IUpdateTransport http;readonly string data;
+        readonly UpdateProcess installer;readonly IUpdateTransport http;readonly string data,executable;
         readonly DateTime started=DateTime.UtcNow;readonly object gate=new object();
         readonly System.Threading.Timer timer;
         volatile UpdateChecker checker;bool? betaChoice;UpdateRelease available;UpdateDialog dialog;bool availableCached;
@@ -111,6 +182,11 @@ namespace AtkBatteryTray {
         volatile bool disposed;int checking,installing;
         string status="尚未检查";
         internal string LastFailure {get;private set;}
+        internal string CurrentInstallDirectory {get{return installer.InstallDirectory;}}
+        internal bool IsStableInstalledQuick {get{return UpdateProcess.HasMatchingStableReceipt(executable,data);}}
+        internal bool TryValidateInstallDirectory(string candidate,out string normalized,out string error){
+            return UpdateInstallPaths.TryValidateTarget(candidate,installer.InstallDirectory,data,out normalized,out error,true);
+        }
         static bool CatalogWaitCode(string code){return code=="update_waiting_catalog"||code=="update_http_403"||code=="update_http_429";}
         internal string Status {get{return StatusAt(DateTime.UtcNow);}}
         internal string StatusAt(DateTime now){
@@ -128,8 +204,8 @@ namespace AtkBatteryTray {
         static bool IncludeBetaPreference(){bool defaults;var pref=DeviceSettings.ReadSnapshot(out defaults);return !defaults&&pref.IncludeBetaUpdates;}
         internal bool BadgeVisible {get{bool defaults;var pref=DeviceSettings.ReadSnapshot(out defaults);return !defaults&&Available&&checker!=null&&checker.BadgeVisible(pref.ShowUpdateBadge,pref.AutoCheckUpdates);}}
         internal UpdateController(Control control,Action refresh,Action<string,string,bool> notify,IUpdateTransport transport=null,string dataDirectory=null,string executablePath=null,bool runTimer=true){
-            dispatch=control;changed=refresh;balloon=notify;data=dataDirectory??DeviceSettings.DataDirectory;betaChoice=IncludeBetaPreference();
-            installer=new UpdateProcess(executablePath??Application.ExecutablePath,data);http=transport??new UpdateHttp(AppRuntime.Version);
+            dispatch=control;changed=refresh;balloon=notify;data=dataDirectory??DeviceSettings.DataDirectory;executable=executablePath??Application.ExecutablePath;betaChoice=IncludeBetaPreference();
+            installer=new UpdateProcess(executable,data);http=transport??new UpdateHttp(AppRuntime.Version);
             timer=new System.Threading.Timer(delegate{Check(true);},null,runTimer?0:Timeout.Infinite,60000);
         }
         void Post(Action action){if(disposed)return;try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});}catch(InvalidOperationException){}}
@@ -184,7 +260,30 @@ namespace AtkBatteryTray {
                 Post(delegate{
                     if(dialog!=null&&!dialog.IsDisposed){DialogVisibility.RestoreAndActivate(dialog);Viewed(dialog,userInitiated);return;}
                     if(available==null||available.Version!=release.Version)return;
-                    var form=new UpdateDialog(release,installed,availableCached);dialog=form;
+                    string initialTarget=installer.InstallDirectory;
+                    if(installed){
+                        string savedTarget=DeviceSettings.Current.UpdateInstallDirectory;
+                        if(!String.IsNullOrWhiteSpace(savedTarget)){
+                            string validTarget,unusedError;
+                            if(UpdateInstallPaths.IsSameDirectory(savedTarget,installer.InstallDirectory)){
+                                try{var clean=DeviceSettings.Current;clean.UpdateInstallDirectory=null;DeviceSettings.SaveConfigurationIfLoaded(clean);}catch(Exception){}
+                            }else if(UpdateInstallPaths.TryValidateTarget(savedTarget,installer.InstallDirectory,data,out validTarget,out unusedError,false)){
+                                initialTarget=validTarget;
+                            }
+                        }
+                    }
+                    var form=new UpdateDialog(release,installed,availableCached,installed?installer.InstallDirectory:null,installed?initialTarget:null,null,delegate(string candidate){
+                        string normalized,err;
+                        return TryValidateInstallDirectory(candidate,out normalized,out err)?null:err;
+                    });dialog=form;
+                    form.InstallDirectoryChanged+=delegate(string nextDir){
+                        try{
+                            var next=DeviceSettings.Current;
+                            next.UpdateInstallDirectory=UpdateInstallPaths.IsSameDirectory(nextDir,installer.InstallDirectory)?null:nextDir;
+                            DeviceSettings.SaveConfiguration(next);
+                            changed();
+                        }catch(Exception){}
+                    };
                     form.SkipRequested+=delegate{
                         ThreadPool.QueueUserWorkItem(delegate{try{checker.Skip(release.Version);Post(delegate{if(available!=null&&available.Version==release.Version)available=null;status="已跳过 "+release.Version;changed();form.Close();});}catch(Exception){Post(delegate{form.Finished("无法保存跳过记录，请稍后再试。");});}});
                     };
@@ -252,11 +351,13 @@ namespace AtkBatteryTray {
         }
         void BeginInstall(UpdateRelease release,UpdateDialog form){
             if(Interlocked.CompareExchange(ref installing,1,0)!=0)return;
+            string requestedTarget=String.IsNullOrWhiteSpace(form.SelectedInstallDirectory)?installer.InstallDirectory:form.SelectedInstallDirectory;
             var cancellation=new CancellationTokenSource();lock(gate){downloadCancel=cancellation;downloadCommitted=false;}form.Downloading();
             ThreadPool.QueueUserWorkItem(delegate{
                 try{
                     cancellation.Token.ThrowIfCancellationRequested();DateTime checkTime=DateTime.UtcNow;var wait=checker.Backoff(UpdateBackoffScope.Asset,checkTime);if(wait.Waiting(checkTime)){Post(delegate{if(!form.IsDisposed)form.Finished(DownloadWait(wait,DateTime.UtcNow));});return;}
-                    var download=new UpdateDownload(http,installer,AppRuntime.Version,installer.InstallDirectory,Path.Combine(data,"updates")) {AllowBeta=IncludeBetaPreference()};
+                    string targetDirectory=UpdateInstallPaths.ValidateTargetOrThrow(requestedTarget,installer.InstallDirectory,data,true);
+                    var download=new UpdateDownload(http,installer,AppRuntime.Version,targetDirectory,Path.Combine(data,"updates")) {AllowBeta=IncludeBetaPreference()};
                     long lastProgress=0;
                     download.Install(release,cancellation.Token,delegate(long bytes,long total){long now=Stopwatch.GetTimestamp();if(now-lastProgress<Stopwatch.Frequency/5&&bytes!=total)return;lastProgress=now;Post(delegate{if(!form.IsDisposed)form.Progress(bytes,total);});},delegate{
                         if(disposed)throw new OperationCanceledException();

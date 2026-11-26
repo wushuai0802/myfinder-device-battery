@@ -332,6 +332,24 @@ namespace InstallerTests {
     Assert ($shell.CreateShortcut((Join-Path $startup $correct)).TargetPath -like '*notepad.exe') 'unrelated shortcut bytes remain usable'
     Remove-Item -LiteralPath (Join-Path $startup $correct) -Force
     Assert-Rejected {Assert-DeviceBatteryInstallDirectory ([IO.Path]::GetPathRoot($fixtureRoot)) $source $data} 'drive roots are never install targets'
+    Assert-Rejected {Assert-DeviceBatteryInstallDirectory '\\server\share\MyFinder' $source $data} 'UNC paths are never install targets'
+    Assert-Rejected {Assert-DeviceBatteryInstallDirectory (Join-Path $data 'nested-app') $source $data} 'nested directories under data directory are rejected'
+    Assert-Rejected {Assert-DeviceBatteryInstallDirectory (Join-Path $target 'nested-child') $source $data $target} 'nested directories under current install directory are rejected'
+    Assert-Rejected {Assert-DeviceBatteryInstallDirectory (Split-Path -Parent $target) $source $data $target} 'parent directories containing current install directory are rejected'
+    # First-time interactive install prompts for a custom path only when no receipt exists and -InstallDirectory is omitted.
+    $promptRoot=Join-Path $fixtureRoot 'first-install-prompt'
+    $promptData=Join-Path $promptRoot 'data'
+    $promptStartup=Join-Path $promptRoot 'startup'
+    $promptPrograms=Join-Path $promptRoot 'programs'
+    $promptCustom=Join-Path $promptRoot 'custom-chosen-dir'
+    New-Item -ItemType Directory -Path $promptData,$promptStartup,$promptPrograms -Force | Out-Null
+    $promptState=[pscustomobject]@{Calls=0;Custom=$promptCustom;Unused=(Join-Path $promptRoot 'should-not-be-used')}
+    $firstPrompt={param($Message) $promptState.Calls++; return ('"'+$promptState.Custom+'"')}.GetNewClosure()
+    $secondPrompt={param($Message) $promptState.Calls++; return $promptState.Unused}.GetNewClosure()
+    $firstInstall=& (Join-Path $source 'scripts\Install-Startup.ps1') -DataDirectory $promptData -StartupDirectory $promptStartup -ProgramsDirectory $promptPrograms -StopRunning -CanPrompt {$true} -PromptInstallDirectory $firstPrompt
+    Assert ($promptState.Calls -eq 1 -and ([IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $firstInstall.InstalledExecutable))).TrimEnd([char]92) -ieq $promptCustom.TrimEnd([char]92))) 'first interactive install uses quoted custom path input'
+    $secondInstall=& (Join-Path $source 'scripts\Install-Startup.ps1') -DataDirectory $promptData -StartupDirectory $promptStartup -ProgramsDirectory $promptPrograms -StopRunning -CanPrompt {$true} -PromptInstallDirectory $secondPrompt
+    Assert ($promptState.Calls -eq 1 -and ($secondInstall.InstalledExecutable -ieq $firstInstall.InstalledExecutable)) 'reinstall with existing receipt skips path prompt and keeps custom directory'
     Assert-Rejected {Assert-DeviceBatteryInstallDirectory $source $source $data} 'unowned source is never an install target'
     Assert-Rejected {Resolve-DeviceBatteryPayloadPath $target '../outside.txt'} 'traversal paths are rejected'
     Assert-Rejected {Resolve-DeviceBatteryPayloadPath $target 'engine\..\outside.txt'} 'alternate separators are rejected'

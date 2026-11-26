@@ -8,6 +8,7 @@ param(
             -not [Console]::IsInputRedirected -and -not ([Environment]::GetCommandLineArgs() -match '^-NonI')
     },
     [scriptblock]$ConfirmStopRunning={param($Message) Read-Host $Message},
+    [scriptblock]$PromptInstallDirectory={param($Message) Read-Host $Message},
     [scriptblock]$RequestExit={
         param($Executable)
         Start-Process -FilePath $Executable -ArgumentList '--exit' -WorkingDirectory (Split-Path -Parent $Executable) -WindowStyle Hidden
@@ -23,8 +24,23 @@ if(-not $StartupDirectory){$StartupDirectory=[Environment]::GetFolderPath('Start
 if(-not $ProgramsDirectory){$ProgramsDirectory=[Environment]::GetFolderPath('Programs')}
 if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
     $previous=Read-DeviceBatteryReceipt $data
-    $InstallDirectory=if($previous){$previous.InstallDirectory}else{
-        Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\MyFinderDeviceBattery'
+    if($previous) {
+        $InstallDirectory=$previous.InstallDirectory
+    } else {
+        $defaultDirectory=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\MyFinderDeviceBattery'
+        $InstallDirectory=$defaultDirectory
+        if($StopRunning -and (& $CanPrompt)) {
+            $chosen=$null
+            try { $chosen=& $PromptInstallDirectory ("安装目录 [直接回车使用默认路径: {0}]（也可输入自定义空目录，如 D:\MyFinderDeviceBattery）" -f $defaultDirectory) }
+            catch { $chosen=$null }
+            if(-not [string]::IsNullOrWhiteSpace($chosen)) {
+                $trimmed=$chosen.Trim()
+                if($trimmed.Length -ge 2 -and (($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'")))){
+                    $trimmed=$trimmed.Substring(1,$trimmed.Length-2).Trim()
+                }
+                if(-not [string]::IsNullOrWhiteSpace($trimmed)){ $InstallDirectory=$trimmed }
+            }
+        }
     }
 }
 if($StopRunning) {

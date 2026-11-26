@@ -224,6 +224,11 @@ static class ControlCenterTests {
                 Application.DoEvents();
                 Check(form.CurrentPage == page, "page switches cleanly to " + page);
             }
+            form.SelectPage(ControlCenterPage.Settings);
+            Application.DoEvents();
+            var installRow = form.Controls.Find("InstallLocationSettingRow", true);
+            var openDirBtn = form.Controls.Find("OpenInstallDirectoryButton", true);
+            Check(installRow.Length == 1 && openDirBtn.Length == 1, "settings page displays install location row and open directory button");
             form.Close();
             Application.DoEvents();
         }

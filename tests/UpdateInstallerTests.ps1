@@ -347,6 +347,108 @@ function Install-DeviceBattery {
     Assert ($forwarded.PreserveStartup -and $forwarded.InstallDirectory -ceq $target -and $forwarded.DataDirectory -ceq $data) 'real update helper and entry point forward preserve mode and exact paths'
     $ordinary=& (Join-Path $forwardScripts 'Install-Startup.ps1') -InstallDirectory $target -DataDirectory $data -StartupDirectory $startup -ProgramsDirectory $programs
     Assert (-not $ordinary.PreserveStartup) 'ordinary entry point defaults to the original install mode'
+    function Test-CustomInstallPathMigration {
+        $migRoot=Join-Path $fixture ('migration-'+[Guid]::NewGuid().ToString('N'))
+        $migOld=Join-Path $migRoot 'old install'
+        $migNew=Join-Path $migRoot (([string][char]0x4e2d)+[char]0x6587+' custom dir')
+        $migCleanOld=Join-Path $migRoot 'clean old'
+        $migCleanNew=Join-Path $migRoot 'clean new'
+        $migData=Join-Path $migRoot 'mig data'
+        $migStartup=Join-Path $migRoot 'mig startup'
+        $migPrograms=Join-Path $migRoot 'mig programs'
+        New-Item -ItemType Directory -Path $migData,$migStartup,$migPrograms -Force | Out-Null
+
+        $migInstall=@{SourceRoot=$old;InstallDirectory=$migOld;DataDirectory=$migData;StartupDirectory=$migStartup;ProgramsDirectory=$migPrograms}
+        $null=Install-DeviceBattery @migInstall
+        $oldExe=Join-Path $migOld 'outputs\AtkMouseBattery.exe'
+        $userNote=Join-Path $migOld 'user-notes.txt'
+        [IO.File]::WriteAllText($userNote,'keep user note')
+        $editedOwned=Join-Path $migOld 'LICENSE'
+        [IO.File]::WriteAllText($editedOwned,'user edited license')
+
+        $savedConfirm=${function:Confirm-DeviceBatteryUpdatePackage}
+        $savedInstaller=${function:Invoke-DeviceBatteryUpdateInstaller}
+        $savedWait=${function:Wait-DeviceBatteryUpdateParent}
+        $savedStart=${function:Start-DeviceBatteryUpdatedApp}
+        $script:migStarted=$null
+        try {
+            function Wait-DeviceBatteryUpdateParent([int]$ParentId,[string]$ParentStartUtc,[string]$Executable,[int]$TimeoutMilliseconds=60000){return $true}
+            function Confirm-DeviceBatteryUpdatePackage([string]$Executable,[string]$WorkDirectory,[string]$Version){return $candidate}
+            function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDirectory,[string]$DataDirectory){
+                $null=Install-DeviceBattery -SourceRoot $Package -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -StartupDirectory $migStartup -ProgramsDirectory $migPrograms -PreserveStartup
+            }
+            function Start-DeviceBatteryUpdatedApp([string]$Executable){$script:migStarted=$Executable}
+
+            function New-MigWork([string]$Version) {
+                $w=Join-Path $migData ('updates\'+$Version+'\run-'+[Guid]::NewGuid().ToString('N'))
+                New-Item -ItemType Directory -Path $w -Force | Out-Null
+                return $w
+            }
+
+            # 1) Reject nested / data-overlap / nonempty foreign targets without mutating old installation
+            $nonEmptyForeign=Join-Path $migRoot 'foreign nonempty'
+            New-Item -ItemType Directory -Path $nonEmptyForeign -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $nonEmptyForeign 'other.txt'),'foreign')
+            foreach($badTarget in @((Join-Path $migOld 'nested child'), (Join-Path $migData 'inside data'), $nonEmptyForeign, '\\server\share\myfinder')) {
+                $script:migStarted=$null
+                $null=Invoke-DeviceBatteryUpdate -Executable $oldExe -DataDirectory $migData -Version '1.3.6' -WorkDirectory (New-MigWork '1.3.6') -ParentId 999999 -ParentStartUtc '2026-01-01T00:00:00.0000000Z' -TargetInstallDirectory $badTarget
+                $res=Get-Content -LiteralPath (Join-Path $migData 'update-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+                Assert ($res.status -ceq 'failed' -and $null -eq $script:migStarted) ('migration rejects invalid target '+$badTarget)
+                Assert ([IO.Path]::GetFullPath((Read-DeviceBatteryReceipt $migData).InstallDirectory).TrimEnd([char]92) -ieq $migOld.TrimEnd([char]92)) ('rejected migration preserves old receipt for '+$badTarget)
+                Assert (Test-Path -LiteralPath $oldExe -PathType Leaf) ('rejected migration preserves old executable for '+$badTarget)
+            }
+
+            # 1b) If starting the migrated app fails, old receipt is restored and old files remain untouched
+            $migFailNew=Join-Path $migRoot 'launch-fail-new'
+            function Start-DeviceBatteryUpdatedApp([string]$Executable){throw 'simulated migrated launch failure'}
+            $null=Invoke-DeviceBatteryUpdate -Executable $oldExe -DataDirectory $migData -Version '1.3.6' -WorkDirectory (New-MigWork '1.3.6') -ParentId 999999 -ParentStartUtc '2026-01-01T00:00:00.0000000Z' -TargetInstallDirectory $migFailNew
+            $failRes=Get-Content -LiteralPath (Join-Path $migData 'update-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            $restoredReceipt=Read-DeviceBatteryReceipt $migData
+            Assert ($failRes.status -ceq 'failed' -and $restoredReceipt.Version -ceq '1.3.4' -and [IO.Path]::GetFullPath($restoredReceipt.InstallDirectory).TrimEnd([char]92) -ieq $migOld.TrimEnd([char]92)) 'migrated launch failure restores previous receipt'
+            Assert (Test-Path -LiteralPath $oldExe -PathType Leaf) 'migrated launch failure keeps old executable intact'
+            function Start-DeviceBatteryUpdatedApp([string]$Executable){$script:migStarted=$Executable}
+
+            # 2) Valid cross-directory migration with user files in old directory
+            $script:migStarted=$null
+            $null=Invoke-DeviceBatteryUpdate -Executable $oldExe -DataDirectory $migData -Version '1.3.6' -WorkDirectory (New-MigWork '1.3.6') -ParentId 999999 -ParentStartUtc '2026-01-01T00:00:00.0000000Z' -TargetInstallDirectory $migNew
+            $res=Get-Content -LiteralPath (Join-Path $migData 'update-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            $newExe=Join-Path $migNew 'outputs\AtkMouseBattery.exe'
+            $newReceipt=Read-DeviceBatteryReceipt $migData
+            Assert ($res.status -ceq 'success') ('cross-directory migration reports success (reason='+$res.reason+')')
+            Assert ($script:migStarted -ieq $newExe) 'cross-directory migration launches the new executable'
+            Assert ($newReceipt.Version -ceq '1.3.6' -and [IO.Path]::GetFullPath($newReceipt.InstallDirectory).TrimEnd([char]92) -ieq $migNew.TrimEnd([char]92)) 'receipt updates to migrated version and directory'
+            Assert (Test-Path -LiteralPath $newExe -PathType Leaf) 'migrated executable exists in new directory'
+            $shell=New-DeviceBatteryShortcutShell
+            $linkName=Get-DeviceBatteryShortcutName
+            Assert ($shell.CreateShortcut((Join-Path $migStartup $linkName)).TargetPath -ieq $newExe) 'startup shortcut retargets to migrated executable'
+            Assert ($shell.CreateShortcut((Join-Path $migPrograms $linkName)).TargetPath -ieq $newExe) 'programs shortcut retargets to migrated executable'
+            Assert (-not (Test-Path -LiteralPath $oldExe)) 'migration removes unmodified old owned executable'
+            Assert (-not (Test-Path -LiteralPath (Join-Path $migOld 'engine\server.py'))) 'migration removes unmodified old owned engine files'
+            Assert (-not (Test-Path -LiteralPath (Join-Path $migOld '.myfinder-device-battery-install.json'))) 'migration removes old ownership marker'
+            Assert ([IO.File]::ReadAllText($userNote) -ceq 'keep user note') 'migration preserves unknown user files in old directory'
+            Assert ([IO.File]::ReadAllText($editedOwned) -ceq 'user edited license') 'migration preserves user-modified files in old directory'
+
+            # 3) Clean old directory migration removes the empty old root completely
+            $migData2=Join-Path $migRoot 'mig data 2'
+            $migStartup2=Join-Path $migRoot 'mig startup 2'
+            $migPrograms2=Join-Path $migRoot 'mig programs 2'
+            New-Item -ItemType Directory -Path $migData2,$migStartup2,$migPrograms2 -Force | Out-Null
+            $null=Install-DeviceBattery -SourceRoot $old -InstallDirectory $migCleanOld -DataDirectory $migData2 -StartupDirectory $migStartup2 -ProgramsDirectory $migPrograms2
+            function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDirectory,[string]$DataDirectory){
+                $null=Install-DeviceBattery -SourceRoot $Package -InstallDirectory $InstallDirectory -DataDirectory $DataDirectory -StartupDirectory $migStartup2 -ProgramsDirectory $migPrograms2 -PreserveStartup
+            }
+            $w2=Join-Path $migData2 ('updates\1.3.6\run-'+[Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $w2 -Force | Out-Null
+            $null=Invoke-DeviceBatteryUpdate -Executable (Join-Path $migCleanOld 'outputs\AtkMouseBattery.exe') -DataDirectory $migData2 -Version '1.3.6' -WorkDirectory $w2 -ParentId 999999 -ParentStartUtc '2026-01-01T00:00:00.0000000Z' -TargetInstallDirectory $migCleanNew
+            Assert (-not (Test-Path -LiteralPath $migCleanOld)) 'clean old installation directory is removed once empty'
+            Assert (Test-Path -LiteralPath (Join-Path $migCleanNew 'outputs\AtkMouseBattery.exe') -PathType Leaf) 'clean migration installs into target directory'
+        } finally {
+            Set-Item Function:\Confirm-DeviceBatteryUpdatePackage $savedConfirm
+            Set-Item Function:\Invoke-DeviceBatteryUpdateInstaller $savedInstaller
+            Set-Item Function:\Wait-DeviceBatteryUpdateParent $savedWait
+            Set-Item Function:\Start-DeviceBatteryUpdatedApp $savedStart
+        }
+    }
     $regressionFailures=@()
     foreach($regression in @(
         {Test-ModuleIndependentHashes},
@@ -356,7 +458,8 @@ function Install-DeviceBattery {
         {Test-RecoveryRestart 'manifest'},
         {Test-RecoveryRestart 'receipt'},
         {Test-RecoveryRestart 'manifest' -LaunchFailure},
-        {Test-RecoveryRestart 'manifest' -ResultFailure}
+        {Test-RecoveryRestart 'manifest' -ResultFailure},
+        {Test-CustomInstallPathMigration}
     )) {
         try {& $regression}catch{$regressionFailures+=,$_.Exception.Message;Write-Output $_.Exception.Message}
     }

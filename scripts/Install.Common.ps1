@@ -174,10 +174,64 @@ function Get-DeviceBatteryStartupState([string]$StartupDirectory,[string]$Expect
     } catch {return [pscustomobject]@{Status='unknown';TargetExists=$false;ArgumentsValid=$false;Reason='Startup state could not be inspected.'}}
 }
 
-function Assert-DeviceBatteryInstallDirectory([string]$Path,[string]$SourceRoot,[string]$DataDirectory) {
-    if(-not [IO.Path]::IsPathRooted($Path)){throw 'The installation directory must be an absolute path.'}
+function Test-DeviceBatteryPathNested([string]$First,[string]$Second) {
+    if([string]::IsNullOrWhiteSpace($First) -or [string]::IsNullOrWhiteSpace($Second)){return $false}
+    $a=[IO.Path]::GetFullPath($First).TrimEnd([char]92,[char]47)
+    $b=[IO.Path]::GetFullPath($Second).TrimEnd([char]92,[char]47)
+    if($a -ieq $b){return $true}
+    $sep=[string][IO.Path]::DirectorySeparatorChar
+    return $a.StartsWith($b+$sep,[StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a+$sep,[StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-DeviceBatteryNoReparseAncestors([string]$Path) {
+    $full=[IO.Path]::GetFullPath($Path).TrimEnd([char]92,[char]47)
+    $root=[IO.Path]::GetPathRoot($full).TrimEnd([char]92,[char]47)
+    $cursor=$full
+    while(-not [string]::IsNullOrWhiteSpace($cursor)) {
+        if($cursor -ieq $root){break}
+        if(Test-Path -LiteralPath $cursor) {
+            $item=Get-Item -LiteralPath $cursor -Force
+            if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+                throw 'Linked installation paths are not supported.'
+            }
+        }
+        $parent=Split-Path -Parent $cursor
+        if([string]::IsNullOrWhiteSpace($parent) -or $parent -ieq $cursor){break}
+        $cursor=$parent.TrimEnd([char]92,[char]47)
+    }
+}
+
+function Test-DeviceBatteryDirectoryWritable([string]$TargetDirectory) {
+    $full=[IO.Path]::GetFullPath($TargetDirectory).TrimEnd([char]92,[char]47)
+    Assert-DeviceBatteryNoReparseAncestors $full
+    $probeDir=$full
+    while(-not (Test-Path -LiteralPath $probeDir)) {
+        $parent=Split-Path -Parent $probeDir
+        if([string]::IsNullOrWhiteSpace($parent) -or $parent -ieq $probeDir){throw 'The installation drive or parent directory does not exist.'}
+        $probeDir=$parent.TrimEnd([char]92,[char]47)
+    }
+    $item=Get-Item -LiteralPath $probeDir -Force
+    if(-not $item.PSIsContainer){throw 'The installation target must be a regular directory.'}
+    if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'Linked installation paths are not supported.'}
+    $probe=Join-Path $probeDir ('.myfinder-write-probe-'+[Guid]::NewGuid().ToString('N')+'.tmp')
+    try {
+        $stream=[IO.File]::Open($probe,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $stream.Dispose()
+    } catch {
+        throw ('The installation directory is not writable by the current user: '+$full)
+    } finally {
+        if(Test-Path -LiteralPath $probe -PathType Leaf){Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue}
+    }
+}
+
+function Assert-DeviceBatteryInstallDirectory([string]$Path,[string]$SourceRoot,[string]$DataDirectory,[string]$CurrentInstallDirectory='') {
+    if([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)){throw 'The installation directory must be an absolute path.'}
+    if($Path.StartsWith('\\') -or $Path -notmatch '^[A-Za-z]:[\\/]'){throw 'The installation directory must be a local drive path.'}
     $full=[IO.Path]::GetFullPath($Path).TrimEnd([char]92)
-    $forbidden=@([IO.Path]::GetPathRoot($full),$DataDirectory,
+    $driveRoot=[IO.Path]::GetPathRoot($full)
+    $drive=New-Object IO.DriveInfo($driveRoot)
+    if($drive.DriveType -ne [IO.DriveType]::Fixed){throw 'Choose a directory on a local fixed drive.'}
+    $forbidden=@($driveRoot,$DataDirectory,
         [Environment]::GetFolderPath('UserProfile'),[Environment]::GetFolderPath('LocalApplicationData'),
         [Environment]::GetFolderPath('Windows'),[Environment]::GetFolderPath('ProgramFiles'),
         [Environment]::GetFolderPath('ProgramFilesX86'))
@@ -186,6 +240,16 @@ function Assert-DeviceBatteryInstallDirectory([string]$Path,[string]$SourceRoot,
             throw 'Choose a separate application directory, not a system or data directory.'
         }
     }
+    if(Test-DeviceBatteryPathNested $full $DataDirectory) {
+        throw 'Choose an installation directory separate from the application data directory.'
+    }
+    if(-not [string]::IsNullOrWhiteSpace($CurrentInstallDirectory)) {
+        $currentFull=[IO.Path]::GetFullPath($CurrentInstallDirectory).TrimEnd([char]92)
+        if($full -ine $currentFull -and (Test-DeviceBatteryPathNested $full $currentFull)) {
+            throw 'The new installation directory cannot be inside or contain the current installation directory.'
+        }
+    }
+    Assert-DeviceBatteryNoReparseAncestors $full
     $null=Resolve-DeviceBatteryPayloadPath $full 'outputs/AtkMouseBattery.exe'
     if(Test-Path -LiteralPath $full) {
         if(-not (Get-Item -LiteralPath $full).PSIsContainer){throw 'The installation target must be a regular directory.'}
@@ -200,6 +264,112 @@ function Assert-DeviceBatteryInstallDirectory([string]$Path,[string]$SourceRoot,
         }
     }
     return $full
+}
+
+function Remove-DeviceBatteryMigratedInstallation([string]$OldInstallDirectory,$OldReceipt,[string]$NewInstallDirectory) {
+    $removed=0;$preserved=0;$warnings=New-Object 'System.Collections.Generic.List[string]'
+    if([string]::IsNullOrWhiteSpace($OldInstallDirectory) -or [string]::IsNullOrWhiteSpace($NewInstallDirectory) -or $null -eq $OldReceipt){
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=@()}
+    }
+    $oldFull=[IO.Path]::GetFullPath($OldInstallDirectory).TrimEnd([char]92)
+    $newFull=[IO.Path]::GetFullPath($NewInstallDirectory).TrimEnd([char]92)
+    if($oldFull -ieq $newFull -or (Test-DeviceBatteryPathNested $oldFull $newFull)){
+        $warnings.Add('Skipped old installation cleanup because paths overlap.')
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=$warnings.ToArray()}
+    }
+    if($OldReceipt.Schema -ne 2 -or [IO.Path]::GetFullPath([string]$OldReceipt.InstallDirectory).TrimEnd([char]92) -ine $oldFull){
+        $warnings.Add('Skipped old installation cleanup because the previous receipt was not versioned for this directory.')
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=$warnings.ToArray()}
+    }
+    if(-not (Test-Path -LiteralPath $oldFull -PathType Container)){
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=@()}
+    }
+    try { Assert-DeviceBatteryNoReparseAncestors $oldFull } catch {
+        $warnings.Add('Skipped old installation cleanup: '+$_.Exception.Message)
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=$warnings.ToArray()}
+    }
+    # Physical directory alias guard (protects against 8.3 short names, SUBST or mount aliases).
+    $aliasSentinelName='.myfinder-alias-check-'+[Guid]::NewGuid().ToString('N')+'.tmp'
+    $aliasSentinelNew=Join-Path $newFull $aliasSentinelName
+    $samePhysical=$false
+    try {
+        $s=[IO.File]::Open($aliasSentinelNew,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $s.Dispose()
+        if(Test-Path -LiteralPath (Join-Path $oldFull $aliasSentinelName) -PathType Leaf){ $samePhysical=$true }
+    } catch {
+        $warnings.Add('Skipped old installation cleanup because physical directory identity could not be verified.')
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=$warnings.ToArray()}
+    } finally {
+        if(Test-Path -LiteralPath $aliasSentinelNew -PathType Leaf){ Remove-Item -LiteralPath $aliasSentinelNew -Force -ErrorAction SilentlyContinue }
+    }
+    if($samePhysical){
+        $warnings.Add('Skipped old installation cleanup because old and new paths refer to the same physical directory.')
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=$warnings.ToArray()}
+    }
+    $marker=Join-Path $oldFull '.myfinder-device-battery-install.json'
+    if(-not (Test-Path -LiteralPath $marker -PathType Leaf)){
+        $warnings.Add('Skipped old installation cleanup because the ownership marker was missing.')
+        return [pscustomobject]@{RemovedCount=0;PreservedCount=0;Warnings=$warnings.ToArray()}
+    }
+    $failedOwned=0
+    $touchedDirs=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach($entry in @($OldReceipt.Files)) {
+        try {
+            $path=Resolve-DeviceBatteryPayloadPath $oldFull ([string]$entry.path)
+            if(-not (Test-Path -LiteralPath $path -PathType Leaf)){continue}
+            $fileItem=Get-Item -LiteralPath $path -Force
+            if(($fileItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){$preserved++;continue}
+            if((Get-DeviceBatteryFileHash $path) -ine [string]$entry.sha256){$preserved++;continue}
+            $deleted=$false
+            for($attempt=0;$attempt -lt 5;$attempt++) {
+                try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop; $deleted=$true; break }
+                catch {
+                    if($attempt -lt 4){ Start-Sleep -Milliseconds 100 }
+                    else { $warnings.Add('Could not remove old file '+$entry.path+': '+$_.Exception.Message) }
+                }
+            }
+            if($deleted) {
+                $removed++
+                $dir=Split-Path -Parent $path
+                while(-not [string]::IsNullOrWhiteSpace($dir) -and $dir.Length -gt $oldFull.Length) {
+                    $null=$touchedDirs.Add($dir)
+                    $dir=Split-Path -Parent $dir
+                }
+            } else { $failedOwned++; $preserved++ }
+        } catch {
+            $failedOwned++
+            $preserved++
+            $warnings.Add('Skipped old file '+$entry.path+': '+$_.Exception.Message)
+        }
+    }
+    if($failedOwned -eq 0) {
+        try {
+            $markerItem=Get-Item -LiteralPath $marker -Force
+            if(($markerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0){
+                Remove-Item -LiteralPath $marker -Force -ErrorAction Stop
+                $removed++
+            }
+        } catch {
+            $warnings.Add('Could not remove old installation marker: '+$_.Exception.Message)
+        }
+    } else {
+        $warnings.Add('Retained old installation marker because some owned files could not be removed.')
+    }
+    $orderedDirs=@($touchedDirs) | Sort-Object { $_.Length } -Descending
+    foreach($dir in $orderedDirs) {
+        try {
+            if(-not (Test-Path -LiteralPath $dir -PathType Container)){continue}
+            $dirItem=Get-Item -LiteralPath $dir -Force
+            if(($dirItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){continue}
+            if(@(Get-ChildItem -LiteralPath $dir -Force).Count -eq 0){Remove-Item -LiteralPath $dir -Force -ErrorAction Stop}
+        } catch {}
+    }
+    try {
+        if((Test-Path -LiteralPath $oldFull -PathType Container) -and (((Get-Item -LiteralPath $oldFull -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0)) {
+            if(@(Get-ChildItem -LiteralPath $oldFull -Force).Count -eq 0){Remove-Item -LiteralPath $oldFull -Force -ErrorAction Stop}
+        }
+    } catch {}
+    return [pscustomobject]@{RemovedCount=$removed;PreservedCount=$preserved;Warnings=$warnings.ToArray()}
 }
 
 function Get-DeviceBatteryOwnedProcesses([string]$InstallDirectory) {
