@@ -94,7 +94,7 @@ namespace AtkBattery {
                 case SupplementKind.TooLarge:return "补充内容过长，请缩短描述或取消附带诊断信息。";
                 case SupplementKind.LocalFailure:return "无法保存本地记录，请稍后重试。";
                 case SupplementKind.Busy:return "正在处理，请稍后重试。";
-                case SupplementKind.ImagesUnavailable:return "当前反馈服务暂未开启图片上传，请先移除图片后再提交。";
+                case SupplementKind.ImagesUnavailable:return "当前图片上传暂时不可用（可能已达本月限额或维护中），请先移除图片后再提交。";
                 default:return "正在确认，请稍后重试";
             }
         }}
