@@ -395,6 +395,14 @@ def discover(paths, excluded=(), *, full=False):
                     sizes = byte_report_sizes(hid, data, caps, 2)
                     info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
                     caps_complete = caps.feature == 65 and sizes == {"0": 65}
+            if caps_complete and attrs.vendor == 0x391D and (caps.page, caps.usage) == (0xFFC1, 0x0001):
+                from providers.vgn_kc2 import matches_collection
+                if matches_collection(info):
+                    from battery_hid import battery_caps
+                    info.update(battery_caps(hid, data, caps))
+                    _descriptor_fallback(info, caps, ("input", "output"))
+                    caps_complete = all(info.get(k) is not None
+                                        for k in ("input_report_sizes", "output_report_sizes"))
             # The two keyboard protocols require proof of report IDs as well as
             # capacity. Inspect only their exact identity/collection; no I/O.
             if caps_complete and attrs.vendor == 0x3837 and (

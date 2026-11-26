@@ -4730,3 +4730,12 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - **XIBERIA K03S Wireless 7.1 (`36F9:C001`, `#1035`, Grade D `observedUnsupported`)**:
   - Hardware testing on `1.4.0-beta.6` & `1.4.1-beta.1` and owner verification against official `XIBERIA X HUB` both confirmed no PC battery support; removed `36F9:C001` from `engine/families/builtin/xiberia.json` and recorded Grade D `observedUnsupported` in `engine/compatibility.json`.
 
+### VGN kc2 Mouse Receivers
+
+- **Scope (`391D` 2.4 GHz receivers, Grade C)**:
+  - Official VGN HUB bundle (`.ai/evidence/vgnhub/index-ZngoA_qG.js`, `customDeviceType: "vgn-kc2"`, `serveProvider: "kcMs2"`, `class mr`) maps nine wireless `0x391D` receivers exposing `FFC1:0001` (`65473:1`): `1A20` (`Dragonfly 3 Turbo`, `#856`, `mi_01`), `1A21` (`Dragonfly 3 Turbo+`, `#1153`, `mi_01`), `1A22` (`Dragonfly F1 V5 Turbo 2.4G`, `mi_01`), `1A23` (`Dragonfly F1 V5 Turbo+ 2.4G`, `mi_01`), `1A35` (`Dragonfly 3 MINI Turbo`, `mi_01`), `1A36` (`Dragonfly 3 MINI Turbo+`, `mi_01`), `1A3B` (`Dragonfly F1 V5 Air Turbo 2.4G`, `mi_01`), `1A3C` (`Dragonfly F1 V5 Air Turbo+ 2.4G`, `mi_01`), and `1A3E` (`Dragonfly 3 RT+`, `mi_02`).
+- **Descriptor & Wire Protocol**:
+  - Live `#856` 68-byte HID descriptor on `391D:1A20` interface 1 (`FFC1:0001`) proves Input `0xB4` (64 bytes incl. ID) & `0xB6` (21 bytes) and Output `0xB3` (64 bytes incl. ID) & `0xB5` (21 bytes), with no Feature reports.
+  - `getDeviceInfo()` sends Output report `0xB3` (`179`), 63-byte payload `[0x06, 0x00 * 62]` (`64` bytes on wire). Reply on Input report `0xB4` (`180`) starts `B4 06` (`64` bytes); `battery = raw[20] & 0x7F` (`127 & e[19]` in WebHID payload), confirmed by `#856` live capture (`b406...3f...` = `63%`).
+  - `0%` is treated as asleep/unready placeholder (`no_reading_reply`); `>100%` and wrong ID/command/length are ignored; `0xB5`/`0xB6` and DPI/config/DFU commands are never sent; charging is unknown (`charging_known = False`). Note `#1153` shows VGN VHUB `69%` on `391D:1A21`. [VGN HUB source evidence](.ai/evidence/vgnhub/index-ZngoA_qG.js) · [Issue #856](https://github.com/wushuai0802/myfinder-device-battery/issues/856) · [Issue #1153](https://github.com/wushuai0802/myfinder-device-battery/issues/1153)
+
