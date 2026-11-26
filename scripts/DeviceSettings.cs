@@ -143,6 +143,7 @@ namespace AtkBattery {
         [DataMember(Order=34, EmitDefaultValue=false)] public LocalApiSettings LocalApi = new LocalApiSettings();
         [DataMember(Order=35, EmitDefaultValue=false)] public TaskbarOverlaySettings TaskbarOverlay = new TaskbarOverlaySettings();
         [DataMember(Order=36, EmitDefaultValue=false)] public bool HideTrayIcon;
+        [DataMember(Order=37, EmitDefaultValue=false)] public string UpdateInstallDirectory;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;AutoDetectMoreDevices=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
@@ -170,6 +171,7 @@ namespace AtkBattery {
             copy.LocalApi=LocalApi==null?new LocalApiSettings():LocalApi.Clone();
             copy.TaskbarOverlay=TaskbarOverlay==null?new TaskbarOverlaySettings():TaskbarOverlay.Clone();
             copy.HideTrayIcon=HideTrayIcon;
+            copy.UpdateInstallDirectory=UpdateInstallDirectory;
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
         }
@@ -299,6 +301,11 @@ namespace AtkBattery {
             if(settings.TaskbarOverlay==null)settings.TaskbarOverlay=new TaskbarOverlaySettings();
             settings.TaskbarOverlay.Normalize();
             if(settings.HideTrayIcon&&!settings.DesktopWidget.Enabled&&!settings.TaskbarOverlay.Enabled)settings.HideTrayIcon=false;
+            settings.UpdateInstallDirectory=String.IsNullOrWhiteSpace(settings.UpdateInstallDirectory)?null:settings.UpdateInstallDirectory.Trim();
+            if(settings.UpdateInstallDirectory!=null) {
+                if(settings.UpdateInstallDirectory.Length>240)throw new InvalidDataException("Invalid update install directory");
+                foreach(char c in settings.UpdateInstallDirectory)if(Char.IsControl(c))throw new InvalidDataException("Invalid update install directory");
+            }
         }
         static void ValidateDeviceIds(List<string> ids) {
             if(ids.Count>128)throw new InvalidDataException("Too many device identifiers");
@@ -337,6 +344,7 @@ namespace AtkBattery {
                 while(document.DocumentElement["PanelLayout"]!=null&&document.DocumentElement["PanelLayout"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["PanelLayout"]);
                 while(document.DocumentElement["AutoDetectMoreDevices"]!=null&&document.DocumentElement["AutoDetectMoreDevices"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["AutoDetectMoreDevices"]);
                 while(document.DocumentElement["HideTrayIcon"]!=null&&document.DocumentElement["HideTrayIcon"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["HideTrayIcon"]);
+                while(document.DocumentElement["UpdateInstallDirectory"]!=null&&document.DocumentElement["UpdateInstallDirectory"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["UpdateInstallDirectory"]);
                 var fields=new AudioBindings();TrayConfiguration.ReadFields(document.DocumentElement,fields);
                 AudioBindings settings;
                 using(var reader=new XmlNodeReader(document))settings=serializer.ReadObject(reader) as AudioBindings;

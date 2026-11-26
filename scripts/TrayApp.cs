@@ -908,6 +908,19 @@ namespace AtkBatteryTray {
         internal string UpdateStatus {get{return updates==null?"尚未检查":updates.Status;}}
         internal string UpdateFailure {get{return updates==null?null:updates.LastFailure;}}
         internal bool UpdateAvailable {get{return updates!=null&&updates.Available;}}
+        internal string CurrentInstallDirectory {
+            get {
+                if(updates!=null)return updates.CurrentInstallDirectory;
+                string exe=Path.GetFullPath(Application.ExecutablePath);
+                string parent=Path.GetDirectoryName(exe);
+                return String.IsNullOrEmpty(parent)?exe:(Path.GetDirectoryName(parent)??parent);
+            }
+        }
+        internal bool IsStableInstalled {get{return updates!=null&&updates.IsStableInstalledQuick;}}
+        internal bool TryValidateInstallDirectory(string candidate,out string normalized,out string error){
+            if(updates!=null)return updates.TryValidateInstallDirectory(candidate,out normalized,out error);
+            return UpdateInstallPaths.TryValidateTarget(candidate,CurrentInstallDirectory,DeviceSettings.DataDirectory,out normalized,out error,true);
+        }
         internal Color UpdateDotColor {get;private set;}
         internal void OpenUpdate(){if(updates!=null)updates.Open();}
         internal void CheckUpdates(){if(devicePackChecks!=null)devicePackChecks.Check(false);if(updates!=null)updates.Check(false);}

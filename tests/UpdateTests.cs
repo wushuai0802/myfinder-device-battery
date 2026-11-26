@@ -321,6 +321,71 @@ static class UpdateTests {
         if(corruptSums)sums[0]=(byte)(sums[0]=='a'?'b':'a');if(corruptZip)zip=new byte[]{1,2,3};
         http.Bytes(sums);if(absentSignature)http.Reply("missing",404);else http.Bytes(sig);http.Bytes(zip);
     }
+    static void CustomInstallPathValidationAndUi(string root){
+        string current=Path.Combine(root,"current-app");
+        string data=Path.Combine(root,"app-data");
+        string emptyCustom=Path.Combine(root,"custom 中文 target");
+        string freshCustom=Path.Combine(root,"fresh-new-dir");
+        string foreignNonEmpty=Path.Combine(root,"foreign-dir");
+        string markerDir=Path.Combine(root,"marked-dir");
+        string fileCollision=Path.Combine(root,"not-a-dir.txt");
+        Directory.CreateDirectory(current);Directory.CreateDirectory(data);Directory.CreateDirectory(emptyCustom);Directory.CreateDirectory(foreignNonEmpty);Directory.CreateDirectory(markerDir);
+        File.WriteAllText(Path.Combine(foreignNonEmpty,"keep.txt"),"user");
+        File.WriteAllText(fileCollision,"file");
+        File.WriteAllText(Path.Combine(markerDir,".myfinder-device-battery-install.json"),"{\"AppId\":\"myfinder-device-battery\",\"Schema\":2,\"InstallDirectory\":\""+markerDir.Replace("\\","\\\\")+"\"}");
+
+        string normalized,err;
+        Check(UpdateInstallPaths.TryValidateTarget(emptyCustom,current,data,out normalized,out err,true)&&normalized.Equals(emptyCustom,StringComparison.OrdinalIgnoreCase),"empty local directory is valid");
+        Check(UpdateInstallPaths.TryValidateTarget(freshCustom,current,data,out normalized,out err,true)&&normalized.Equals(freshCustom,StringComparison.OrdinalIgnoreCase),"new local directory under writable parent is valid");
+        Check(UpdateInstallPaths.TryValidateTarget(markerDir,current,data,out normalized,out err,true),"directory with valid ownership marker is valid");
+        Check(UpdateInstallPaths.TryValidateTarget(current,current,data,out normalized,out err,true),"current directory itself remains valid for in-place updates");
+        Check(!UpdateInstallPaths.TryValidateTarget("relative\\path",current,data,out normalized,out err,true)&&!String.IsNullOrEmpty(err),"relative path rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(@"\\server\share\app",current,data,out normalized,out err,true)&&!String.IsNullOrEmpty(err),"UNC path rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(Path.GetPathRoot(root),current,data,out normalized,out err,true)&&!String.IsNullOrEmpty(err),"drive root rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(Environment.GetFolderPath(Environment.SpecialFolder.Windows),current,data,out normalized,out err,true),"Windows system directory rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(Path.Combine(data,"sub"),current,data,out normalized,out err,true),"directory nested inside data directory rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(Path.Combine(current,"child"),current,data,out normalized,out err,true),"directory nested inside current install rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(root,current,data,out normalized,out err,true),"parent directory containing current install rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(foreignNonEmpty,current,data,out normalized,out err,true),"non-empty foreign directory rejected");
+        Check(!UpdateInstallPaths.TryValidateTarget(fileCollision,current,data,out normalized,out err,true),"file path collision rejected");
+
+        string nextPick=foreignNonEmpty;
+        string notifiedDir=null;
+        using(var dialog=new UpdateDialog(Release("1.4.2"),true,false,current,current,delegate{return nextPick;},delegate(string c){string n,e;return UpdateInstallPaths.TryValidateTarget(c,current,data,out n,out e,true)?null:e;})){
+            dialog.InstallDirectoryChanged+=delegate(string d){notifiedDir=d;};
+            var locCard=dialog.Controls.Find("InstallLocationCard",true).SingleOrDefault();
+            var locPath=dialog.Controls.Find("InstallLocationPath",true).SingleOrDefault() as Label;
+            var changeBtn=dialog.Controls.Find("ChangeInstallLocation",true).SingleOrDefault() as Button;
+            var statusLbl=dialog.Controls.Find("UpdateStatus",true).SingleOrDefault() as Label;
+            Check(locCard!=null&&locPath!=null&&changeBtn!=null&&statusLbl!=null,"stable update dialog renders install location controls");
+            Check(dialog.SelectedInstallDirectory==current&&locPath.Text==current,"initial install location matches current directory");
+            dialog.Opacity=0;dialog.ShowInTaskbar=false;dialog.Show();Application.DoEvents();
+            changeBtn.PerformClick();Application.DoEvents();
+            Check(dialog.SelectedInstallDirectory==current&&notifiedDir==null&&statusLbl.Text.Contains("空目录"),"invalid directory selection shows error and keeps prior location");
+            nextPick=freshCustom;
+            changeBtn.PerformClick();Application.DoEvents();
+            Check(dialog.SelectedInstallDirectory==freshCustom&&notifiedDir==freshCustom&&locPath.Text==freshCustom&&statusLbl.Text.Contains("迁移"),"valid directory selection updates location and triggers callback");
+            dialog.Downloading();Application.DoEvents();
+            Check(!changeBtn.Enabled,"change location button disables during download");
+            dialog.Handoff();Application.DoEvents();
+            Check(!changeBtn.Enabled&&statusLbl.Text.Contains("迁移"),"handoff keeps button disabled and mentions migration");
+            dialog.Finished("已取消更新。");Application.DoEvents();
+            Check(changeBtn.Enabled,"change location button re-enables after cancellation");
+            dialog.Close();
+        }
+        using(var portableDialog=new UpdateDialog(Release("1.4.2"),false,false,current,current,null,null)){
+            Check(portableDialog.Controls.Find("InstallLocationCard",true).Length==0,"portable update dialog keeps zero-intrusion layout without install location card");
+        }
+
+        string prefFile=Path.Combine(root,"pref-custom-path.json");
+        var bindings=new AudioBindings {UpdateInstallDirectory=freshCustom};
+        DeviceSettings.SaveBindings(prefFile,bindings);
+        var loaded=DeviceSettings.LoadBindings(prefFile);
+        Check(loaded.UpdateInstallDirectory==freshCustom,"UpdateInstallDirectory round-trips in audio-settings.json");
+        File.WriteAllText(prefFile,"{\"SchemaVersion\":1,\"Theme\":\"dark\",\"UpdateInstallDirectory\":123}");
+        var sanitized=DeviceSettings.LoadBindings(prefFile);
+        Check(sanitized.Theme=="dark"&&sanitized.UpdateInstallDirectory==null,"malformed UpdateInstallDirectory type is dropped without discarding other settings");
+    }
     [STAThread] static int Main(string[] args){
         string root=Path.Combine(Path.GetFullPath(args[0]),"update-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try {
@@ -464,6 +529,7 @@ static class UpdateTests {
             File.WriteAllText(Path.Combine(portableData,"install.json"),receiptV2,new UTF8Encoding(true));
             Check(new UpdateProcess(portableExe,portableData).IsStable(CancellationToken.None),"stable decision reuses real installer with BOM and case-insensitive receipt");
             PlainReleaseNotes();
+            CustomInstallPathValidationAndUi(root);
             using(var dialog=new UpdateDialog(Release("1.3.6"),true)){
                 var notes=dialog.Controls.Find("ReleaseNotes",true).Single() as TextBoxBase;Check(notes!=null&&notes.ReadOnly&&notes.Multiline&&notes.Text.Contains("<script>bad()</script>"),"malicious release notes shown as literal text by a native edit control");
                 dialog.Opacity=0;dialog.ShowInTaskbar=false;dialog.Show();Application.DoEvents();

@@ -211,4 +211,131 @@ namespace AtkBattery {
             seen.Add("package-manifest.json");foreach(string file in Directory.GetFiles(directory,"*",SearchOption.AllDirectories))if(!seen.Contains(file.Substring(directory.TrimEnd('\\','/').Length+1).Replace('\\','/')))throw new InvalidDataException("Unlisted update payload.");
         }
     }
+
+    internal static class UpdateInstallPaths {
+        internal static string Normalize(string path) {
+            if(String.IsNullOrWhiteSpace(path))return null;
+            string trimmed=path.Trim();
+            if(trimmed.Length>=2&&((trimmed[0]=='"'&&trimmed[trimmed.Length-1]=='"')||(trimmed[0]=='\''&&trimmed[trimmed.Length-1]=='\'')))trimmed=trimmed.Substring(1,trimmed.Length-2).Trim();
+            if(trimmed.Length==0||trimmed.Length>240)return null;
+            foreach(char c in trimmed)if(Char.IsControl(c))return null;
+            if(trimmed.StartsWith(@"\\",StringComparison.Ordinal)||!Regex.IsMatch(trimmed,@"\A[A-Za-z]:[\\/]"))return null;
+            try { return Path.GetFullPath(trimmed).TrimEnd('\\','/'); }
+            catch(Exception) { return null; }
+        }
+        internal static bool IsSameDirectory(string first,string second) {
+            string a=Normalize(first),b=Normalize(second);
+            return a!=null&&b!=null&&String.Equals(a,b,StringComparison.OrdinalIgnoreCase);
+        }
+        internal static bool IsNested(string first,string second) {
+            string a=Normalize(first),b=Normalize(second);
+            if(a==null||b==null)return false;
+            if(String.Equals(a,b,StringComparison.OrdinalIgnoreCase))return true;
+            string sep=Path.DirectorySeparatorChar.ToString();
+            return a.StartsWith(b+sep,StringComparison.OrdinalIgnoreCase)||b.StartsWith(a+sep,StringComparison.OrdinalIgnoreCase);
+        }
+        static bool HasReparseAncestor(string fullPath) {
+            string root=(Path.GetPathRoot(fullPath)??"").TrimEnd('\\','/');
+            string cursor=fullPath.TrimEnd('\\','/');
+            while(!String.IsNullOrEmpty(cursor)) {
+                if(String.Equals(cursor,root,StringComparison.OrdinalIgnoreCase))break;
+                if((Directory.Exists(cursor)||File.Exists(cursor))&&(File.GetAttributes(cursor)&FileAttributes.ReparsePoint)!=0)return true;
+                string parent=Path.GetDirectoryName(cursor);
+                if(String.IsNullOrEmpty(parent)||String.Equals(parent,cursor,StringComparison.OrdinalIgnoreCase))break;
+                cursor=parent.TrimEnd('\\','/');
+            }
+            return false;
+        }
+        static bool HasValidOwnershipMarker(string directory) {
+            string marker=Path.Combine(directory,".myfinder-device-battery-install.json");
+            if(!File.Exists(marker))return false;
+            try {
+                if((File.GetAttributes(marker)&FileAttributes.ReparsePoint)!=0)return false;
+                var properties=UpdateJson.Read<Dictionary<string,object>>(UpdateJson.ReadBytes(marker,2097152),true);
+                string appId=null,location=null;int schema=0;
+                foreach(var pair in properties) {
+                    if(pair.Key.Equals("AppId",StringComparison.OrdinalIgnoreCase))appId=pair.Value as string;
+                    else if(pair.Key.Equals("InstallDirectory",StringComparison.OrdinalIgnoreCase))location=pair.Value as string;
+                    else if(pair.Key.Equals("Schema",StringComparison.OrdinalIgnoreCase)&&pair.Value!=null)Int32.TryParse(Convert.ToString(pair.Value,CultureInfo.InvariantCulture),NumberStyles.Integer,CultureInfo.InvariantCulture,out schema);
+                }
+                return String.Equals(appId,UpdateTrust.AppId,StringComparison.Ordinal)&&(schema==1||schema==2)&&IsSameDirectory(location,directory);
+            } catch(Exception) { return false; }
+        }
+        static bool CheckWritable(string fullPath,out string error) {
+            error=null;
+            string probeDir=fullPath;
+            while(!Directory.Exists(probeDir)) {
+                if(File.Exists(probeDir)){error="目标路径的父路径不是文件夹，请选择有效目录。";return false;}
+                string parent=Path.GetDirectoryName(probeDir);
+                if(String.IsNullOrEmpty(parent)||String.Equals(parent,probeDir,StringComparison.OrdinalIgnoreCase)){error="目标磁盘或上级目录不存在。";return false;}
+                probeDir=parent;
+            }
+            if(HasReparseAncestor(probeDir)){error="不支持包含符号链接或目录联接的路径。";return false;}
+            string probe=Path.Combine(probeDir,".myfinder-write-probe-"+Guid.NewGuid().ToString("N")+".tmp");
+            try {
+                using(new FileStream(probe,FileMode.CreateNew,FileAccess.Write,FileShare.None)){}
+                return true;
+            } catch(Exception) {
+                error="当前用户对该目录没有写入权限，请选择其他可写目录（勿选需管理员权限的目录）。";
+                return false;
+            } finally {
+                try { if(File.Exists(probe))File.Delete(probe); } catch(Exception) {}
+            }
+        }
+        internal static bool TryValidateTarget(string candidate,string currentInstallDirectory,string dataDirectory,out string normalized,out string error,bool checkWritable=true) {
+            normalized=null;error=null;
+            if(String.IsNullOrWhiteSpace(candidate)){error="安装路径不能为空。";return false;}
+            string full=Normalize(candidate);
+            if(full==null){error="请选择本地磁盘上的绝对路径（不支持相对路径、网络路径或过长路径）。";return false;}
+            string driveRoot=Path.GetPathRoot(full);
+            try {
+                var drive=new DriveInfo(driveRoot);
+                if(drive.DriveType!=DriveType.Fixed){error="请选择本地固定磁盘上的目录（不支持网络盘或只读介质）。";return false;}
+            } catch(Exception) { error="目标磁盘不可访问，请选择本地固定磁盘上的目录。";return false; }
+            string[] forbidden={
+                driveRoot,dataDirectory,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+            };
+            foreach(string item in forbidden) {
+                if(!String.IsNullOrWhiteSpace(item)&&String.Equals(full,item.TrimEnd('\\','/'),StringComparison.OrdinalIgnoreCase)) {
+                    error="不能直接选择磁盘根目录、系统目录或程序数据目录，请新建独立子文件夹。";
+                    return false;
+                }
+            }
+            if(!String.IsNullOrWhiteSpace(dataDirectory)&&IsNested(full,dataDirectory)) {
+                error="安装目录不能与程序数据目录相同或互相包含。";
+                return false;
+            }
+            string currentFull=Normalize(currentInstallDirectory);
+            if(currentFull!=null&&!String.Equals(full,currentFull,StringComparison.OrdinalIgnoreCase)&&IsNested(full,currentFull)) {
+                error="新安装目录不能位于当前安装目录内部或包含当前安装目录。";
+                return false;
+            }
+            if(HasReparseAncestor(full)){error="不支持包含符号链接或目录联接的路径。";return false;}
+            if(File.Exists(full)){error="目标路径已被同名文件占用，请选择文件夹。";return false;}
+            try { UpdatePaths.Resolve(full,"outputs/AtkMouseBattery.exe"); }
+            catch(Exception) { error="目标路径包含无效目录名或受限符号链接，请重新选择。";return false; }
+            if(Directory.Exists(full)) {
+                bool hasEntries;
+                try { hasEntries=Directory.EnumerateFileSystemEntries(full).Any(); }
+                catch(Exception) { error="无法读取目标目录内容，请检查目录权限。";return false; }
+                if(hasEntries&&!HasValidOwnershipMarker(full)) {
+                    error="目标目录已有其他文件，请新建或选择一个空目录。";
+                    return false;
+                }
+            }
+            if(checkWritable&&!CheckWritable(full,out error))return false;
+            normalized=full;
+            return true;
+        }
+        internal static string ValidateTargetOrThrow(string candidate,string currentInstallDirectory,string dataDirectory,bool checkWritable=true) {
+            string normalized,error;
+            if(!TryValidateTarget(candidate,currentInstallDirectory,dataDirectory,out normalized,out error,checkWritable))throw new InvalidDataException(error);
+            return normalized;
+        }
+    }
 }

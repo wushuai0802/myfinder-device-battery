@@ -58,7 +58,12 @@ function Invoke-DeviceBatteryUpdateInstaller([string]$Package,[string]$InstallDi
 }
 
 function Start-DeviceBatteryUpdatedApp([string]$Executable) {
-    $null=Start-Process -FilePath $Executable -ArgumentList '--show-updated' -WorkingDirectory (Split-Path -Parent $Executable) -PassThru
+    $proc=Start-Process -FilePath $Executable -ArgumentList '--show-updated' -WorkingDirectory (Split-Path -Parent $Executable) -PassThru -ErrorAction Stop
+    try {
+        if($proc -and $proc.WaitForExit(150) -and $proc.ExitCode -ne 0) {
+            throw ('The updated application exited unexpectedly with code '+$proc.ExitCode+'.')
+        }
+    } finally { if($proc){ $proc.Dispose() } }
 }
 
 function Write-DeviceBatteryUpdateResult([string]$DataDirectory,[string]$Status,[string]$Version,[string]$Reason) {
@@ -102,22 +107,61 @@ function Remove-DeviceBatteryUpdateWork([string]$WorkDirectory) {
 }
 
 function Invoke-DeviceBatteryUpdate {
-    param([string]$Executable,[string]$DataDirectory,[string]$Version,[string]$WorkDirectory,[int]$ParentId,[string]$ParentStartUtc)
+    param([string]$Executable,[string]$DataDirectory,[string]$Version,[string]$WorkDirectory,[int]$ParentId,[string]$ParentStartUtc,[string]$TargetInstallDirectory='')
     $work=Assert-DeviceBatteryUpdateWork $DataDirectory $WorkDirectory $Version
-    $installDirectory=Split-Path -Parent (Split-Path -Parent ([IO.Path]::GetFullPath($Executable)))
+    $installDirectory=(Split-Path -Parent (Split-Path -Parent ([IO.Path]::GetFullPath($Executable)))).TrimEnd([char]92)
+    $targetDirectory=$installDirectory
+    $migrating=$false
     $stopped=$false
+    $installerApplied=$false
+    $oldReceiptPath=Join-Path $DataDirectory 'install.json'
+    $oldReceiptRaw=$null
     try {
         if(-not (Test-DeviceBatteryUpdateInstallation $Executable $DataDirectory)){throw 'The running copy is not the recorded stable installation.'}
         if(-not (Wait-DeviceBatteryUpdateParent $ParentId $ParentStartUtc $Executable)){throw 'Timed out waiting for the application to exit normally; no installation was attempted.'}
         $stopped=$true
         if(-not (Test-DeviceBatteryUpdateInstallation $Executable $DataDirectory)){throw 'The stable installation changed while waiting.'}
+        $oldReceipt=Read-DeviceBatteryReceipt $DataDirectory
+        if(Test-Path -LiteralPath $oldReceiptPath -PathType Leaf){$oldReceiptRaw=[IO.File]::ReadAllText($oldReceiptPath,(New-Object Text.UTF8Encoding($false)))}
+        if(-not [string]::IsNullOrWhiteSpace($TargetInstallDirectory)) {
+            if(-not [IO.Path]::IsPathRooted($TargetInstallDirectory) -or $TargetInstallDirectory.StartsWith('\\') -or $TargetInstallDirectory -notmatch '^[A-Za-z]:[\\/]'){
+                throw 'The target installation directory must be a local drive path.'
+            }
+            $targetDirectory=[IO.Path]::GetFullPath($TargetInstallDirectory).TrimEnd([char]92)
+        }
+        $migrating=$targetDirectory -ine $installDirectory
+        if($migrating) {
+            $targetDirectory=Assert-DeviceBatteryInstallDirectory $targetDirectory $installDirectory $DataDirectory -CurrentInstallDirectory $installDirectory
+            Test-DeviceBatteryDirectoryWritable $targetDirectory
+        }
         $package=Confirm-DeviceBatteryUpdatePackage $Executable $work $Version
-        $null=Invoke-DeviceBatteryUpdateInstaller $package $installDirectory $DataDirectory
-        if((Read-DeviceBatteryReceipt $DataDirectory).Version -cne $Version){throw 'The installer did not record the expected version.'}
+        $null=Invoke-DeviceBatteryUpdateInstaller $package $targetDirectory $DataDirectory
+        $installerApplied=$true
+        $newReceipt=Read-DeviceBatteryReceipt $DataDirectory
+        if(-not $newReceipt -or $newReceipt.Version -cne $Version -or [IO.Path]::GetFullPath([string]$newReceipt.InstallDirectory).TrimEnd([char]92) -ine $targetDirectory){
+            throw 'The installer did not record the expected version or installation directory.'
+        }
+        $targetExecutable=Join-Path $targetDirectory 'outputs\AtkMouseBattery.exe'
+        if(-not (Test-Path -LiteralPath $targetExecutable -PathType Leaf)){throw 'The updated application executable is missing.'}
+        Start-DeviceBatteryUpdatedApp $targetExecutable
         Write-DeviceBatteryUpdateResult $DataDirectory 'success' $Version ''
-        Start-DeviceBatteryUpdatedApp $Executable
+        if($migrating) {
+            try {
+                $cleanup=Remove-DeviceBatteryMigratedInstallation $installDirectory $oldReceipt $targetDirectory
+                if($cleanup -and @($cleanup.Warnings).Count -gt 0) {
+                    $log=Join-Path $DataDirectory 'update.log'
+                    $note=[DateTime]::UtcNow.ToString('o')+' cleanup '+$Version+' '+((@($cleanup.Warnings) -join '; ') -replace '[\r\n]',' ')+[Environment]::NewLine
+                    [IO.File]::AppendAllText($log,$note,(New-Object Text.UTF8Encoding($false)))
+                }
+            } catch {}
+        }
     }catch {
         $reason=$_.Exception.Message
+        if($migrating -and $installerApplied -and $null -ne $oldReceiptRaw -and (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+            try {
+                [IO.File]::WriteAllText($oldReceiptPath,$oldReceiptRaw,(New-Object Text.UTF8Encoding($false)))
+            } catch {}
+        }
         try {
             Write-DeviceBatteryUpdateResult $DataDirectory 'failed' $Version $reason
         }finally{
