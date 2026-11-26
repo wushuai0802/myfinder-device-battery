@@ -13,6 +13,7 @@ PIDS = {
     (0x258A, 0x024F): "VGN V98 Pro V3 2.4G receiver",
     (0x258A, 0x027F): "VGN V98 Pro V3 2.4G receiver",
     (0x258A, 0x027B): "VGN V87 V2 2.4G receiver",
+    (0x258A, 0x01BB): "2.4G 无线键盘（258A:01BB）",
     (0x391D, 0x2A01): "VGN N75 V2 2.4G receiver",
     (0x391D, 0x2A02): "VGN V108 2.4G receiver",
 }

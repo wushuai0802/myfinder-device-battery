@@ -584,6 +584,7 @@ def discover(paths, excluded=(), *, full=False):
                     (0x258A, 0x024F, 0xFF02, 0x0002),
                     (0x258A, 0x027F, 0xFF02, 0x0002),
                     (0x258A, 0x027B, 0xFF02, 0x0002),
+                    (0x258A, 0x01BB, 0xFF02, 0x0002),
                     (0x391D, 0x2A01, 0xFF02, 0x0002),
                     (0x391D, 0x2A02, 0xFF02, 0x0002)):
                 from battery_hid import battery_caps
@@ -689,8 +690,13 @@ def discover(paths, excluded=(), *, full=False):
                     _descriptor_fallback(info, caps, ("input",))
                 else:
                     info["input_report_proof"] = "caps"
-                caps_complete = bool(info["input_report_sizes"]
-                                     and info["input_report_sizes"].get("3", 0) >= 5)
+                caps_complete = bool(
+                    info["input_report_sizes"]
+                    and (info["input_report_sizes"].get("3", 0) >= 5
+                         or ((attrs.vendor, attrs.product, caps.page, caps.usage)
+                             == (0x1D57, 0xFA60, 0x000A, 0x0000)
+                             and info["input_report_sizes"] == {"0": 5}
+                             and info.get("input_report_proof") == "descriptor")))
             if caps_complete and (attrs.vendor, attrs.product) == (0x260D, 0x1074):
                 from battery_hid import byte_report_sizes
                 from providers.dareu import cm610_identity

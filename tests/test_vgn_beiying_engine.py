@@ -29,7 +29,7 @@ class VgnBeiyingBridgeTests(unittest.TestCase):
         self.assertEqual(server.PROVIDER_VIDS[P.name], (0x258A, 0x391D))
         self.assertIn(P.name, BRAND_PROVIDERS)
         self.assertEqual(verification_for(P.name)[0], "C")
-        pairs = {(0x258A, 0x024F), (0x258A, 0x027F), (0x258A, 0x027B),
+        pairs = {(0x258A, 0x024F), (0x258A, 0x027F), (0x258A, 0x027B), (0x258A, 0x01BB),
                  (0x391D, 0x2A01), (0x391D, 0x2A02)}
         for index in (build_index(), build_index(engine_root=ENGINE)):
             self.assertNotIn(P.name, index["unparsed"])
@@ -38,7 +38,7 @@ class VgnBeiyingBridgeTests(unittest.TestCase):
                               if r["provider"] == P.name}, pairs)
             self.assertEqual(index["vendors"][P.name], [0x258A, 0x391D])
         for vid in (0x258A, 0x3554, 0x391D, 0x41E4):
-            for pid in (0x024F, 0x027B, 0x027F, 0xFA09, 0x2A01, 0x2A02, 0x024E):
+            for pid in (0x024F, 0x027B, 0x027F, 0x01BB, 0xFA09, 0x2A01, 0x2A02, 0x024E):
                 self.assertEqual(server.recognized_candidate_count(P.name, [
                     V.entry(vendor_id=vid, product_id=pid)]), int((vid, pid) in pairs))
 
