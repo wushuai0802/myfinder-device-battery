@@ -102,30 +102,32 @@ class Fa6xPassiveTests(unittest.TestCase):
     def test_sc650_unnumbered_descriptor_proof_accepts_exact_five_byte_frame(self):
         info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
                           input_report_proof="descriptor")
-        for level in (1, 41, 100):
-            with self.subTest(level=level), \
-                    fixture([report(level, model=0x8E, state=1, length=5)], [info]) as (bus, provider):
-                status, = provider.poll()
-                self.assertEqual((status.level, status.name, status.verification_level),
-                                 (level, F.PIDS[0xFA60], "C"))
-                self.assertEqual((status.charging, status.charging_known, status.cached),
-                                 (False, False, False))
-                self.assertEqual(bus.opened, [info["path"]])
-                self.assertTrue(bus.reads)
-                self.assertTrue(all(size == 5 for _, size, _ in bus.reads))
-                self.assertEqual(provider.diagnostics(), [])
+        for model, levels in ((0x8E, (1, 41, 100)), (0x95, (1, 89, 100))):
+            for level in levels:
+                with self.subTest(model=model, level=level), \
+                        fixture([report(level, model=model, state=1, length=5)], [info]) as (bus, provider):
+                    status, = provider.poll()
+                    self.assertEqual((status.level, status.name, status.verification_level),
+                                     (level, F.PIDS[0xFA60], "C"))
+                    self.assertEqual((status.charging, status.charging_known, status.cached),
+                                     (False, False, False))
+                    self.assertEqual(bus.opened, [info["path"]])
+                    self.assertTrue(bus.reads)
+                    self.assertTrue(all(size == 5 for _, size, _ in bus.reads))
+                    self.assertEqual(provider.diagnostics(), [])
 
     def test_sc650_unnumbered_rejects_other_models_prefixes_percentages_and_lengths(self):
         info = descriptor(input_report_length=5, input_report_sizes={"0": 5},
                           input_report_proof="descriptor")
         invalid = [report(41, model=model, state=1, length=5)
                    for model in (0, 0x07, 0x76, 0x77, 0x78, 0x79, 0xE8, 0xFF)]
-        invalid += [report(41, model=0x8E, event=event, state=1, length=5)
-                    for event in (0, 0x41, 0xFF)]
-        invalid += [report(41, model=0x8E, state=state, length=5) for state in (0, 2, 3, 0xFF)]
-        invalid += [report(level, model=0x8E, state=1, length=5) for level in (0, 101, 255)]
-        invalid += [report(41, model=0x8E, state=1, report_id=n, length=5) for n in (0, 4)]
-        invalid += [report(41, model=0x8E, state=1, length=n) for n in (4, 6)]
+        for model in (0x8E, 0x95):
+            invalid += [report(41, model=model, event=event, state=1, length=5)
+                        for event in (0, 0x41, 0xFF)]
+            invalid += [report(41, model=model, state=state, length=5) for state in (0, 2, 3, 0xFF)]
+            invalid += [report(level, model=model, state=1, length=5) for level in (0, 101, 255)]
+            invalid += [report(41, model=model, state=1, report_id=n, length=5) for n in (0, 4)]
+            invalid += [report(41, model=model, state=1, length=n) for n in (4, 6)]
         for raw in invalid:
             with self.subTest(raw=raw), fixture([raw], [info]) as (bus, provider):
                 self.assertEqual(provider.poll(), [])

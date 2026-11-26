@@ -30,6 +30,7 @@ MODELS = {
     0xFA60: frozenset((0x07, 0x76, 0x77, 0x78, 0x79, 0x8E, 0xE8)),
     0xFA65: frozenset((0x71, 0x76, 0x77, 0x78, 0x79, 0x90)),
 }
+UNNUMBERED_FA60_MODELS = frozenset((0x8E, 0x95))
 INPUT_ID = 0x03
 READ_WINDOW_MS = 1500
 MAX_READS = 32
@@ -66,8 +67,8 @@ def parse_legacy_battery(raw):
 
 
 def parse_unnumbered_8e_battery(raw):
-    """Exact SC650 frame on the descriptor-proven unnumbered FA60 route."""
-    if (len(raw) != 5 or raw[0] != INPUT_ID or raw[1] != 0x8E
+    """Exact SC650 (8E) / IN9 PRO (95) frame on the descriptor-proven unnumbered FA60 route."""
+    if (len(raw) != 5 or raw[0] != INPUT_ID or raw[1] not in UNNUMBERED_FA60_MODELS
             or (raw[2], raw[3]) != (0x40, 0x01) or not 1 <= raw[4] <= 100):
         return None
     return raw[4]

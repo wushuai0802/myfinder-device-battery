@@ -54,6 +54,15 @@ class VgnBeiyingTests(unittest.TestCase):
                     self.assertEqual(status.charging_known, (vid, pid) == (0x258A, 0x024F))
                     self.assertEqual(bus.writes, [(info["path"], V.make_request())])
 
+    def test_shared_258a_01bb_capture_parses_neutral_name_and_unknown_charging(self):
+        captured = list(bytes.fromhex("13 4A 01 00 02 64 01 00 00 00 00 00 00 00 00 00 00 00 00 C5"))
+        info = entry(vendor_id=0x258A, product_id=0x01BB, product_string="2.4G Wireless Receiver")
+        with fixture([captured], [info]) as bus:
+            status, = P().poll()
+            self.assertEqual((status.level, status.name, status.charging_known, status.verification_level),
+                             (100, "2.4G 无线键盘（258A:01BB）", False, "C"))
+            self.assertEqual(bus.writes, [(info["path"], V.make_request())])
+
     def test_levels_and_external_power_bit_do_not_inherit_mchose_semantics(self):
         for level in (0, 1, 63, 99, 100):
             for flags in (0, 1, 2, 0x10, 0x11, 0x20, 0xFF):

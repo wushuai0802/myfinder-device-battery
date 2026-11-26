@@ -3198,6 +3198,9 @@ shared FA09 uses the single-owner flow documented above.
 | `391D:2005` | VGN V108 | `FF00:0001` | `09` | Wired; excluded |
 | `391D:2006` | VGN V108 | `FF00:0001` | `09` | Wired; excluded |
 | `391D:2A02` | VGN V108 | `FF02:0002` | `13` | Enabled; static evidence only |
+| `258A:01BB` | Shared BY 2.4G receiver (e.g. Valkyrie VK99 PRO / #720) | `FF02:0002` | `13` | Enabled; contributor capture (100%, neutral name, charging unknown) |
+
+Contributor hardware capture on Windows 11 (Valkyrie VK99 PRO 2.4G receiver `258A:01BB`, `MI_01&Col01`, `FF02:0002`, raw descriptor `06 02 FF 09 02 A1 01 85 13 09 02 15 00 26 FF 00 75 08 95 13 81 00 09 02 15 00 26 FF 00 75 08 95 13 91 00 C0`, HidP fixed-usage proof `{"19": 20}` bidirectional): sending the existing read-only `4A` frame returned `13 4A 01 00 02 64 01 00 00 00 00 00 00 00 00 00 00 00 00 C5` (`100%`, valid trailer checksum `0xC5`). Because `258A:01BB` is a shared BY receiver ID across multiple brands (see also #720), it uses the neutral card name `2.4G 无线键盘（258A:01BB）` and leaves charging unknown (grade C, pending maintainer hardware validation and controlled charging/sleep tests).
 
 The N75 receiver row also contains `path:"mi_01&col01"`. The inspected WebHID
 read path uses `getDevice`'s exact VID/PID match and collection page/usage,
@@ -3906,8 +3909,16 @@ SC650 #490 additionally reports the no-Report-ID descriptor
 `03 8E 40 01 29` (41%): only a unique `FA60 / 000A:0000` collection with
 `input_report_length=5`, exactly `input_report_sizes={"0":5}` and
 `input_report_proof="descriptor"` enables this separate receive-only route,
-which accepts only exact five-byte `03 8E 40 01 <1..100>` frames; grade C,
-pending this project's real hardware verification（待实机验证）.
+which accepts only exact five-byte `03 8E 40 01 <1..100>` and
+`03 95 40 01 <1..100>` frames; grade C, pending this project's real hardware
+verification（待实机验证）. A contributor capture on Windows 11 with an Inphic
+IN9 PRO (`1D57:FA60`, `Inphic 2.4G Receiver`, `MI_02&Col03`, `000A:0000`)
+confirmed the exact same unnumbered descriptor
+`05 0A 09 00 A1 01 75 08 95 04 81 03 C0` (`{"0": 5}`) and passive notifications
+`03 95 40 01 59` (89%) emitted every ~2.0 s (corroborating the native `INPHIC.exe`
+model `95` / event `40` branch documented below). Event `41`, states other than
+`01`, zero/out-of-range percentages, numbered web fallback and `FA65` remain
+rejected; card name stays neutral and charging stays unknown.
 
 For exactly `1D57:FA60 / 000A:0000`, topology first tries the existing
 `byte_report_sizes` caps proof. Only when that Input proof is missing may the

@@ -261,6 +261,22 @@ class Sc650DescriptorFallbackTests(unittest.TestCase):
             self.assertEqual((status.level, status.charging_known, status.verification_level), (49, False, "C"))
             self.assertEqual(bus.opened, [info["path"]])
 
+    def test_fa60_unnumbered_raw_descriptor_caches_and_reads_model_95(self):
+        unnumbered = bytes.fromhex("05 0a 09 00 a1 01 75 08 95 04 81 03 c0")
+        self.configure(raw=unnumbered)
+        info = self.scan()
+        self.assertEqual(info["input_report_sizes"], {"0": 5})
+        self.assertEqual(info["input_report_proof"], "descriptor")
+        self.assertIn(fixtures.PATH_A, self.case.cache)
+        before = self.case.kernel.CreateFileW.call_count
+        self.assertEqual(self.scan(), info)
+        self.assertEqual(self.case.kernel.CreateFileW.call_count, before)
+        with fixture([[3, 0x95, 0x40, 1, 0x59]], [info]) as (bus, provider):
+            status, = provider.poll()
+            self.assertEqual((status.level, status.name, status.charging_known, status.verification_level),
+                             (89, F.PIDS[0xFA60], False, "C"))
+            self.assertEqual(bus.opened, [info["path"]])
+
     def test_sc650_bad_raw_proof_rejects_and_retries_until_recovered(self):
         cases = (self.raw.replace(b"\x85\x03", b"\x85\x04"),
                  self.raw.replace(b"\x05\x0a", b"\x05\x0b"),
