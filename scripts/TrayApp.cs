@@ -1075,10 +1075,10 @@ namespace AtkBatteryTray {
             return result;
         }
         public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute,null,null,MouseBattery.SetActiveDpiStage,null,true) {
-            updates=new UpdateController(dispatch,UpdateIcon,delegate(string title,string message,bool update){balloonRoute.Set(update?TrayBalloonKind.Update:TrayBalloonKind.LowBattery);tray.ShowBalloonTip(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
+            updates=new UpdateController(dispatch,UpdateIcon,delegate(string title,string message,bool update){balloonRoute.Set(update?TrayBalloonKind.Update:TrayBalloonKind.LowBattery);ShowBalloonIfTrayVisible(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
             // Program.Main already holds Local\ATK-A9-Air-Battery-Tray for this lifetime.
             FeedbackReplies=new FeedbackReplies(FeedbackStore.Current,new FeedbackHttp());
-            feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);tray.ShowBalloonTip(5000,balloon.Title,balloon.Text,ToolTipIcon.Info);});
+            feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);ShowBalloonIfTrayVisible(5000,balloon.Title,balloon.Text,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
             deviceEvents=new DeviceEventsWindow(delegate {if(!disposed&&!systemShuttingDown){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();if(controlCenter!=null)controlCenter.NotifyThemeChanged();if(desktopWidget!=null)desktopWidget.NotifyThemeChanged();if(taskbarOverlay!=null)taskbarOverlay.NotifyThemeChanged();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else if(!systemShuttingDown){deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed){trayIcons.RecreateAll();if(taskbarOverlay!=null)taskbarOverlay.NotifyTaskbarRecreated();}},HandleSessionEnding,HandleEndSession);
             sessionEndingHandler=delegate{SystemShutdown.NotifySessionEnding();if(genericWorker!=null)genericWorker.MarkShuttingDown();};
@@ -1259,6 +1259,28 @@ namespace AtkBatteryTray {
         public void PanelClosed() {
             if(disposed)return;panelOpen=false;liveSync.Stop();SaveStatus();
         }
+        void ShowBalloonIfTrayVisible(int timeout,string title,string text,ToolTipIcon icon) {
+            if(disposed||!tray.Visible)return;
+            try{tray.ShowBalloonTip(timeout,title,text,icon);}catch(Exception){}
+        }
+        internal bool EffectiveTrayIconVisible {
+            get {
+                var native=trayIcons!=null?trayIcons.First as NativeTrayIcon:null;
+                return native==null||native.UserVisible;
+            }
+        }
+        internal void NotifyTaskbarOverlayStatusChanged() {
+            if(disposed)return;
+            SyncTrayVisibility();
+            if(controlCenter!=null)controlCenter.NotifyDataChanged();
+        }
+        void SyncTrayVisibility(AudioBindings preferences=null) {
+            if(disposed||trayIcons==null)return;
+            AudioBindings pref=preferences;
+            if(pref==null){try{pref=DeviceSettings.Current;}catch{pref=new AudioBindings();}}
+            bool showTray=TrayVisibilityPolicy.ShouldShowTrayIcon(pref,TaskbarOverlayStatusCode);
+            trayIcons.SetAllUserVisible(showTray);
+        }
         void UpdateIcon() {
             if(busy==0&&headsetBusy==0&&audioBusy==0&&genericBusy==0&&!pendingRead)manualRefresh=false;
             AudioBindings preferences;try{preferences=DeviceSettings.Current;}catch{preferences=new AudioBindings();}
@@ -1270,8 +1292,11 @@ namespace AtkBatteryTray {
             UpdateDotColor=UpdateBadge.ColorFor(ThemePalette.Current(dark).Accent,background,Style.TaskbarDark);
             presentation.UpdateColor=UpdateDotColor;presentation.UpdateBadge=updates!=null&&updates.BadgeVisible;
             presentation.Tooltip=UpdateBadge.Tooltip(presentation.Tooltip,updates==null?null:updates.Version);
+            bool showTray=TrayVisibilityPolicy.ShouldShowTrayIcon(preferences,TaskbarOverlayStatusCode);
+            trayIcons.SetAllUserVisible(showTray);
             if(trayIcons.First.Update(presentation,preferences.TrayIconStyle,dark,size))iconUpdates++;
             trayIcons.Sync(preferences.TrayGroups);
+            trayIcons.SetAllUserVisible(showTray);
             foreach(string id in new List<string>(groupDeviceKeys.Keys))if(TrayConfiguration.Find(preferences,id)==null)groupDeviceKeys.Remove(id);
             if(preferences.TrayGroups.Count>0){
                 var candidates=TrayCandidates(true);
@@ -1320,7 +1345,7 @@ namespace AtkBatteryTray {
                 foreach(var device in WirelessDevices)if(lowBattery.IsLatched(device.Id))saved.Append('\n').Append(device.Id).Append("=1");
                 fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt"),saved.ToString());
             }catch(IOException){}catch(UnauthorizedAccessException){}
-            if(messages.Count>0){string text=String.Join(" · ",messages.ToArray());if(text.Length>240)text=text.Substring(0,237)+"…";balloonRoute.Set(TrayBalloonKind.LowBattery);tray.ShowBalloonTip(5000,"外设电量较低",text,ToolTipIcon.Warning);}
+            if(messages.Count>0){string text=String.Join(" · ",messages.ToArray());if(text.Length>240)text=text.Substring(0,237)+"…";balloonRoute.Set(TrayBalloonKind.LowBattery);ShowBalloonIfTrayVisible(5000,"外设电量较低",text,ToolTipIcon.Warning);}
         }
         void SaveStatus() {
             if(!persistStatus)return;

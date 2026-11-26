@@ -32,7 +32,9 @@ namespace AtkBatteryTray {
                     using(var edge=new Pen(VisualDesign.HighContrast?SystemColors.WindowText:Color.FromArgb(65,Color.White),.8f))g.DrawEllipse(edge,badgeRect);
                     // Leave a full native pixel between the digit tops and the dot.
                     if(updateBadge.HasValue)g.TranslateTransform(0,32f/size);
-                    DrawDigits(g,percent.HasValue?(approximate?"~":"")+percent.Value.ToString():"--",charge,fg,halo);
+                    // Omit "~" prefix on the tiny 16-32px tray badge so approximate readings keep full two-digit
+                    // legibility and never resemble a minus sign ("-"); tooltip and panel still disclose approximation.
+                    DrawDigits(g,percent.HasValue?percent.Value.ToString():"--",charge,fg,halo);
                     if(updateBadge.HasValue)g.TranslateTransform(0,-32f/size);
                     if(charge) {
                         if(updateBadge.HasValue)g.TranslateTransform(-24,0);

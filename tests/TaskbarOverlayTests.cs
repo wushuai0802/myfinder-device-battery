@@ -69,6 +69,34 @@ static class TaskbarOverlayTests {
         var cloned = b.Clone();
         cloned.TaskbarOverlay.Enabled = true;
         Check(!b.TaskbarOverlay.Enabled, "AudioBindings.Clone deep-copies TaskbarOverlay");
+
+        // Independent tray icon hiding policy & no-lockout invariant (#1129)
+        Check(!b.HideTrayIcon, "HideTrayIcon defaults false");
+        string hidePath = Path.Combine(output, "hide-tray-invariant.json");
+        var onlyHide = new AudioBindings { HideTrayIcon = true };
+        DeviceSettings.SaveBindings(hidePath, onlyHide);
+        var loadedOnlyHide = DeviceSettings.LoadBindings(hidePath);
+        Check(!loadedOnlyHide.HideTrayIcon, "Validate auto-heals HideTrayIcon=false when neither taskbar overlay nor widget is enabled");
+
+        var withTaskbar = new AudioBindings { HideTrayIcon = true };
+        withTaskbar.TaskbarOverlay.Enabled = true;
+        DeviceSettings.SaveBindings(hidePath, withTaskbar);
+        var loadedWithTaskbar = DeviceSettings.LoadBindings(hidePath);
+        Check(loadedWithTaskbar.HideTrayIcon && loadedWithTaskbar.TaskbarOverlay.Enabled, "HideTrayIcon persists when TaskbarOverlay is enabled");
+        Check(!TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "ready"), "tray icon stays hidden when taskbar overlay is ready");
+        Check(!TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "ready_avoided"), "tray icon stays hidden when taskbar overlay is ready_avoided");
+        Check(!TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "fullscreen_hidden"), "tray icon stays hidden during temporary fullscreen game hiding");
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "auto_hide_taskbar"), "tray icon auto-restores when taskbar overlay persistently degrades on auto-hide taskbar");
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "plugin_conflict"), "tray icon auto-restores when taskbar overlay persistently degrades on plugin conflict");
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "disabled"), "tray icon stays visible while taskbar overlay is still disabled/uninitialized");
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, null), "tray icon fails safe to visible on null/unknown taskbar status");
+
+        loadedWithTaskbar.DesktopWidget.Enabled = true;
+        Check(!TrayVisibilityPolicy.ShouldShowTrayIcon(loadedWithTaskbar, "auto_hide_taskbar"), "tray icon stays hidden when desktop widget remains enabled as alternative surface");
+        loadedWithTaskbar.DesktopWidget.Enabled = false;
+        loadedWithTaskbar.TaskbarOverlay.Enabled = false;
+        DeviceSettings.SaveBindings(hidePath, loadedWithTaskbar);
+        Check(!DeviceSettings.LoadBindings(hidePath).HideTrayIcon, "disabling last alternative surface auto-restores HideTrayIcon=false");
     }
 
     static void EnvironmentGatingAndDegradationMatrix() {
@@ -265,6 +293,20 @@ static class TaskbarOverlayTests {
                 owner.SavePreferences(next);
                 ctrl.ApplySettings();
                 Check(!ctrl.IsRunning && ctrl.StatusCode == "disabled", "disabling disposes overlay form cleanly");
+
+                // Live TrayContext tray visibility with DesktopWidget + HideTrayIcon (#1129)
+                Check(owner.EffectiveTrayIconVisible, "tray icon starts visible");
+                next = DeviceSettings.Current;
+                next.DesktopWidget.Enabled = true;
+                next.HideTrayIcon = true;
+                owner.SavePreferences(next);
+                owner.ConfigurationChanged(false);
+                Check(!owner.EffectiveTrayIconVisible, "tray icon hides when HideTrayIcon=true and alternative surface is active");
+                next = DeviceSettings.Current;
+                next.DesktopWidget.Enabled = false;
+                owner.SavePreferences(next);
+                owner.ConfigurationChanged(false);
+                Check(!DeviceSettings.Current.HideTrayIcon && owner.EffectiveTrayIconVisible, "disabling last alternative surface automatically restores tray icon");
             }
             owner.ExitThread();
         }

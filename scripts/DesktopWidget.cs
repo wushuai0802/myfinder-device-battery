@@ -977,7 +977,7 @@ namespace AtkBatteryTray {
 
         void BuildContextMenu() {
             ThemedContextMenu.Apply(menu);
-            menu.Opening += delegate {
+            menu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) {
                 menu.Items.Clear();
                 var cfg = DeviceSettings.Current.DesktopWidget;
                 var styleMenu = new ToolStripMenuItem("收起形态");
@@ -1020,9 +1020,23 @@ namespace AtkBatteryTray {
                 openCc.Click += delegate { owner.ShowControlCenter(ControlCenterPage.Placement); };
                 menu.Items.Add(openCc);
 
+                var toggleTray = new ToolStripMenuItem("显示托盘图标") { Checked = !DeviceSettings.Current.HideTrayIcon };
+                toggleTray.Click += delegate {
+                    var pref = DeviceSettings.Current;
+                    pref.HideTrayIcon = !pref.HideTrayIcon;
+                    try { owner.SavePreferences(pref); owner.ConfigurationChanged(false); } catch (Exception) { }
+                };
+                menu.Items.Add(toggleTray);
+
                 var closeItem = new ToolStripMenuItem("关闭桌面小组件");
                 closeItem.Click += delegate { UpdateWidgetConfig(delegate(DesktopWidgetSettings w) { w.Enabled = false; }); };
                 menu.Items.Add(closeItem);
+
+                menu.Items.Add(new ToolStripSeparator());
+                var exitItem = new ToolStripMenuItem("退出");
+                exitItem.Click += delegate { owner.ExitThread(); };
+                menu.Items.Add(exitItem);
+                e.Cancel = false;
             };
         }
 

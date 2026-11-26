@@ -1615,7 +1615,7 @@ namespace AtkBatteryTray {
             var sb = new System.Text.StringBuilder();
             sb.Append(currentPage).Append('|').Append(selectedDeviceKey ?? "").Append('|').Append(selectedPlacementCard).Append('|');
             sb.Append(pref.Theme).Append('|').Append(pref.ThemeStyle).Append('|').Append(pref.PanelLayout).Append('|').Append(pref.FontSize).Append('|');
-            sb.Append(pref.ReducedMotion).Append('|').Append(pref.TrayIconStyle).Append('|').Append(pref.TraySource).Append('|').Append(pref.TrayDeviceId ?? "").Append('|');
+            sb.Append(pref.ReducedMotion).Append('|').Append(pref.HideTrayIcon).Append('|').Append(pref.TrayIconStyle).Append('|').Append(pref.TraySource).Append('|').Append(pref.TrayDeviceId ?? "").Append('|');
             sb.Append(pref.LowBatteryNotifications).Append('|').Append(pref.WarningThreshold).Append('|').Append(pref.BackgroundSeconds).Append('|');
             sb.Append(pref.RememberReadings).Append('|').Append(pref.AutoDetectMoreDevices).Append('|').Append(pref.AutoCheckUpdates).Append('|');
             sb.Append(pref.ShowUpdateBadge).Append('|').Append(pref.IncludeBetaUpdates).Append('|').Append(pref.CheckFeedbackReplies).Append('|');
@@ -2332,7 +2332,11 @@ namespace AtkBatteryTray {
             cardsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
             cardsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
 
-            cardsGrid.Controls.Add(CreatePlacementOptionCard(0, "托盘图标", "通知区域显示电量数字，点击打开主面板", "已启用", ControlCenterBadgeTone.Positive), 0, 0);
+            bool trayHidden = pref.HideTrayIcon;
+            bool trayFallbackVisible = trayHidden && TrayVisibilityPolicy.ShouldShowTrayIcon(pref, owner.TaskbarOverlayStatusCode);
+            string trayTag = !trayHidden ? "已启用" : (trayFallbackVisible ? "临时恢复" : "已隐藏");
+            var trayTone = !trayHidden ? ControlCenterBadgeTone.Positive : (trayFallbackVisible ? ControlCenterBadgeTone.Accent : ControlCenterBadgeTone.Muted);
+            cardsGrid.Controls.Add(CreatePlacementOptionCard(0, "托盘图标", "通知区域显示电量数字，点击打开主面板", trayTag, trayTone), 0, 0);
             cardsGrid.Controls.Add(CreatePlacementOptionCard(1, "桌面小组件", "悬浮电量胶囊、全壁纸贴边隐藏与全屏防打扰", pref.DesktopWidget.Enabled ? "已启用" : "未启用", pref.DesktopWidget.Enabled ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted), 1, 0);
             bool tbOn = pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled;
             cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏通知区左侧以无焦点层直接显示电量", tbOn ? "已启用 · 实验" : "未启用 · 实验", tbOn ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Accent), 2, 0);
@@ -2345,10 +2349,25 @@ namespace AtkBatteryTray {
 
             var rows = new List<Control>();
             if (selectedPlacementCard == 0) {
+                var showTrayToggle = new ControlCenterToggle(palette, dark) { Checked = !pref.HideTrayIcon };
+                showTrayToggle.Toggled += delegate {
+                    if (!showTrayToggle.Checked && !TrayVisibilityPolicy.HasAlternativeSurface(DeviceSettings.Current)) {
+                        showTrayToggle.Checked = true;
+                        showTrayToggle.Invalidate();
+                        ShowNotice("请先开启「任务栏电量」或「桌面小组件」，再隐藏托盘图标");
+                        return;
+                    }
+                    UpdatePreference(delegate(AudioBindings p) { p.HideTrayIcon = !showTrayToggle.Checked; });
+                };
+                string trayToggleDesc = trayFallbackVisible
+                    ? "任务栏电量当前处于降级隐藏状态，已临时恢复托盘图标以确保可随时打开控制中心"
+                    : "开启任务栏电量或桌面小组件后可独立关闭，避免与任务栏电量重复显示";
+                rows.Add(CreateSettingRow("显示托盘图标", trayToggleDesc, showTrayToggle, false));
+
                 int iconStyleIdx = pref.TrayIconStyle == "device" ? 1 : 0;
                 rows.Add(CreateSettingRow("托盘图标样式", "选择在系统托盘直接显示电量数字或设备图标", CreateSegmentedChoices(new[] { "数字", "设备图标" }, iconStyleIdx, delegate(int idx) {
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TrayIconStyle = idx == 1 ? "device" : "number"; });
-                }), false));
+                }), true));
                 string[] ruleKeys = { "active", "lowest", "auto", "mouse", "headset", "keyboard" };
                 string[] ruleLabels = { "当前使用", "最低电量", "自动", "鼠标优先", "耳机优先", "键盘优先" };
                 int ruleIdx = Array.IndexOf(ruleKeys, pref.TraySource);
@@ -2359,7 +2378,9 @@ namespace AtkBatteryTray {
                 var w = pref.DesktopWidget;
                 var enableToggle = new ControlCenterToggle(palette, dark) { Checked = w.Enabled };
                 enableToggle.Toggled += delegate {
+                    bool wasHidden = DeviceSettings.Current.HideTrayIcon;
                     UpdatePreference(delegate(AudioBindings p) { p.DesktopWidget.Enabled = enableToggle.Checked; });
+                    if (wasHidden && !DeviceSettings.Current.HideTrayIcon) ShowNotice("已自动恢复托盘图标，确保可随时打开控制中心");
                 };
                 rows.Add(CreateSettingRow("启用桌面小组件", "在桌面显示独立悬浮电量胶囊，支持自由拖动与点击展开", enableToggle, false));
 
@@ -2413,7 +2434,9 @@ namespace AtkBatteryTray {
                 var tb = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
                 var tbEnable = new ControlCenterToggle(palette, dark) { Checked = tb.Enabled };
                 tbEnable.Toggled += delegate {
+                    bool wasHidden = DeviceSettings.Current.HideTrayIcon;
                     UpdatePreference(delegate(AudioBindings p) { p.TaskbarOverlay.Enabled = tbEnable.Checked; });
+                    if (wasHidden && !DeviceSettings.Current.HideTrayIcon) ShowNotice("已自动恢复托盘图标，确保可随时打开控制中心");
                 };
                 rows.Add(CreateSettingRow("启用任务栏电量（实验）", "采用独立无焦点贴合层，绝不注入 Explorer；不支持环境自动降级隐藏", tbEnable, false));
 

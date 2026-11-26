@@ -630,45 +630,63 @@ namespace AtkBatteryTray {
 
         void BuildContextMenu() {
             ThemedContextMenu.Apply(contextMenu);
-            var openPanel = new ToolStripMenuItem("打开设备电量面板");
-            openPanel.Click += delegate { if (owner != null) owner.ShowDetailsFromOverlay(); };
-            var openCc = new ToolStripMenuItem("打开控制中心 → 显示位置");
-            openCc.Click += delegate { if (owner != null) owner.ShowControlCenter(ControlCenterPage.Placement); };
-            var nudgeLeft = new ToolStripMenuItem("向左避让（-40px）");
-            nudgeLeft.Click += delegate {
-                if (owner == null) return;
-                var p = DeviceSettings.Current;
-                p.TaskbarOverlay.OffsetX = Math.Max(TaskbarOverlayEvaluator.MinOffsetX, Math.Min(0, p.TaskbarOverlay.OffsetX - 40));
-                try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+            contextMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) {
+                contextMenu.Items.Clear();
+                var pref = DeviceSettings.Current;
+                var openPanel = new ToolStripMenuItem("打开设备电量面板");
+                openPanel.Click += delegate { if (owner != null) owner.ShowDetailsFromOverlay(); };
+                var openCc = new ToolStripMenuItem("打开控制中心 → 显示位置");
+                openCc.Click += delegate { if (owner != null) owner.ShowControlCenter(ControlCenterPage.Placement); };
+                var nudgeLeft = new ToolStripMenuItem("向左避让（-40px）");
+                nudgeLeft.Click += delegate {
+                    if (owner == null) return;
+                    var p = DeviceSettings.Current;
+                    p.TaskbarOverlay.OffsetX = Math.Max(TaskbarOverlayEvaluator.MinOffsetX, Math.Min(0, p.TaskbarOverlay.OffsetX - 40));
+                    try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+                };
+                var resetOffset = new ToolStripMenuItem("重置默认位置");
+                resetOffset.Click += delegate {
+                    if (owner == null) return;
+                    var p = DeviceSettings.Current;
+                    p.TaskbarOverlay.OffsetX = 0;
+                    try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+                };
+                var toggleIcons = new ToolStripMenuItem("切换图标显示");
+                toggleIcons.Click += delegate {
+                    if (owner == null) return;
+                    var p = DeviceSettings.Current;
+                    p.TaskbarOverlay.ShowIcons = !p.TaskbarOverlay.ShowIcons;
+                    try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+                };
+                var toggleTray = new ToolStripMenuItem("显示托盘图标") { Checked = !pref.HideTrayIcon };
+                toggleTray.Click += delegate {
+                    if (owner == null) return;
+                    var p = DeviceSettings.Current;
+                    p.HideTrayIcon = !p.HideTrayIcon;
+                    try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+                };
+                var disableItem = new ToolStripMenuItem("关闭任务栏电量");
+                disableItem.Click += delegate {
+                    if (owner == null) return;
+                    var p = DeviceSettings.Current;
+                    p.TaskbarOverlay.Enabled = false;
+                    try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
+                };
+                var exitItem = new ToolStripMenuItem("退出");
+                exitItem.Click += delegate { if (owner != null) owner.ExitThread(); };
+
+                contextMenu.Items.Add(openPanel);
+                contextMenu.Items.Add(openCc);
+                contextMenu.Items.Add(new ToolStripSeparator());
+                contextMenu.Items.Add(nudgeLeft);
+                contextMenu.Items.Add(resetOffset);
+                contextMenu.Items.Add(toggleIcons);
+                contextMenu.Items.Add(toggleTray);
+                contextMenu.Items.Add(disableItem);
+                contextMenu.Items.Add(new ToolStripSeparator());
+                contextMenu.Items.Add(exitItem);
+                e.Cancel = false;
             };
-            var resetOffset = new ToolStripMenuItem("重置默认位置");
-            resetOffset.Click += delegate {
-                if (owner == null) return;
-                var p = DeviceSettings.Current;
-                p.TaskbarOverlay.OffsetX = 0;
-                try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
-            };
-            var toggleIcons = new ToolStripMenuItem("切换图标显示");
-            toggleIcons.Click += delegate {
-                if (owner == null) return;
-                var p = DeviceSettings.Current;
-                p.TaskbarOverlay.ShowIcons = !p.TaskbarOverlay.ShowIcons;
-                try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
-            };
-            var disableItem = new ToolStripMenuItem("关闭任务栏电量");
-            disableItem.Click += delegate {
-                if (owner == null) return;
-                var p = DeviceSettings.Current;
-                p.TaskbarOverlay.Enabled = false;
-                try { owner.SavePreferences(p); owner.ConfigurationChanged(false); } catch (Exception) { }
-            };
-            contextMenu.Items.Add(openPanel);
-            contextMenu.Items.Add(openCc);
-            contextMenu.Items.Add(new ToolStripSeparator());
-            contextMenu.Items.Add(nudgeLeft);
-            contextMenu.Items.Add(resetOffset);
-            contextMenu.Items.Add(toggleIcons);
-            contextMenu.Items.Add(disableItem);
         }
 
         void HandleMouseDown(object sender, MouseEventArgs e) {
@@ -780,8 +798,12 @@ namespace AtkBatteryTray {
             dpiScale = NativeDisplay.ScaleAt(snap != null && snap.TaskbarRect.Width > 0 ? snap.TaskbarRect.Location : Point.Empty);
             Size physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
 
+            string prevStatus = lastPlacement != null ? lastPlacement.StatusCode : null;
             var placement = TaskbarOverlayEvaluator.Evaluate(snap, physicalSize, cfg.OffsetX);
             lastPlacement = placement;
+            if (prevStatus != placement.StatusCode && owner != null) {
+                owner.NotifyTaskbarOverlayStatusChanged();
+            }
 
             if (!placement.CanDisplay) {
                 if (Visible || overlayVisible) Hide();
