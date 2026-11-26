@@ -1048,6 +1048,7 @@ namespace AtkBatteryTray {
         public string DpiError="";
         public bool IsRefreshing {get{return busy!=0;}}
         public bool IsDpiRefreshing {get{return switching||pendingStage>=0;}}
+        internal int? PendingNativeDpiStage {get{return pendingStage>=0?(int?)pendingStage:(stageInFlight>=0?(int?)stageInFlight:null);}}
         public bool IsAudioBusy {get{return audioBusy!=0;}}
         public bool IsHeadsetRefreshing {get{return headsetBusy!=0;}}
         public bool AudioControlsAvailable {get{return !audioNeedsReconcile;}}
