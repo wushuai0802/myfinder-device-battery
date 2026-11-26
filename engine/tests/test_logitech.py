@@ -518,7 +518,11 @@ class ParseTests(unittest.TestCase):
         (L.F_UNIFIED, [40, 4, 5], (40, False, "")),       # invalid battery
         (L.F_STATUS, [40, 30, 4], (40, True, "")),
         (L.F_STATUS, [0, 0, 0], (None, False, "")),       # no level
-        (L.F_VOLTAGE, [0x10, 0x6C, 0x80], (100, True, "estimated from voltage")),
+        (L.F_VOLTAGE, [0x10, 0x6C, 0x80], (99, True, "estimated from voltage")),
+        (L.F_VOLTAGE, [0x10, 0x6C, 0x81], (100, True, "estimated from voltage")),
+        (L.F_VOLTAGE, [0x0F, 0x7B, 0x81], (100, True, "estimated from voltage")),
+        (L.F_VOLTAGE, [0x0F, 0x7B, 0x80], (76, True, "estimated from voltage")),
+        (L.F_VOLTAGE, [0x0F, 0x7B, 0x82], (76, False, "estimated from voltage")),
         (L.F_VOLTAGE, [0x0F, 0x7B, 0x02], (76, False, "estimated from voltage")),
         (L.F_ADC, [0x0F, 0x7B, 0x01], (76, False, "estimated from voltage")),
         (L.F_ADC, [0x0F, 0x7B, 0x03], (76, True, "estimated from voltage")),

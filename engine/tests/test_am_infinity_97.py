@@ -61,14 +61,20 @@ class Clock:
         self.value += seconds
 
 
+_UNSET = object()
+
+
 class FakeHid:
-    def __init__(self, replies=(), queued=(), write_result=62, fail=None,
-                 endless_queue=False, input_reports=(), no_input_report=False):
+    def __init__(self, replies=(), queued=(), write_result=_UNSET, fail=None,
+                 endless_queue=False, input_reports=(), no_input_report=False,
+                 report_bytes=62):
         self.replies = list(replies)
         self.queued = list(queued)
         self.input_reports = list(input_reports)
         self.no_input_report = no_input_report
-        self.write_result = write_result
+        self.report_bytes = report_bytes
+        self.expected_request = REQUEST + bytes(report_bytes - len(REQUEST))
+        self.write_result = report_bytes if write_result is _UNSET else write_result
         self.fail = fail
         self.endless_queue = endless_queue
         self.opened, self.closed, self.writes, self.reads, self.gets = [], [], [], [], []
@@ -85,8 +91,8 @@ class FakeHid:
                     raise OSError("private-path")
 
             def write(self, packet):
-                if type(packet) is not bytes or packet != REQUEST:
-                    raise AssertionError("output outside the fixed 62-byte whitelist")
+                if type(packet) is not bytes or packet != bus.expected_request:
+                    raise AssertionError("output outside the fixed whitelist")
                 bus.writes.append((self.path, packet))
                 self.submitted = True
                 if bus.fail == "write":
@@ -94,7 +100,7 @@ class FakeHid:
                 return bus.write_result
 
             def read(self, length, timeout):
-                if length != 62 or not 1 <= timeout <= max(A.READ_GAP_MS, 1):
+                if length != bus.report_bytes or not 1 <= timeout <= max(A.READ_GAP_MS, 1):
                     raise AssertionError("unbounded or unexpected read")
                 bus.reads.append((length, timeout))
                 phase = "read" if self.submitted else "drain"
@@ -104,11 +110,11 @@ class FakeHid:
                 if queue:
                     return queue.pop(0)
                 if not self.submitted and bus.endless_queue:
-                    return [0] * 62
+                    return [0] * bus.report_bytes
                 return []
 
             def get_input_report(self, report_id, length):
-                if (report_id, length) != (7, 62) or not self.submitted:
+                if (report_id, length) != (7, bus.report_bytes) or not self.submitted:
                     raise AssertionError("unexpected get_input_report")
                 bus.gets.append((report_id, length))
                 if bus.no_input_report:
@@ -498,15 +504,16 @@ class FailClosedTests(unittest.TestCase):
                 self.assert_no_io([entry(path=path)])
 
     def test_extra_report_ids_do_not_block_proven_ones(self):
-        for extra_sizes in (
-            dict(input_report_sizes={"7": 62, "1": 8},
-                 output_report_sizes={"6": 62, "2": 8}),
-            dict(input_report_length=64, output_report_length=64,
-                 input_report_sizes={"7": 62, "8": 64},
-                 output_report_sizes={"6": 62, "8": 64}),
+        for extra_sizes, buf_len in (
+            (dict(input_report_sizes={"7": 62, "1": 8},
+                  output_report_sizes={"6": 62, "2": 8}), 62),
+            (dict(input_report_length=64, output_report_length=64,
+                  input_report_sizes={"7": 62, "8": 64},
+                  output_report_sizes={"6": 62, "8": 64}), 64),
         ):
             with self.subTest(extra_sizes=extra_sizes), fixture(
-                    [report(answer(52))], inventory=[entry(**extra_sizes)]):
+                    [report(answer(52), size=buf_len)], inventory=[entry(**extra_sizes)],
+                    report_bytes=buf_len):
                 self.assertEqual(P().poll()[0].level, 52)
 
     def test_report_proof_failure_projects_safe_health_summary(self):
@@ -673,6 +680,49 @@ class RegistrationTests(unittest.TestCase):
         self.assertTrue(A.matches_collection(entry(physical_id=None, input_report_sizes=None)))
         self.assertFalse(A.matches_collection(entry(usage=2)))
         self.assertFalse(A.matches_collection(entry(vendor_id=0x3151)))
+
+    def test_multi_report_in_out_lengths_pad_and_parse(self):
+        # Windows hidapi pads multi-report collections to output_report_length / input_report_length
+        info = entry(
+            input_report_length=65,
+            output_report_length=65,
+            input_report_sizes={"7": 62, "9": 65},
+            output_report_sizes={"6": 62, "8": 65},
+        )
+        req_65 = A.make_request(65)
+        self.assertEqual(len(req_65), 65)
+        self.assertEqual(req_65[:62], REQUEST)
+        self.assertEqual(req_65[62:], b"\x00\x00\x00")
+        padded_reply = report(answer(93, charging=0, exists=1), size=65)
+        payload = A.report_payload(padded_reply, max_len=65)
+        self.assertEqual(payload, answer(93, charging=0, exists=1))
+        self.assertIsNone(A.report_payload(report(answer(93), size=63), max_len=65))
+
+        calls = []
+
+        class _MultiDev:
+            def open_path(self, path):
+                calls.append(("open", path))
+
+            def write(self, data):
+                calls.append(("write", len(data)))
+                return len(data)
+
+            def read(self, length, timeout):
+                calls.append(("read", length))
+                if calls.count(("write", 65)) == 0:
+                    return []
+                return padded_reply if calls.count(("read", 65)) <= 2 else []
+
+            def close(self):
+                calls.append(("close",))
+
+        with patch.object(A, "hid", SimpleNamespace(device=lambda: _MultiDev())), \
+             patch.object(A.hidlist, "enumerate", return_value=[info]):
+            status, = P().poll()
+        self.assertEqual((status.level, status.charging), (93, False))
+        self.assertIn(("write", 65), calls)
+        self.assertIn(("read", 65), calls)
 
 
 if __name__ == "__main__":

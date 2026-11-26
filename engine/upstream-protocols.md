@@ -4655,17 +4655,19 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - **Server & Host Plumbing (`engine/server.py`, `scripts/GenericBattery.cs`, `scripts/WirelessLayout.cs`)**: Registered all 8 static DPI providers + dynamic `families` in `DPI_PROVIDERS`; generalized C# `WirelessDpi.CanWrite` beyond the 3-provider list while preserving `pulsar`/`families` `onboard`-only and `pack`/system-provider exclusions; fixed `WirelessLayout.DpiFresh` so valid read-only DPI (`canSet=False, targetToken=null`) renders current DPI & read-only highlight cleanly until stale.
 
 
-## Rapoo VT9 PRO read-only status/notification (24AE:1221, 1205, 4405)
+## Rapoo VT9 PRO read-only status/notification (24AE:1221, 1205, 4405, 1601)
 
-- Verification grade: **C** (pending owner hardware verification; static + OpenMouse protocol evidence + user HID diagnostic).
+- Verification grade: **C** (pending owner hardware verification; static + OpenMouse protocol evidence + user HID diagnostics & captures).
 - Sources:
   - OpenMouse commit `93c4cc601d448ea481eb59d7b785eec75ae16ec2` (`docs/rapoo-vt9-pro-testing.md`, `src/rapoo/index.ts`, `src/rapoo/index.test.ts`): documents `24AE:1205` (2.4 GHz receiver) and `24AE:4405` (wired USB).
   - User hardware diagnostic (`1.4.0-beta.6`): `24AE:1221` ("Rapoo Gaming Device") exposes collections `0001:0002 0001:0006 0001:0080 000C:0001 FF00:0002 FF00:0002 FF00:000E FF0B:0104`.
+  - Issue `#1172` live 20s capture (`24AE:1601` `"Rapoo Gaming Device"`, `MI_01 Col05` `FF00:0002`, Input `0xBB` 7 bytes): 7 periodic frames (~3.00s cadence) `BB B0 43 DC 05 01 60` (`96%`, matching official A HUB ~96%), corroborated with `.ai/evidence/rapoohub/index-cgGQw9wn.js` `_F(n)` (`batteryValid === 1`, `batteryPercent`).
 - Read-only protocol (strictly zero writes; no `0xBA` commands, no DPI writes):
-  - **Primary Feature channel (`FF0B:0104`)**: `GET_FEATURE` Report ID `0x2A` (`42`), Windows buffer length `>= 10` (with leading report ID `0x2A` at `raw[0]`, e.g. `2a 01 00 00 04 11 20 00 00 62 00` or `2a 01 00 00 04 21 50 00 00 62 00`); `raw[9]` holds battery percent (`0..100`). Works even while the mouse is idle/asleep.
-  - **Fallback passive Input channel (`FF00:000E`)**: passive listen for Input Report ID `0xBB` (`187`), length `>= 7`, `raw[0] == 0xBB`, `raw[1] == 0xB0`, `raw[5] in (1, 2)` (1=Wireless, 2=Wired), `raw[6]` holds battery percent (`0..100`).
+  - **Primary Feature channel (`FF0B:0104`, `1221/1205/4405` only)**: `GET_FEATURE` Report ID `0x2A` (`42`), Windows buffer length `>= 10` (with leading report ID `0x2A` at `raw[0]`, e.g. `2a 01 00 00 04 11 20 00 00 62 00` or `2a 01 00 00 04 21 50 00 00 62 00`); `raw[9]` holds battery percent (`0..100`). Works even while the mouse is idle/asleep.
+  - **Fallback passive Input channel (`FF00:000E`, `1221/1205/4405` only)**: passive listen for Input Report ID `0xBB` (`187`), length `>= 7`, `raw[0] == 0xBB`, `raw[1] == 0xB0`, `raw[5] in (1, 2)` (1=Wireless, 2=Wired), `raw[6]` holds battery percent (`0..100`).
+  - **Passive-only channel (`FF00:0002`, `24AE:1601`)**: proves `input_report_sizes` across all `FF00:0002` collections under the same USB parent (failing closed if any sibling lacks proven `input_report_sizes`), selects the unique collection proving Input `0xBB` (`>= 7` bytes, ignoring sibling `0xBC` 12B), and never opens `FF0B:0104` or `FF00:000E`.
 - Scope exclusions:
-  - Unverified older VT9 PIDs (`24AE:1601`, `24AE:185A`, `24AE:1849`) remain excluded; `24AE:1601` stays Grade D `observedUnsupported`.
+  - Unverified older VT9 PIDs (`24AE:185A`, `24AE:1849`) remain excluded.
   - No DPI support in `rapoo_vt9` (`DPI_PROVIDERS` does not include `rapoo_vt9`).
 
 
@@ -4678,8 +4680,8 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
   - `TheRealRazbi/hyperx-cloud-flight-s-battery-icon` (`cfddb9c30031e86b5ab5e78ff7d536728304dc90`, `headset_interface.py`)
 - Bounded query (`engine/providers/hyperx_flight_s.py`):
   - Exact `0951:16EA` under resolved USB parent, unique `(0xFF13, 0x0001)` collection, runtime-proven Output report `06` (`>= 16` bytes) and Input report `0B` or `06` (`>= 8` bytes).
-  - Sends only `06 00 02 00 9A 00 00 68 4A 8E 0A 00 00 00 BB 02` zero-padded to proven Output length.
-  - Parses replies where `raw[0] in (0x0B, 0x06)`, `raw[3] == 0x02`, `(raw[5], raw[6]) != (0, 0)`, `0 <= raw[7] <= 100`, suppressing `level == 0` when voltage `>= 3500 mV` (startup glitch), and treating `raw[3] == 0x01, raw[4] == 0x03` as power-off (`no reading`). Charging stays unknown; EQ/button/mic/7.1 packets are never sent.
+  - Sends only `06 00 02 00 9A 00 00 68 4A 8E 0A 00 00 00 BB 02` zero-padded to proven Output length (`output_report_length`).
+  - Accepts replies matching either `input_report_sizes[str(rid)]` or Windows `input_report_length` zero-padded frames (`#1167`; `HeadsetMonitor.swift` documents Windows `hidapi` returning 62-byte padded `0x0B` frames despite a 12-byte report definition), where `raw[0] in (0x0B, 0x06)`, `raw[3] == 0x02`, `(raw[5], raw[6]) != (0, 0)`, `0 <= raw[7] <= 100`, suppressing `level == 0` when voltage `>= 3500 mV` (startup glitch), and treating `raw[3] == 0x01, raw[4] == 0x03` as power-off (`no reading`). Charging stays unknown; EQ/button/mic/7.1 packets are never sent.
 
 
 ## CHERRY MW5500 (046A:0133)
@@ -4738,4 +4740,17 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
   - Live `#856` 68-byte HID descriptor on `391D:1A20` interface 1 (`FFC1:0001`) proves Input `0xB4` (64 bytes incl. ID) & `0xB6` (21 bytes) and Output `0xB3` (64 bytes incl. ID) & `0xB5` (21 bytes), with no Feature reports.
   - `getDeviceInfo()` sends Output report `0xB3` (`179`), 63-byte payload `[0x06, 0x00 * 62]` (`64` bytes on wire). Reply on Input report `0xB4` (`180`) starts `B4 06` (`64` bytes); `battery = raw[20] & 0x7F` (`127 & e[19]` in WebHID payload), confirmed by `#856` live capture (`b406...3f...` = `63%`).
   - `0%` is treated as asleep/unready placeholder (`no_reading_reply`); `>100%` and wrong ID/command/length are ignored; `0xB5`/`0xB6` and DPI/config/DFU commands are never sent; charging is unknown (`charging_known = False`). Note `#1153` shows VGN VHUB `69%` on `391D:1A21`. [VGN HUB source evidence](.ai/evidence/vgnhub/index-ZngoA_qG.js) · [Issue #856](https://github.com/wushuai0802/myfinder-device-battery/issues/856) · [Issue #1153](https://github.com/wushuai0802/myfinder-device-battery/issues/1153)
+
+### 1.4.1-beta.4 Device Batch Notes (`#1174`, `#1177`, `#1176`, `#1171`)
+
+- **ATK A9 NANO (`373B:1216`, `#1174`, `engine/topology.py`, `engine/providers/pulsar.py`)**:
+  - Issue `#1174` captured the exact 55-byte raw HID report descriptor for `373B:1216` `"NK mouse NANO dongle"` `FF05:0001`: Report ID `0x08` declares two 63-byte `Input(Data, Array)` items (127 bytes total) while Windows `HidP` reports `input_report_length = 64` (`collection maximum mismatch`), and Output `0x08` = 64 bytes. The reporter also confirmed the NANO read-only query `08 7D 72 02 00 01 07 01` returns `08 72 00 05 00 07 01 3F ...` (`63%`).
+  - Added `(0x373B, 0x1216)` to the scoped `_descriptor_fallback` tuple, added `atk_nano_windows_report_candidate()` + `_windows_report_id_supported(hid, data, 0x08, 64)` verification setting `nano_windows_report_confirmed = True`, and taught `AtkNanoProvider._pick` to use that explicit confirmation without relaxing safety gates or mutating caller dicts. Remains Grade C (`待实机验证`).
+- **Angry Miao AM Infinity .97 (`0E8D:0703`, `#1177`, `engine/providers/am_infinity_97.py`, `engine/server.py`)**:
+  - Multi-report `FF13:0001` collections on Windows can report `input_report_length > 62` / `output_report_length > 62` while Report `06`/`07` sizes are 62 bytes. Updated `make_request`, `_is_report`, `report_payload`, `_drain`, and `_query` to pass and accept the collection's proven `output_report_length` / `input_report_length` while still bounding Report `07` payload extraction to 59 bytes (`REPORT_BYTES - 3`), increased response wait slightly (`1200 ms` / `40` reads), and projected sanitized `seen=ID/len` summaries on timeout.
+- **Logitech HID++ `0x1001` `batteryVoltage` (`#1171`, `engine/providers/logitech.py`)**:
+  - Decodes `flags & 0x07` when external power (`flags & 0x80`) is set per Linux `hid-logitech-hidpp.c` / Solaar: `1 = FULL` returns `(100, True)`, `2 = NOT_CHARGING` returns `(voltage_to_percent(mv), False)`, and `0 = CHARGING` (or unknown external-power codes) caps the discharge-curve estimate at `99%` (`min(voltage_to_percent(mv), 99), True`) so charging terminal voltage does not claim `≈100%` before firmware signals `FULL`.
+- **Lunafury TYPE33EVO (`373E:0084`, `#1176`, Grade C, `engine/providers/lunafury.py`)**:
+  - Static analysis of the official WebHID driver (`https://mouse.lunafury.games/`, `js/app.1700b96d.js` & `js/output.xvi3.min.js`, model `TYPE33` / `TYPE33_54H` binding `VIDWireless4K8K = 373E`, `PIDWireless4K8K = 0084`): selects the single collection among `FFA0:0001 / FFFF:0000 / FFFF:0001` whose runtime descriptor proves Feature report `0` = `65` bytes (requiring all present candidates to complete Feature proof first). Sends only read-only XVI `0x83` query `[0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83] + [0]*58`, polls `GET_FEATURE` Report `0`, validates `[0x00, 0xA1, ..., 0x02, ..., 0x83]` (65B or 64B payload), `charge in (0, 1)`, and `1 <= percent <= 100` (`0%` ignored as asleep/offline). Never sends bootloader (`0xB0`), firmware, DPI, LED, or config commands.
+
 

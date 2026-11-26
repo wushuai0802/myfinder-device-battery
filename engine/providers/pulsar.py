@@ -229,6 +229,27 @@ NANO_PIDS = {
         0x12F5: "ATK 8K dongle-M1",
     },
 }
+NANO_REPORT_ID = 0x08
+NANO_REPORT_LEN = 64
+
+
+def atk_nano_windows_report_candidate(info):
+    """Match the supported 373B:1216 NANO layout whose descriptor repeats Input 08."""
+    if ((info.get("vendor_id"), info.get("product_id")) != (0x373B, 0x1216)
+            or (info.get("usage_page"), info.get("usage")) != (0xFF05, 0x0001)
+            or (info.get("input_report_length"), info.get("output_report_length"))
+            != (NANO_REPORT_LEN, NANO_REPORT_LEN)
+            or info.get("report_descriptor_error") != "collection maximum mismatch"
+            or info.get("input_report_sizes") is not None):
+        return False
+    declared = info.get("declared_report_sizes")
+    if not isinstance(declared, dict):
+        return False
+    key = str(NANO_REPORT_ID)
+    output_sizes = info.get("output_report_sizes")
+    return (declared.get("input") == {key: 2 * NANO_REPORT_LEN - 1}
+            and declared.get("output") == {key: NANO_REPORT_LEN}
+            and (output_sizes is None or output_sizes == {key: NANO_REPORT_LEN}))
 
 
 # Public projection of existing private-reader results, never free-form logs.
@@ -300,6 +321,18 @@ class AtkNanoProvider(BatteryHidProvider):
         candidates = [d for d in infos if d.get("vendor_id") == self.vid
                       and d.get("product_id") in self.pids
                       and (d.get("usage_page"), d.get("usage")) == self.collection]
+        if (len(candidates) == 1
+                and candidates[0].get("nano_windows_report_confirmed") is True
+                and atk_nano_windows_report_candidate(candidates[0])):
+            self.input_id = NANO_REPORT_ID
+            key = str(NANO_REPORT_ID)
+            confirmed = {
+                **candidates[0],
+                "input_report_sizes": {key: NANO_REPORT_LEN},
+                "output_report_sizes": {key: NANO_REPORT_LEN},
+            }
+            patched = [confirmed if d is candidates[0] else d for d in infos]
+            return super()._pick(patched)
         sizes = candidates[0].get("input_report_sizes") if len(candidates) == 1 else None
         if not isinstance(sizes, dict) or len(sizes) != 1:
             self._diag.append("NANO requires one proven input report: nothing sent")

@@ -1367,7 +1367,7 @@ class DescriptorCacheTests(unittest.TestCase):
                     self.batch3_descriptor((0x24AE, pid), (0xFF00, 2), {7: 19}, {6: 65})
                     recovered, = self.scan([PATH_A])
                     self.assertEqual(recovered["input_report_sizes"], {"7": 19})
-        for identity, collection in (((0x24AE, 0x1601), (0xFF00, 2)),
+        for identity, collection in (((0x24AE, 0x185A), (0xFF00, 2)),
                                      ((0x24AE, 0x1419), (0xFF00, 2)),
                                      ((0x24AE, 0x4611), (0xFF00, 2)),
                                      ((0x24AE, 0x4612), (0xFF00, 2)),
