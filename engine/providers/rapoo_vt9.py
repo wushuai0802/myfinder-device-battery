@@ -1,14 +1,18 @@
 """Grade-C Rapoo VT9 PRO read-only status (Feature 0x2A) and passive 0xBB input.
 
 Evidence: OpenMouse 93c4cc601d448ea481eb59d7b785eec75ae16ec2 (docs/rapoo-vt9-pro-testing.md,
-src/rapoo/index.ts for 24AE:1205 receiver & 24AE:4405 cable) plus user diagnostics for
-24AE:1221 (Rapoo VT9 PRO Dual 8K exposing FF0B:0104 + FF00:000E). Pending maintainer
-hardware verification.
+src/rapoo/index.ts for 24AE:1205 receiver & 24AE:4405 cable), user diagnostics for
+24AE:1221 (Rapoo VT9 PRO Dual 8K exposing FF0B:0104 + FF00:000E), and #1172 live capture
+for 24AE:1601 (Rapoo VT9 PRO, FF00:0002 passive Input 0xBB 7B, corroborated with Rapoo HUB
+_F parser). Pending maintainer hardware verification.
 
 Strictly read-only / zero writes: never calls write(), send_feature_report(), or 0xBA.
-- Primary channel: FF0B:0104 GET_FEATURE report 0x2A (ID 42), proven >= 10 bytes.
-- Fallback channel: FF00:000E passive Input report 0xBB (ID 187), proven >= 7 bytes.
-Unverified older VT9 PIDs (e.g. 24AE:1601, 185A, 1849) remain strictly excluded.
+- Primary channel (24AE:1221/1205/4405): FF0B:0104 GET_FEATURE report 0x2A (ID 42), proven >= 10 bytes.
+- Fallback channel (24AE:1221/1205/4405): FF00:000E passive Input report 0xBB (ID 187), proven >= 7 bytes.
+- Passive-only channel (24AE:1601): unique Input 0xBB-proven FF00:0002 collection (>= 7 bytes;
+  sibling FF00:0002 0xBC / FF00:000E / FF0B:0104 are never opened); fails closed if any
+  FF00:0002 sibling lacks proven input_report_sizes.
+Unverified older VT9 PIDs (e.g. 24AE:185A, 1849) remain strictly excluded.
 """
 from __future__ import annotations
 
@@ -36,12 +40,14 @@ PIDS = {
     0x1221: "Rapoo VT9 PRO Dual 8K",
     0x1205: "Rapoo VT9 PRO",
     0x4405: "Rapoo VT9 PRO",
+    0x1601: "Rapoo VT9 PRO",
 }
 FEATURE_COLLECTION = (0xFF0B, 0x0104)
 FEATURE_ID = 0x2A
 MIN_FEATURE_LEN = 10
 
 INPUT_COLLECTION = (0xFF00, 0x000E)
+PASSIVE_ONLY_COLLECTIONS = {0x1601: (0xFF00, 0x0002)}
 INPUT_ID = 0xBB
 MIN_INPUT_LEN = 7
 
@@ -146,6 +152,44 @@ class RapooVT9Provider(Provider):
             return None
         return info
 
+    @staticmethod
+    def _has_valid_report_sizes(info, direction: str, min_len: int = 2) -> bool:
+        maximum = info.get(f"{direction}_report_length")
+        sizes = info.get(f"{direction}_report_sizes")
+        return (type(maximum) is int and min_len <= maximum <= 4096
+                and isinstance(sizes, dict) and bool(sizes)
+                and all(type(n) is int and 2 <= n <= maximum for n in sizes.values())
+                and max(sizes.values()) == maximum)
+
+    def _pick_passive_only(self, infos, collection):
+        candidates = [d for d in infos if (d.get("usage_page"), d.get("usage")) == collection]
+        if not candidates:
+            return None
+        page, usage = collection
+        key = str(INPUT_ID)
+        for info in candidates:
+            if not self._has_valid_report_sizes(info, "input", 2):
+                sizes = info.get("input_report_sizes")
+                self._diag.append(
+                    f"report {INPUT_ID:02X} unproven; sizes={_sizes_summary(sizes)}"
+                    + report_proof_summary(info, "input", include_declared=True) + "; not opened")
+                return None
+        bb_candidates = [
+            d for d in candidates
+            if type(d["input_report_sizes"].get(key)) is int
+            and MIN_INPUT_LEN <= d["input_report_sizes"][key] <= d["input_report_length"]
+        ]
+        if not bb_candidates:
+            self._diag.append(f"report {INPUT_ID:02X} unproven on {page:04X}:{usage:04X}; not opened")
+            return None
+        if len(bb_candidates) != 1 or not bb_candidates[0].get("path"):
+            self._diag.append(f"ambiguous {page:04X}:{usage:04X} {INPUT_ID:02X} collection; not opened")
+            return None
+        info = bb_candidates[0]
+        if not self._valid_identity(info):
+            return None
+        return info
+
     def _read_feature(self, info):
         size = info["feature_report_sizes"][str(FEATURE_ID)]
         maximum = info["feature_report_length"]
@@ -198,7 +242,7 @@ class RapooVT9Provider(Provider):
             if not raw:
                 break
             self._observe_input(info, raw)
-            if raw[0] != INPUT_ID or len(raw) != expected_len:
+            if raw[0] != INPUT_ID or len(raw) not in (expected_len, info["input_report_length"]):
                 continue
             parsed = parse_input_battery(raw)
             if parsed is not None:
@@ -215,7 +259,7 @@ class RapooVT9Provider(Provider):
             if not raw:
                 break
             self._observe_input(info, raw)
-            if raw[0] != INPUT_ID or len(raw) != expected_len:
+            if raw[0] != INPUT_ID or len(raw) not in (expected_len, info["input_report_length"]):
                 continue
             parsed = parse_input_battery(raw)
             if parsed is not None:
@@ -226,7 +270,11 @@ class RapooVT9Provider(Provider):
         return newest
 
     def _read_passive(self, physical: str, infos):
-        info = self._pick_proven(infos, INPUT_COLLECTION, "input", INPUT_ID, MIN_INPUT_LEN)
+        pid = infos[0].get("product_id")
+        if pid in PASSIVE_ONLY_COLLECTIONS:
+            info = self._pick_passive_only(infos, PASSIVE_ONLY_COLLECTIONS[pid])
+        else:
+            info = self._pick_proven(infos, INPUT_COLLECTION, "input", INPUT_ID, MIN_INPUT_LEN)
         if info is None:
             self._release(physical)
             return None, None
@@ -319,9 +367,11 @@ class RapooVT9Provider(Provider):
 
             reading = None
             winning = None
-            feature_info = self._pick_proven(infos, FEATURE_COLLECTION, "feature", FEATURE_ID, MIN_FEATURE_LEN)
-            if feature_info is not None:
-                reading, winning = self._read_feature(feature_info)
+            pid = infos[0].get("product_id")
+            if pid not in PASSIVE_ONLY_COLLECTIONS:
+                feature_info = self._pick_proven(infos, FEATURE_COLLECTION, "feature", FEATURE_ID, MIN_FEATURE_LEN)
+                if feature_info is not None:
+                    reading, winning = self._read_feature(feature_info)
 
             if reading is None:
                 passive_reading, passive_info = self._read_passive(physical, infos)

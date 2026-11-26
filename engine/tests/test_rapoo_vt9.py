@@ -258,10 +258,10 @@ class RapooVT9ProviderTests(unittest.TestCase):
 
     def test_unproven_identity_descriptor_and_excluded_pids_not_opened(self):
         bad_cases = [
-            ("excluded_pid_1601", [_vt9_feature_info(pid=0x1601, path="\\\\?\\hid#vid_24ae&pid_1601&col08#1")]),
+            ("excluded_pid_185a", [_vt9_feature_info(pid=0x185A, path="\\\\?\\hid#vid_24ae&pid_185a&col08#1")]),
             ("collection_physical", [_vt9_feature_info(physical="collection:123")]),
-            ("wrong_usb_pid", [_vt9_feature_info(physical="pnp:usb\\vid_24ae&pid_1601\\5&1&0&1")]),
-            ("wrong_hid_path", [_vt9_feature_info(path="\\\\?\\hid#vid_24ae&pid_1601&col08#1")]),
+            ("wrong_usb_pid", [_vt9_feature_info(physical="pnp:usb\\vid_24ae&pid_185a\\5&1&0&1")]),
+            ("wrong_hid_path", [_vt9_feature_info(path="\\\\?\\hid#vid_24ae&pid_185a&col08#1")]),
             ("unproven_sizes", [_vt9_feature_info(sizes={})]),
             ("wrong_max_length", [_vt9_feature_info(sizes={"42": 11}, maximum=12)]),
             ("short_feature_size", [_vt9_feature_info(sizes={"42": 9}, maximum=9)]),
@@ -314,6 +314,43 @@ class RapooVT9ProviderTests(unittest.TestCase):
         finally:
             provider.close()
 
+    def test_1601_passive_ff00_0002_opens_unique_bb_ignores_bc_and_never_writes(self):
+        col05 = _vt9_input_info(pid=0x1601, suffix="mi_01&col05", sizes={"187": 7}, maximum=7)
+        col05["usage_page"], col05["usage"] = 0xFF00, 0x0002
+        col06 = _vt9_input_info(pid=0x1601, suffix="mi_01&col06", sizes={"188": 12}, maximum=12)
+        col06["usage_page"], col06["usage"] = 0xFF00, 0x0002
+        col04 = _vt9_input_info(pid=0x1601, suffix="mi_01&col04", sizes={"186": 32}, maximum=32)
+        f_col = _vt9_feature_info(pid=0x1601)
+        bus = _FakeBus({
+            ("input", col05["path"]): [[0xBB, 0xB0, 0x43, 0xDC, 0x05, 0x01, 0x60]],
+        })
+        provider = VT9.RapooVT9Provider()
+        try:
+            with patch.object(VT9.hidlist, "enumerate", return_value=[col04, col06, col05, f_col]), \
+                 patch.object(VT9.hid, "device", bus):
+                statuses = provider.poll()
+            self.assertEqual(len(statuses), 1)
+            self.assertEqual((statuses[0].name, statuses[0].level, statuses[0].charging_known, statuses[0].kind),
+                             ("Rapoo VT9 PRO", 96, False, "mouse"))
+            self.assertEqual(bus.opened_paths, [col05["path"]])
+            self.assertEqual(bus.feature_calls, [])
+            self.assertEqual(bus.writes, [])
+        finally:
+            provider.close()
+
+        # Fail closed when sibling FF00:0002 has unproven sizes or duplicates BB
+        for bad in (
+            [col05, dict(col06, input_report_sizes=None)],
+            [col05, dict(col06, input_report_sizes={"187": 7}, input_report_length=7)],
+        ):
+            bad_bus = _FakeBus()
+            bad_provider = VT9.RapooVT9Provider()
+            with patch.object(VT9.hidlist, "enumerate", return_value=bad), \
+                 patch.object(VT9.hid, "device", bad_bus):
+                self.assertEqual(bad_provider.poll(), [])
+            self.assertEqual(bad_bus.opened_paths, [])
+            self.assertEqual(bad_bus.writes, [])
+
 
 class RapooVT9IntegrationTests(unittest.TestCase):
     def test_server_recognition_and_no_dpi(self):
@@ -327,20 +364,21 @@ class RapooVT9IntegrationTests(unittest.TestCase):
                     {"vendor_id": 0x24AE, "product_id": 0x1205},
                     {"vendor_id": 0x24AE, "product_id": 0x4405},
                     {"vendor_id": 0x24AE, "product_id": 0x1601},
+                    {"vendor_id": 0x24AE, "product_id": 0x185A},
                     {"vendor_id": 0x24AE, "product_id": 0x1411},
                     {"vendor_id": 0x24AE, "product_id": 0x1872},
                 ],
             ),
-            3,
+            4,
         )
 
     def test_catalog_and_device_pack_include_vt9_only(self):
         self.assertEqual(catalog.validate_catalog()["errors"], [])
         index = known_ids.build_index()
         by_key = {(r["vendorId"], r["productId"]): r for r in index["devices"]}
-        for pid in (0x1221, 0x1205, 0x4405):
+        for pid in (0x1221, 0x1205, 0x4405, 0x1601):
             self.assertEqual(by_key[(0x24AE, pid)]["provider"], "rapoo_vt9")
-        self.assertNotIn((0x24AE, 0x1601), by_key)
+        self.assertNotIn((0x24AE, 0x185A), by_key)
 
 
 if __name__ == "__main__":

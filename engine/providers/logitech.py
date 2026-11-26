@@ -189,8 +189,18 @@ def parse_battery(feature: int, p) -> Tuple[Optional[int], bool, str]:
             return None, False, ""
         if mv < 2500:                                 # not a real battery voltage
             return None, False, ""
-        charging = bool(p[2] & 0x80) if feature == F_VOLTAGE else bool(p[2] & 0x02)
-        return voltage_to_percent(mv), charging, "estimated from voltage"
+        if feature == F_VOLTAGE:
+            if p[2] & 0x80:
+                status_code = p[2] & 0x07
+                if status_code == 1:                  # HID++ 0x1001 ChargeStatus FULL
+                    return 100, True, "estimated from voltage"
+                if status_code == 2:                  # HID++ 0x1001 ChargeStatus NOT_CHARGING
+                    return voltage_to_percent(mv), False, "estimated from voltage"
+                # Active/slow/unknown external power: terminal voltage reaches ~4.2V
+                # long before 100% SoC; do not report 100% until firmware sets FULL (1).
+                return min(voltage_to_percent(mv), 99), True, "estimated from voltage"
+            return voltage_to_percent(mv), False, "estimated from voltage"
+        return voltage_to_percent(mv), bool(p[2] & 0x02), "estimated from voltage"
     return None, False, ""
 
 

@@ -304,6 +304,37 @@ class AtkNanoTests(unittest.TestCase):
         self.assertEqual((bus.opened, bus.writes, bus.reads), ([], [], []))
         self.assertEqual(provider.reader_diagnostics(), ["NANO input report unproven"])
 
+    def test_1216_confirmed_windows_repeated_63b_input_08_reads_and_keeps_gates(self):
+        # Exact #1174 hardware descriptor & reply shape (63%)
+        confirmed = entry(
+            "nano-1174",
+            input_report_sizes=None,
+            output_report_sizes={"8": 64},
+            input_report_length=64,
+            output_report_length=64,
+            report_descriptor_error="collection maximum mismatch",
+            declared_report_sizes={"input": {"8": 127}, "output": {"8": 64}, "feature": {}},
+            nano_windows_report_confirmed=True,
+        )
+        snapshot = dict(confirmed)
+        with fixture([reply(63)], [confirmed]) as bus:
+            status, = P.PulsarProvider().poll()
+        self.assertEqual((status.level, status.name), (63, "ATK / VXE NANO receiver"))
+        self.assertEqual(confirmed, snapshot)  # caller's inventory dict is never mutated
+        self.assertEqual(bus.writes, [(confirmed["path"], REQUEST)])
+
+        # Without explicit confirmation or with wrong PID/declared sizes, fail closed
+        for bad in (
+            dict(confirmed, nano_windows_report_confirmed=False),
+            dict(confirmed, product_id=0x12F5),
+            dict(confirmed, declared_report_sizes={"input": {"8": 128}, "output": {"8": 64}}),
+            dict(confirmed, input_report_sizes={"8": 64}),
+        ):
+            with self.subTest(bad=bad), fixture([reply(63)], [bad]) as bad_bus:
+                if bad.get("input_report_sizes") is None:
+                    self.assertEqual(P.PulsarProvider().poll(), [])
+                    self.assertEqual(bad_bus.opened, [])
+
 
 if __name__ == "__main__":
     unittest.main()

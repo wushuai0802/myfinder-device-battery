@@ -55,7 +55,7 @@ def is_power_off_event(raw) -> bool:
     )
 
 
-def parse_reply(raw, input_sizes: dict) -> Optional[tuple]:
+def parse_reply(raw, input_sizes: dict, input_max: Optional[int] = None) -> Optional[tuple]:
     if (not isinstance(raw, (bytes, bytearray, list, tuple))
             or len(raw) < MIN_INPUT_LEN
             or not isinstance(input_sizes, dict)):
@@ -66,7 +66,10 @@ def parse_reply(raw, input_sizes: dict) -> Optional[tuple]:
     if report_id not in INPUT_IDS:
         return None
     expected_len = input_sizes.get(str(report_id))
-    if type(expected_len) is not int or len(raw) != expected_len:
+    if type(expected_len) is not int or expected_len < MIN_INPUT_LEN:
+        return None
+    if len(raw) != expected_len and not (
+            type(input_max) is int and input_max >= expected_len and len(raw) == input_max):
         return None
     if raw[3] != 0x02 or (raw[5] == 0 and raw[6] == 0):
         return None
@@ -106,11 +109,13 @@ class HyperXFlightSProvider(Provider):
             return None
         out_max = info.get("output_report_length")
         out_sizes = info.get("output_report_sizes")
+        out_id_len = out_sizes.get(str(OUTPUT_ID)) if isinstance(out_sizes, dict) else None
         if (type(out_max) is not int or not MIN_OUTPUT_LEN <= out_max <= 4096
                 or not isinstance(out_sizes, dict) or not out_sizes
                 or any(type(n) is not int or not 2 <= n <= out_max for n in out_sizes.values())
                 or max(out_sizes.values()) != out_max
-                or out_sizes.get(str(OUTPUT_ID)) != out_max):
+                or type(out_id_len) is not int
+                or not MIN_OUTPUT_LEN <= out_id_len <= out_max):
             self._diag.append("Flight S output 06 length unproven"
                               + report_proof_summary(info, "output", include_declared=True) + ": nothing sent")
             return None
@@ -133,6 +138,7 @@ class HyperXFlightSProvider(Provider):
             return None
         in_len = info["input_report_length"]
         in_sizes = info["input_report_sizes"]
+        seen = set()
         deadline = time.monotonic() + READ_TIMEOUT_MS / 1000
         for _ in range(MAX_READS):
             remaining = deadline - time.monotonic()
@@ -141,13 +147,22 @@ class HyperXFlightSProvider(Provider):
             raw = dev.read(in_len, max(1, int(remaining * 1000)))
             if not raw:
                 break
+            if (isinstance(raw, (bytes, bytearray, list, tuple))
+                    and len(raw) >= 1 and type(raw[0]) is int and 0 <= raw[0] <= 255
+                    and len(seen) < 32):
+                seen.add((raw[0], len(raw)))
             if is_power_off_event(raw):
                 self._diag.append("Flight S headset powered off; no reading")
                 return None
-            parsed = parse_reply(raw, in_sizes)
+            parsed = parse_reply(raw, in_sizes, input_max=in_len)
             if parsed is not None:
                 return parsed
-        self._diag.append("Flight S no valid battery reply within timeout")
+        msg = "Flight S no valid battery reply within timeout"
+        if seen:
+            ordered = sorted(seen)
+            summary = ",".join(f"{rid:02X}/{length}" for rid, length in ordered[:6])
+            msg += "; seen=" + summary + (",..." if len(ordered) > 6 else "")
+        self._diag.append(msg)
         return None
 
     def poll(self) -> List[DeviceStatus]:

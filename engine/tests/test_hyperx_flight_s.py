@@ -101,6 +101,14 @@ class HyperXFlightSTests(unittest.TestCase):
         # Windows 62B reply (rid 0x0B) & compact 12B reply (rid 0x06)
         self.assertEqual(FS.parse_reply(_battery_reply(76, 3890, rid=0x0B, length=62), sizes), (76, False, ""))
         self.assertEqual(FS.parse_reply(_battery_reply(45, 3750, rid=0x06, length=12), sizes), (45, False, ""))
+        # Windows hidapi zero-pads smaller input reports to input_max when passed input_max
+        self.assertEqual(
+            FS.parse_reply(_battery_reply(64, 3860, rid=0x0B, length=62), {"11": 12, "6": 62}, input_max=62),
+            (64, False, ""),
+        )
+        self.assertIsNone(
+            FS.parse_reply(_battery_reply(64, 3860, rid=0x0B, length=20), {"11": 12, "6": 62}, input_max=62)
+        )
         # Reject startup 0% glitch while voltage >= 3500 mV, but allow genuine 0% at 3328 mV
         self.assertIsNone(FS.parse_reply(_battery_reply(0, 3770), sizes))
         self.assertEqual(FS.parse_reply(_battery_reply(0, 3328), sizes), (0, False, ""))
@@ -140,6 +148,26 @@ class HyperXFlightSTests(unittest.TestCase):
              patch.object(FS.hid, "device", bus_off):
             self.assertEqual(provider.poll(), [])
         self.assertIn("powered off", provider.diagnostics()[-1])
+
+    def test_poll_accepts_windows_padded_0b_and_multi_report_output_sizes(self):
+        info = _flight_s_info(
+            output_report_sizes={"6": 16, "10": 62},
+            input_report_sizes={"11": 12, "6": 62},
+        )
+        bus = _FakeBus(replies=[_battery_reply(79, 3920, rid=0x0B, length=62)])
+        provider = FS.HyperXFlightSProvider()
+        with patch.object(FS.hidlist, "enumerate", return_value=[info]), \
+             patch.object(FS.hid, "device", bus):
+            statuses = provider.poll()
+        self.assertEqual([s.level for s in statuses], [79])
+        self.assertEqual(bus.written, [(info["path"], FS.make_request(62))])
+
+        # Sanitized timeout diagnostic appends only report IDs and lengths
+        bus_timeout = _FakeBus(replies=[[0x0A, 0, 0, 3] + [0] * 58] * 32)
+        with patch.object(FS.hidlist, "enumerate", return_value=[info]), \
+             patch.object(FS.hid, "device", bus_timeout):
+            self.assertEqual(provider.poll(), [])
+        self.assertIn("; seen=0A/62", provider.diagnostics()[-1])
 
     def test_unproven_or_ambiguous_collection_never_opens(self):
         cases = [

@@ -420,8 +420,7 @@ class RapooTests(unittest.TestCase):
         reader, = [e for e in load_catalog()["readers"] if e["provider"] == "rapoo"]
         self.assertEqual(reader["verificationLevel"], "C")
         unsupported = [e for e in load_catalog()["observedUnsupported"] if e["id"].startswith("rapoo_")]
-        self.assertEqual([e["match"]["productId"] for e in unsupported], ["1601"])
-        self.assertFalse(unsupported[0]["compatible"])
+        self.assertEqual(unsupported, [])
         self.assertEqual(validate_catalog()["errors"], [])
 
 

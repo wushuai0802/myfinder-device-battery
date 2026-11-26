@@ -521,7 +521,7 @@ def discover(paths, excluded=(), *, full=False):
                         (0x35D8, 0x0133), (0x3837, 0x1018), (0x3837, 0x101D),
                         (0x3837, 0x1014),
                         (0x3837, 0x1016),
-                        (0x373B, 0x12F5),
+                        (0x373B, 0x1216), (0x373B, 0x12F5),
                         (0x41E4, 0x2001), (0x3554, 0xFA09), (0x3554, 0xFB26),
                         (0x3554, 0xFB3E), (0x391D, 0x1A1A)):
                     # The alternate 1018 collection is useful only at 4D/64.
@@ -541,6 +541,15 @@ def discover(paths, excluded=(), *, full=False):
                     if (v3_ultra_windows_report_candidate(info)
                             and _windows_report_id_supported(hid, data, V3_REPORT_ID, V3_REPORT_LEN)):
                         info["v3_windows_report_confirmed"] = True
+                        caps_complete = True
+                if (not caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage)
+                        == (0x373B, 0x1216, 0xFF05, 0x0001)
+                        and info.get("report_descriptor_error") == "collection maximum mismatch"):
+                    from providers.pulsar import (NANO_REPORT_ID, NANO_REPORT_LEN,
+                                                  atk_nano_windows_report_candidate)
+                    if (atk_nano_windows_report_candidate(info)
+                            and _windows_report_id_supported(hid, data, NANO_REPORT_ID, NANO_REPORT_LEN)):
+                        info["nano_windows_report_confirmed"] = True
                         caps_complete = True
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
                     0x3554, 0xFA09, 0xFF04, 0x0002):
@@ -618,6 +627,25 @@ def discover(paths, excluded=(), *, full=False):
                     info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
                     _descriptor_fallback(info, caps, ("input",))
                     caps_complete = bool(info["input_report_sizes"] and "187" in info["input_report_sizes"])
+            if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                    0x24AE, 0x1601, 0xFF00, 0x0002):
+                # VT9 PRO 1601 passive input only: prove both BB (Col05) and sibling BC (Col06)
+                # FF00:0002 collections so only the unique BB collection may open.
+                from battery_hid import byte_report_sizes
+                info["input_report_sizes"] = byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True)
+                _descriptor_fallback(info, caps, ("input",))
+                caps_complete = bool(info["input_report_sizes"])
+            if caps_complete and (attrs.vendor, attrs.product) == (0x373E, 0x0084) and (caps.page, caps.usage) in (
+                    (0xFFA0, 0x0001), (0xFFFF, 0x0000), (0xFFFF, 0x0001)):
+                # Lunafury TYPE33EVO: prove Feature report sizes across all three collections.
+                from battery_hid import byte_report_sizes
+                info["feature_report_length"] = caps.feature
+                info["feature_report_sizes"] = byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True)
+                if not any((caps.feature, caps.fb, caps.fv)):
+                    info["feature_report_sizes"] = {}
+                else:
+                    _descriptor_fallback(info, caps, ("feature",))
+                caps_complete = info["feature_report_sizes"] is not None
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
                     0x0951, 0x16EA, 0xFF13, 0x0001):
                 # HyperX Cloud Flight S: prove Output 06 and Input 0B/06 before querying.

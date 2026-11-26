@@ -40,8 +40,8 @@ OUTPUT_REPORT_ID = 0x06
 INPUT_REPORT_ID = 0x07
 REPORT_BYTES = 62
 
-RESPONSE_TIMEOUT_MS = 800
-MAX_READS = 25
+RESPONSE_TIMEOUT_MS = 1200
+MAX_READS = 40
 READ_GAP_MS = 20
 DRAIN_TIMEOUT_MS = 40
 MAX_DRAIN_READS = 16
@@ -61,9 +61,11 @@ _PARENT = re.compile(
 _HARDWARE = re.compile(r"(?:^|[#\\&])vid_0e8d&pid_0703(?:$|[#\\&])", re.I)
 
 
-def make_request():
+def make_request(output_length: int = REPORT_BYTES):
+    if type(output_length) is not int or not REPORT_BYTES <= output_length <= 4096:
+        raise ValueError("invalid AM Infinity output report length")
     return (bytes([OUTPUT_REPORT_ID, 0x06, 0x80, 0x05, 0x5A, 0x02, 0x00, 0xCF, 0x30])
-            + bytes(REPORT_BYTES - 9))
+            + bytes(output_length - 9))
 
 
 def _target(info):
@@ -105,18 +107,18 @@ def reports_proven(info):
     return True
 
 
-def _is_report(raw):
+def _is_report(raw, max_len: int = REPORT_BYTES):
     return (isinstance(raw, (bytes, bytearray, list, tuple))
-            and len(raw) == REPORT_BYTES
+            and (len(raw) == REPORT_BYTES or max_len > REPORT_BYTES and len(raw) == max_len)
             and all(type(value) is int and 0 <= value <= 255 for value in raw))
 
 
-def report_payload(raw):
+def report_payload(raw, max_len: int = REPORT_BYTES):
     """RACE stream bytes carried by one input report, or None when it is not one."""
-    if not _is_report(raw) or raw[0] != INPUT_REPORT_ID:
+    if not _is_report(raw, max_len) or raw[0] != INPUT_REPORT_ID:
         return None
     length = raw[1] | (raw[2] << 8)
-    if not 0 < length <= len(raw) - 3:
+    if not 0 < length <= REPORT_BYTES - 3:
         return None
     return bytes(raw[3:3 + length])
 
@@ -169,7 +171,7 @@ class AmInfinity97Provider(Provider):
         self._last = {}      # physical -> last measured DeviceStatus
         self._paths = {}     # physical -> paths seen for this identity
 
-    def _drain(self, dev):
+    def _drain(self, dev, read_len: int = REPORT_BYTES):
         """Drain queued interrupt reports; returns (ok, use_interrupt).
 
         Airoha RACE collections on Windows may expose IN report 07 only via
@@ -183,7 +185,7 @@ class AmInfinity97Provider(Provider):
                 break
             try:
                 # Positive timeout also bounds bindings where zero selects blocking read.
-                raw = dev.read(REPORT_BYTES, 1)
+                raw = dev.read(read_len, 1)
             except (OSError, ValueError):
                 return True, False
             if not raw:
@@ -191,18 +193,21 @@ class AmInfinity97Provider(Provider):
         self._diag.append("input queue did not drain within bounds: nothing sent")
         return False, True
 
-    def _query(self, dev):
+    def _query(self, dev, info=None):
         """(level, charging, present) from one bounded exchange, else None."""
-        ok, use_interrupt = self._drain(dev)
+        out_len = info["output_report_length"] if info else REPORT_BYTES
+        in_len = info["input_report_length"] if info else REPORT_BYTES
+        ok, use_interrupt = self._drain(dev, in_len)
         if not ok:
             return None
-        request = make_request()
+        request = make_request(out_len)
         written = dev.write(request)
-        if type(written) is not int or written != REPORT_BYTES:
+        if type(written) is not int or written != out_len:
             self._diag.append("short/failed battery query write; no retry")
             return None
         stream = bytearray()
         last_get_raw = None
+        seen = set()
         deadline = time.monotonic() + RESPONSE_TIMEOUT_MS / 1000
         for _ in range(MAX_READS):
             remaining = deadline - time.monotonic()
@@ -213,7 +218,7 @@ class AmInfinity97Provider(Provider):
             if use_interrupt:
                 try:
                     raw = dev.read(
-                        REPORT_BYTES,
+                        in_len,
                         min(READ_GAP_MS, max(1, int(remaining * 1000))),
                     )
                 except (OSError, ValueError):
@@ -224,20 +229,24 @@ class AmInfinity97Provider(Provider):
                     time.sleep(gap)
                 if time.monotonic() >= deadline:
                     break
-                raw = dev.get_input_report(INPUT_REPORT_ID, REPORT_BYTES)
+                raw = dev.get_input_report(INPUT_REPORT_ID, in_len)
                 from_get = True
             elif not raw:
                 try:
-                    raw = dev.get_input_report(INPUT_REPORT_ID, REPORT_BYTES)
+                    raw = dev.get_input_report(INPUT_REPORT_ID, in_len)
                     from_get = True
                 except (OSError, ValueError):
                     raw = None
+            if (isinstance(raw, (bytes, bytearray, list, tuple))
+                    and len(raw) >= 1 and type(raw[0]) is int and 0 <= raw[0] <= 255
+                    and len(seen) < 32):
+                seen.add((raw[0], len(raw)))
             if from_get and raw:
-                snapshot = bytes(raw) if _is_report(raw) else None
+                snapshot = bytes(raw) if _is_report(raw, in_len) else None
                 if snapshot is not None and snapshot == last_get_raw:
                     continue
                 last_get_raw = snapshot
-            payload = report_payload(raw)
+            payload = report_payload(raw, in_len)
             if payload is None:
                 continue
             if len(stream) + len(payload) > MAX_RX_BYTES:
@@ -256,7 +265,12 @@ class AmInfinity97Provider(Provider):
                 if not reading[2]:
                     self._diag.append("receiver reports no mouse; level unavailable")
                 return reading
-        self._diag.append("no valid battery answer within bounds")
+        msg = "no valid battery answer within bounds"
+        if seen:
+            ordered = sorted(seen)
+            summary = ",".join(f"{rid:02X}/{length}" for rid, length in ordered[:6])
+            msg += "; seen=" + summary + (",..." if len(ordered) > 6 else "")
+        self._diag.append(msg)
         return None
 
     @staticmethod
@@ -331,7 +345,7 @@ class AmInfinity97Provider(Provider):
             try:
                 dev = hid.device()
                 dev.open_path(info["path"])
-                reading = self._query(dev)
+                reading = self._query(dev, info)
             except (OSError, ValueError):
                 self._diag.append("battery I/O failed; connection unknown")
                 reading = None
