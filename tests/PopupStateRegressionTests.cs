@@ -154,6 +154,7 @@ static class PopupStateRegressionTests {
             fixture.Owner.NativeMousePresent=false;fixture.Owner.GenericReady=true;var headset=Device("generic-headset","Generic headset",80);headset.Kind="headset";fixture.Owner.WirelessDevices=new[]{headset};
             fixture.Navigation.SelectedDeviceKey=headset.Id;fixture.Navigation.SelectedDeviceName=headset.Name;fixture.Page(PopupPage.Device);fixture.FindPageWith(200);fixture.Click(200);
             Check(fixture.Navigation.Page==PopupPage.Audio&&fixture.Navigation.AudioDeviceKey==headset.Id&&fixture.Owner.AudioScopeDeviceId==headset.Id&&!fixture.Owner.AudioControlsAvailable,"generic headset entry switches scope and disables stale global controls immediately");
+            Check(!fixture.Controls().Exists(delegate(PopupControl row){return row.Id==252&&row.DeviceKey=="native:audio";}),"scoped wireless headset audio page never shows global native:audio hide toggle");
             Check(fixture.Control(100).DeviceKey==headset.Id&&!fixture.Control(100).Selected&&!fixture.Control(100).Enabled,"unconfirmed scoped audio rows cannot appear as selected global outputs");
             Pump(delegate{return !fixture.Owner.IsAudioBusy&&fixture.Owner.AudioControlsAvailable;});fixture.Popup.ShowPreferences();
             Check(fixture.Owner.AudioScopeDeviceId==null,"temporarily leaving audio for preferences returns controls to global scope");fixture.Click(6);
@@ -164,6 +165,36 @@ static class PopupStateRegressionTests {
             fixture.Click(6);Check(fixture.Owner.AudioScopeDeviceId==headset.Id,"returning from picker retains the original device scope");fixture.Click(6);fixture.Click(6);
             Check(fixture.Navigation.Page==PopupPage.Device&&fixture.Navigation.AudioDeviceKey==null&&fixture.Owner.AudioScopeDeviceId==null,"leaving the audio page group returns control to global scope");
             Pump(delegate{return !fixture.Owner.IsAudioBusy;});Check(fixture.VolumeWrites==0,"scoped navigation performs no physical audio write or settings save");
+        }
+        // #1141: Global Audio page allows hiding/restoring the 3.5mm wired headset (native:audio) card directly (transient settings only)
+        var wiredAudio=Audio();
+        wiredAudio.HeadsetName="3.5mm 有线耳机";
+        wiredAudio.Devices=new[]{new AudioDeviceChoice {Id="headset",Name="3.5mm 有线耳机",Flow=0,FormFactor=3}};
+        DeviceSettings.UseTransientConfiguration(new AudioBindings {PanelLayout="bar",ReducedMotion=true,RememberReadings=false,Theme="light",VolumeCollapsed=false});
+        using(var owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot {Battery=battery?new BatteryReading {Percent=85,TimestampUtc=DateTime.UtcNow}:null,Dpi=Dpi()};},
+            delegate(int stage){throw new Exception("Unexpected DPI write");},delegate{return new HeadsetReading {ConnectionVerified=true,Connected=false};},delegate{return wiredAudio;},false,
+            null,null,null,delegate{return false;},null,null,null,null,
+            delegate(AudioBindings pref){DeviceSettings.UseTransientConfiguration(pref);})){
+            Pump(delegate{return owner.Current!=null&&owner.Audio!=null&&!owner.IsRefreshing&&!owner.IsAudioBusy&&!owner.IsHeadsetRefreshing;});
+            owner.GenericReady=true;owner.WirelessDevices=new WirelessDevice[0];owner.Headset=null;
+            using(var popup=new Details(owner)){
+                typeof(TrayContext).GetField("details",Private).SetValue(owner,popup);
+                var nav=(PopupNavigation)Field(popup,"navigation");
+                nav.Page=PopupPage.Audio;nav.AudioDeviceKey=null;nav.AudioDeviceName=null;nav.Offset=0;
+                Call(popup,"UpdateLayoutSize");
+                var rows=(List<PopupControl>)Call(popup,"ControlsForPage");
+                var hideAudio=rows.Find(delegate(PopupControl r){return r.Id==252;});
+                Check(hideAudio!=null&&hideAudio.DeviceKey=="native:audio"&&hideAudio.Checked,"global Audio page exposes native:audio visibility toggle checked by default");
+                Call(popup,"PerformAction",hideAudio);
+                Check(DeviceSettings.Current.HiddenDeviceIds.Contains("native:audio"),"toggling native:audio off persists in HiddenDeviceIds");
+                Check(!WirelessLayout.Build(owner,0,1000,false).All.Exists(delegate(WirelessCard card){return card.Id=="native:audio";}),"hidden native:audio is omitted from main panel");
+                rows=(List<PopupControl>)Call(popup,"ControlsForPage");
+                hideAudio=rows.Find(delegate(PopupControl r){return r.Id==252;});
+                Check(hideAudio!=null&&!hideAudio.Checked,"global Audio page keeps unchecked toggle so user can restore native:audio");
+                Call(popup,"PerformAction",hideAudio);
+                Check(!DeviceSettings.Current.HiddenDeviceIds.Contains("native:audio"),"toggling native:audio back on restores it cleanly");
+            }
+            owner.ExitThread();
         }
     }
     static void MainSystemVolume() {

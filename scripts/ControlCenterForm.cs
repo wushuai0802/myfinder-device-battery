@@ -147,6 +147,7 @@ namespace AtkBatteryTray {
         internal string DpiTargetToken;
         internal bool IsNativeMouse;
         internal bool IsNativeHeadset;
+        internal bool IsAudioOnly;
     }
 
     internal sealed class ControlCenterController : IDisposable {
@@ -1642,6 +1643,9 @@ namespace AtkBatteryTray {
                     sb.Append(';');
                 }
             }
+            if (pref.HiddenDeviceIds != null) {
+                foreach (string hid in pref.HiddenDeviceIds) sb.Append("hid:").Append(hid).Append(';');
+            }
             return sb.ToString();
         }
 
@@ -1668,17 +1672,19 @@ namespace AtkBatteryTray {
                     Card = card,
                     IsNativeMouse = card.NativeMouse,
                     IsNativeHeadset = card.NativeHeadset,
+                    IsAudioOnly = card.AudioOnly,
                     Hidden = pref.HiddenDeviceIds.Contains(card.Id),
                     PinnedTray = pref.TrayDeviceId == card.Id,
                     CanRename = !card.AudioOnly && (card.NativeMouse || card.NativeHeadset || card.Device != null),
-                    CanHide = !card.AudioOnly,
+                    CanHide = true,
                     CanPinTray = !card.AudioOnly,
                     Capability = isNoBat ? DeviceBatteryCapability.NoBatteryPlaceholder : DeviceBatteryCapability.Supported
                 };
                 if (card.AudioOnly) {
                     item.Transport = "仅音频控制";
-                    item.StateText = card.Subtitle ?? "不提供电池读数";
-                    item.NoBatteryReason = "无电量读取";
+                    string audioState = card.Subtitle ?? "不提供电池读数";
+                    item.StateText = item.Hidden ? audioState + " · 已隐藏" : audioState;
+                    item.NoBatteryReason = item.Hidden ? "已隐藏" : "仅音频";
                     item.VerificationText = "系统音频通道";
                 } else if (card.NativeMouse) {
                     item.Transport = "2.4 GHz 接收器";
@@ -1990,14 +1996,19 @@ namespace AtkBatteryTray {
 
             var left = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = palette.WindowBackground, Padding = new Padding(0, 0, 14, 0) };
             var supported = items.FindAll(delegate(ControlCenterDeviceItem it) { return it.Capability == DeviceBatteryCapability.Supported; });
-            var noBat = items.FindAll(delegate(ControlCenterDeviceItem it) { return it.Capability == DeviceBatteryCapability.NoBatteryPlaceholder; });
+            var audioCards = items.FindAll(delegate(ControlCenterDeviceItem it) { return it.IsAudioOnly; });
+            var noBat = items.FindAll(delegate(ControlCenterDeviceItem it) { return it.Capability == DeviceBatteryCapability.NoBatteryPlaceholder && !it.IsAudioOnly; });
 
             if (supported.Count > 0) {
                 left.Controls.Add(CreateGroupHeading("在线 / 已识别设备 (" + supported.Count + ")"));
                 foreach (var it in supported) left.Controls.Add(CreateDeviceListButton(it, it.Key == selected.Key));
             }
+            if (audioCards.Count > 0) {
+                left.Controls.Add(CreateGroupHeading("有线 / 音频卡片 (" + audioCards.Count + ")"));
+                foreach (var it in audioCards) left.Controls.Add(CreateCompactNoBatteryItem(it, it.Key == selected.Key));
+            }
             if (noBat.Count > 0) {
-                if (selected.Capability == DeviceBatteryCapability.NoBatteryPlaceholder) showNoBatteryDevices = true;
+                if (selected.Capability == DeviceBatteryCapability.NoBatteryPlaceholder && !selected.IsAudioOnly) showNoBatteryDevices = true;
                 left.Controls.Add(CreateNoBatteryExpander(noBat.Count, showNoBatteryDevices));
                 if (showNoBatteryDevices) {
                     foreach (var it in noBat) left.Controls.Add(CreateCompactNoBatteryItem(it, it.Key == selected.Key));
@@ -2127,7 +2138,8 @@ namespace AtkBatteryTray {
                 CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(item.Kind), new RectangleF(tile.X + 9, tile.Y + 9, 18, 18), symColor);
 
                 CompactRenderer.DrawLabel(g, item.Name, new RectangleF(58, 11, 134, 20), 13.5f, true, palette.Foreground, StringAlignment.Near);
-                CompactRenderer.DrawLabel(g, item.Transport, new RectangleF(58, 32, 134, 18), 12f, false, secondary, StringAlignment.Near);
+                string subTransport = item.Hidden ? "已隐藏 · " + item.Transport : item.Transport;
+                CompactRenderer.DrawLabel(g, subTransport, new RectangleF(58, 32, 134, 18), 12f, false, secondary, StringAlignment.Near);
 
                 if (item.Capability == DeviceBatteryCapability.NoBatteryPlaceholder) {
                     CompactRenderer.DrawLabel(g, item.NoBatteryReason ?? "无电量", new RectangleF(192, 19, 76, 20), 12f, false, secondary, StringAlignment.Far);
@@ -2213,9 +2225,12 @@ namespace AtkBatteryTray {
             if (item.CanHide) {
                 var showToggle = new ControlCenterToggle(palette, dark) { Checked = !item.Hidden };
                 showToggle.Toggled += delegate {
-                    UpdatePreferenceInPlace(delegate(AudioBindings p) { DeviceSettings.SetDeviceHidden(p, item.Key, !showToggle.Checked); });
+                    UpdatePreference(delegate(AudioBindings p) { DeviceSettings.SetDeviceHidden(p, item.Key, !showToggle.Checked); });
                 };
-                rows.Add(CreateSettingRow("在主面板显示", "关闭后不在托盘弹出面板展示，后台仍继续读取电量", showToggle, true));
+                string hideDesc = item.IsAudioOnly
+                    ? "关闭后不在托盘弹出面板显示此有线/音源卡片，仍可在音源设置中控制"
+                    : "关闭后不在托盘弹出面板展示，后台仍继续读取电量";
+                rows.Add(CreateSettingRow("在主面板显示", hideDesc, showToggle, true));
             }
 
             if (item.CanPinTray) {
