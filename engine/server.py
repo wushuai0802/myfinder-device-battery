@@ -57,6 +57,7 @@ PROVIDERS = (
     ("mchose_k99v3", "MchoseK99V3Provider"), ("mchose_v9pro2", "MchoseV9Pro2Provider"),
     ("mchose_by_keyboard", "MchoseByKeyboardProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
+    ("hyperx_cloud_flight", "HyperXCloudFlightProvider"),
     ("hyperx_flight_s", "HyperXFlightSProvider"),
     ("hyperx_stinger_core", "HyperXStingerCoreProvider"),
     ("cherry_mw5500", "CherryMW5500Provider"),
@@ -115,6 +116,7 @@ PROVIDER_VIDS = {
     "mchose_v9pro2": (0x3837,),
     "mchose_by_keyboard": (0x3554, 0x41E4),
     "hyperx_cloud3": (0x03F0,), "hyperx": (0x03F0,), "keychron": (0x3434,),
+    "hyperx_cloud_flight": (0x0951,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710, 0x391D), "jbl": (0x0ECB,),
     "dareu": (0x260D,),
     "delux": (0x3554,),
@@ -154,7 +156,7 @@ IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
 IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt", "inphic", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "vgn_kc2", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "inphic", "ajazz_ak980"}
-READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "vgn_kc2", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse", "lunafury"}
+READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "vgn_kc2", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_cloud_flight", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse", "lunafury"}
 A5V2_FAILURE_REASONS = frozenset({
     "A5V2 topology_unproven",
     "A5V2 collection_ambiguous",
@@ -853,7 +855,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                     if module.is_candidate_info(d)})
     if name in ("moondrop", "valkyrie", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
                 "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt",
-                "inphic", "xiaomi_mouse", "lunafury", "rapoo_vt9", "hyperx_flight_s", "cherry_mw5500", "vgn_kc2"):
+                "inphic", "xiaomi_mouse", "lunafury", "rapoo_vt9", "hyperx_cloud_flight", "hyperx_flight_s", "cherry_mw5500", "vgn_kc2"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop", "hyperx_stinger_core"):
@@ -1240,7 +1242,7 @@ class BatteryEngine:
                     if reason in diagnostics:
                         self.health[reader_key]["diagnosticSummary"] = reason
                         break
-            if name in ("rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "inphic", "ajazz_ak980", "moondrop", "hyperx_flight_s", "hyperx_stinger_core", "cherry_mw5500", "lunafury") and not measured and diagnostics:
+            if name in ("rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "inphic", "ajazz_ak980", "moondrop", "hyperx_cloud_flight", "hyperx_flight_s", "hyperx_stinger_core", "cherry_mw5500", "lunafury") and not measured and diagnostics:
                 # These readers emit only fixed text, numeric descriptor sizes and
                 # input report IDs/lengths. No paths, payloads or exceptions.
                 self.health[reader_key]["diagnosticSummary"] = reader_health_summary(diagnostics[0])

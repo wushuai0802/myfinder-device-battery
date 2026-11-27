@@ -12,6 +12,11 @@ Its copyright and permission notice is preserved in
 `engine/licenses/HaloBattery-MIT.txt`. The adapted HaloBattery portions retain
 that MIT notice; the project's AGPL license does not replace the upstream license.
 
+The HyperX Cloud Flight provider is an independent implementation of protocol
+facts documented by HeadsetControl and the MIT-licensed
+[kondinskis/hyperx-cloud-flight](https://github.com/kondinskis/hyperx-cloud-flight).
+No upstream application code is copied or bundled.
+
 The upstream application, installer, updater, input hooks, controller mode
 switches and user settings are not included. Provider imports are lazy; the
 native ATK and HyperX adapters retain ownership of their existing device IDs.
