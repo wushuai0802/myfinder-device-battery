@@ -548,6 +548,25 @@ The same `66 <cmd>` 62-byte exchange as the Cloud III Wireless row, from @dantif
 
 The vendor collection, picked by usage page rather than position (0xFF90:0x0303): the dongle carries four collections on the one interface, so the first one is not the right one. A 52-byte output report `06 ff bb <command> 00` is answered by 20 bytes echoing the command: command 0x02 carries the level in byte 7 (voltage in bytes 5-6), command 0x03 reports charging in byte 4 - the same exchange HeadsetControl uses for these two product ids. **Unverified** - no Cloud II Wireless was on hand, so a reply that does not echo the command is ignored and a level above 100 refused rather than shown
 
+### HyperX Cloud Flight Wireless (0951:16C4 / 1723)
+
+The original Cloud Flight uses the `FF53:0303` or `FF90:0303` vendor collection,
+not the Cloud Flight S protocol. The read-only query is a 20-byte output report
+`21 FF 05 00 ...`; a 15- or 20-byte reply returns battery voltage as big-endian
+millivolts at bytes 3-4. Values above `0x100B` are treated as charging; otherwise
+the voltage is converted with the HeadsetControl Cloud Flight curve. The command,
+both Kingston receiver PIDs and curve are independently documented by
+[HeadsetControl](https://github.com/Sapd/HeadsetControl/blob/1d2ccd1412246d85b2f8733d739cc865ba466aab/lib/devices/hyperx_cloud_flight.hpp)
+and the MIT-licensed `kondinskis/hyperx-cloud-flight` implementation.
+
+**Confirmed on local hardware:** the installed HyperX Ngenuity Cloud Flight module
+enumerated `0951:1723`; its `FF90:0303` descriptor declares 20-byte input/output
+reports. A live `21 FF 05` query returned `21 FF 05 0F 76 ...` (3958 mV), which
+the same curve converts to an estimated 95%. This was read while Ngenuity was
+running; its displayed percentage was not compared. Charging transition and the
+older `16C4` receiver remain untested here. Charging replies clear the percentage
+because voltage under charge cannot reliably estimate the remaining capacity.
+
 ### HyperX Cloud III S Wireless
 
 **Connection:** 2.4 GHz dongle (03F0:02CC, and 03F0:06BE which the reference also lists)

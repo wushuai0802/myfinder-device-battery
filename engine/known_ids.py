@@ -41,6 +41,7 @@ TABLES = {
     "astro": ("PIDS",), "asus": ("KNOWN",), "asus_omni": ("PIDS",), "asus_headset": ("PIDS",), "audeze": ("KNOWN",),
     "corsair": ("PIDS", "BRAGI_PIDS"), "gwolves": ("WIRED", "MODELS"),
     "hyperx": ("PIDS",), "hyperx_cloud3": ("PIDS",),
+    "hyperx_cloud_flight": ("PIDS",),
     "hyperx_cloud3s": ("PIDS",), "jbl": ("PIDS",),
     "keychron": ("PIDS",), "lamzu": ("PIDS",), "lofree": ("DONGLES",),
     "logitech": ("HEADSETS",), "logitech_centurion": ("PIDS",),
