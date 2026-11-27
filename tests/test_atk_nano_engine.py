@@ -28,11 +28,15 @@ class AtkNanoBridgeTests(unittest.TestCase):
         commands = [dict(action="query", sequence=i, provider="pulsar",
                          physicalId=info["physical_id"], inventory=[row])
                     for i, row in enumerate((unproven, info, info, info), 1)]
-        # One persistent child provider: failed proof -> 73% -> silence -> 0%.
-        with N.fixture([N.reply(73), [], N.reply(0)], [info]) as bus:
+        # One persistent child provider: failed proof -> 73% (+0x0F silent) -> silence -> 0% (+0x0F charging).
+        with N.fixture([N.reply(73), [], [], N.reply(0), N.reply(1, command=0x0F)], [info]) as bus:
             responses = child_replies(commands)
-        self.assertEqual(bus.writes, [(info["path"], N.REQUEST)] * 3)
-        self.assertEqual(len(bus.reads), 3)
+        self.assertEqual(bus.writes, [
+            (info["path"], N.REQUEST), (info["path"], N.CHARGING_REQUEST),
+            (info["path"], N.REQUEST),
+            (info["path"], N.REQUEST), (info["path"], N.CHARGING_REQUEST),
+        ])
+        self.assertEqual(len(bus.reads), 5)
         self.assertEqual(bus.opened, bus.closed)
         expected = [["NANO input report unproven"], [], ["NANO no valid battery reply"], []]
         self.assertEqual([r["diagnostics"] for r in responses], expected)
@@ -142,7 +146,7 @@ class AtkNanoBridgeTests(unittest.TestCase):
             self.assertEqual(response["candidateCount"], 1)
             self.assertFalse(response.get("errorCode"))
             self.assertEqual([s["level"] for s in response["statuses"]], [73] if proven else [])
-            self.assertEqual(bus.writes, [(info["path"], N.REQUEST)] if proven else [])
+            self.assertEqual(bus.writes, [(info["path"], N.REQUEST), (info["path"], N.CHARGING_REQUEST)] if proven else [])
             if proven:
                 self.assertFalse(response["statuses"][0]["charging_known"])
 

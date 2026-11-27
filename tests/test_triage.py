@@ -747,7 +747,7 @@ class KnownIdsTests(unittest.TestCase):
             self.assertTrue(reason.strip())
             self.assertTrue(any(d["provider"] == module for d in first["devices"]))
         self.assertFalse(any(d["provider"] in first["unparsed"] for d in first["devices"]))
-        self.assertEqual(first["vendors"]["mchose"], sorted([0x5253, 0x3837, 0xA8A5, 0x2023]))
+        self.assertEqual(first["vendors"]["mchose"], sorted([0x5253, 0x3837, 0xA8A5, 0x2023, 0x0BDA]))
         self.assertNotIn(("mchose", 0x5253, 0x0031), entries)  # Reply model code.
         self.assertNotIn(("lofree", 0x388D, 0x0024), entries)  # Cable is deliberately not read.
         self.assertFalse(any(d["vendorId"] == 0x05AC and d["productId"] == 0x024F for d in first["devices"]))
