@@ -4774,3 +4774,27 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - **ATK / VXE NANO (`373B:1216` & `373B:12F5`, `#1174`, Grade C — 用户实机验证 #1174, `engine/providers/pulsar.py`)**:
   - User hardware verification in `#1174` confirmed `v1.4.1-beta.4` reads live battery on `373B:1216` `"NK mouse NANO dongle"` (`percent: 51`, `online: true`, `sourceQuality: device_reply`, `pulsar health: state=ok`).
   - Added best-effort read-only BITMOUSE `GetBatteryChargingStatus` (`0x0F`, `08 85 72 02 00 01 0F 01` + 56 zero bytes) from official ATK Hub (`.ai/evidence/atkhub/chunks/filter-DJ0h7EXv.js`, `GetBatteryChargingStatus = 15`, `getPowerInfo` offset `45288`), executed on the already-open proven `FF05:0001` handle only after `0x07` succeeds (`250 ms` / `8` reads budget). Accepts only `status == 0`, `cmd == 0x0F`, `data_len >= 1`, `value in (0, 1)` (`1 = charging`, `0 = discharging`); silently degrades to `charging_known = False` without discarding the valid `0x07` battery level if a firmware does not reply or returns an error.
+
+
+## HyperX Cloud Stinger Core Wireless DTS (`03F0:0A8E`, `03F0:0A93`, `0951:170B`)
+
+- **Source & License**: Derived from MIT-licensed `davidsantanaalves/HyperBatteryMonitor` @ pinned commit `999d40bc1502d6e932c5c3df4e6a32d5f00c7158` (`Devices/CloudStingerCoreWirelessDevice.cs`), covering Kingston `0951:170B`, HP `03F0:0A93` (PR #6), and HP `03F0:0A8E` (PR #16; also observed in a MyFinder `1.4.1-beta.4` user report showing `03F0:0A8E "Hid Interface" 000C:0001 FF00:0001 FFC0:0001`).
+- **Strict Gate (`engine/providers/hyperx_stinger_core.py`, Grade C)**:
+  - Exact `(VID, PID)` pairs `(0x03F0, 0x0A8E)`, `(0x03F0, 0x0A93)`, `(0x0951, 0x170B)` only, unique `FF00:0001` collection per resolved `pnp:usb\vid_...&pid_...` USB parent, and runtime descriptor proof (`topology.py`) that Feature report `0xFF` (`255`) exists with length in `32..128` matching `feature_report_length`. `FFC0:0001` (mic/mute) and `000C:0001` are never opened.
+  - Sends one read-only connection check Feature report (`FF 07 00 FD 04 00 00 02 82 03 05 29 0F 00 00 03 68 10 00 00`, zero-padded to proven length) without write retry. HP revisions poll `GetFeature(0xFF)` up to 10 × 20 ms skipping stale `raw[1:3] == 01 00`; Kingston reads once. If `raw[11] != 0x01`, stops immediately without sending the battery query.
+  - When connected, sends one read-only battery query (`FF 07 00 FD 04 0C F1 02 01 04 F0 0C`, zero-padded). HP revisions require header `FF 12 05`. State byte `raw[9]`: `0x06` = 100% full (`charging = False`, exact), `0x05` = charging (`charging = True`, `about NN%`), `0x03` = discharging (`charging = False`, `about NN%`); `int16_le` millivolts at `raw[11:13]` must fall in `2500..5000` mV and map through the 11-knot piecewise-linear voltage curves. Pending real-hardware confirmation on MyFinder.
+
+## VGN ryMs Wired Mode (`391D:1004` `#1203` and Official Siblings)
+
+- **Source**: Official VGN HUB bundle (`.ai/evidence/vgnhub/index-ZngoA_qG.js`, `ryMs` driver `jc.GetPowerSupply = 138` (`0x8A`), `getMsPowerSupply()`, `sendCmd()`).
+- **Protocol (`engine/providers/vgn_ry_ms.py`, Grade C)**:
+  - Extends `vgn_ry_ms` with the 6 official wired `vgn-ry-mouse` PIDs paired with the existing 6 wireless receivers: `391D:1004` (`VGN 蜻蜓3 Pro Max`, `#1203`), `1008` (`Y2 V2 Pro Max`), `1015` (`F1 V2 Pro Max`), `1028` (`3 Ultra`), `102F` (`F1 V5 Ultra`), and `1048` (`F2 V2 Ultra`).
+  - Wired PIDs strictly require `FFFF:0002`, `interface_number == 1`, HID path containing matching `vid_391d&pid_<pid>&mi_01&col01`, resolved non-`collection:` USB parent, unique collection, and proven unnumbered Feature report `0` of 65 bytes (`{"0": 65}`).
+  - Sends one 65-byte Feature report `00 8A 00 00 00 00 00 75 00...` (`crc = 0xFF - 0x8A = 0x75`), waits 60 ms, reads `GetFeature(0, 65)`, rejects request echo and `0` placeholder, and extracts `1..100%` from `raw[2]` (WebHID `payload[1]`). `charging_known = False`; pending real-hardware verification.
+
+## Batch 11-27 User Verification & Grade-D Updates (`#1176`, `#781` / `#1208`)
+
+- **Lunafury TYPE33EVO (`373E:0084`, `#1176`, Grade C — 用户实机验证，#1176)**: Reporter verified `v1.4.1-beta.4` on real hardware (`69%`, confirming both everyday discharge and charging battery readings work normally). Remains Grade C per maintainer policy.
+### iKF-V11 Pro (7.1) (`0E6A:0110`, Grade D Observed Unsupported)
+
+- Two independent detailed diagnostics (`#781`, `#1208`) confirm `0E6A:0110` `"iKF-V11 Pro (7.1)"` exposes only USB Audio (`MI_00`) and standard Consumer Control (`000C:0001`) with zero vendor HID collections and no Windows Bluetooth battery/GATT property; official `hub.ikeepfun.com` binds only VID `38B1`. Recorded as Grade D `observedUnsupported` strictly scoped to `"iKF-V11 Pro (7.1)"` so unrelated `0E6A:0110` devices (such as `AULA-G7`) are unaffected. [Issue #781](https://github.com/wushuai0802/myfinder-device-battery/issues/781) · [Issue #1208](https://github.com/wushuai0802/myfinder-device-battery/issues/1208)

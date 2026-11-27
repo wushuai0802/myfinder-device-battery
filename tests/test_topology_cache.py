@@ -2070,9 +2070,11 @@ class VgnRyMsDescriptorTests(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         case.identities[PATH_A] = (0x391D, 0x1A04)
-        case.identities[PATH_B] = (0x391D, 0x1004)
+        case.identities[PATH_B] = (0x391D, 0x1001)
+        wired = r"\\?\hid#vid_391d&pid_1004&mi_01&col01#synthetic"
         extra = r"\\?\hid#vid_391d&pid_1a25&mi_01&col01#synthetic"
         sibling = extra.replace("col01", "col02")
+        case.identities[wired] = (0x391D, 0x1004)
         case.identities[extra] = case.identities[sibling] = (0x391D, 0x1A25)
         length = 64
 
@@ -2089,18 +2091,60 @@ class VgnRyMsDescriptorTests(unittest.TestCase):
 
         case.hid.HidP_GetCaps.side_effect = caps
         case.hid.HidP_GetValueCaps.side_effect = fields
-        infos = case.scan([PATH_A, PATH_B, extra, sibling])
+        infos = case.scan([PATH_A, PATH_B, wired, extra, sibling])
         by_path = {row["path"]: row for row in infos}
         self.assertEqual(by_path[PATH_A.encode()]["feature_report_sizes"], {"0": 65})
+        self.assertEqual(by_path[wired.encode()]["feature_report_sizes"], {"0": 65})
         self.assertEqual(by_path[extra.encode()]["feature_report_sizes"], {"0": 65})
         self.assertNotIn("feature_report_sizes", by_path[PATH_B.encode()])
         self.assertNotIn("feature_report_sizes", by_path[sibling.encode()])
         self.assertIn(PATH_A, case.cache)
+        self.assertIn(wired, case.cache)
         case.cache.clear()
         length = 63
         bad, = case.scan([PATH_A])
         self.assertEqual(bad["feature_report_sizes"], {"0": 64})
         self.assertNotIn(PATH_A, case.cache)
+        case.hid.HidD_GetFeature.assert_not_called()
+        case.hid.HidD_SetFeature.assert_not_called()
+
+
+class HyperXStingerCoreDescriptorTests(unittest.TestCase):
+    def test_only_ff00_feature_ff_proof_is_published_and_cached(self):
+        case = DescriptorCacheTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        hp_path = r"\\?\hid#vid_03f0&pid_0a8e&mi_03&col03#synthetic"
+        mute_path = r"\\?\hid#vid_03f0&pid_0a8e&mi_03&col04#synthetic"
+        case.identities[hp_path] = (0x03F0, 0x0A8E)
+        case.identities[mute_path] = (0x03F0, 0x0A8E)
+        pages = {hp_path: (0xFF00, 1), mute_path: (0xFFC0, 1)}
+        current = {"path": hp_path}
+        orig_open = case.kernel.CreateFileW.side_effect
+
+        def track_open(path, *args, **kwargs):
+            current["path"] = path
+            return orig_open(path, *args, **kwargs) if orig_open else 1
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = pages[current["path"]]
+            value.feature, value.fv = 64, 1
+            return 0x00110000
+
+        def fields(report_type, fields_, count, data):
+            self.assertEqual(report_type, 2)
+            fields_[0].report, fields_[0].bits, fields_[0].count = 0xFF, 8, 63
+            return 0x00110000
+
+        case.kernel.CreateFileW.side_effect = track_open
+        case.hid.HidP_GetCaps.side_effect = caps
+        case.hid.HidP_GetValueCaps.side_effect = fields
+        infos = case.scan([hp_path, mute_path])
+        by_path = {row["path"]: row for row in infos}
+        self.assertEqual(by_path[hp_path.encode()]["feature_report_sizes"], {"255": 64})
+        self.assertNotIn("feature_report_sizes", by_path[mute_path.encode()])
+        self.assertIn(hp_path, case.cache)
         case.hid.HidD_GetFeature.assert_not_called()
         case.hid.HidD_SetFeature.assert_not_called()
 

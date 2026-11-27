@@ -58,6 +58,7 @@ PROVIDERS = (
     ("mchose_by_keyboard", "MchoseByKeyboardProvider"),
     ("hyperx_alpha2", "HyperXAlpha2Provider"), ("hyperx_cloud3", "HyperXCloud3Provider"),
     ("hyperx_flight_s", "HyperXFlightSProvider"),
+    ("hyperx_stinger_core", "HyperXStingerCoreProvider"),
     ("cherry_mw5500", "CherryMW5500Provider"),
     ("hyperx", "HyperXProvider"), ("keychron", "KeychronProvider"),
     ("pulsar", "PulsarProvider"), ("jbl", "JblProvider"),
@@ -102,6 +103,7 @@ PROVIDER_VIDS = {
     "vgn_keyboard": (0x320F,), "vgn_keyboard_wired": (0x320F,),
     "cherry": (0x046A,), "cherry_mw5500": (0x046A,),
     "hyperx_flight_s": (0x0951,),
+    "hyperx_stinger_core": (0x03F0, 0x0951),
     "lingbao": (0x088D,),
     "vgn_beiying": (0x258A, 0x391D),
     "vgn_dragonfly3": (0x391D,), "vgn_ry_ms": (0x391D,), "vgn_kc2": (0x391D,), "ninjutso_legacy": (0x1915,),
@@ -152,7 +154,7 @@ IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
 IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt", "inphic", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "vgn_kc2", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "inphic", "ajazz_ak980"}
-READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "vgn_kc2", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse", "lunafury"}
+READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "vgn_kc2", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse", "lunafury"}
 A5V2_FAILURE_REASONS = frozenset({
     "A5V2 topology_unproven",
     "A5V2 collection_ambiguous",
@@ -854,7 +856,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                 "inphic", "xiaomi_mouse", "lunafury", "rapoo_vt9", "hyperx_flight_s", "cherry_mw5500", "vgn_kc2"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
-    if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop"):
+    if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop", "hyperx_stinger_core"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if (d.get("vendor_id"), d.get("product_id")) in module.PIDS})
     pids = set()
@@ -1108,7 +1110,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "vgn_kc2", "am_infinity_97", "mchose", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive", "rainyrt", "inphic", "ajazz_ak980", "cherry", "cherry_mw5500", "hyperx_flight_s", "lingbao", "zhuaudio", "asus_omni", "lunafury") and summary and not item.get("errorCode"):
+            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "vgn_kc2", "am_infinity_97", "mchose", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive", "rainyrt", "inphic", "ajazz_ak980", "cherry", "cherry_mw5500", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "lunafury") and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -1238,7 +1240,7 @@ class BatteryEngine:
                     if reason in diagnostics:
                         self.health[reader_key]["diagnosticSummary"] = reason
                         break
-            if name in ("rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "inphic", "ajazz_ak980", "moondrop", "hyperx_flight_s", "cherry_mw5500", "lunafury") and not measured and diagnostics:
+            if name in ("rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "inphic", "ajazz_ak980", "moondrop", "hyperx_flight_s", "hyperx_stinger_core", "cherry_mw5500", "lunafury") and not measured and diagnostics:
                 # These readers emit only fixed text, numeric descriptor sizes and
                 # input report IDs/lengths. No paths, payloads or exceptions.
                 self.health[reader_key]["diagnosticSummary"] = reader_health_summary(diagnostics[0])

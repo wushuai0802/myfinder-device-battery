@@ -1,6 +1,8 @@
-"""VGN receiver battery queries from VGN HUB's ryMs driver.
+"""VGN mouse battery queries from VGN HUB's ryMs driver (2.4G receivers and wired USB).
 
 The contributor tested 391D:1A04 at 92% and 91% against VGN HUB's 92%.
+Wired 391D:1004 (#1203) and sibling ryMs wired PIDs use the same ryMs
+FFFF:0002 / MI_01&Col01 report-0 65-byte Feature channel with jc.GetPowerSupply (0x8A).
 See engine/upstream-protocols.md for the report and evidence scope.
 """
 from __future__ import annotations
@@ -21,37 +23,55 @@ PIDS = {
     0x1A25: "VGN Dragonfly 3 Ultra",
     0x1A2B: "VGN Dragonfly F1 V5 Ultra",
     0x1A41: "VGN Dragonfly F2 V2 Ultra",
+    0x1004: "VGN 蜻蜓3 Pro Max",
+    0x1008: "VGN Dragonfly Y2 V2 Pro Max",
+    0x1015: "VGN Dragonfly F1 V2 Pro Max",
+    0x1028: "VGN Dragonfly 3 Ultra",
+    0x102F: "VGN Dragonfly F1 V5 Ultra",
+    0x1048: "VGN Dragonfly F2 V2 Ultra",
 }
+WIRED_PIDS = frozenset((0x1004, 0x1008, 0x1015, 0x1028, 0x102F, 0x1048))
 COLLECTION = (0xFFFF, 0x0002)
 REPORT_ID = 0
 REPORT_BYTES = 65  # 64-byte Feature payload and one Windows report-ID slot.
+WIRELESS_CMD = 0xF7
+WIRED_CMD = 0x8A  # VGN HUB ryMs jc.GetPowerSupply = 138
 REPLY_WAIT = 0.06
 
 
 def matches_collection(info):
-    if (info.get("vendor_id") != VID or info.get("product_id") not in PIDS
+    pid = info.get("product_id")
+    if (info.get("vendor_id") != VID or pid not in PIDS
             or (info.get("usage_page"), info.get("usage")) != COLLECTION):
         return False
-    if info["product_id"] == 0x1A04:
+    if pid == 0x1A04:
         return True  # Preserve the same path acceptance as the original candidate.
     path = info.get("path")
-    if info.get("interface_number") != 1 or not isinstance(path, (str, bytes)):
+    if type(info.get("interface_number")) is not int or info["interface_number"] != 1 or not isinstance(path, (str, bytes)):
         return False
     try:
         text = path.decode("utf-8") if isinstance(path, bytes) else path
     except UnicodeError:
         return False
     parts = text.split("#")
-    return (len(parts) >= 3 and "\0" not in text
-            and re.search(r"&mi_01&col01(?:&|$)", parts[1], re.I) is not None)
+    if len(parts) < 3 or "\0" in text:
+        return False
+    if pid in WIRED_PIDS:
+        return re.search(
+            rf"vid_391d&pid_{pid:04x}(?:&rev_[0-9a-f]{{4}})?&mi_01&col01(?:&|$)",
+            parts[1],
+            re.I,
+        ) is not None
+    return re.search(r"&mi_01&col01(?:&|$)", parts[1], re.I) is not None
 
 
 def checksum(prefix):
     return 0xFF - (sum(prefix) & 0xFF)
 
 
-def make_request():
-    prefix = bytes([0xF7]) + bytes(6)
+def make_request(wired=False):
+    cmd = WIRED_CMD if wired else WIRELESS_CMD
+    prefix = bytes([cmd]) + bytes(6)
     return bytes([REPORT_ID]) + prefix + bytes([checksum(prefix)]) + bytes(56)
 
 
@@ -66,6 +86,25 @@ def parse_reply(raw):
     if level > 100 or sleep not in (0, 1):
         return None
     return level, sleep == 1
+
+
+def parse_wired_reply(raw):
+    if (not isinstance(raw, (bytes, bytearray, list, tuple)) or len(raw) != REPORT_BYTES
+            or any(type(byte) is not int or not 0 <= byte <= 255 for byte in raw)):
+        return None
+    if raw[0] != REPORT_ID or not any(raw[1:]):
+        return None
+    # Reject an un-updated request prefix echoed straight back (even with different padding).
+    if bytes(raw[:9]) == make_request(wired=True)[:9]:
+        return None
+    # Accept only status-zero or GetPowerSupply (0x8A) response header to block unrelated commands.
+    if raw[1] not in (0x00, WIRED_CMD):
+        return None
+    # VGN HUB ryMs wired getMsPowerSupply() reads battery from payload[1] (Windows raw[2]).
+    level = raw[2]
+    if not 1 <= level <= 100:
+        return None
+    return level, False
 
 
 class VgnRyMsProvider(Provider):
@@ -102,7 +141,8 @@ class VgnRyMsProvider(Provider):
                     or info.get("feature_report_sizes") != {"0": REPORT_BYTES}):
                 self._diag.append("feature report 0/65 unproven; nothing sent")
                 continue
-            reading = self._read(info["path"])
+            wired = info["product_id"] in WIRED_PIDS
+            reading = self._read(info["path"], wired=wired)
             if reading is None:
                 continue
             level, asleep = reading
@@ -114,16 +154,17 @@ class VgnRyMsProvider(Provider):
             ))
         return result
 
-    def _read(self, path):
+    def _read(self, path, wired=False):
         dev = None
         try:
             dev = hid.device()
             dev.open_path(path)
-            if dev.send_feature_report(make_request()) != REPORT_BYTES:
+            if dev.send_feature_report(make_request(wired=wired)) != REPORT_BYTES:
                 self._diag.append("short/failed battery query write; no retry")
                 return None
             time.sleep(REPLY_WAIT)
-            reading = parse_reply(dev.get_feature_report(REPORT_ID, REPORT_BYTES))
+            raw = dev.get_feature_report(REPORT_ID, REPORT_BYTES)
+            reading = parse_wired_reply(raw) if wired else parse_reply(raw)
             if reading is None:
                 self._diag.append("rejected battery reply")
             return reading
