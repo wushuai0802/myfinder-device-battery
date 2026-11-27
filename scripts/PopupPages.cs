@@ -274,6 +274,12 @@ namespace AtkBatteryTray {
                 if(!String.IsNullOrEmpty(owner.GenericHealthSummary))rows.Add(Info("读取器健康",owner.GenericHealthSummary));
                 else if(!String.IsNullOrEmpty(owner.GenericError))rows.Add(Info("读取器状态","暂不可用，详情见诊断摘要"));
                 else if(!String.IsNullOrEmpty(owner.GenericIdleSummary))rows.Add(Info("读取器健康",owner.GenericIdleSummary));
+                if(pref.TaskbarOverlay!=null&&pref.TaskbarOverlay.Enabled){
+                    bool tbHealthy=owner.TaskbarOverlayStatusCode=="ready"||owner.TaskbarOverlayStatusCode=="ready_avoided";
+                    var tbRow=Info("任务栏浮层",tbHealthy?owner.TaskbarOverlayShortStatus:(owner.TaskbarOverlayShortStatus+" · "+owner.TaskbarOverlayStatusMessage));
+                    if(!tbHealthy)tbRow.WrapText=true;
+                    rows.Add(tbRow);
+                }
                 rows.Add(Info("许可证","AGPL-3.0-only"));rows.Add(Info("无担保","按现状提供"));
                 var source=Info("源码",null);source.Detail="https://github.com/\nwushuai0802/\nmyfinder-device-battery";rows.Add(source);
                 rows.Add(Row(250,"复制诊断摘要",null,"info"));

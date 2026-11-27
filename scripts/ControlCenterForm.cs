@@ -1650,7 +1650,7 @@ namespace AtkBatteryTray {
                 var tb = pref.TaskbarOverlay;
                 sb.Append(tb.Enabled).Append('|').Append(tb.ShowIcons).Append('|').Append(tb.MaxDevices).Append('|').Append(tb.OffsetX).Append('|');
             }
-            sb.Append(owner.TaskbarOverlayStatusCode).Append('|');
+            sb.Append(owner.TaskbarOverlayStatusCode).Append('|').Append(owner.TaskbarOverlayStatusMessage ?? "").Append('|').Append(owner.TaskbarOverlayDiagnostic ?? "").Append('|');
             sb.Append(owner.StoppedFamilyDeviceCount).Append('|').Append(owner.IsProbeToggleBusy).Append('|').Append(owner.IsFamilyOpBusy).Append('|');
             sb.Append(owner.GenericReady).Append('|').Append(owner.GenericError ?? "").Append('|').Append(owner.GenericHealthSummary ?? "").Append('|');
             sb.Append(owner.Current != null ? owner.Current.Percent.ToString() + ":" + owner.Current.Charging : "-").Append('|');
@@ -2494,7 +2494,7 @@ namespace AtkBatteryTray {
 
                 bool tbReady = owner.TaskbarOverlayStatusCode == "ready" || owner.TaskbarOverlayStatusCode == "ready_avoided";
                 var statusTone = tbReady ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;
-                var diagBadge = new ControlCenterBadge(tbReady ? "环境就绪" : (tb.Enabled ? "已自动降级" : "未开启"), palette, dark, subFont, statusTone, false, true);
+                var diagBadge = new ControlCenterBadge(tbReady ? "环境就绪" : (tb.Enabled ? owner.TaskbarOverlayShortStatus : "未开启"), palette, dark, subFont, statusTone, false, true);
                 rows.Add(CreateSettingRow("当前环境状态", owner.TaskbarOverlayStatusMessage, diagBadge, true));
             }
 
@@ -2658,6 +2658,19 @@ namespace AtkBatteryTray {
                 ShowNotice("已触发设备与组件刷新");
             }, false, false, "refresh"), false);
 
+            var pref = DeviceSettings.Current;
+            Control rTaskbar = null;
+            if (pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled) {
+                rTaskbar = CreateSettingRow("任务栏浮层状态", owner.TaskbarOverlayShortStatus + " · " + owner.TaskbarOverlayStatusMessage, CreateActionButton("重建浮层", delegate {
+                    if (owner.RecreateTaskbarOverlay("manual")) {
+                        ShowNotice("已重建任务栏电量浮层");
+                        RebuildCurrentPage();
+                    } else {
+                        ShowNotice("任务栏电量浮层未启用");
+                    }
+                }, false, false, "refresh"), true);
+            }
+
             var r2 = CreateSettingRow("反馈问题", "在程序内提交新设备请求或异常，不需要 GitHub 账号", CreateActionButton("写反馈", delegate {
                 owner.OpenFeedbackFromHost(this, false, copyText, openLink);
             }, false, true), true);
@@ -2679,6 +2692,7 @@ namespace AtkBatteryTray {
             card.Controls.Add(r4);
             card.Controls.Add(r3);
             card.Controls.Add(r2);
+            if (rTaskbar != null) card.Controls.Add(rTaskbar);
             card.Controls.Add(r1);
             root.Controls.Add(card);
             root.Controls.SetChildIndex(card, 0);

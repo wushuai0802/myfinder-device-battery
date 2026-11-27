@@ -11,10 +11,10 @@ namespace AtkBatteryTray {
     // Design constraints:
     // - NEVER calls SetParent into Shell_TrayWnd or injects DLLs/hooks into explorer.exe.
     // - Renders as an independent WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE overlay
-    //   positioned adjacent to the notification tray on the primary bottom taskbar.
-    // - Strict environment gating: auto-hide taskbar, non-bottom taskbar, missing/third-party shell,
-    //   fullscreen obstruction, or insufficient free width degrade cleanly by hiding the overlay and
-    //   surfacing an explicit diagnostic reason in Control Center.
+    //   positioned adjacent to the notification tray on the primary taskbar (bottom/top/left/right).
+    // - Strict environment gating & self-recovery: auto-hide taskbar, missing/third-party shell,
+    //   fullscreen obstruction, insufficient free space, or persistent commit/Z-order failures degrade
+    //   cleanly by hiding the overlay, auto-restoring the tray icon, and surfacing explicit diagnostics.
     internal sealed class TaskbarEnvironmentSnapshot {
         internal bool HasTaskbarWindow;
         internal bool TaskbarVisible;
@@ -27,6 +27,8 @@ namespace AtkBatteryTray {
         internal DisplayObstruction Obstruction;
         internal bool TaskbarCoveredByFullscreen;
         internal int NotificationState; // SHQueryUserNotificationState: 2=BUSY, 3=D3D_FULLSCREEN, 4=PRESENTATION, 5=ACCEPTS
+        internal bool SelfBehindTaskbar; // True when selfHandle sits below Shell_TrayWnd in EnumWindows top-to-bottom Z-order
+        internal bool SelfCloaked; // True when DWMWA_CLOAKED reports non-zero on selfHandle
         internal List<Rectangle> OccupiedRects;
     }
 
@@ -218,8 +220,9 @@ namespace AtkBatteryTray {
                    monOverlap.Height >= (monitorBounds.Height * 3) / 4;
         }
 
-        static void ProbeTaskbarWindows(IntPtr trayWnd, IntPtr selfHandle, Rectangle monitorBounds, Rectangle bar, bool hasTrayNotify, Rectangle trayNotifyRect, List<Rectangle> occupied, out bool taskbarCoveredByFullscreen) {
+        static void ProbeTaskbarWindows(IntPtr trayWnd, IntPtr selfHandle, Rectangle monitorBounds, Rectangle bar, bool hasTrayNotify, Rectangle trayNotifyRect, List<Rectangle> occupied, out bool taskbarCoveredByFullscreen, out bool selfBehindTaskbar) {
             taskbarCoveredByFullscreen = false;
+            selfBehindTaskbar = false;
             if (trayWnd == IntPtr.Zero || bar.Width <= 0 || bar.Height <= 0 || occupied == null) return;
             bool verticalBar = bar.Height > bar.Width;
             uint currentPid = GetCurrentProcessId();
@@ -227,9 +230,14 @@ namespace AtkBatteryTray {
             IntPtr desktopWnd = GetDesktopWindow();
             bool reachedTaskbar = false;
             bool covered = false;
+            bool behind = false;
             try {
                 EnumWindows(delegate(IntPtr hwnd, IntPtr lParam) {
-                    if (hwnd == IntPtr.Zero || hwnd == selfHandle) return true;
+                    if (hwnd == IntPtr.Zero) return true;
+                    if (selfHandle != IntPtr.Zero && hwnd == selfHandle) {
+                        if (reachedTaskbar) behind = true;
+                        return true;
+                    }
                     if (hwnd == trayWnd) {
                         reachedTaskbar = true;
                         return true;
@@ -263,6 +271,7 @@ namespace AtkBatteryTray {
                 }, IntPtr.Zero);
             } catch (Exception) { }
             taskbarCoveredByFullscreen = reachedTaskbar && covered;
+            selfBehindTaskbar = reachedTaskbar && behind;
 
             try {
                 int horizontalGuardStart = bar.Left + bar.Width / 3;
@@ -363,8 +372,11 @@ namespace AtkBatteryTray {
             } catch (Exception) { }
 
             bool coveredByFullscreen;
-            ProbeTaskbarWindows(trayWnd, selfHandle, snap.PrimaryMonitorBounds, snap.TaskbarRect, snap.HasTrayNotifyRect, snap.TrayNotifyRect, snap.OccupiedRects, out coveredByFullscreen);
+            bool selfBehindTaskbar;
+            ProbeTaskbarWindows(trayWnd, selfHandle, snap.PrimaryMonitorBounds, snap.TaskbarRect, snap.HasTrayNotifyRect, snap.TrayNotifyRect, snap.OccupiedRects, out coveredByFullscreen, out selfBehindTaskbar);
             snap.TaskbarCoveredByFullscreen = coveredByFullscreen;
+            snap.SelfBehindTaskbar = selfBehindTaskbar;
+            snap.SelfCloaked = selfHandle != IntPtr.Zero && IsWindowCloaked(selfHandle);
 
             return snap;
         }
@@ -375,7 +387,7 @@ namespace AtkBatteryTray {
         const int GapBeforeNotifyPx = 10;
         const int GapBetweenPluginsPx = 8;
         const int MaxAvoidanceIterations = 16;
-        const int MinLeftGuardRatioDenominator = 3; // Reserve left 1/3 for Start/search/pinned apps
+        const int MinLeftGuardRatioDenominator = 3; // Reserve left/top 1/3 for Start/search/pinned apps
 
         internal static bool TryComputeHorizontalBounds(TaskbarEnvironmentSnapshot snap, Size overlayPhysicalSize, out int safeMinX, out int maxAllowedX, out int y, out TaskbarOverlayPlacement failure) {
             bool isVertical;
@@ -696,6 +708,117 @@ namespace AtkBatteryTray {
         }
     }
 
+    internal enum TaskbarOverlayRecoveryAction {
+        None,
+        PromoteZOrder,
+        RecreateHandle,
+        DegradeCommitFailed,
+        DegradeOccluded
+    }
+
+    internal delegate bool TaskbarOverlayCommitFunc(
+        IntPtr hwnd,
+        Point physicalLocation,
+        Size logicalSize,
+        float dpiScale,
+        byte opacity,
+        Action<Graphics, SizeF> paint,
+        out int win32Error);
+
+    // Pure deterministic state machine governing layered-window commit failure retries,
+    // Z-order re-promotion above Shell_TrayWnd, bounded handle recreation, and fail-safe degradation.
+    internal sealed class TaskbarOverlayRecoveryPolicy {
+        internal const int CommitFailuresBeforeRecreate = 2;
+        internal const int BehindTicksBeforeRecreate = 3;
+        internal const int DefaultMaxRecreates = 3;
+        internal const int HealthyFramesBeforeBudgetReset = 150; // ~60s of continuous healthy 400ms ticks
+
+        readonly int maxRecreates;
+        int consecutiveCommitFailures;
+        int consecutiveBehindTaskbar;
+        int consecutiveHealthyFrames;
+        int recreateCount;
+        int lastWin32Error;
+        bool degradedCommitFailed;
+        bool degradedOccluded;
+
+        internal TaskbarOverlayRecoveryPolicy(int maxRecreates = DefaultMaxRecreates) {
+            this.maxRecreates = Math.Max(0, maxRecreates);
+        }
+
+        internal int ConsecutiveCommitFailures { get { return consecutiveCommitFailures; } }
+        internal int ConsecutiveBehindTaskbar { get { return consecutiveBehindTaskbar; } }
+        internal int RecreateCount { get { return recreateCount; } }
+        internal int LastWin32Error { get { return lastWin32Error; } }
+        internal bool IsDegradedCommitFailed { get { return degradedCommitFailed; } }
+        internal bool IsDegradedOccluded { get { return degradedOccluded; } }
+        internal bool IsPersistentlyDegraded { get { return degradedCommitFailed || degradedOccluded; } }
+
+        internal TaskbarOverlayRecoveryAction ObserveCommitResult(bool succeeded, int win32Error) {
+            if (succeeded) {
+                consecutiveCommitFailures = 0;
+                lastWin32Error = 0;
+                degradedCommitFailed = false;
+                return TaskbarOverlayRecoveryAction.None;
+            }
+            consecutiveHealthyFrames = 0;
+            consecutiveCommitFailures++;
+            lastWin32Error = win32Error;
+            if (consecutiveCommitFailures >= CommitFailuresBeforeRecreate) {
+                if (recreateCount < maxRecreates) {
+                    recreateCount++;
+                    consecutiveCommitFailures = 0;
+                    return TaskbarOverlayRecoveryAction.RecreateHandle;
+                }
+                degradedCommitFailed = true;
+            }
+            return TaskbarOverlayRecoveryAction.DegradeCommitFailed;
+        }
+
+        internal TaskbarOverlayRecoveryAction ObserveVisibility(bool committedAndVisible, bool behindTaskbar) {
+            if (!committedAndVisible) return TaskbarOverlayRecoveryAction.None;
+            if (!behindTaskbar) {
+                consecutiveBehindTaskbar = 0;
+                degradedOccluded = false;
+                return TaskbarOverlayRecoveryAction.None;
+            }
+            consecutiveHealthyFrames = 0;
+            consecutiveBehindTaskbar++;
+            if (consecutiveBehindTaskbar >= BehindTicksBeforeRecreate) {
+                if (recreateCount < maxRecreates) {
+                    recreateCount++;
+                    consecutiveBehindTaskbar = 0;
+                    return TaskbarOverlayRecoveryAction.RecreateHandle;
+                }
+                degradedOccluded = true;
+                return TaskbarOverlayRecoveryAction.DegradeOccluded;
+            }
+            return TaskbarOverlayRecoveryAction.PromoteZOrder;
+        }
+
+        internal void RecordHealthyFrame() {
+            consecutiveCommitFailures = 0;
+            consecutiveBehindTaskbar = 0;
+            lastWin32Error = 0;
+            degradedCommitFailed = false;
+            degradedOccluded = false;
+            consecutiveHealthyFrames++;
+            if (consecutiveHealthyFrames >= HealthyFramesBeforeBudgetReset) {
+                recreateCount = 0;
+            }
+        }
+
+        internal void ResetForManualRecreate() {
+            consecutiveCommitFailures = 0;
+            consecutiveBehindTaskbar = 0;
+            consecutiveHealthyFrames = 0;
+            recreateCount = 0;
+            lastWin32Error = 0;
+            degradedCommitFailed = false;
+            degradedOccluded = false;
+        }
+    }
+
     internal sealed class TaskbarBatteryOverlayForm : Form {
         const int WS_EX_LAYERED = 0x00080000;
         const int WS_EX_TOOLWINDOW = 0x00000080;
@@ -707,9 +830,11 @@ namespace AtkBatteryTray {
         const int WM_SETTINGCHANGE = 0x001A;
         const int WM_DPICHANGED = 0x02E0;
         static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
         const uint SWP_NOSIZE = 0x0001;
         const uint SWP_NOMOVE = 0x0002;
         const uint SWP_NOACTIVATE = 0x0010;
+        const uint SWP_NOOWNERZORDER = 0x0200;
 
         [DllImport("user32.dll")]
         static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -717,12 +842,20 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll")]
         static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+        [DllImport("user32.dll")]
+        static extern bool IsWindowVisible(IntPtr hWnd);
+
+        const int SW_HIDE = 0;
         const int SW_SHOWNOACTIVATE = 4;
 
         readonly TrayContext owner;
         readonly LayeredSurface surface = new LayeredSurface();
         readonly System.Windows.Forms.Timer watchTimer = new System.Windows.Forms.Timer { Interval = 400 };
+        readonly System.Windows.Forms.Timer startupVerifyTimer = new System.Windows.Forms.Timer { Interval = 1500 };
         readonly Func<TaskbarEnvironmentSnapshot> probeFunc;
+        readonly TaskbarOverlayCommitFunc commitFunc;
+        readonly TaskbarOverlayRecoveryPolicy recoveryPolicy;
+        readonly Action<string> recreateRequested;
         readonly ContextMenuStrip contextMenu = new ContextMenuStrip();
 
         List<TaskbarOverlayRenderer.Item> items = new List<TaskbarOverlayRenderer.Item>();
@@ -731,14 +864,26 @@ namespace AtkBatteryTray {
         Point physicalLocation;
         bool overlayVisible;
         bool isVerticalLayout;
+        bool evaluating;
+        int lastCommitError;
+        int zPromoteCount;
+        IntPtr lastCommittedHandle;
         string lastRenderKey;
         bool pointerDown, dragging;
         Point dragStartScreen;
         int dragStartAxis, dragMinAxis, dragMaxAxis, dragAnchorMaxAxis;
 
-        internal TaskbarBatteryOverlayForm(TrayContext owner, Func<TaskbarEnvironmentSnapshot> probe = null) {
+        internal TaskbarBatteryOverlayForm(
+            TrayContext owner,
+            Func<TaskbarEnvironmentSnapshot> probe = null,
+            TaskbarOverlayCommitFunc commitOverride = null,
+            TaskbarOverlayRecoveryPolicy recoveryPolicy = null,
+            Action<string> recreateRequested = null) {
             this.owner = owner;
             probeFunc = probe ?? delegate { return TaskbarEnvironmentProbe.Capture(IsHandleCreated ? Handle : IntPtr.Zero); };
+            commitFunc = commitOverride;
+            this.recoveryPolicy = recoveryPolicy ?? new TaskbarOverlayRecoveryPolicy();
+            this.recreateRequested = recreateRequested;
 
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
@@ -751,6 +896,10 @@ namespace AtkBatteryTray {
 
             BuildContextMenu();
             watchTimer.Tick += delegate { EvaluateAndRender(); };
+            startupVerifyTimer.Tick += delegate {
+                startupVerifyTimer.Stop();
+                if (!IsDisposed) RefreshNow(true);
+            };
             MouseDown += HandleMouseDown;
             MouseMove += HandleMouseMove;
             MouseUp += HandleMouseUp;
@@ -759,8 +908,24 @@ namespace AtkBatteryTray {
 
         internal TaskbarOverlayPlacement LastPlacement { get { return lastPlacement; } }
         internal bool OverlayVisible { get { return overlayVisible; } }
+        internal int LastCommitError { get { return lastCommitError; } }
+        internal int ZPromoteCount { get { return zPromoteCount; } }
+        internal IntPtr LastCommittedHandle { get { return lastCommittedHandle; } }
 
         protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override void OnHandleCreated(EventArgs e) {
+            base.OnHandleCreated(e);
+            lastCommittedHandle = IntPtr.Zero;
+            lastRenderKey = null;
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e) {
+            lastCommittedHandle = IntPtr.Zero;
+            lastRenderKey = null;
+            overlayVisible = false;
+            base.OnHandleDestroyed(e);
+        }
 
         protected override CreateParams CreateParams {
             get {
@@ -777,7 +942,12 @@ namespace AtkBatteryTray {
             }
             base.WndProc(ref m);
             if (m.Msg == WM_DISPLAYCHANGE || m.Msg == WM_SETTINGCHANGE || m.Msg == WM_DPICHANGED) {
-                if (!IsDisposed) EvaluateAndRender();
+                if (!IsDisposed) {
+                    if (m.Msg == WM_DISPLAYCHANGE || m.Msg == WM_DPICHANGED) {
+                        recoveryPolicy.ResetForManualRecreate();
+                    }
+                    EvaluateAndRender();
+                }
             }
         }
 
@@ -850,6 +1020,7 @@ namespace AtkBatteryTray {
             var pref = DeviceSettings.Current;
             var cfg = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
             TaskbarEnvironmentSnapshot snap = probeFunc();
+            dpiScale = NativeDisplay.ScaleAt(snap != null && snap.TaskbarRect.Width > 0 ? snap.TaskbarRect.Location : Point.Empty);
             bool vertical = snap != null && TaskbarEnvironmentProbe.IsVerticalEdge(snap.TaskbarEdge);
             isVerticalLayout = vertical;
             float thickness = snap != null && snap.TaskbarRect.Width > 0 ? (snap.TaskbarRect.Width / Math.Max(1f, dpiScale)) : 56f;
@@ -888,7 +1059,7 @@ namespace AtkBatteryTray {
             if (nextAxis == curAxis) return;
             physicalLocation = isVerticalLayout ? new Point(physicalLocation.X, nextAxis) : new Point(nextAxis, physicalLocation.Y);
             lastRenderKey = null;
-            SetWindowPos(Handle, HWND_TOPMOST, physicalLocation.X, physicalLocation.Y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(Handle, HWND_TOPMOST, physicalLocation.X, physicalLocation.Y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
 
         void HandleMouseUp(object sender, MouseEventArgs e) {
@@ -928,12 +1099,60 @@ namespace AtkBatteryTray {
             var unused = Handle;
             EvaluateAndRender();
             watchTimer.Start();
+            startupVerifyTimer.Stop();
+            startupVerifyTimer.Start();
         }
 
         internal void RefreshNow(bool forceRepaint = true) {
             if (IsDisposed) return;
             if (forceRepaint) lastRenderKey = null;
             EvaluateAndRender();
+        }
+
+        bool CommitPixels(IntPtr hwnd, Point loc, Size logicalSize, float scale, byte opacity, Action<Graphics, SizeF> paint, out int win32Error) {
+            if (commitFunc != null) {
+                return commitFunc(hwnd, loc, logicalSize, scale, opacity, paint, out win32Error);
+            }
+            bool ok = surface.Commit(hwnd, loc, logicalSize, scale, opacity, paint);
+            win32Error = ok ? 0 : surface.LastWin32Error;
+            return ok;
+        }
+
+        void PromoteAboveTaskbar(bool bounce) {
+            if (!IsHandleCreated || IsDisposed) return;
+            uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+            if (bounce) {
+                // Re-inserting through NOTOPMOST -> TOPMOST reliably lifts an already-topmost
+                // overlay back above Shell_TrayWnd on Win11 without activating it.
+                SetWindowPos(Handle, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+                zPromoteCount++;
+            }
+            SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, flags);
+        }
+
+        void HideOverlayWindow() {
+            overlayVisible = false;
+            lastCommittedHandle = IntPtr.Zero;
+            lastRenderKey = null;
+            if (IsDisposed || Disposing) return;
+            if (Visible) Hide();
+            if (!IsDisposed && !Disposing && IsHandleCreated && IsWindowVisible(Handle)) ShowWindow(Handle, SW_HIDE);
+        }
+
+        void UpdatePlacement(TaskbarOverlayPlacement next) {
+            string prevStatus = lastPlacement != null ? lastPlacement.StatusCode : null;
+            string prevMessage = lastPlacement != null ? lastPlacement.StatusMessage : null;
+            lastPlacement = next;
+            if (prevStatus != next.StatusCode) {
+                SafeDiagnostic.Transition(
+                    "taskbar_overlay",
+                    next.StatusCode +
+                    (lastCommitError != 0 ? " err=" + lastCommitError : "") +
+                    (recoveryPolicy.RecreateCount > 0 ? " recreates=" + recoveryPolicy.RecreateCount : ""));
+            }
+            if ((prevStatus != next.StatusCode || prevMessage != next.StatusMessage) && owner != null) {
+                owner.NotifyTaskbarOverlayStatusChanged();
+            }
         }
 
         static string BuildRenderKey(Point loc, Size logicalSize, float scale, bool dark, string themeStyle, bool showIcons, bool highContrast, bool vertical, List<TaskbarOverlayRenderer.Item> list) {
@@ -953,7 +1172,17 @@ namespace AtkBatteryTray {
         }
 
         void EvaluateAndRender() {
-            if (IsDisposed || dragging) return;
+            if (IsDisposed || Disposing || dragging || evaluating) return;
+            evaluating = true;
+            try {
+                EvaluateAndRenderCore();
+            } finally {
+                evaluating = false;
+            }
+        }
+
+        void EvaluateAndRenderCore() {
+            if (IsDisposed || Disposing || dragging) return;
             var pref = DeviceSettings.Current;
             var cfg = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
             cfg.Normalize();
@@ -972,18 +1201,66 @@ namespace AtkBatteryTray {
                 physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
             }
 
-            string prevStatus = lastPlacement != null ? lastPlacement.StatusCode : null;
             var placement = TaskbarOverlayEvaluator.Evaluate(snap, physicalSize, cfg.OffsetX);
-            lastPlacement = placement;
-            if (prevStatus != placement.StatusCode && owner != null) {
-                owner.NotifyTaskbarOverlayStatusChanged();
+            if (!placement.CanDisplay) {
+                HideOverlayWindow();
+                UpdatePlacement(placement);
+                return;
             }
 
-            if (!placement.CanDisplay) {
-                if (Visible || overlayVisible) Hide();
-                overlayVisible = false;
-                lastRenderKey = null;
+            if (recoveryPolicy.IsPersistentlyDegraded) {
+                HideOverlayWindow();
+                if (recoveryPolicy.IsDegradedOccluded) {
+                    UpdatePlacement(new TaskbarOverlayPlacement {
+                        CanDisplay = false,
+                        StatusCode = "zorder_occluded",
+                        StatusMessage = "任务栏浮层多次被系统任务栏遮挡，已自动恢复托盘图标；可在「诊断与反馈」点击「重建浮层」重试。"
+                    });
+                } else {
+                    lastCommitError = recoveryPolicy.LastWin32Error;
+                    UpdatePlacement(new TaskbarOverlayPlacement {
+                        CanDisplay = false,
+                        StatusCode = "commit_failed",
+                        StatusMessage = "任务栏浮层像素提交失败（Win32 错误 " + lastCommitError + "），已自动恢复托盘图标；可在「诊断与反馈」点击「重建浮层」重试。"
+                    });
+                }
                 return;
+            }
+
+            if (overlayVisible && snap != null && snap.SelfCloaked) {
+                // DWM cloaked the window (e.g. shell/virtual-desktop transition). Do not treat as healthy
+                // or spin recreations; restore tray icon via fail-safe status and force repaint once uncloaked.
+                lastRenderKey = null;
+                UpdatePlacement(new TaskbarOverlayPlacement {
+                    CanDisplay = false,
+                    StatusCode = "dwm_cloaked",
+                    StatusMessage = "任务栏浮层当前被系统桌面合成器隐藏（Cloaked），已自动恢复托盘图标并等待恢复。"
+                });
+                return;
+            }
+
+            bool behindTaskbar = overlayVisible && snap != null && snap.SelfBehindTaskbar;
+            bool forceZBounce = !overlayVisible || (lastPlacement != null && lastPlacement.StatusCode == "dwm_cloaked");
+            if (behindTaskbar) {
+                var zAction = recoveryPolicy.ObserveVisibility(true, true);
+                if (zAction == TaskbarOverlayRecoveryAction.RecreateHandle && recreateRequested != null) {
+                    SafeDiagnostic.Transition("taskbar_overlay", "recreate_zorder_occluded#" + recoveryPolicy.RecreateCount);
+                    recreateRequested("zorder_occluded");
+                    return;
+                }
+                if (zAction == TaskbarOverlayRecoveryAction.DegradeOccluded) {
+                    HideOverlayWindow();
+                    UpdatePlacement(new TaskbarOverlayPlacement {
+                        CanDisplay = false,
+                        StatusCode = "zorder_occluded",
+                        StatusMessage = "任务栏浮层多次被系统任务栏遮挡，已自动恢复托盘图标；可在「诊断与反馈」点击「重建浮层」重试。"
+                    });
+                    return;
+                }
+                forceZBounce = true;
+                lastRenderKey = null;
+            } else if (overlayVisible) {
+                recoveryPolicy.ObserveVisibility(true, false);
             }
 
             physicalLocation = placement.PhysicalLocation;
@@ -991,24 +1268,60 @@ namespace AtkBatteryTray {
             ThemePalette palette = ThemePalette.Current(dark);
             string renderKey = BuildRenderKey(physicalLocation, logicalSize, dpiScale, dark, pref.ThemeStyle, cfg.ShowIcons, VisualDesign.HighContrast, vertical, items);
 
-            if (overlayVisible && Visible && renderKey == lastRenderKey) {
+            IntPtr currentHandle = IsHandleCreated ? Handle : IntPtr.Zero;
+            bool nativeVisible = currentHandle != IntPtr.Zero && IsWindowVisible(currentHandle);
+            if (!behindTaskbar && !forceZBounce && overlayVisible && Visible && nativeVisible &&
+                currentHandle == lastCommittedHandle && renderKey == lastRenderKey) {
+                recoveryPolicy.RecordHealthyFrame();
+                UpdatePlacement(placement);
                 return;
             }
 
-            // Commit premultiplied pixels & position BEFORE showing to avoid blank flash.
-            surface.Commit(Handle, physicalLocation, logicalSize, dpiScale, 255, delegate(Graphics g, SizeF sz) {
+            // Show via WinForms (ShowWithoutActivation=true + WS_EX_LAYERED has zero flash) so
+            // managed Form.Visible stays synced with native HWND visibility, then commit pixels atomically.
+            if (!Visible) Show();
+            if (IsDisposed || Disposing) return;
+            IntPtr commitHandle = Handle;
+            int commitErr;
+            bool committed = CommitPixels(commitHandle, physicalLocation, logicalSize, dpiScale, 255, delegate(Graphics g, SizeF sz) {
                 TaskbarOverlayRenderer.Paint(g, sz, items, cfg.ShowIcons, palette, dark, vertical);
-            });
-            if (!Visible) ShowWindow(Handle, SW_SHOWNOACTIVATE);
-            SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }, out commitErr);
+            if (IsDisposed || Disposing) return;
+
+            if (!committed) {
+                HideOverlayWindow();
+                lastCommitError = commitErr;
+                var cAction = recoveryPolicy.ObserveCommitResult(false, commitErr);
+                if (cAction == TaskbarOverlayRecoveryAction.RecreateHandle && recreateRequested != null) {
+                    SafeDiagnostic.Transition("taskbar_overlay", "recreate_commit_failed_err=" + commitErr + "#" + recoveryPolicy.RecreateCount);
+                    recreateRequested("commit_failed");
+                    return;
+                }
+                UpdatePlacement(new TaskbarOverlayPlacement {
+                    CanDisplay = false,
+                    StatusCode = "commit_failed",
+                    StatusMessage = "任务栏浮层像素提交失败（Win32 错误 " + commitErr + "），已自动恢复托盘图标；可在「诊断与反馈」点击「重建浮层」重试。"
+                });
+                return;
+            }
+
+            lastCommitError = 0;
+            recoveryPolicy.ObserveCommitResult(true, 0);
+            if (!IsWindowVisible(commitHandle)) ShowWindow(commitHandle, SW_SHOWNOACTIVATE);
+            PromoteAboveTaskbar(forceZBounce);
             overlayVisible = true;
+            lastCommittedHandle = commitHandle;
             lastRenderKey = renderKey;
+            if (!behindTaskbar) recoveryPolicy.RecordHealthyFrame();
+            UpdatePlacement(placement);
         }
 
         protected override void Dispose(bool disposing) {
             if (disposing) {
                 watchTimer.Stop();
                 watchTimer.Dispose();
+                startupVerifyTimer.Stop();
+                startupVerifyTimer.Dispose();
                 contextMenu.Dispose();
                 surface.Dispose();
             }
@@ -1019,16 +1332,28 @@ namespace AtkBatteryTray {
     internal sealed class TaskbarBatteryOverlayController : IDisposable {
         readonly TrayContext owner;
         readonly Func<TaskbarEnvironmentSnapshot> probeOverride;
+        readonly TaskbarOverlayCommitFunc commitOverride;
+        readonly TaskbarOverlayRecoveryPolicy recoveryPolicy = new TaskbarOverlayRecoveryPolicy();
+        System.Windows.Forms.Timer postUpdateTimer;
         TaskbarBatteryOverlayForm form;
         bool disposed;
+        bool recreating;
+        int recreateCount;
+        string lastRecoveryReason;
 
-        internal TaskbarBatteryOverlayController(TrayContext owner, Func<TaskbarEnvironmentSnapshot> probeOverride = null) {
+        internal TaskbarBatteryOverlayController(
+            TrayContext owner,
+            Func<TaskbarEnvironmentSnapshot> probeOverride = null,
+            TaskbarOverlayCommitFunc commitOverride = null) {
             this.owner = owner;
             this.probeOverride = probeOverride;
+            this.commitOverride = commitOverride;
         }
 
         internal bool IsRunning { get { return !disposed && form != null && !form.IsDisposed; } }
         internal TaskbarBatteryOverlayForm ActiveForm { get { return IsRunning ? form : null; } }
+        internal int RecreateCount { get { return recreateCount; } }
+        internal string LastRecoveryReason { get { return lastRecoveryReason; } }
 
         internal string StatusCode {
             get {
@@ -1044,19 +1369,91 @@ namespace AtkBatteryTray {
             }
         }
 
+        internal string ShortStatusLabel {
+            get {
+                string code = StatusCode;
+                if (code == "disabled") return "未开启";
+                if (code == "ready") return "正常绘制";
+                if (code == "ready_avoided") return "正常绘制（已避让）";
+                if (code == "fullscreen_hidden") return "全屏自动隐藏";
+                if (code == "commit_failed") return "像素提交失败";
+                if (code == "zorder_occluded") return "被任务栏遮挡";
+                if (code == "dwm_cloaked") return "被系统合成隐藏";
+                return "已自动降级";
+            }
+        }
+
+        internal string DiagnosticText {
+            get {
+                var cfg = DeviceSettings.Current.TaskbarOverlay;
+                bool enabled = cfg != null && cfg.Enabled;
+                if (!enabled && StatusCode == "disabled") return "未启用";
+                var sb = new System.Text.StringBuilder();
+                sb.Append(enabled ? "已启用" : "已关闭")
+                  .Append(" | 状态=").Append(StatusCode)
+                  .Append(" | 可见=").Append(ActiveForm != null && ActiveForm.OverlayVisible ? "是" : "否");
+                if (ActiveForm != null && ActiveForm.LastCommitError != 0) {
+                    sb.Append(" | Win32错误=").Append(ActiveForm.LastCommitError);
+                }
+                if (recreateCount > 0) {
+                    sb.Append(" | 重建=").Append(recreateCount);
+                    if (!String.IsNullOrEmpty(lastRecoveryReason)) sb.Append("(").Append(lastRecoveryReason).Append(")");
+                }
+                sb.Append(" | ").Append(StatusMessage);
+                return sb.ToString();
+            }
+        }
+
         internal void ApplySettings() {
             if (disposed) return;
             var cfg = DeviceSettings.Current.TaskbarOverlay;
             if (cfg == null || !cfg.Enabled) {
+                StopPostUpdateTimer();
+                recoveryPolicy.ResetForManualRecreate();
                 CloseForm();
                 return;
             }
             if (form == null || form.IsDisposed) {
-                form = new TaskbarBatteryOverlayForm(owner, probeOverride);
-                form.StartWatching();
+                CreateAndStartForm();
             } else {
                 form.RefreshNow();
             }
+        }
+
+        internal bool RecreateOverlay(string reason, bool resetBudget = false) {
+            if (disposed || recreating) return false;
+            var cfg = DeviceSettings.Current.TaskbarOverlay;
+            if (cfg == null || !cfg.Enabled) {
+                CloseForm();
+                return false;
+            }
+            recreating = true;
+            try {
+                if (resetBudget) recoveryPolicy.ResetForManualRecreate();
+                recreateCount++;
+                lastRecoveryReason = String.IsNullOrEmpty(reason) ? "manual" : reason;
+                SafeDiagnostic.Transition("taskbar_overlay", "recreate:" + lastRecoveryReason + "#" + recreateCount);
+                CloseForm();
+                CreateAndStartForm();
+            } finally {
+                recreating = false;
+            }
+            if (owner != null) owner.NotifyTaskbarOverlayStatusChanged();
+            return IsRunning;
+        }
+
+        internal void SchedulePostUpdateRecovery(int delayMs = 1200) {
+            if (disposed) return;
+            var cfg = DeviceSettings.Current.TaskbarOverlay;
+            if (cfg == null || !cfg.Enabled) return;
+            StopPostUpdateTimer();
+            int interval = Math.Max(50, delayMs);
+            postUpdateTimer = new System.Windows.Forms.Timer { Interval = interval };
+            postUpdateTimer.Tick += delegate {
+                StopPostUpdateTimer();
+                if (!disposed) RecreateOverlay("post_update", true);
+            };
+            postUpdateTimer.Start();
         }
 
         internal void NotifyDataChanged() {
@@ -1069,9 +1466,32 @@ namespace AtkBatteryTray {
             form.RefreshNow();
         }
 
-        internal void NotifyTaskbarRecreated() {
+        internal void NotifyPopupStateChanged() {
             if (disposed || form == null || form.IsDisposed) return;
-            form.RefreshNow();
+            form.RefreshNow(false);
+        }
+
+        internal void NotifyTaskbarRecreated() {
+            if (disposed) return;
+            var cfg = DeviceSettings.Current.TaskbarOverlay;
+            if (cfg == null || !cfg.Enabled) return;
+            RecreateOverlay("taskbar_created", true);
+        }
+
+        void CreateAndStartForm() {
+            form = new TaskbarBatteryOverlayForm(owner, probeOverride, commitOverride, recoveryPolicy, delegate(string reason) {
+                RecreateOverlay(reason, false);
+            });
+            form.StartWatching();
+        }
+
+        void StopPostUpdateTimer() {
+            var timer = postUpdateTimer;
+            postUpdateTimer = null;
+            if (timer != null) {
+                try { timer.Stop(); } catch (Exception) { }
+                try { timer.Dispose(); } catch (Exception) { }
+            }
         }
 
         void CloseForm() {
@@ -1086,6 +1506,7 @@ namespace AtkBatteryTray {
         public void Dispose() {
             if (disposed) return;
             disposed = true;
+            StopPostUpdateTimer();
             CloseForm();
         }
     }
