@@ -851,9 +851,13 @@ def discover(paths, excluded=(), *, full=False):
                     caps_complete = all(info.get(key) is not None
                                         for key in ("input_report_sizes", "output_report_sizes"))
             if (caps_complete
-                    and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
-                        0x3837, 0x1001, 0xFF01, 0x0001)
-                    and info["product_string"].strip() == "MCHOSE K7 Ultra"):
+                    and ((attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                             0x3837, 0x1001, 0xFF01, 0x0001)
+                         and info["product_string"].strip() == "MCHOSE K7 Ultra"
+                         or (attrs.vendor, attrs.product, caps.page, caps.usage) == (
+                             0x0BDA, 0x4762, 0xFF01, 0x0001)
+                         and info["product_string"].strip().casefold() in (
+                             "a5 ultra", "mchose a5 ultra"))):
                 from battery_hid import byte_report_sizes
                 sizes = byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True)
                 info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)

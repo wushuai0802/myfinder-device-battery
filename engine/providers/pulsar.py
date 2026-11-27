@@ -98,6 +98,7 @@ from typing import Dict, List, Optional, Tuple
 
 import hid
 
+import battery_hid as _battery_hid
 from battery_hid import BatteryHidProvider
 from . import hidlist
 from .base import DeviceStatus, Provider, hexdump, log
@@ -279,10 +280,21 @@ def _nano_reader_reason(line):
     return _NANO_READER_REASONS.get(line)
 
 
+NANO_CHARGING_TIMEOUT_MS = 250
+NANO_CHARGING_MAX_READS = 8
+
+
 def make_nano_request():
     # Output report 08 + 63-byte BITMOUSE payload; receiver target 01.
     # Checksum 7D = sum(72 02 00 01 07 01 + padding) modulo 256.
     return [0x08, 0x7D, 0x72, 0x02, 0x00, 0x01, 0x07, 0x01] + [0] * 56
+
+
+def make_nano_charging_request():
+    # Output report 08 + 63-byte BITMOUSE GetBatteryChargingStatus (0x0F); receiver target 01.
+    # Source: official ATK Hub (filter-DJ0h7EXv.js getPowerInfo / GetBatteryChargingStatus=15).
+    # Checksum 85 = sum(72 02 00 01 0F 01 + padding) modulo 256.
+    return [0x08, 0x85, 0x72, 0x02, 0x00, 0x01, 0x0F, 0x01] + [0] * 56
 
 
 def parse_nano_reply(reply, report_id):
@@ -297,6 +309,18 @@ def parse_nano_reply(reply, report_id):
             or not 1 <= reply[5] <= len(reply) - 6 or not 0 <= reply[6] <= 100):
         return None
     return reply[6], False, ""
+
+
+def parse_nano_charging_reply(reply, report_id):
+    # BITMOUSE GetBatteryChargingStatus (0x0F): 0 = discharging, 1 = charging.
+    if report_id:
+        if not reply or reply[0] != report_id:
+            return None
+        reply = reply[1:]
+    if (not 7 <= len(reply) <= 63 or reply[1] != 0 or reply[4] != 0x0F
+            or not 1 <= reply[5] <= len(reply) - 6 or reply[6] not in (0, 1)):
+        return None
+    return reply[6] == 1
 
 
 class AtkNanoProvider(BatteryHidProvider):
@@ -347,6 +371,42 @@ class AtkNanoProvider(BatteryHidProvider):
 
     def parse_reply(self, reply):
         return parse_nano_reply(reply, self.input_id)
+
+    def _query_charging(self, dev, info):
+        """Best-effort read-only 0x0F charging query; degrades to unknown on silence/error."""
+        request = make_nano_charging_request()
+        try:
+            if dev.write(request) != len(request):
+                return None
+            length = info["input_report_length"] - (self.input_id == 0)
+            deadline = _battery_hid.time.monotonic() + NANO_CHARGING_TIMEOUT_MS / 1000
+            for _ in range(NANO_CHARGING_MAX_READS):
+                remaining = deadline - _battery_hid.time.monotonic()
+                if remaining <= 0:
+                    break
+                raw = dev.read(length, max(1, int(remaining * 1000)))
+                if not raw:
+                    break
+                if len(raw) != length:
+                    continue
+                parsed = parse_nano_charging_reply(raw, self.input_id)
+                if parsed is not None:
+                    return parsed
+        except (OSError, ValueError):
+            return None
+        return None
+
+    def _query(self, dev, info):
+        self.charging_known = False
+        reading = super()._query(dev, info)
+        if reading is None:
+            return None
+        level, _, approx = reading
+        charging = self._query_charging(dev, info)
+        if charging is not None:
+            self.charging_known = True
+            return level, charging, approx
+        return level, False, approx
 
 
 # Exact IDs with strict descriptor guards, including the maintainer-tested F505.

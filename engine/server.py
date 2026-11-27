@@ -89,7 +89,7 @@ PROVIDER_VIDS = {
     "weikav_nut75": (0x0C45,), "veekos_shine60": (0x3151,),
     "aula_mouse": (0x320F,), "aula_keyboard": (0x0C45, 0x05AC),
     "razer": (0x1532,), "audeze": (0x3329,), "wlmouse": (0x36A7,),
-    "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023), "hyperx_alpha2": (0x03F0,),
+    "mchose": (0x5253, 0x3837, 0xA8A5, 0x2023, 0x0BDA), "hyperx_alpha2": (0x03F0,),
     "mchose_headset": (0x291D, 0x3837),
     "atk_headset": (0x373B,),
     "moondrop": (0x35D8,),
@@ -875,6 +875,13 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                                and d.get("product_id") == module.K7_ULTRA_PID
                                for d in inventory)
                         else set())
+                     | ({(module.A5_ULTRA_VID, module.A5_ULTRA_PID)}
+                        if any(d.get("vendor_id") == module.A5_ULTRA_VID
+                               and d.get("product_id") == module.A5_ULTRA_PID
+                               and str(d.get("product_string") or "").strip().casefold()
+                               in module.A5_ULTRA_PRODUCT_NAMES
+                               for d in inventory)
+                        else set())
                      if name == "mchose" else set())
     for field in ("PIDS", "KNOWN", "DONGLES", "RECEIVERS", "HEADSETS", "WIRED", "BRAGI_PIDS", "MOUSE_MODELS", "MODELS", "CLASSIC_MODELS"):
         value = getattr(module, field, ())
@@ -1209,7 +1216,9 @@ class BatteryEngine:
                             else:
                                 self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
                             break
-                        if isinstance(line, str) and line.startswith("K7ULTRA ") and line != "K7ULTRA stable_reply_C_pending_hardware":
+                        if isinstance(line, str) and (
+                                (line.startswith("K7ULTRA ") and line != "K7ULTRA stable_reply_C_pending_hardware")
+                                or (line.startswith("A5ULTRA ") and line != "A5ULTRA stable_reply_C_pending_hardware")):
                             self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line)
                             break
                 if "diagnosticSummary" not in self.health[reader_key]:

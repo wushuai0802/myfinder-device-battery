@@ -14,6 +14,7 @@ from test_new_brands import FakeHid
 import test_pulsar as L
 
 REQUEST = [0x08, 0x7D, 0x72, 0x02, 0x00, 0x01, 0x07, 0x01] + [0] * 56
+CHARGING_REQUEST = [0x08, 0x85, 0x72, 0x02, 0x00, 0x01, 0x0F, 0x01] + [0] * 56
 
 
 def entry(physical="nano-a", report_id=8, length=64, **changes):
@@ -116,8 +117,8 @@ class AtkNanoTests(unittest.TestCase):
                 provider = P.PulsarProvider()
                 status, = provider.poll()
             self.assertEqual(status.level, 73)
-            self.assertEqual(bus.writes, [(entry()["path"], REQUEST)])
-            self.assertEqual(len(bus.reads), 1)
+            self.assertEqual(bus.writes, [(entry()["path"], REQUEST), (entry()["path"], CHARGING_REQUEST)])
+            self.assertEqual(len(bus.reads), 2)
             self.assertEqual(bus.opened, bus.closed)
             self.assertEqual(provider.reader_diagnostics(), ["NANO handle close failed"])
 
@@ -131,7 +132,7 @@ class AtkNanoTests(unittest.TestCase):
                 status, = provider.poll()
             self.assertEqual(status.level, level)
             self.assertEqual(provider.reader_diagnostics(), [])
-            self.assertEqual(bus.writes, [(entry()["path"], REQUEST)])
+            self.assertEqual(bus.writes, [(entry()["path"], REQUEST), (entry()["path"], CHARGING_REQUEST)])
             self.assertIsNone(status.dpi)
             self.assertIsNone(status.dpi_target)
 
@@ -168,8 +169,11 @@ class AtkNanoTests(unittest.TestCase):
             nano = entry()
             nano_script = [(("device",), None), (("open", nano["path"]), None),
                            (("write", tuple(REQUEST)), 64),
-                           (("read", 64, 1000), nano_frames[0] if nano_frames else []),
-                           (("close",), None)]
+                           (("read", 64, 1000), nano_frames[0] if nano_frames else [])]
+            if nano_frames:
+                nano_script += [(("write", tuple(CHARGING_REQUEST)), 64),
+                                (("read", 64, 250), [])]
+            nano_script += [(("close",), None)]
             for mixed in (False, True):
                 infos = [nano, legacy] if mixed else [legacy]
                 script = legacy_script + (nano_script if mixed else [])
@@ -202,7 +206,7 @@ class AtkNanoTests(unittest.TestCase):
                     self.assertTrue(status.connection_known)
                     self.assertIsNone(status.dpi)
                     self.assertIsNone(status.dpi_target)
-                    self.assertEqual(bus.writes, [(info["path"], REQUEST)])
+                    self.assertEqual(bus.writes, [(info["path"], REQUEST), (info["path"], CHARGING_REQUEST)])
                     self.assertEqual(bus.reads[0][0], length - (report_id == 0))
                     self.assertEqual(bus.opened, bus.closed)
 
@@ -255,7 +259,7 @@ class AtkNanoTests(unittest.TestCase):
             status, = P.PulsarProvider().poll()
         self.assertEqual(status.level, 62)
         self.assertEqual(bus.opened, [entry()["path"]])
-        self.assertEqual(bus.writes, [(entry()["path"], REQUEST)])
+        self.assertEqual(bus.writes, [(entry()["path"], REQUEST), (entry()["path"], CHARGING_REQUEST)])
 
     def test_silence_and_streams_are_bounded_without_retry(self):
         for frames in ([], [reply(command=0)] * 100):
@@ -278,9 +282,9 @@ class AtkNanoTests(unittest.TestCase):
 
     def test_two_receivers_keep_separate_identity_and_input_contracts(self):
         infos = [entry("one", report_id=0, length=8), entry("two", report_id=85)]
-        with fixture([reply(20, 0, 8), reply(90, 85)], infos):
+        with fixture([reply(20, 0, 8), [], reply(90, 85), []], infos):
             first = P.PulsarProvider().poll()
-        with fixture([reply(90, 85), reply(20, 0, 8)], list(reversed(infos))):
+        with fixture([reply(90, 85), [], reply(20, 0, 8), []], list(reversed(infos))):
             second = P.PulsarProvider().poll()
         self.assertEqual([s.level for s in first], [20, 90])
         self.assertEqual(len({s.key for s in first}), 2)
@@ -294,7 +298,7 @@ class AtkNanoTests(unittest.TestCase):
                          (84, "mouse", "C", "ATK 8K dongle-M1"))
         self.assertFalse(status.charging_known)
         self.assertIsNone(status.dpi)
-        self.assertEqual(bus.writes, [(info["path"], REQUEST)])
+        self.assertEqual(bus.writes, [(info["path"], REQUEST), (info["path"], CHARGING_REQUEST)])
         # Unproven 12F5 must never fall back to legacy FF02 CompX even if an FF02 collection exists.
         unproven = [entry("m1-b", product_id=0x12F5, input_report_sizes=None),
                     entry("m1-b", product_id=0x12F5, usage_page=0xFF02, usage=2, path=b"m1-ff02")]
@@ -321,7 +325,7 @@ class AtkNanoTests(unittest.TestCase):
             status, = P.PulsarProvider().poll()
         self.assertEqual((status.level, status.name), (63, "ATK / VXE NANO receiver"))
         self.assertEqual(confirmed, snapshot)  # caller's inventory dict is never mutated
-        self.assertEqual(bus.writes, [(confirmed["path"], REQUEST)])
+        self.assertEqual(bus.writes, [(confirmed["path"], REQUEST), (confirmed["path"], CHARGING_REQUEST)])
 
         # Without explicit confirmation or with wrong PID/declared sizes, fail closed
         for bad in (
@@ -334,6 +338,55 @@ class AtkNanoTests(unittest.TestCase):
                 if bad.get("input_report_sizes") is None:
                     self.assertEqual(P.PulsarProvider().poll(), [])
                     self.assertEqual(bad_bus.opened, [])
+
+    def test_charging_query_0x0f_parses_known_values_and_degrades_gracefully(self):
+        self.assertEqual(P.make_nano_charging_request(), CHARGING_REQUEST)
+        self.assertEqual(CHARGING_REQUEST[1], sum(CHARGING_REQUEST[2:]) & 255)
+        # Golden vector comparison against 0x07: only checksum (byte 1) and opcode (byte 6) differ.
+        diffs = [(i, REQUEST[i], CHARGING_REQUEST[i]) for i in range(64) if REQUEST[i] != CHARGING_REQUEST[i]]
+        self.assertEqual(diffs, [(1, 0x7D, 0x85), (6, 0x07, 0x0F)])
+        # Out-of-order / late frame isolation between 0x07 and 0x0F.
+        self.assertIsNone(P.parse_nano_reply(reply(1, command=0x0F), 8))
+        self.assertIsNone(P.parse_nano_charging_reply(reply(1, command=0x07), 8))
+        for val, expected in ((0, False), (1, True)):
+            with self.subTest(charging_val=val), fixture(
+                    [reply(57), reply(val, command=0x0F)]) as bus:
+                provider = P.PulsarProvider()
+                status, = provider.poll()
+            self.assertEqual((status.level, status.charging, status.charging_known),
+                             (57, expected, True))
+            self.assertEqual(provider.reader_diagnostics(), [])
+            self.assertEqual(bus.writes, [(entry()["path"], REQUEST), (entry()["path"], CHARGING_REQUEST)])
+
+        # Multi-receiver sequential poll must never leak charging_known across receivers.
+        infos = [entry("one"), entry("two", product_id=0x12F5, product_string="Wireless mouse 8k dongle-M1")]
+        with fixture([reply(57), reply(1, command=0x0F), reply(84), []], infos):
+            statuses = P.PulsarProvider().poll()
+        self.assertEqual([(s.level, s.charging, s.charging_known) for s in statuses],
+                         [(57, True, True), (84, False, False)])
+
+        # Invalid/error/out-of-range 0x0F replies degrade gracefully to charging_known=False
+        # without dropping the valid 0x07 battery reading or emitting error diagnostics.
+        for bad_charge in (
+            [],
+            reply(2, command=0x0F),
+            reply(255, command=0x0F),
+            reply(1, command=0x0F, status=0xFF),
+            reply(1, command=0x0F, data_length=0),
+            reply(1, command=0x07),
+        ):
+            with self.subTest(bad_charge=bad_charge[:8]), fixture(
+                    [reply(63), bad_charge]) as bus:
+                provider = P.PulsarProvider()
+                status, = provider.poll()
+            self.assertEqual((status.level, status.charging, status.charging_known),
+                             (63, False, False))
+            self.assertEqual(provider.reader_diagnostics(), [])
+
+        # When 0x07 fails, 0x0F is never sent.
+        with fixture([]) as bus:
+            self.assertEqual(P.PulsarProvider().poll(), [])
+        self.assertEqual(bus.writes, [(entry()["path"], REQUEST)])
 
 
 if __name__ == "__main__":
