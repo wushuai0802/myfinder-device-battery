@@ -521,6 +521,7 @@ def discover(paths, excluded=(), *, full=False):
                     (0x3710, 0x5501, 0xFF02, 0x0002),
                     (0x3554, 0xFB26, 0xFF02, 0x0002),
                     (0x3554, 0xFB3E, 0xFF02, 0x0002),
+                    (0x3554, 0xFB49, 0xFF02, 0x0002),
                     (0x391D, 0x1A1A, 0xFF02, 0x0002),
                     (0x41E4, 0x2001, 0xFF04, 0x0002),
                     (0x41E4, 0x2001, 0xFF02, 0x0002),
@@ -538,7 +539,7 @@ def discover(paths, excluded=(), *, full=False):
                         (0x3837, 0x1016),
                         (0x373B, 0x1216), (0x373B, 0x12F5),
                         (0x41E4, 0x2001), (0x3554, 0xFA09), (0x3554, 0xFB26),
-                        (0x3554, 0xFB3E), (0x391D, 0x1A1A)):
+                        (0x3554, 0xFB3E), (0x3554, 0xFB49), (0x391D, 0x1A1A)):
                     # The alternate 1018 collection is useful only at 4D/64.
                     # Do not repeatedly open a known 41-byte/zero-capacity TLC
                     # for raw metadata. Keep all prior primary/provider gates.
@@ -673,6 +674,16 @@ def discover(paths, excluded=(), *, full=False):
                     info["output_report_sizes"] and "6" in info["output_report_sizes"]
                     and info["input_report_sizes"]
                     and ("11" in info["input_report_sizes"] or "6" in info["input_report_sizes"]))
+            if caps_complete and attrs.vendor == 0x0951 and attrs.product in (0x16C4, 0x1723) \
+                    and caps.usage == 0x0303 and caps.page in (0xFF53, 0xFF90):
+                from battery_hid import byte_report_sizes
+                info.update(input_report_sizes=byte_report_sizes(hid, data, caps, 0, allow_fixed_usage=True),
+                            output_report_sizes=byte_report_sizes(hid, data, caps, 1, allow_fixed_usage=True))
+                _descriptor_fallback(info, caps, ("input", "output"))
+                caps_complete = bool(
+                    info["output_report_sizes"] == {"33": 20}
+                    and info["input_report_sizes"] == {"33": 20}
+                    and caps.input == caps.output == 20)
             if caps_complete and (attrs.vendor, attrs.product, caps.page, caps.usage) == (
                     0x046A, 0x0133, 0xFF10, 0x0001):
                 # CHERRY MW5500: prove Feature 00 (9B) and Input 00 before querying.

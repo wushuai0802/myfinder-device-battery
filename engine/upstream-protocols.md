@@ -548,6 +548,25 @@ The same `66 <cmd>` 62-byte exchange as the Cloud III Wireless row, from @dantif
 
 The vendor collection, picked by usage page rather than position (0xFF90:0x0303): the dongle carries four collections on the one interface, so the first one is not the right one. A 52-byte output report `06 ff bb <command> 00` is answered by 20 bytes echoing the command: command 0x02 carries the level in byte 7 (voltage in bytes 5-6), command 0x03 reports charging in byte 4 - the same exchange HeadsetControl uses for these two product ids. **Unverified** - no Cloud II Wireless was on hand, so a reply that does not echo the command is ignored and a level above 100 refused rather than shown
 
+### HyperX Cloud Flight Wireless (0951:16C4 / 1723)
+
+The original Cloud Flight uses the `FF53:0303` or `FF90:0303` vendor collection,
+not the Cloud Flight S protocol. The read-only query is a 20-byte output report
+`21 FF 05 00 ...`; a 15- or 20-byte reply returns battery voltage as big-endian
+millivolts at bytes 3-4. Values above `0x100B` are treated as charging; otherwise
+the voltage is converted with the HeadsetControl Cloud Flight curve. The command,
+both Kingston receiver PIDs and curve are independently documented by
+[HeadsetControl](https://github.com/Sapd/HeadsetControl/blob/1d2ccd1412246d85b2f8733d739cc865ba466aab/lib/devices/hyperx_cloud_flight.hpp)
+and the MIT-licensed `kondinskis/hyperx-cloud-flight` implementation.
+
+**Confirmed on local hardware:** the installed HyperX Ngenuity Cloud Flight module
+enumerated `0951:1723`; its `FF90:0303` descriptor declares 20-byte input/output
+reports. A live `21 FF 05` query returned `21 FF 05 0F 76 ...` (3958 mV), which
+the same curve converts to an estimated 95%. This was read while Ngenuity was
+running; its displayed percentage was not compared. Charging transition and the
+older `16C4` receiver remain untested here. Charging replies clear the percentage
+because voltage under charge cannot reliably estimate the remaining capacity.
+
 ### HyperX Cloud III S Wireless
 
 **Connection:** 2.4 GHz dongle (03F0:02CC, and 03F0:06BE which the reference also lists)
@@ -4477,7 +4496,12 @@ The independent Windows reader records the battery GET on 1532:00E6 (receiver) a
 
 ### MCHOSE K99 V3 wireless
 
-The 3837:3033 receiver with the complete product name MCHOSE K99 V3 2.4G uses MI_01, Generic Desktop usage zero, and unnumbered 64-byte payloads. Windows adds the report-ID slot on writes. The captured battery query starts with 55 03 00 38 38. Both captured AA 03 replies have the percentage at offset 8, with 40% and 100% represented in the upstream fixture and README respectively. Charge-state semantics remain unknown. The G87 V2 and K87S sharing this PID have different product names. Protocol facts were independently implemented here. [Descriptor and 40% fixture](https://github.com/arutkowski00/mchose-hid-bridge/tree/ad74f3e75fd5ae099b2ea4af039678c54dea73ac/tests/fixtures) · [Upstream protocol description](https://github.com/arutkowski00/mchose-hid-bridge/blob/ad74f3e75fd5ae099b2ea4af039678c54dea73ac/README.md#wire-protocol-k99-v3-confirmed)
+The 3837:3033 receiver with the complete product name `MCHOSE K99 V3 2.4G` uses `MI_01`, Generic Desktop usage zero (`0001:0000`), and unnumbered 64-byte payloads (65 bytes on Windows including the report-ID slot, proven via HidP caps or strict raw-descriptor fallback). User reports [#1050](https://github.com/wushuai0802/myfinder-device-battery/issues/1050) and [#1220](https://github.com/wushuai0802/myfinder-device-battery/issues/1220) showed the earlier `55 03 00 38 38` (`getInfo`, command `03`) reply returning a static `0x34 = 52` board/firmware byte at offset 8 while official M HUB displayed `100%`. Static analysis of the official M HUB Cizhou bundle (`https://www.mchose.com.cn/cizhou/CZ_SHARED_DATA/main.603a04ac22cc1e88d46c.js`) confirms `3837:3033 "MCHOSE K99 V3 2.4G"` uses the exact same GLW read-only configuration protocol as `MCHOSE G87 V2` (`research/batch2-protocols.md` §1): command `04` (`getBase`, offset `0`, length `56`) reads the active profile index, and command `05` (`getFuncConfig`, offset `64 * profile`, lengths `56` + `8`) reads the 64-byte profile block whose byte `32` encodes `rf_battery = config[32] & 0x7F` (`0..100`) and `isCharging = bool(config[32] & 0x80)`. No `setBase` or configuration repair write is ever sent. The `G87 V2` and `K87S` sharing `3837:3033` have distinct product names. [Descriptor fixture](https://github.com/arutkowski00/mchose-hid-bridge/tree/ad74f3e75fd5ae099b2ea4af039678c54dea73ac/tests/fixtures) · [GLW protocol notes](research/batch2-protocols.md#1-g87-v2可实现使用-glw-键盘协议) · [#1050](https://github.com/wushuai0802/myfinder-device-battery/issues/1050)
+
+### VGN DragonFly F2 Ultra+ receiver (3554:FB49)
+
+**Verification C: official VGN HUB static evidence (#1217) and synthetic tests only; pending hardware verification.**
+In the official VGN HUB bundle (`.ai/evidence/vgnhub/index-ZngoA_qG.js`), `{vendorId: 13652 (0x3554), productId: 64329 (0xFB49), usagePage: 65282 (0xFF02), usage: 2, customDeviceType: "vgn-y2", receiver: true, reportId: 8}` maps `3554:FB49` (`"VGN DragonFly F2 Ultra+"` in [#1217](https://github.com/wushuai0802/myfinder-device-battery/issues/1217)) to the `vgn-y2` CompX report-8 battery protocol (`$i.BatteryLevel = 0x04`). `topology.py` proves 17-byte Input/Output report `08` on `FF02:0002` (HidP caps first, then strict raw-descriptor fallback), and `pulsar.py` (`STRICT_REPORT8_PREFIXES`) requires a single resolved `pnp:usb\vid_3554&pid_fb49\...` receiver and `MI_01` `FF02:0002`, sends one 17-byte `08 04` query with `0x55` checksum, rejects request echoes and non-zero status/address bytes, keeps `charging_known = False`, and disables DPI writes.
 
 ### MCHOSE V9 Pro 2 wireless
 

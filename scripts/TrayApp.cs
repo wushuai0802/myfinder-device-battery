@@ -1054,7 +1054,7 @@ namespace AtkBatteryTray {
         readonly int processId=Process.GetCurrentProcess().Id;
         readonly DateTime processStartedAtUtc=Process.GetCurrentProcess().StartTime.ToUniversalTime();
         DateTime lastSyncUtc=DateTime.MinValue;
-        int completedReads,completedSwitches;
+        int completedReads,completedWirelessReads,completedSwitches;
         int iconUpdates;
         public BatteryReading Current,LastGood;
         public DpiConfig Dpi;
@@ -1351,6 +1351,40 @@ namespace AtkBatteryTray {
             return TraySelection.Present(available,selected,pref.TrayGroups.Count>0?TrayConfiguration.FirstName:null);
         }
         List<WirelessCard> TrayCandidates(bool includeHidden){return WirelessLayout.Build(this,0,100000,includeHidden).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&card.Battery!=null&&(card.Device!=null||card.NativeMouse||card.NativeHeadset);});}
+        internal WirelessDevice PrimaryWirelessMouse(){
+            var list=WirelessDevices;
+            WirelessDevice fallback=null;
+            foreach(var d in list){
+                if(d==null||d.Kind!="mouse")continue;
+                if(d.Percent.HasValue&&d.Fresh&&d.Online)return d;
+                if(fallback==null&&(d.Online||d.ConnectionState=="connected"||d.ConnectionState=="disconnected"))fallback=d;
+            }
+            return fallback;
+        }
+        internal WirelessDevice PrimaryWirelessBrowserDevice(){
+            AudioBindings pref;try{pref=DeviceSettings.Current;}catch{pref=new AudioBindings();}
+            var available=TrayCandidates(true);
+            available.RemoveAll(delegate(WirelessCard card){return TrayConfiguration.Owner(pref,card.Id)!=TrayConfiguration.FirstId||card.Hidden&&card.Id!=pref.TrayDeviceId;});
+            var selected=TraySelection.Select(available,pref.TraySource,pref.TrayDeviceId,activePhysicalId,activeNative,trayDeviceKey);
+            if(selected!=null&&selected.Device!=null)return selected.Device;
+            var list=WirelessDevices;
+            foreach(var d in list){
+                if(d==null||d.Kind!="mouse")continue;
+                if(pref.HiddenDeviceIds.Contains(d.Id)&&d.Id!=pref.TrayDeviceId)continue;
+                if(d.Percent.HasValue&&d.Fresh&&d.Online)return d;
+            }
+            return null;
+        }
+        internal WirelessDevice PrimaryWirelessHeadset(){
+            var list=WirelessDevices;
+            WirelessDevice fallback=null;
+            foreach(var d in list){
+                if(d==null||d.Kind!="headset")continue;
+                if(d.Online&&d.ConnectionState=="connected")return d;
+                if(fallback==null&&(d.Online||d.ConnectionState=="connected"||d.ConnectionState=="disconnected"))fallback=d;
+            }
+            return fallback;
+        }
         void EvaluateLowBattery(BatteryView mouse,BatteryView headset) {
             bool oldMouse=lowBattery.IsLatched("mouse"),oldHeadset=lowBattery.IsLatched("headset");
             bool allowed=NativeDisplay.MayNotify();var messages=new List<string>();
@@ -1377,40 +1411,58 @@ namespace AtkBatteryTray {
         internal string BuildStatusJson() {
                 string path=Path.Combine(DeviceSettings.DataDirectory,"status.json");
                 var persistence=fileWriter.GetHealth(path);
-                string safe=Escape(ErrorMessage);
+                DateTime now=DateTime.UtcNow;
+                var current=Current;var dpi=Dpi;var headset=Headset;var audio=Audio;var wireless=WirelessDevices;var lastWirelessDpi=lastWirelessDpiResult;
+                bool nativePresent=NativeMousePresent;
+                var fallbackDevice=!nativePresent&&current==null?PrimaryWirelessBrowserDevice():null;
+                var fallbackView=fallbackDevice!=null?WirelessLayout.View(fallbackDevice):null;
+                bool liveVerified=current!=null?UiState.Recent(current.TimestampUtc,now,90):(fallbackView!=null&&fallbackView.Fresh&&fallbackDevice.Online&&fallbackDevice.ConnectionState!="disconnected");
+                string percentJson=current!=null?current.Percent.ToString():(liveVerified&&fallbackView!=null&&fallbackView.Percent.HasValue?fallbackView.Percent.Value.ToString():"null");
+                string chargingJson=current!=null?current.Charging.ToString().ToLowerInvariant():(liveVerified&&fallbackDevice!=null&&fallbackDevice.Charging.HasValue?fallbackDevice.Charging.Value.ToString().ToLowerInvariant():"null");
+                string batteryCheckedJson=current!=null?"\""+current.TimestampUtc.ToString("o")+"\"":(fallbackDevice!=null&&fallbackDevice.ConfirmedTime!=DateTime.MinValue?"\""+fallbackDevice.ConfirmedTime.ToUniversalTime().ToString("o")+"\"":"null");
+                DateTime syncAt=lastSyncUtc!=DateTime.MinValue?lastSyncUtc:genericChecked;
+                string detailRaw=!nativePresent&&current==null&&ErrorMessage=="Not yet read"?(GenericError??(GenericReady?"":ErrorMessage)):ErrorMessage;
+                string safe=Escape(SafeDiagnostic.Clean(detailRaw));
+                bool useNativeHeadset=headset!=null&&headset.ReceiverPresent;
+                var wHeadset=!useNativeHeadset?PrimaryWirelessHeadset():null;
+                bool hReceiver=useNativeHeadset||wHeadset!=null;
+                bool hVerified=useNativeHeadset?headset.ConnectionVerified:(wHeadset!=null&&(wHeadset.ConnectionState=="connected"||wHeadset.ConnectionState=="disconnected"));
+                string hConnected=useNativeHeadset?(headset.ConnectionVerified?headset.Connected.ToString().ToLowerInvariant():"null"):(wHeadset!=null?(wHeadset.ConnectionState=="connected"?"true":wHeadset.ConnectionState=="disconnected"?"false":"null"):"null");
+                string hPercent=useNativeHeadset?(headset.Percent.HasValue?headset.Percent.Value.ToString():"null"):(wHeadset!=null&&wHeadset.Online&&wHeadset.Percent.HasValue?wHeadset.Percent.Value.ToString():"null");
+                string hDetail=useNativeHeadset?headset.Detail:(wHeadset!=null?"":(headset==null?(!nativePresent&&GenericReady?"":"Not yet read"):headset.Detail));
                 var stages=new StringBuilder("[");
-                if(Dpi!=null&&Dpi.Stages!=null)for(int i=0;i<Dpi.Stages.Count;i++) {
-                    if(i>0)stages.Append(',');stages.Append("{\"x\":").Append(Dpi.Stages[i].XDpi).Append(",\"y\":").Append(Dpi.Stages[i].YDpi).Append('}');
+                if(dpi!=null&&dpi.Stages!=null)for(int i=0;i<dpi.Stages.Count;i++) {
+                    if(i>0)stages.Append(',');stages.Append("{\"x\":").Append(dpi.Stages[i].XDpi).Append(",\"y\":").Append(dpi.Stages[i].YDpi).Append('}');
                 }
                 stages.Append(']');
-                string json="{\"version\":\""+Escape(AppRuntime.Version)+"\",\"instanceId\":\""+instanceId+"\",\"processId\":"+processId+",\"processStartedAtUtc\":\""+processStartedAtUtc.ToString("o")+"\",\"snapshotGeneratedAtUtc\":\""+DateTime.UtcNow.ToString("o")+"\",\"page\":\""+(details==null||details.IsDisposed?"closed":details.CurrentPage)+"\",\"liveVerified\":"+(Current!=null&&UiState.Recent(Current.TimestampUtc,DateTime.UtcNow,90)?"true":"false")+
-                    ",\"percent\":"+(Current!=null?Current.Percent.ToString():"null")+
-                    ",\"charging\":"+(Current!=null?Current.Charging.ToString().ToLower():"null")+
-                    ",\"dpiLiveVerified\":"+NativeDpiVerified.ToString().ToLower()+",\"nativeDpiReconcilePending\":"+nativeNeedsReconcile.ToString().ToLower()+",\"discardedNativeResults\":"+discardedNativeResults+
-                    ",\"dpi\":"+(Dpi!=null&&Dpi.Stages!=null&&Dpi.ActiveStage>=0&&Dpi.ActiveStage<Dpi.Stages.Count?Dpi.Stages[Dpi.ActiveStage].XDpi.ToString():"null")+
-                    ",\"activeStage\":"+(Dpi!=null?Dpi.ActiveStage.ToString():"null")+
+                string json="{\"version\":\""+Escape(AppRuntime.Version)+"\",\"instanceId\":\""+instanceId+"\",\"processId\":"+processId+",\"processStartedAtUtc\":\""+processStartedAtUtc.ToString("o")+"\",\"snapshotGeneratedAtUtc\":\""+now.ToString("o")+"\",\"page\":\""+(details==null||details.IsDisposed?"closed":details.CurrentPage)+"\",\"liveVerified\":"+(liveVerified?"true":"false")+
+                    ",\"percent\":"+percentJson+
+                    ",\"charging\":"+chargingJson+
+                    ",\"dpiLiveVerified\":"+NativeDpiVerified.ToString().ToLowerInvariant()+",\"nativeDpiReconcilePending\":"+nativeNeedsReconcile.ToString().ToLowerInvariant()+",\"discardedNativeResults\":"+discardedNativeResults+
+                    ",\"dpi\":"+(dpi!=null&&dpi.Stages!=null&&dpi.ActiveStage>=0&&dpi.ActiveStage<dpi.Stages.Count?dpi.Stages[dpi.ActiveStage].XDpi.ToString():"null")+
+                    ",\"activeStage\":"+(dpi!=null?dpi.ActiveStage.ToString():"null")+
                     ",\"stages\":"+stages+
-                    ",\"panelOpen\":"+panelOpen.ToString().ToLower()+",\"syncIntervalMs\":"+(panelOpen?"2000":refresh.Interval.ToString())+
+                    ",\"panelOpen\":"+panelOpen.ToString().ToLowerInvariant()+",\"syncIntervalMs\":"+(panelOpen?"2000":refresh.Interval.ToString())+
                     ",\"busy\":"+(busy!=0?"true":"false")+",\"pendingStage\":"+pendingStage+
-                    ",\"completedReads\":"+completedReads+",\"completedSwitches\":"+completedSwitches+
+                    ",\"completedReads\":"+(completedReads+completedWirelessReads)+",\"completedSwitches\":"+completedSwitches+
                     ",\"iconUpdates\":"+iconUpdates+
-                    ",\"batteryCheckedAtUtc\":"+(Current!=null?"\""+Current.TimestampUtc.ToString("o")+"\"":"null")+
-                    ",\"dpiCheckedAtUtc\":"+(Dpi!=null?"\""+Dpi.TimestampUtc.ToString("o")+"\"":"null")+
-                    ",\"checkedAtUtc\":\""+lastSyncUtc.ToString("o")+"\",\"detail\":\""+safe+"\",\"dpiDetail\":\""+Escape(DpiError)+"\""+
-                    ",\"headset\":{\"receiverPresent\":"+(Headset!=null&&Headset.ReceiverPresent?"true":"false")+
-                    ",\"connectionVerified\":"+(Headset!=null&&Headset.ConnectionVerified?"true":"false")+
-                    ",\"connected\":"+(Headset!=null&&Headset.ConnectionVerified?Headset.Connected.ToString().ToLower():"null")+
-                    ",\"percent\":"+(Headset!=null&&Headset.Percent.HasValue?Headset.Percent.Value.ToString():"null")+
-                    ",\"detail\":\""+Escape(Headset==null?"Not yet read":Headset.Detail)+"\"}"+
-                    ",\"audio\":{\"activeOutput\":\""+Escape(Audio==null?"unknown":Audio.ActiveOutput)+"\",\"headsetAvailable\":"+(Audio!=null&&Audio.HeadsetAvailable?"true":"false")+
-                    ",\"speakerAvailable\":"+(Audio!=null&&Audio.SpeakerAvailable?"true":"false")+
-                    ",\"volumePercent\":"+(Audio!=null&&Audio.OutputVolumePercent.HasValue?Audio.OutputVolumePercent.Value.ToString():"null")+
-                    ",\"microphoneMuted\":"+(Audio!=null&&Audio.MicrophoneMuted.HasValue?Audio.MicrophoneMuted.Value.ToString().ToLower():"null")+
-                    ",\"error\":\""+Escape(Audio==null?"":SafeDiagnostic.Clean(Audio.Error))+"\"},\"universalReady\":"+GenericReady.ToString().ToLower()+",\"universalDeviceCount\":"+WirelessDevices.Length+",\"universalError\":\""+Escape(GenericError)+"\",\"readerHealth\":\""+Escape(GenericHealthSummary)+"\",\"readerFailures\":"+GenericFailureCount+",\"readerIdle\":"+GenericIdleCount+",\"audioReconcilePending\":"+audioNeedsReconcile.ToString().ToLower()+
-                    ",\"genericDpi\":{\"busy\":"+(wirelessDpiInFlight!=null).ToString().ToLower()+",\"pendingCount\":"+pendingWirelessDpi.Count+",\"reconcilePending\":"+wirelessDpiNeedsReconcile.ToString().ToLower()+
-                    ",\"lastRequestedDpi\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.RequestedDpi.ToString())+",\"lastConfirmedDpi\":"+(lastWirelessDpiResult!=null&&lastWirelessDpiResult.ConfirmedDpi.HasValue?lastWirelessDpiResult.ConfirmedDpi.Value.ToString():"null")+
-                    ",\"lastSuccess\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.Success.ToString().ToLower())+",\"outcomeUnknown\":"+(lastWirelessDpiResult==null?"null":lastWirelessDpiResult.OutcomeUnknown.ToString().ToLower())+
-                    ",\"error\":\""+Escape(lastWirelessDpiResult==null?"":SafeDiagnostic.Clean(lastWirelessDpiResult.Error))+"\",\"checkedAtUtc\":\""+Escape(lastWirelessDpiResult==null?"":lastWirelessDpiResult.CheckedAtUtc)+"\"},\"activityRefresh\":{\"listener\":\""+activityListenerState+"\",\"registered\":"+(mouseActivity!=null&&mouseActivity.Registered).ToString().ToLower()+",\"rawInputMessages\":"+(mouseActivity==null?0:mouseActivity.RawInputMessages)+",\"mousePackets\":"+(mouseActivity==null?0:mouseActivity.MousePackets)+",\"headerReadFailures\":"+(mouseActivity==null?0:mouseActivity.HeaderReadFailures)+",\"resolvedSources\":"+(mouseActivity==null?0:mouseActivity.ResolvedSourceCount)+",\"unresolvedSources\":"+(mouseActivity==null?0:mouseActivity.UnresolvedSourceCount)+",\"events\":"+activityRefresh.Events+",\"freshSkipped\":"+activityRefresh.FreshSkipped+",\"coalesced\":"+activityRefresh.Coalesced+",\"cooldownSkipped\":"+activityRefresh.CooldownSkipped+",\"unsupportedSkipped\":"+activityRefresh.UnsupportedSkipped+",\"reads\":"+activityRefresh.Reads+",\"retries\":"+activityRefresh.Retries+",\"failures\":"+activityRefresh.Failures+",\"deferred\":"+activityRefresh.Deferred+",\"pendingSources\":"+activityRefresh.Pending+"}}";
+                    ",\"batteryCheckedAtUtc\":"+batteryCheckedJson+
+                    ",\"dpiCheckedAtUtc\":"+(dpi!=null?"\""+dpi.TimestampUtc.ToString("o")+"\"":"null")+
+                    ",\"checkedAtUtc\":\""+syncAt.ToString("o")+"\",\"detail\":\""+safe+"\",\"dpiDetail\":\""+Escape(DpiError)+"\""+
+                    ",\"headset\":{\"receiverPresent\":"+(hReceiver?"true":"false")+
+                    ",\"connectionVerified\":"+(hVerified?"true":"false")+
+                    ",\"connected\":"+hConnected+
+                    ",\"percent\":"+hPercent+
+                    ",\"detail\":\""+Escape(hDetail)+"\"}"+
+                    ",\"audio\":{\"activeOutput\":\""+Escape(audio==null?"unknown":audio.ActiveOutput)+"\",\"headsetAvailable\":"+(audio!=null&&audio.HeadsetAvailable?"true":"false")+
+                    ",\"speakerAvailable\":"+(audio!=null&&audio.SpeakerAvailable?"true":"false")+
+                    ",\"volumePercent\":"+(audio!=null&&audio.OutputVolumePercent.HasValue?audio.OutputVolumePercent.Value.ToString():"null")+
+                    ",\"microphoneMuted\":"+(audio!=null&&audio.MicrophoneMuted.HasValue?audio.MicrophoneMuted.Value.ToString().ToLowerInvariant():"null")+
+                    ",\"error\":\""+Escape(audio==null?"":SafeDiagnostic.Clean(audio.Error))+"\"},\"universalReady\":"+GenericReady.ToString().ToLowerInvariant()+",\"universalDeviceCount\":"+wireless.Length+",\"universalError\":\""+Escape(SafeDiagnostic.Clean(GenericError))+"\",\"readerHealth\":\""+Escape(GenericHealthSummary)+"\",\"readerFailures\":"+GenericFailureCount+",\"readerIdle\":"+GenericIdleCount+",\"audioReconcilePending\":"+audioNeedsReconcile.ToString().ToLowerInvariant()+
+                    ",\"genericDpi\":{\"busy\":"+(wirelessDpiInFlight!=null).ToString().ToLowerInvariant()+",\"pendingCount\":"+pendingWirelessDpi.Count+",\"reconcilePending\":"+wirelessDpiNeedsReconcile.ToString().ToLowerInvariant()+
+                    ",\"lastRequestedDpi\":"+(lastWirelessDpi==null?"null":lastWirelessDpi.RequestedDpi.ToString())+",\"lastConfirmedDpi\":"+(lastWirelessDpi!=null&&lastWirelessDpi.ConfirmedDpi.HasValue?lastWirelessDpi.ConfirmedDpi.Value.ToString():"null")+
+                    ",\"lastSuccess\":"+(lastWirelessDpi==null?"null":lastWirelessDpi.Success.ToString().ToLowerInvariant())+",\"outcomeUnknown\":"+(lastWirelessDpi==null?"null":lastWirelessDpi.OutcomeUnknown.ToString().ToLowerInvariant())+
+                    ",\"error\":\""+Escape(lastWirelessDpi==null?"":SafeDiagnostic.Clean(lastWirelessDpi.Error))+"\",\"checkedAtUtc\":\""+Escape(lastWirelessDpi==null?"":lastWirelessDpi.CheckedAtUtc)+"\"},\"activityRefresh\":{\"listener\":\""+activityListenerState+"\",\"registered\":"+(mouseActivity!=null&&mouseActivity.Registered).ToString().ToLowerInvariant()+",\"rawInputMessages\":"+(mouseActivity==null?0:mouseActivity.RawInputMessages)+",\"mousePackets\":"+(mouseActivity==null?0:mouseActivity.MousePackets)+",\"headerReadFailures\":"+(mouseActivity==null?0:mouseActivity.HeaderReadFailures)+",\"resolvedSources\":"+(mouseActivity==null?0:mouseActivity.ResolvedSourceCount)+",\"unresolvedSources\":"+(mouseActivity==null?0:mouseActivity.UnresolvedSourceCount)+",\"events\":"+activityRefresh.Events+",\"freshSkipped\":"+activityRefresh.FreshSkipped+",\"coalesced\":"+activityRefresh.Coalesced+",\"cooldownSkipped\":"+activityRefresh.CooldownSkipped+",\"unsupportedSkipped\":"+activityRefresh.UnsupportedSkipped+",\"reads\":"+activityRefresh.Reads+",\"retries\":"+activityRefresh.Retries+",\"failures\":"+activityRefresh.Failures+",\"deferred\":"+activityRefresh.Deferred+",\"pendingSources\":"+activityRefresh.Pending+"}}";
                 json=json.Substring(0,json.Length-1)+",\"persistence\":{\"lastSuccessfulStatusWriteUtc\":"+JsonTime(persistence.LastSuccessUtc)+",\"lastFailureUtc\":"+JsonTime(persistence.LastFailureUtc)+",\"failureCount\":"+persistence.FailureCount+",\"errorCode\":\""+Escape(persistence.ErrorCode)+"\",\"inFlight\":"+persistence.InFlight.ToString().ToLower()+"}}";
                 return json;
         }
@@ -1702,6 +1754,7 @@ namespace AtkBatteryTray {
                 if(complete&&!clearingHistory&&pref.RememberReadings&&persistWirelessCache)fileWriter.Enqueue(wirelessCachePath,ReadingCache.EncodeWireless(wirelessCache.Values));
                 if(complete&&snapshot.FamilyMemoryJson!=null)familyMemory.MergeFromSnapshot(snapshot.FamilyMemoryJson);
                 if(!applyingPhysicalSnapshot){bool previous=NativeMousePresent;if(snapshot.NativeMousePresent.HasValue)NativeMousePresent=snapshot.NativeMousePresent.Value;if(NativeMousePresent&&!previous)RequestRead(true,false);}
+                if(complete){completedWirelessReads++;if(!NativeMousePresent)lastSyncUtc=DateTime.UtcNow;}
             }else{GenericError=snapshot.Error;GenericHealthSummary="读取组件暂不可用";GenericIdleSummary=null;GenericIdleCount=0;BlockWirelessDpi();foreach(var device in WirelessDevices){device.Fresh=false;device.Charging=null;}}
             UpdateReaderFailureGroup(snapshot,complete);
             if(complete){string state=GenericError??GenericHealthSummary??"ready";ThreadPool.QueueUserWorkItem(delegate{SafeDiagnostic.Transition("device_readers",state);});}
@@ -1717,13 +1770,19 @@ namespace AtkBatteryTray {
         }
         public string DiagnosticSummary() {
             var now=DateTime.UtcNow;var mouse=UiState.Mouse(Current,LastGood,now);var headset=UiState.Headset(Headset,now);
-            var text="MyFinder Device Battery "+AppRuntime.Version+"\r\nWindows "+WindowsVersion.Read()+"\r\n当前实例："+processId+" / "+processStartedAtUtc.ToString("o")+"\r\n诊断写入："+StorageHealthText+"\r\n鼠标："+mouse.Tooltip+"\r\n耳机："+headset.Tooltip+
-                "\r\n耳机无线："+(ShowHeadset(Headset,Audio)?"已确认连接":"未确认连接")+"\r\n音源："+(Audio==null?"未确认":Audio.ActiveOutput)+
+            var wMouse=!NativeMousePresent&&Current==null&&LastGood==null?PrimaryWirelessMouse():null;
+            string mouseSummary=wMouse!=null?WirelessLayout.View(wMouse).Tooltip:(!NativeMousePresent&&Current==null&&LastGood==null&&GenericReady?"未检测到原生鼠标":mouse.Tooltip);
+            bool nativeHeadsetShown=ShowHeadset(Headset,Audio);
+            var wHeadset=!nativeHeadsetShown&&(Headset==null||!Headset.ReceiverPresent)?PrimaryWirelessHeadset():null;
+            string headsetSummary=wHeadset!=null?WirelessLayout.View(wHeadset).Tooltip:headset.Tooltip;
+            bool headsetConnected=nativeHeadsetShown||(wHeadset!=null&&wHeadset.Online&&wHeadset.ConnectionState=="connected");
+            var text="MyFinder Device Battery "+AppRuntime.Version+"\r\nWindows "+WindowsVersion.Read()+"\r\n当前实例："+processId+" / "+processStartedAtUtc.ToString("o")+"\r\n诊断写入："+StorageHealthText+"\r\n鼠标："+mouseSummary+"\r\n耳机："+headsetSummary+
+                "\r\n耳机无线："+(headsetConnected?"已确认连接":"未确认连接")+"\r\n音源："+(Audio==null?"未确认":Audio.ActiveOutput)+
                 "\r\n后台间隔："+DeviceSettings.Current.BackgroundSeconds+"秒\r\n自启："+PopupPages.StartupState();
             text+="\r\n软件更新："+UpdateStatus;if(!String.IsNullOrEmpty(UpdateFailure))text+="\r\n上次更新失败："+UpdateFailure;
             text+="\r\n"+DevicePackDiagnostic;
             text+="\r\n"+FeedbackReplies.Store.Diagnostic;
-            if(!String.IsNullOrEmpty(ErrorMessage))text+="\r\n鼠标读取："+SafeDiagnostic.Clean(ErrorMessage);
+            if(!String.IsNullOrEmpty(ErrorMessage)&&(NativeMousePresent||Current!=null||LastGood!=null||ErrorMessage!="Not yet read"))text+="\r\n鼠标读取："+SafeDiagnostic.Clean(ErrorMessage);
             if(!String.IsNullOrEmpty(DpiError))text+="\r\nDPI读取："+SafeDiagnostic.Clean(DpiError);
             foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip+(device.ModelSource=="pack"?" | 来自数据包，待验证":"");
             text+="\r\n通用读取："+(GenericReady?"已就绪":GenericScanning?"识别中":"尚未就绪")+"\r\n读取健康："+(GenericError??GenericHealthSummary??GenericIdleSummary??"正常");foreach(var item in GenericHealth)if(item.State!="ok"&&item.State!="no_devices")text+="\r\n"+item.Provider+"："+item.State+" / "+item.ErrorCode;

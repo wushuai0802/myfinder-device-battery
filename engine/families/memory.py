@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Set, Tuple
 MAX_TRIAL_ROUNDS = 3
 MAX_ANOMALIES = 2
 STALE_POLLS = 40
-RETRY_POLLS = 20   # after an unanswered trial, wait this many polls and try one more round
+RETRY_POLLS = 3   # after an unanswered trial, wait this many polls and try one more round
 
 
 @dataclass
@@ -51,7 +51,7 @@ class ReadMemory:
     def entry(self, family_id: str, device_key: str) -> DeviceMemory:
         return self._devices.setdefault((family_id, device_key), DeviceMemory())
 
-    def plan(self, family_id: str, device_key: str, read_names: List[str]) -> List[str]:
+    def plan(self, family_id: str, device_key: str, read_names: List[str], force: bool = False) -> List[str]:
         """Reads to try this poll, in order. Empty: send nothing."""
         memory = self.entry(family_id, device_key)
         # Persisted state can name reads a newer family file no longer has.
@@ -65,10 +65,13 @@ class ReadMemory:
         if memory.rounds >= MAX_TRIAL_ROUNDS:
             # Never give up for good: a receiver whose mouse was off, or a passive
             # read of a device that only reports while in use, gets another trial.
-            memory.silent_polls += 1
-            if memory.silent_polls < RETRY_POLLS:
-                return []
-            memory.rounds, memory.silent_polls = MAX_TRIAL_ROUNDS - 1, 0
+            if force:
+                memory.rounds, memory.silent_polls = MAX_TRIAL_ROUNDS - 1, 0
+            else:
+                memory.silent_polls += 1
+                if memory.silent_polls < RETRY_POLLS:
+                    return []
+                memory.rounds, memory.silent_polls = MAX_TRIAL_ROUNDS - 1, 0
         memory.rounds += 1
         return [name for name in read_names if name not in memory.retired]
 

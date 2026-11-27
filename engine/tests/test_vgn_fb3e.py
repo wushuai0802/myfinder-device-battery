@@ -94,3 +94,69 @@ class Fb3eTests(unittest.TestCase):
         self.assertEqual(self.read(bytes.fromhex(CAPTURES[0][1])), [])
         self.device.write.assert_called_once_with(P.make_request())
         self.device.close.assert_called_once()
+
+
+FB49_PARENT = r"pnp:usb\vid_3554&pid_fb49\test"
+FB49_PATH = rb"\\?\hid#vid_3554&pid_fb49&mi_01&col02#fb49-test"
+
+
+def fb49_receiver(**changes):
+    row = dict(vendor_id=0x3554, product_id=0xFB49, product_string="VGN DragonFly F2 Ultra+",
+               physical_id=FB49_PARENT, path=FB49_PATH, interface_number=1,
+               usage_page=0xFF02, usage=2, input_report_length=17, output_report_length=17,
+               input_report_sizes={"8": 17}, output_report_sizes={"8": 17})
+    row.update(changes)
+    return row
+
+
+def fb49_frame(level, length_byte=2, power=0, mv=4055):
+    body = [0x08, 0x04, 0x00, 0x00, 0x00, length_byte, level, power, (mv >> 8) & 0xFF, mv & 0xFF] + [0] * 6
+    return bytes(body + [P.checksum(body)])
+
+
+class Fb49Tests(unittest.TestCase):
+    """#1217: VGN DragonFly F2 Ultra+ (3554:FB49) official VGN HUB vgn-y2 report-8 path."""
+
+    def setUp(self):
+        self.provider = P.PulsarProvider()
+        self.hid = Mock()
+        self.device = self.hid.device.return_value
+        self.device.write.return_value = 17
+        self.inventory = [fb49_receiver()]
+        self.enterContext(patch.object(P, "hid", self.hid))
+        self.enterContext(patch.object(P.hidlist, "enumerate", side_effect=lambda vid: [
+            row for row in self.inventory if row["vendor_id"] == vid]))
+        self.enterContext(patch.object(P, "output_length", side_effect=AssertionError("legacy probe")))
+        self.enterContext(patch.object(P, "_capture_dpi", side_effect=AssertionError("DPI capture")))
+
+    def read(self, frame=b""):
+        self.device.reset_mock()
+        self.device.read.side_effect = [b"", frame, b""]
+        return self.provider.poll()
+
+    def test_accepts_len2_and_len4_vgn_y2_replies_and_retains_on_sleep(self):
+        for level, length_byte in ((90, 2), (76, 4)):
+            result, = self.read(fb49_frame(level, length_byte=length_byte))
+            self.assertEqual((result.name, result.level, result.charging_known, result.physical_id),
+                             ("VGN DragonFly F2 Ultra+", level, False, FB49_PARENT))
+            self.assertIsNone(result.dpi_target)
+            self.device.open_path.assert_called_once_with(FB49_PATH)
+            self.device.write.assert_called_once_with(P.make_request())
+        old, = self.read()
+        self.assertEqual((old.level, old.online, old.charging_known), (76, False, False))
+
+    def test_zero_send_and_frame_validation_gates(self):
+        for rows in ([fb49_receiver(interface_number=0)],
+                     [fb49_receiver(physical_id="collection:synthetic")],
+                     [fb49_receiver(), fb49_receiver()],
+                     [fb49_receiver(input_report_sizes={})],
+                     [fb49_receiver(output_report_sizes={"8": 16})]):
+            with self.subTest(rows=rows):
+                self.inventory = rows
+                self.assertEqual(self.read(), [])
+                self.device.open_path.assert_not_called()
+        self.inventory = [fb49_receiver()]
+        for invalid in (bytes(P.make_request()), fb49_frame(101), fb49_frame(80, length_byte=3),
+                        fb49_frame(80)[:-1] + bytes([fb49_frame(80)[-1] ^ 1])):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.read(invalid), [])
