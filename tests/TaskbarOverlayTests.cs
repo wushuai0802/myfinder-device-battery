@@ -423,6 +423,188 @@ static class TaskbarOverlayTests {
         }
     }
 
+    static void RecoveryPolicyStateMachine() {
+        var policy = new TaskbarOverlayRecoveryPolicy(3);
+        Check(!policy.IsPersistentlyDegraded && policy.RecreateCount == 0, "policy starts clean");
+
+        // Commit failures: 1st degrades transiently, 2nd requests handle recreation
+        Check(policy.ObserveCommitResult(false, 87) == TaskbarOverlayRecoveryAction.DegradeCommitFailed, "first commit failure degrades cleanly");
+        Check(!policy.IsPersistentlyDegraded && policy.LastWin32Error == 87, "records Win32 error without persistent latch yet");
+        Check(policy.ObserveCommitResult(false, 87) == TaskbarOverlayRecoveryAction.RecreateHandle, "second consecutive commit failure triggers recreate");
+        Check(policy.RecreateCount == 1 && policy.ConsecutiveCommitFailures == 0, "recreate increments budget and resets consecutive counter");
+
+        // Commit recovery resets error and counters; sustained healthy frames replenish budget
+        Check(policy.ObserveCommitResult(true, 0) == TaskbarOverlayRecoveryAction.None, "successful commit clears error");
+        Check(policy.LastWin32Error == 0, "last Win32 error cleared on success");
+        for (int i = 0; i < TaskbarOverlayRecoveryPolicy.HealthyFramesBeforeBudgetReset; i++) policy.RecordHealthyFrame();
+        Check(policy.RecreateCount == 0, "sustained healthy frames replenish recreate budget");
+
+        // Exhaust commit recreate budget -> persistent degradation latch (no infinite loop)
+        for (int r = 0; r < 3; r++) {
+            Check(policy.ObserveCommitResult(false, 1400) == TaskbarOverlayRecoveryAction.DegradeCommitFailed, "pre-recreate failure #" + r);
+            Check(policy.ObserveCommitResult(false, 1400) == TaskbarOverlayRecoveryAction.RecreateHandle, "bounded recreate #" + (r + 1));
+        }
+        Check(policy.RecreateCount == 3 && !policy.IsPersistentlyDegraded, "budget reached 3");
+        Check(policy.ObserveCommitResult(false, 1400) == TaskbarOverlayRecoveryAction.DegradeCommitFailed, "post-budget failure 1");
+        Check(policy.ObserveCommitResult(false, 1400) == TaskbarOverlayRecoveryAction.DegradeCommitFailed, "post-budget failure 2 stays degraded instead of recreating");
+        Check(policy.IsPersistentlyDegraded && policy.IsDegradedCommitFailed && policy.RecreateCount == 3, "commit failure latches persistent degradation at cap");
+
+        policy.ResetForManualRecreate();
+        Check(!policy.IsPersistentlyDegraded && policy.RecreateCount == 0, "manual reset clears persistent latch and budget");
+
+        // Z-order behind Shell_TrayWnd: 2 promotes -> 3rd triggers recreate -> cap latches zorder_occluded
+        for (int r = 0; r < 3; r++) {
+            Check(policy.ObserveVisibility(true, true) == TaskbarOverlayRecoveryAction.PromoteZOrder, "behind tick 1 promotes Z-order");
+            Check(policy.ObserveVisibility(true, true) == TaskbarOverlayRecoveryAction.PromoteZOrder, "behind tick 2 promotes Z-order");
+            Check(policy.ObserveVisibility(true, true) == TaskbarOverlayRecoveryAction.RecreateHandle, "behind tick 3 triggers recreate #" + (r + 1));
+        }
+        Check(policy.ObserveVisibility(true, true) == TaskbarOverlayRecoveryAction.PromoteZOrder, "post-budget behind tick 1");
+        Check(policy.ObserveVisibility(true, true) == TaskbarOverlayRecoveryAction.PromoteZOrder, "post-budget behind tick 2");
+        Check(policy.ObserveVisibility(true, true) == TaskbarOverlayRecoveryAction.DegradeOccluded, "post-budget behind tick 3 degrades to occluded");
+        Check(policy.IsPersistentlyDegraded && policy.IsDegradedOccluded && policy.RecreateCount == 3, "Z-order occlusion latches persistent degradation at cap");
+
+        // Fail-safe tray icon restoration for all new degraded statuses (#1193)
+        var pref = new AudioBindings { HideTrayIcon = true };
+        pref.TaskbarOverlay.Enabled = true;
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(pref, "commit_failed"), "tray icon auto-restores when overlay commit fails");
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(pref, "zorder_occluded"), "tray icon auto-restores when overlay is occluded behind taskbar");
+        Check(TrayVisibilityPolicy.ShouldShowTrayIcon(pref, "dwm_cloaked"), "tray icon auto-restores when overlay is DWM cloaked");
+    }
+
+    static void ControllerRecoveryAndDiagnosticsExposure() {
+        var pref = new AudioBindings { ThemeStyle = "graphite", Theme = "dark", RememberReadings = false };
+        pref.TaskbarOverlay.Enabled = false;
+        DeviceSettings.UseTransientConfiguration(pref);
+        string settingsPath = Path.Combine(output, "tb-recovery-settings.json");
+
+        using (var owner = new TrayContext(false,
+            delegate(bool b) { return new MouseSnapshot { Battery = new BatteryReading { Percent = 84, TimestampUtc = DateTime.UtcNow } }; },
+            delegate(int s) { return null; },
+            null, null, false, null, null, null, delegate { return false; },
+            null, null, null, null,
+            delegate(AudioBindings s) { DeviceSettings.SaveBindings(settingsPath, s); DeviceSettings.UseTransientConfiguration(s); })) {
+            ((System.Windows.Forms.Timer)Field(owner, "refresh")).Stop();
+            owner.Current = new BatteryReading { Percent = 84, TimestampUtc = DateTime.UtcNow };
+            owner.NativeMousePresent = true;
+            owner.GenericReady = true;
+
+            // Default disabled: PopupPage.Diagnostics omits taskbar overlay row so existing layouts stay unchanged
+            var navDiag = new PopupNavigation { Page = PopupPage.Diagnostics, VisibleChoices = 30 };
+            var rowsDisabled = PopupPages.Build(owner, navDiag, false);
+            Check(!rowsDisabled.Exists(delegate(PopupControl c) { return c.Text == "任务栏浮层"; }), "PopupPage.Diagnostics omits taskbar overlay row when disabled");
+
+            // 1. Commit failure -> bounded auto-recreate -> automatic recovery + managed Visible sync
+            var next = DeviceSettings.Current;
+            next.TaskbarOverlay.Enabled = true;
+            owner.SavePreferences(next);
+
+            int commitAttempts = 0;
+            int failCount = 2;
+            bool behindTaskbar = false;
+            bool selfCloaked = false;
+            using (var ctrl = new TaskbarBatteryOverlayController(
+                owner,
+                delegate {
+                    var snap = MakeValidTopBar();
+                    snap.SelfBehindTaskbar = behindTaskbar;
+                    snap.SelfCloaked = selfCloaked;
+                    return snap;
+                },
+                delegate(IntPtr hwnd, Point loc, Size logical, float scale, byte opacity, Action<Graphics, SizeF> paint, out int err) {
+                    commitAttempts++;
+                    if (commitAttempts <= failCount) {
+                        err = 87;
+                        return false;
+                    }
+                    err = 0;
+                    return true;
+                })) {
+                ctrl.ApplySettings();
+                Check(ctrl.IsRunning && ctrl.StatusCode == "commit_failed" && !ctrl.ActiveForm.OverlayVisible, "first commit failure surfaces commit_failed instead of pretending visible");
+                Check(ctrl.ActiveForm.LastCommitError == 87, "captures exact Win32 error code");
+                Check(ctrl.ShortStatusLabel == "像素提交失败", "exposes concise short status label for commit failure");
+                Check(ctrl.DiagnosticText.Contains("commit_failed") && ctrl.DiagnosticText.Contains("Win32错误=87"), "DiagnosticText includes status code and Win32 error");
+
+                var firstForm = ctrl.ActiveForm;
+                ctrl.NotifyDataChanged();
+                Check(ctrl.RecreateCount == 1 && ctrl.LastRecoveryReason == "commit_failed", "second consecutive commit failure auto-recreates overlay form");
+                Check(ctrl.ActiveForm != null && ctrl.ActiveForm != firstForm, "auto-recreate replaces the underlying HWND form instance");
+                Check(ctrl.StatusCode == "ready" && ctrl.ActiveForm.OverlayVisible && ctrl.ActiveForm.Visible, "recreated form commits cleanly and keeps managed Form.Visible synced");
+                Check(ctrl.ActiveForm.LastCommittedHandle == ctrl.ActiveForm.Handle && ctrl.ActiveForm.LastCommittedHandle != IntPtr.Zero, "tracks handle generation of last successful commit");
+
+                // 1b. DWM cloaked detection waits without spinning recreates, then repaints cleanly on uncloak
+                selfCloaked = true;
+                int recreatesBeforeCloak = ctrl.RecreateCount;
+                ctrl.NotifyPopupStateChanged();
+                Check(ctrl.StatusCode == "dwm_cloaked" && ctrl.ShortStatusLabel == "被系统合成隐藏" && ctrl.RecreateCount == recreatesBeforeCloak, "DWM cloaked state surfaces dwm_cloaked without spinning recreations");
+                selfCloaked = false;
+                int commitsBeforeUncloak = commitAttempts;
+                ctrl.NotifyPopupStateChanged();
+                Check(ctrl.StatusCode == "ready" && commitAttempts > commitsBeforeUncloak, "uncloaking forces fresh pixel commit and returns to ready");
+
+                // 2. Z-order occlusion behind top Shell_TrayWnd (#1193) -> promote -> bounded auto-recreate -> persistent latch
+                behindTaskbar = true;
+                int beforePromotes = ctrl.ActiveForm.ZPromoteCount;
+                ctrl.NotifyDataChanged(); // behind tick 1 -> promote
+                Check(ctrl.ActiveForm.ZPromoteCount > beforePromotes && ctrl.StatusCode == "ready", "behind tick 1 bounces Z-order above Shell_TrayWnd");
+                ctrl.NotifyDataChanged(); // behind tick 2 -> promote
+                int recreatesBefore = ctrl.RecreateCount;
+                ctrl.NotifyDataChanged(); // behind tick 3 -> auto recreate #2
+                Check(ctrl.RecreateCount == recreatesBefore + 1 && ctrl.LastRecoveryReason == "zorder_occluded", "persistent behind-taskbar triggers bounded auto-recreate");
+
+                // Exhaust remaining recreate budget while still behind taskbar
+                for (int i = 0; i < 8; i++) ctrl.NotifyDataChanged();
+                Check(ctrl.StatusCode == "zorder_occluded" && !ctrl.ActiveForm.OverlayVisible && !ctrl.ActiveForm.Visible, "exhausted Z-order recovery degrades cleanly to zorder_occluded and hides");
+                Check(ctrl.ShortStatusLabel == "被任务栏遮挡", "exposes concise short status label for Z-order occlusion");
+                int commitsAtLatch = commitAttempts;
+                ctrl.NotifyDataChanged();
+                ctrl.NotifyDataChanged();
+                Check(commitAttempts == commitsAtLatch && ctrl.StatusCode == "zorder_occluded", "persistent degradation latch prevents 400ms show/hide churn");
+
+                // Manual recreate clears latch and recovers cleanly
+                behindTaskbar = false;
+                Check(ctrl.RecreateOverlay("manual", true), "manual recreate succeeds");
+                Check(ctrl.StatusCode == "ready" && ctrl.ActiveForm.OverlayVisible && ctrl.ActiveForm.Visible, "manual recreate restores overlay cleanly");
+
+                // 3. Post-update (--show-updated) scheduled recovery
+                int beforePostUpdate = ctrl.RecreateCount;
+                ctrl.SchedulePostUpdateRecovery(60);
+                var deadline = DateTime.UtcNow.AddMilliseconds(1200);
+                while (ctrl.RecreateCount == beforePostUpdate && DateTime.UtcNow < deadline) {
+                    Application.DoEvents();
+                    System.Threading.Thread.Sleep(20);
+                }
+                Check(ctrl.RecreateCount == beforePostUpdate + 1 && ctrl.LastRecoveryReason == "post_update", "post-update recovery timer recreates overlay once message loop is active");
+                Check(ctrl.StatusCode == "ready" && ctrl.ActiveForm.OverlayVisible, "overlay remains healthy after post-update recreate");
+            }
+
+            // 4. Diagnostics exposure across DiagnosticSummary, PopupPage.Diagnostics, and ControlCenterForm
+            string summary = owner.DiagnosticSummary();
+            Check(summary.Contains("任务栏浮层："), "DiagnosticSummary includes taskbar overlay line when enabled");
+            var rowsEnabled = PopupPages.Build(owner, navDiag, false);
+            Check(rowsEnabled.Exists(delegate(PopupControl c) { return c.Text == "任务栏浮层"; }), "PopupPage.Diagnostics surfaces taskbar overlay status when enabled");
+
+            using (var cc = new ControlCenterForm(owner, ControlCenterPage.Diagnostics, delegate { }, delegate { })) {
+                bool foundStatus = false;
+                bool foundRecreateBtn = false;
+                Action<Control> walk = null;
+                walk = delegate(Control parent) {
+                    foreach (Control child in parent.Controls) {
+                        if (child.Text != null) {
+                            if (child.Text.Contains("任务栏浮层状态")) foundStatus = true;
+                            if (child.Text == "重建浮层") foundRecreateBtn = true;
+                        }
+                        if (child.HasChildren) walk(child);
+                    }
+                };
+                walk(cc);
+                Check(foundStatus && foundRecreateBtn, "Control Center Diagnostics page surfaces taskbar overlay status and manual recreate button");
+            }
+
+            owner.ExitThread();
+        }
+    }
+
     static void RenderShowcasePng() {
         var items = new List<TaskbarOverlayRenderer.Item> {
             new TaskbarOverlayRenderer.Item { Id = "m1", Name = "ATK A9 Air+", Kind = "mouse", Percent = 84, Fresh = true },
@@ -485,7 +667,9 @@ static class TaskbarOverlayTests {
 
         Run("TaskbarOverlaySettings defaults and normalization", SettingsDefaultsAndNormalization);
         Run("Taskbar environment gating and degradation matrix", EnvironmentGatingAndDegradationMatrix);
+        Run("Taskbar overlay recovery policy state machine", RecoveryPolicyStateMachine);
         Run("Taskbar overlay controller lifecycle and recovery", LiveControllerLifecycleAndDegradation);
+        Run("Taskbar overlay auto-recovery and diagnostics exposure", ControllerRecoveryAndDiagnosticsExposure);
         Run("Taskbar overlay visual showcase render", RenderShowcasePng);
 
         Console.WriteLine(checks + " checks, " + failures + " failed groups");

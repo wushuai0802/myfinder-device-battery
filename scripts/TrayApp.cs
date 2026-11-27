@@ -810,7 +810,7 @@ namespace AtkBatteryTray {
             foreach(string id in preferences.DeviceOrder)visible.Append("|order:").Append(id);
             visible.Append('|').Append(UiState.Mouse(owner.Current,owner.LastGood,now).Key).Append('|').Append(UiState.Headset(displayHeadset,now).Key);
             visible.Append('|').Append(UiState.SyncText(UiState.Mouse(owner.Current,owner.LastGood,now),now)).Append('|').Append(owner.NativeDpiToken);
-            if(navigation.Page==PopupPage.Diagnostics)visible.Append('|').Append(owner.StorageHealthText);
+            if(navigation.Page==PopupPage.Diagnostics)visible.Append('|').Append(owner.StorageHealthText).Append('|').Append(owner.TaskbarOverlayStatusCode).Append('|').Append(owner.TaskbarOverlayStatusMessage);
             if(displayAudio!=null)visible.Append('|').Append(displayAudio.MicrophoneAvailable);
             string key=visible.ToString();
             if(key==lastPresentedKey)return true;
@@ -886,6 +886,9 @@ namespace AtkBatteryTray {
         internal bool TaskbarOverlayRunning {get{return taskbarOverlay!=null&&taskbarOverlay.IsRunning;}}
         internal string TaskbarOverlayStatusCode {get{return taskbarOverlay==null?"disabled":taskbarOverlay.StatusCode;}}
         internal string TaskbarOverlayStatusMessage {get{return taskbarOverlay==null?"默认关闭":taskbarOverlay.StatusMessage;}}
+        internal string TaskbarOverlayShortStatus {get{return taskbarOverlay==null?"未开启":taskbarOverlay.ShortStatusLabel;}}
+        internal string TaskbarOverlayDiagnostic {get{return taskbarOverlay==null?"未启用":taskbarOverlay.DiagnosticText;}}
+        internal bool RecreateTaskbarOverlay(string reason="manual"){return !disposed&&taskbarOverlay!=null&&taskbarOverlay.RecreateOverlay(reason,true);}
         internal TaskbarBatteryOverlayForm ActiveTaskbarOverlay {get{return taskbarOverlay==null?null:taskbarOverlay.ActiveForm;}}
         internal void ShowDetailsFromOverlay(){if(!disposed)ShowDetails(false);}
         internal void OpenFeedbackFromHost(IWin32Window parent,bool missingDevice,Action<string> copyText,Action<string> openLink){
@@ -1178,6 +1181,7 @@ namespace AtkBatteryTray {
         }
         internal void RequestUpdatedPanel() {
             if(disposed)return;
+            if(taskbarOverlay!=null)taskbarOverlay.SchedulePostUpdateRecovery();
             if(updatedPanelRequest==null)updatedPanelRequest=new UpdatedPanelRequest(delegate{return TrayPanelPlacement.FindIcon(tray,DeviceSettings.Current.LastTrayIconPosition);},TrayPanelPlacement.Fallback,OpenUpdatedPanel);
             updatedPanelRequest.Start();
         }
@@ -1186,6 +1190,7 @@ namespace AtkBatteryTray {
             if(details==null||details.IsDisposed)details=new Details(this);
             details.OpenUpdated(placement);
             if(!updatedNoticeShown){updatedNoticeShown=true;details.NoticeUpdated();}
+            if(taskbarOverlay!=null)taskbarOverlay.NotifyPopupStateChanged();
         }
         internal bool LeftButtonPressed {get{return readLeftButton();}}
         internal bool OwnsDetails(Details popup){return !disposed&&details==popup;}
@@ -1272,6 +1277,7 @@ namespace AtkBatteryTray {
         }
         public void PanelClosed() {
             if(disposed)return;panelOpen=false;liveSync.Stop();SaveStatus();
+            if(taskbarOverlay!=null)taskbarOverlay.NotifyPopupStateChanged();
         }
         void ShowBalloonIfTrayVisible(int timeout,string title,string text,ToolTipIcon icon) {
             if(disposed||!tray.Visible)return;
@@ -1721,6 +1727,7 @@ namespace AtkBatteryTray {
             if(!String.IsNullOrEmpty(DpiError))text+="\r\nDPI读取："+SafeDiagnostic.Clean(DpiError);
             foreach(var device in WirelessDevices)text+="\r\n"+device.Kind+"："+WirelessLayout.View(device).Tooltip+(device.ModelSource=="pack"?" | 来自数据包，待验证":"");
             text+="\r\n通用读取："+(GenericReady?"已就绪":GenericScanning?"识别中":"尚未就绪")+"\r\n读取健康："+(GenericError??GenericHealthSummary??GenericIdleSummary??"正常");foreach(var item in GenericHealth)if(item.State!="ok"&&item.State!="no_devices")text+="\r\n"+item.Provider+"："+item.State+" / "+item.ErrorCode;
+            if((DeviceSettings.Current.TaskbarOverlay!=null&&DeviceSettings.Current.TaskbarOverlay.Enabled)||TaskbarOverlayStatusCode!="disabled")text+="\r\n任务栏浮层："+TaskbarOverlayDiagnostic;
             text+="\r\n未取得电量的设备（可能未适配，也可能正在休眠）";
             if(unadaptedDevices.Length==0)text+="\r\n无记录";
             foreach(var device in unadaptedDevices)text+="\r\n"+device.DiagnosticLine();

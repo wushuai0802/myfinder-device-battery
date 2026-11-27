@@ -44,6 +44,33 @@ namespace AtkBatteryTray {
         [DllImport("gdi32.dll", SetLastError = true)]
         static extern bool DeleteObject(IntPtr obj);
 
+        const int GWL_EXSTYLE = -20;
+        const long WS_EX_LAYERED = 0x00080000L;
+        const int ERROR_INVALID_PARAMETER = 87;
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
+        static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
+        static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLong", SetLastError = true)]
+        static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+        static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        static IntPtr GetWindowLongPtrCompat(IntPtr hWnd, int nIndex) {
+            return IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, nIndex) : new IntPtr(GetWindowLong32(hWnd, nIndex));
+        }
+
+        static IntPtr SetWindowLongPtrCompat(IntPtr hWnd, int nIndex, IntPtr dwNewLong) {
+            return IntPtr.Size == 8 ? SetWindowLongPtr64(hWnd, nIndex, dwNewLong) : new IntPtr(SetWindowLong32(hWnd, nIndex, dwNewLong.ToInt32()));
+        }
+
+        [DllImport("user32.dll")]
+        static extern bool IsWindow(IntPtr hWnd);
+
         [DllImport("user32.dll", SetLastError = true)]
         static extern bool UpdateLayeredWindow(
             IntPtr hwnd,
@@ -59,8 +86,12 @@ namespace AtkBatteryTray {
         Bitmap buffer;
         Size physicalSize;
         bool disposed;
+        int lastWin32Error;
+        bool lastCommitSucceeded;
 
         internal Size PhysicalSize { get { return physicalSize; } }
+        internal int LastWin32Error { get { return lastWin32Error; } }
+        internal bool LastCommitSucceeded { get { return lastCommitSucceeded; } }
 
         internal static Size ComputePhysicalSize(Size logicalSize, float dpiScale) {
             float scale = Math.Max(1f, Math.Min(4f, dpiScale));
@@ -101,7 +132,12 @@ namespace AtkBatteryTray {
         }
 
         internal bool Commit(IntPtr hwnd, Point physicalLocation, Size logicalSize, float dpiScale, byte opacity, Action<Graphics, SizeF> paint) {
-            if (disposed || hwnd == IntPtr.Zero) return false;
+            lastWin32Error = 0;
+            lastCommitSucceeded = false;
+            if (disposed || hwnd == IntPtr.Zero || logicalSize.Width <= 0 || logicalSize.Height <= 0 || !IsWindow(hwnd)) {
+                lastWin32Error = ERROR_INVALID_PARAMETER;
+                return false;
+            }
             float scale = Math.Max(1f, Math.Min(4f, dpiScale));
             var target = ComputePhysicalSize(logicalSize, scale);
             var bmp = EnsureBuffer(target);
@@ -120,17 +156,41 @@ namespace AtkBatteryTray {
             IntPtr oldBitmap = IntPtr.Zero;
             try {
                 screenDc = GetDC(IntPtr.Zero);
-                if (screenDc == IntPtr.Zero) return false;
+                if (screenDc == IntPtr.Zero) {
+                    lastWin32Error = Marshal.GetLastWin32Error();
+                    return false;
+                }
                 memDc = CreateCompatibleDC(screenDc);
-                if (memDc == IntPtr.Zero) return false;
+                if (memDc == IntPtr.Zero) {
+                    lastWin32Error = Marshal.GetLastWin32Error();
+                    return false;
+                }
                 hBitmap = bmp.GetHbitmap(Color.FromArgb(0));
-                if (hBitmap == IntPtr.Zero) return false;
+                if (hBitmap == IntPtr.Zero) {
+                    lastWin32Error = Marshal.GetLastWin32Error();
+                    return false;
+                }
                 oldBitmap = SelectObject(memDc, hBitmap);
                 var dstPos = new NativePoint(physicalLocation.X, physicalLocation.Y);
                 var size = new NativeSize(target.Width, target.Height);
                 var srcPos = new NativePoint(0, 0);
                 var blend = new NativeBlend { Op = 0, Flags = 0, Alpha = opacity, Format = 1 };
-                return UpdateLayeredWindow(hwnd, screenDc, ref dstPos, ref size, memDc, ref srcPos, 0, ref blend, 2);
+                bool ok = UpdateLayeredWindow(hwnd, screenDc, ref dstPos, ref size, memDc, ref srcPos, 0, ref blend, 2);
+                if (!ok) {
+                    int err = Marshal.GetLastWin32Error();
+                    if (err == ERROR_INVALID_PARAMETER) {
+                        // WinForms/Windows can leave a window in uniform-alpha layered mode;
+                        // toggling WS_EX_LAYERED resets the layer state before retrying per-pixel ARGB.
+                        long style = GetWindowLongPtrCompat(hwnd, GWL_EXSTYLE).ToInt64();
+                        SetWindowLongPtrCompat(hwnd, GWL_EXSTYLE, new IntPtr(style & ~WS_EX_LAYERED));
+                        SetWindowLongPtrCompat(hwnd, GWL_EXSTYLE, new IntPtr(style | WS_EX_LAYERED));
+                        ok = UpdateLayeredWindow(hwnd, screenDc, ref dstPos, ref size, memDc, ref srcPos, 0, ref blend, 2);
+                        err = ok ? 0 : Marshal.GetLastWin32Error();
+                    }
+                    lastWin32Error = err;
+                }
+                lastCommitSucceeded = ok;
+                return ok;
             } finally {
                 if (oldBitmap != IntPtr.Zero && memDc != IntPtr.Zero) SelectObject(memDc, oldBitmap);
                 if (hBitmap != IntPtr.Zero) DeleteObject(hBitmap);
