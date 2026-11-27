@@ -151,7 +151,7 @@ class VgnRyMsTests(unittest.TestCase):
         self.assertEqual(bus.writes, [])
 
     def test_other_identities_and_collections_never_open(self):
-        changes = [dict(product_id=pid) for pid in (0x1A01, 0x1A02, 0x1004, 0x1A25, 0x1A2B, 0x2A01, 0x1A04F)]
+        changes = [dict(product_id=pid) for pid in (0x1A01, 0x1A02, 0x1001, 0x1A25, 0x1A2B, 0x2A01, 0x1A04F)]
         changes += [dict(vendor_id=0x3554), dict(usage_page=0xFFFF, usage=1),
                     dict(usage_page=0xFF01, usage=0x10), dict(path=b"")]
         for change in changes:
@@ -198,13 +198,64 @@ class VgnRyMsTests(unittest.TestCase):
             {"path": target["path"].replace(b"col01", b"col02")},
             {"path": target["path"].replace(b"col01", b"col010")},
             {"path": b"not-the-collection#also-not-the-collection#&mi_01&col01"},
-            {"product_id": 0x1028},
+            {"product_id": 0x1099},
             {"feature_report_sizes": None},
         ):
             with self.subTest(changes=changes), fixture([reply()], [dict(target, **changes)]) as bus:
                 self.assertEqual(P().poll(), [])
                 self.assertEqual(bus.opened, [])
                 self.assertEqual(bus.writes, [])
+
+    def test_wired_ry_ms_mice_use_0x8a_query_and_payload_index_1(self):
+        request = V.make_request(wired=True)
+        self.assertEqual(len(request), 65)
+        self.assertEqual(list(request[:9]), [0x00, 0x8A, 0, 0, 0, 0, 0, 0, 0x75])
+        self.assertEqual(set(request[9:]), {0})
+
+        expected = {
+            0x1004: "VGN 蜻蜓3 Pro Max",
+            0x1008: "VGN Dragonfly Y2 V2 Pro Max",
+            0x1015: "VGN Dragonfly F1 V2 Pro Max",
+            0x1028: "VGN Dragonfly 3 Ultra",
+            0x102F: "VGN Dragonfly F1 V5 Ultra",
+            0x1048: "VGN Dragonfly F2 V2 Ultra",
+        }
+        wired_reply = [0x00, 0x8A, 84] + [0] * 62
+        for pid, name in expected.items():
+            path = rf"\\?\hid#vid_391d&pid_{pid:04x}&mi_01&col01#synthetic".encode()
+            target = entry(product_id=pid, interface_number=1, path=path)
+            with self.subTest(pid=pid), fixture([wired_reply], [target]) as bus:
+                status, = P().poll()
+                self.assertEqual((status.name, status.level, status.online, status.verification_level),
+                                 (name, 84, True, "C"))
+                self.assertFalse(status.charging_known)
+                self.assertEqual(bus.writes, [(path, list(request))])
+                self.assertEqual(bus.opened, bus.closed)
+
+    def test_wired_ry_ms_rejects_echo_zero_and_mismatched_paths(self):
+        path = br"\\?\hid#vid_391d&pid_1004&mi_01&col01#synthetic"
+        target = entry(product_id=0x1004, interface_number=1, path=path)
+        for bad_reply in (
+            list(V.make_request(wired=True)),
+            list(V.make_request(wired=True)[:9]) + [0x55] + [0] * 55,
+            [0] * 65,
+            [0x00, 0x90, 80] + [0] * 62,  # unrelated command header (e.g. DPI)
+            [0x00, 0x8A, 0] + [0] * 62,
+            [0x00, 0x8A, 101] + [0] * 62,
+            [0x01, 0x8A, 80] + [0] * 62,
+        ):
+            with self.subTest(bad_reply=bad_reply[:4]), fixture([bad_reply], [target]):
+                self.assertEqual(P().poll(), [])
+        for bad_entry in (
+            entry(product_id=0x1004, interface_number=2, path=path),
+            entry(product_id=0x1004, interface_number=1,
+                  path=br"\\?\hid#vid_391d&pid_1008&mi_01&col01#synthetic"),
+            entry(product_id=0x1004, interface_number=1,
+                  path=br"\\?\hid#vid_391d&pid_1004&mi_01&col02#synthetic"),
+        ):
+            with self.subTest(bad_entry=bad_entry["path"]), fixture([[0x00, 0x8A, 80] + [0] * 62], [bad_entry]) as bus:
+                self.assertEqual(P().poll(), [])
+                self.assertEqual(bus.opened, [])
 
     def test_duplicate_and_unresolved_collections_never_open(self):
         inventories = ([entry(), entry(path=b"duplicate")],

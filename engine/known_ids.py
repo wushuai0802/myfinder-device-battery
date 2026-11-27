@@ -57,6 +57,7 @@ TABLES = {
     "vgn_keyboard": ("PIDS",), "vgn_keyboard_wired": ("PIDS",),
     "cherry": ("PIDS",), "cherry_mw5500": ("PIDS",),
     "hyperx_flight_s": ("PIDS",),
+    "hyperx_stinger_core": ("PIDS",),
     "asus_azoth": ("PIDS",), "mchose_g3v2": ("PIDS",),
     "eweadn_x23": ("PIDS",), "eweadn_x87": ("PIDS",),
     "weikav_nut75": ("PIDS",), "veekos_shine60": ("PIDS",),
@@ -211,7 +212,7 @@ def build_index(root=None, *, engine_root=None):
                 if module == "pulsar" and table == "NANO_PIDS" and table not in source.values:
                     continue  # Older external snapshots predate the BITMOUSE reader.
                 # Each table has an explicit VID relation, not a cross product.
-                if module in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop"):
+                if module in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop", "hyperx_stinger_core"):
                     for key, value in source.table(table):
                         identity = source.literal(key)
                         # Older snapshots used one VID and integer PID keys.

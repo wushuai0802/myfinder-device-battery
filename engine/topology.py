@@ -389,12 +389,27 @@ def discover(paths, excluded=(), *, full=False):
                     _descriptor_fallback(info, caps, ("input", "output"))
                     # Retained when the proof fails: the reader counts duplicates first.
             if caps_complete and attrs.vendor == 0x391D and (caps.page, caps.usage) == (0xFFFF, 0x0002):
-                from providers.vgn_ry_ms import matches_collection
+                from providers.vgn_ry_ms import WIRED_PIDS, matches_collection
                 if matches_collection(info):
                     from battery_hid import byte_report_sizes
                     sizes = byte_report_sizes(hid, data, caps, 2)
                     info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
-                    caps_complete = caps.feature == 65 and sizes == {"0": 65}
+                    if attrs.product in WIRED_PIDS:
+                        _descriptor_fallback(info, caps, ("feature",))
+                    caps_complete = caps.feature == 65 and info.get("feature_report_sizes") == {"0": 65}
+            if (caps_complete
+                    and (attrs.vendor, attrs.product) in (
+                        (0x03F0, 0x0A8E), (0x03F0, 0x0A93), (0x0951, 0x170B))
+                    and (caps.page, caps.usage) == (0xFF00, 0x0001)):
+                from battery_hid import byte_report_sizes
+                sizes = byte_report_sizes(hid, data, caps, 2, allow_fixed_usage=True)
+                info.update(feature_report_length=caps.feature, feature_report_sizes=sizes)
+                _descriptor_fallback(info, caps, ("feature",))
+                sizes = info.get("feature_report_sizes")
+                caps_complete = bool(
+                    isinstance(sizes, dict)
+                    and 32 <= caps.feature <= 128
+                    and sizes.get("255") == caps.feature)
             if caps_complete and attrs.vendor == 0x391D and (caps.page, caps.usage) == (0xFFC1, 0x0001):
                 from providers.vgn_kc2 import matches_collection
                 if matches_collection(info):
