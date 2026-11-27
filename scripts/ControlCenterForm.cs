@@ -1171,6 +1171,7 @@ namespace AtkBatteryTray {
         ThemePalette palette;
         bool dark;
         int selectedMode;
+        string trayIconStyle = "number";
 
         internal ControlCenterPlacementPreview(ThemePalette palette, bool dark) {
             this.palette = palette;
@@ -1181,10 +1182,11 @@ namespace AtkBatteryTray {
             BackColor = palette.Card;
         }
 
-        internal void UpdatePreview(ThemePalette next, bool isDark, int mode) {
+        internal void UpdatePreview(ThemePalette next, bool isDark, int mode, string iconStyle = null) {
             palette = next;
             dark = isDark;
             selectedMode = mode;
+            if (!String.IsNullOrEmpty(iconStyle)) trayIconStyle = TrayConfiguration.NormalizeTrayIconStyle(iconStyle);
             BackColor = palette.Card;
             Invalidate();
         }
@@ -1253,9 +1255,25 @@ namespace AtkBatteryTray {
                     CompactRenderer.DrawSymbol(g, "headset", new RectangleF(bat.X + 76, bat.Y + 6, 13, 13), ThemePalette.LevelColor(39, dark));
                     CompactRenderer.DrawLabel(g, "39%", new RectangleF(bat.X + 92, bat.Y, 42, bat.Height), 11f, true, ThemePalette.LevelColor(39, dark), StringAlignment.Near);
                 } else if (selectedMode == 0) {
-                    var badge = new RectangleF(Width - 118, Height - 30, 24, 20);
-                    CompactRenderer.Fill(g, badge, ThemePalette.LevelColor(85, dark), 4.5f);
-                    CompactRenderer.DrawLabel(g, "85", badge, 11f, true, Color.White, StringAlignment.Center);
+                    string style = TrayConfiguration.NormalizeTrayIconStyle(trayIconStyle);
+                    if (style == "badge") {
+                        var badge = new RectangleF(Width - 118, Height - 30, 22, 20);
+                        CompactRenderer.Fill(g, badge, TrayGlyph.BadgeFill(85, false), 5f);
+                        CompactRenderer.DrawLabel(g, "85", badge, 11f, true, Color.White, StringAlignment.Center);
+                    } else if (style == "minimal") {
+                        var rect = new RectangleF(Width - 120, Height - 30, 26, 20);
+                        CompactRenderer.DrawLabel(g, "85", rect, 12.5f, true, TrayGlyph.LevelColor(85, dark), StringAlignment.Center);
+                    } else if (style == "device") {
+                        var iconBox = new RectangleF(Width - 117, Height - 31, 18, 13);
+                        CompactRenderer.DrawSymbol(g, "mouse", iconBox, tbFg);
+                        var track = new RectangleF(Width - 118, Height - 15, 20, 4);
+                        CompactRenderer.Fill(g, track, Color.FromArgb(90, TrayGlyph.LevelColor(null, dark)), 1.5f);
+                        CompactRenderer.Fill(g, new RectangleF(track.X, track.Y, track.Width * 0.85f, track.Height), TrayGlyph.LevelColor(85, dark), 1.5f);
+                    } else {
+                        var circle = new RectangleF(Width - 118, Height - 30, 20, 20);
+                        using (var fill = new SolidBrush(TrayGlyph.NumberFill(85, false))) g.FillEllipse(fill, circle);
+                        CompactRenderer.DrawLabel(g, "85", circle, 10.5f, true, Color.FromArgb(12, 17, 21), StringAlignment.Center);
+                    }
                 }
                 g.Restore(state);
             }
@@ -2357,13 +2375,13 @@ namespace AtkBatteryTray {
             cardsGrid.Controls.Add(CreatePlacementOptionCard(0, "托盘图标", "通知区域显示电量数字，点击打开主面板", trayTag, trayTone), 0, 0);
             cardsGrid.Controls.Add(CreatePlacementOptionCard(1, "桌面小组件", "悬浮电量胶囊、全壁纸贴边隐藏与全屏防打扰", pref.DesktopWidget.Enabled ? "已启用" : "未启用", pref.DesktopWidget.Enabled ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted), 1, 0);
             bool tbOn = pref.TaskbarOverlay != null && pref.TaskbarOverlay.Enabled;
-            cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏通知区左侧以无焦点层直接显示电量", tbOn ? "已启用 · 实验" : "未启用 · 实验", tbOn ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Accent), 2, 0);
+            cardsGrid.Controls.Add(CreatePlacementOptionCard(2, "任务栏电量", "在任务栏通知区旁以无焦点层直接显示电量（支持顶/底/侧边）", tbOn ? "已启用 · 实验" : "未启用 · 实验", tbOn ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Accent), 2, 0);
 
             var detailCard = CreateCard(new Padding(16, 14, 16, 16));
             detailCard.Dock = DockStyle.Top;
 
             var preview = new ControlCenterPlacementPreview(palette, dark) { Dock = DockStyle.Top, Height = 148, Margin = new Padding(8, 12, 8, 2) };
-            preview.UpdatePreview(palette, dark, selectedPlacementCard);
+            preview.UpdatePreview(palette, dark, selectedPlacementCard, pref.TrayIconStyle);
 
             var rows = new List<Control>();
             if (selectedPlacementCard == 0) {
@@ -2382,9 +2400,12 @@ namespace AtkBatteryTray {
                     : "开启任务栏电量或桌面小组件后可独立关闭，避免与任务栏电量重复显示";
                 rows.Add(CreateSettingRow("显示托盘图标", trayToggleDesc, showTrayToggle, false));
 
-                int iconStyleIdx = pref.TrayIconStyle == "device" ? 1 : 0;
-                rows.Add(CreateSettingRow("托盘图标样式", "选择在系统托盘直接显示电量数字或设备图标", CreateSegmentedChoices(new[] { "数字", "设备图标" }, iconStyleIdx, delegate(int idx) {
-                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TrayIconStyle = idx == 1 ? "device" : "number"; });
+                int iconStyleIdx = Math.Max(0, Array.IndexOf(TrayConfiguration.TrayIconStyleKeys, TrayConfiguration.NormalizeTrayIconStyle(pref.TrayIconStyle)));
+                rows.Add(CreateSettingRow("托盘图标样式", "选择圆形数字、圆角白字、纯数字或设备图标，上方示意图实时预览", CreateSegmentedChoices(TrayConfiguration.TrayIconStyleNames, iconStyleIdx, delegate(int idx) {
+                    string nextStyle = TrayConfiguration.TrayIconStyleKeys[idx];
+                    UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TrayIconStyle = nextStyle; }, delegate {
+                        preview.UpdatePreview(palette, dark, selectedPlacementCard, nextStyle);
+                    });
                 }), true));
                 string[] ruleKeys = { "active", "lowest", "auto", "mouse", "headset", "keyboard" };
                 string[] ruleLabels = { "当前使用", "最低电量", "自动", "鼠标优先", "耳机优先", "键盘优先" };
@@ -2458,7 +2479,7 @@ namespace AtkBatteryTray {
                 };
                 rows.Add(CreateSettingRow("启用任务栏电量（实验）", "采用独立无焦点贴合层，绝不注入 Explorer；不支持环境自动降级隐藏", tbEnable, false));
 
-                rows.Add(CreateSettingRow("显示样式", "在任务栏通知区左侧紧凑显示设备电量条", CreateSegmentedChoices(new[] { "图标 + 数字", "仅数字" }, tb.ShowIcons ? 0 : 1, delegate(int idx) {
+                rows.Add(CreateSettingRow("显示样式", "水平任务栏横向排布，左/右侧边任务栏自动切换纵向紧凑排布", CreateSegmentedChoices(new[] { "图标 + 数字", "仅数字" }, tb.ShowIcons ? 0 : 1, delegate(int idx) {
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TaskbarOverlay.ShowIcons = idx == 0; });
                 }), true));
 
@@ -2469,7 +2490,7 @@ namespace AtkBatteryTray {
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TaskbarOverlay.MaxDevices = tbMaxOpts[idx]; });
                 }), true));
 
-                rows.Add(CreateSettingRow("水平偏移微调", "默认紧贴通知区左侧，也可在任务栏上直接水平拖动微调", CreateTaskbarOffsetStepper(tb.OffsetX), true, false, 300));
+                rows.Add(CreateSettingRow("位置偏移微调", "默认紧贴通知区边缘（水平向左 / 侧边向上），也可直接沿任务栏拖动微调", CreateTaskbarOffsetStepper(tb.OffsetX), true, false, 300));
 
                 bool tbReady = owner.TaskbarOverlayStatusCode == "ready" || owner.TaskbarOverlayStatusCode == "ready_avoided";
                 var statusTone = tbReady ? ControlCenterBadgeTone.Positive : ControlCenterBadgeTone.Muted;

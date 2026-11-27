@@ -172,6 +172,14 @@ namespace AtkBatteryTray {
             return false;
         }
 
+        internal static bool IsVerticalEdge(int edge) {
+            return edge == EdgeLeft || edge == EdgeRight;
+        }
+
+        internal static bool IsHorizontalEdge(int edge) {
+            return edge == EdgeBottom || edge == EdgeTop;
+        }
+
         internal static int ResolveTaskbarEdge(int appBarEdge, Rectangle taskbarRect, Rectangle monitorBounds) {
             if (taskbarRect.Width > 0 && taskbarRect.Height > 0 && monitorBounds.Width > 0 && monitorBounds.Height > 0) {
                 if (taskbarRect.Width > taskbarRect.Height) {
@@ -200,6 +208,11 @@ namespace AtkBatteryTray {
 
             Rectangle barOverlap = Rectangle.Intersect(windowRect, taskbarRect);
             Rectangle monOverlap = Rectangle.Intersect(windowRect, monitorBounds);
+            if (taskbarRect.Height > taskbarRect.Width) {
+                return barOverlap.Height >= (taskbarRect.Height * 3) / 4 &&
+                       barOverlap.Width >= Math.Max(1, taskbarRect.Width - 8) &&
+                       monOverlap.Width >= (monitorBounds.Width * 3) / 4;
+            }
             return barOverlap.Width >= (taskbarRect.Width * 3) / 4 &&
                    barOverlap.Height >= Math.Max(1, taskbarRect.Height - 8) &&
                    monOverlap.Height >= (monitorBounds.Height * 3) / 4;
@@ -208,6 +221,7 @@ namespace AtkBatteryTray {
         static void ProbeTaskbarWindows(IntPtr trayWnd, IntPtr selfHandle, Rectangle monitorBounds, Rectangle bar, bool hasTrayNotify, Rectangle trayNotifyRect, List<Rectangle> occupied, out bool taskbarCoveredByFullscreen) {
             taskbarCoveredByFullscreen = false;
             if (trayWnd == IntPtr.Zero || bar.Width <= 0 || bar.Height <= 0 || occupied == null) return;
+            bool verticalBar = bar.Height > bar.Width;
             uint currentPid = GetCurrentProcessId();
             IntPtr shellWnd = GetShellWindow();
             IntPtr desktopWnd = GetDesktopWindow();
@@ -239,10 +253,11 @@ namespace AtkBatteryTray {
 
                     if (!reachedTaskbar &&
                         r.Bottom > bar.Top && r.Top < bar.Bottom &&
-                        r.Right > bar.Left && r.Left < bar.Right &&
-                        r.Height > 0 && r.Height <= bar.Height + 16 &&
-                        r.Width >= 16 && r.Width <= (bar.Width * 2) / 3) {
-                        occupied.Add(r);
+                        r.Right > bar.Left && r.Left < bar.Right) {
+                        bool isPluginBand = verticalBar
+                            ? (r.Width > 0 && r.Width <= bar.Width + 16 && r.Height >= 16 && r.Height <= (bar.Height * 2) / 3)
+                            : (r.Height > 0 && r.Height <= bar.Height + 16 && r.Width >= 16 && r.Width <= (bar.Width * 2) / 3);
+                        if (isPluginBand) occupied.Add(r);
                     }
                     return true;
                 }, IntPtr.Zero);
@@ -250,7 +265,8 @@ namespace AtkBatteryTray {
             taskbarCoveredByFullscreen = reachedTaskbar && covered;
 
             try {
-                int rightHalfStart = bar.Left + bar.Width / 2;
+                int horizontalGuardStart = bar.Left + bar.Width / 3;
+                int verticalGuardStart = bar.Top + bar.Height / 3;
                 EnumChildWindows(trayWnd, delegate(IntPtr hwnd, IntPtr lParam) {
                     if (hwnd == IntPtr.Zero || hwnd == selfHandle) return true;
                     if (!IsWindowVisible(hwnd)) return true;
@@ -259,11 +275,20 @@ namespace AtkBatteryTray {
                     NativeRect nr;
                     if (!GetWindowRect(hwnd, out nr)) return true;
                     Rectangle r = nr.ToRectangle();
-                    if (hasTrayNotify && r.Left >= trayNotifyRect.Left - 4) return true;
-                    if (r.Height > 0 && r.Height <= bar.Height + 4 &&
-                        r.Width >= 16 && r.Width <= bar.Width / 2 &&
-                        r.Right > rightHalfStart && r.Left < bar.Right) {
-                        occupied.Add(r);
+                    if (verticalBar) {
+                        if (hasTrayNotify && r.Top >= trayNotifyRect.Top - 4) return true;
+                        if (r.Width > 0 && r.Width <= bar.Width + 4 &&
+                            r.Height >= 16 && r.Height <= (bar.Height * 2) / 3 &&
+                            r.Bottom > verticalGuardStart && r.Top < bar.Bottom) {
+                            occupied.Add(r);
+                        }
+                    } else {
+                        if (hasTrayNotify && r.Left >= trayNotifyRect.Left - 4) return true;
+                        if (r.Height > 0 && r.Height <= bar.Height + 4 &&
+                            r.Width >= 16 && r.Width <= (bar.Width * 2) / 3 &&
+                            r.Right > horizontalGuardStart && r.Left < bar.Right) {
+                            occupied.Add(r);
+                        }
                     }
                     return true;
                 }, IntPtr.Zero);
@@ -353,9 +378,25 @@ namespace AtkBatteryTray {
         const int MinLeftGuardRatioDenominator = 3; // Reserve left 1/3 for Start/search/pinned apps
 
         internal static bool TryComputeHorizontalBounds(TaskbarEnvironmentSnapshot snap, Size overlayPhysicalSize, out int safeMinX, out int maxAllowedX, out int y, out TaskbarOverlayPlacement failure) {
-            safeMinX = 0;
-            maxAllowedX = 0;
-            y = 0;
+            bool isVertical;
+            if (!TryComputeBounds(snap, overlayPhysicalSize, out isVertical, out safeMinX, out maxAllowedX, out y, out failure)) {
+                return false;
+            }
+            if (isVertical) {
+                safeMinX = 0;
+                maxAllowedX = 0;
+                y = 0;
+                failure = Fail("non_horizontal_taskbar", "当前任务栏为垂直侧边模式。");
+                return false;
+            }
+            return true;
+        }
+
+        internal static bool TryComputeBounds(TaskbarEnvironmentSnapshot snap, Size overlayPhysicalSize, out bool isVertical, out int safeMinAxis, out int maxAllowedAxis, out int crossPos, out TaskbarOverlayPlacement failure) {
+            isVertical = false;
+            safeMinAxis = 0;
+            maxAllowedAxis = 0;
+            crossPos = 0;
             if (snap == null || !snap.HasTaskbarWindow) {
                 failure = Fail("no_explorer_taskbar", "未检测到 Windows 任务栏（可能使用第三方 Shell），已自动隐藏。");
                 return false;
@@ -368,15 +409,24 @@ namespace AtkBatteryTray {
                 failure = Fail("auto_hide_taskbar", "当前系统启用了自动隐藏任务栏，为避免悬空遮挡已自动降级隐藏。");
                 return false;
             }
-            if (snap.TaskbarEdge != TaskbarEnvironmentProbe.EdgeBottom &&
-                snap.TaskbarEdge != TaskbarEnvironmentProbe.EdgeTop) {
-                failure = Fail("non_horizontal_taskbar", "实验版仅支持底部或顶部水平任务栏，左/右侧垂直任务栏已自动降级隐藏。");
+            bool horizontal = TaskbarEnvironmentProbe.IsHorizontalEdge(snap.TaskbarEdge);
+            bool vertical = TaskbarEnvironmentProbe.IsVerticalEdge(snap.TaskbarEdge);
+            if (!horizontal && !vertical) {
+                failure = Fail("unsupported_taskbar_edge", "未识别的任务栏停靠边缘，已自动降级隐藏。");
                 return false;
             }
+            isVertical = vertical;
             Rectangle bar = snap.TaskbarRect;
-            if (bar.Width < 320 || bar.Height < 24 || bar.Height > 120) {
-                failure = Fail("invalid_taskbar_bounds", "当前任务栏尺寸异常，已自动隐藏以防止错位。");
-                return false;
+            if (vertical) {
+                if (bar.Height < 320 || bar.Width < 40 || bar.Width > 160) {
+                    failure = Fail("invalid_taskbar_bounds", "当前侧边任务栏尺寸异常，已自动隐藏以防止错位。");
+                    return false;
+                }
+            } else {
+                if (bar.Width < 320 || bar.Height < 24 || bar.Height > 120) {
+                    failure = Fail("invalid_taskbar_bounds", "当前任务栏尺寸异常，已自动隐藏以防止错位。");
+                    return false;
+                }
             }
             if (snap.Obstruction == DisplayObstruction.Fullscreen ||
                 snap.Obstruction == DisplayObstruction.UncertainFullscreen ||
@@ -389,38 +439,54 @@ namespace AtkBatteryTray {
 
             int w = Math.Max(1, overlayPhysicalSize.Width);
             int h = Math.Max(1, overlayPhysicalSize.Height);
-            if (h > bar.Height) {
-                failure = Fail("invalid_taskbar_bounds", "任务栏高度不足以容纳电量条，已自动隐藏。");
-                return false;
+            if (vertical) {
+                if (w > bar.Width) {
+                    failure = Fail("invalid_taskbar_bounds", "侧边任务栏宽度不足以容纳电量条，已自动隐藏。");
+                    return false;
+                }
+                int bottomAnchor = (snap.HasTrayNotifyRect && snap.TrayNotifyRect.Top > bar.Top + 80 && snap.TrayNotifyRect.Top < bar.Bottom)
+                    ? snap.TrayNotifyRect.Top - GapBeforeNotifyPx
+                    : bar.Bottom - Math.Max(120, bar.Height / 6);
+                safeMinAxis = bar.Top + Math.Max(120, bar.Height / MinLeftGuardRatioDenominator);
+                maxAllowedAxis = bottomAnchor - h;
+                if (maxAllowedAxis < safeMinAxis) {
+                    failure = Fail("insufficient_space", "侧边任务栏通知区上方空间不足，已自动隐藏以避免遮挡图标。");
+                    return false;
+                }
+                crossPos = bar.Left + (bar.Width - w) / 2;
+            } else {
+                if (h > bar.Height) {
+                    failure = Fail("invalid_taskbar_bounds", "任务栏高度不足以容纳电量条，已自动隐藏。");
+                    return false;
+                }
+                int rightAnchor = (snap.HasTrayNotifyRect && snap.TrayNotifyRect.Left > bar.Left + 80 && snap.TrayNotifyRect.Left < bar.Right)
+                    ? snap.TrayNotifyRect.Left - GapBeforeNotifyPx
+                    : bar.Right - Math.Max(140, bar.Width / 8);
+                safeMinAxis = bar.Left + Math.Max(120, bar.Width / MinLeftGuardRatioDenominator);
+                maxAllowedAxis = rightAnchor - w;
+                if (maxAllowedAxis < safeMinAxis) {
+                    failure = Fail("insufficient_space", "任务栏通知区左侧空间不足，已自动隐藏以避免遮挡图标。");
+                    return false;
+                }
+                crossPos = bar.Top + (bar.Height - h) / 2;
             }
 
-            int rightAnchor = (snap.HasTrayNotifyRect && snap.TrayNotifyRect.Left > bar.Left + 80 && snap.TrayNotifyRect.Left < bar.Right)
-                ? snap.TrayNotifyRect.Left - GapBeforeNotifyPx
-                : bar.Right - Math.Max(140, bar.Width / 8);
-
-            safeMinX = bar.Left + Math.Max(120, bar.Width / MinLeftGuardRatioDenominator);
-            maxAllowedX = rightAnchor - w;
-            if (maxAllowedX < safeMinX) {
-                failure = Fail("insufficient_space", "任务栏通知区左侧空间不足，已自动隐藏以避免遮挡图标。");
-                return false;
-            }
-
-            y = bar.Top + (bar.Height - h) / 2;
             failure = null;
             return true;
         }
 
         internal static TaskbarOverlayPlacement Evaluate(TaskbarEnvironmentSnapshot snap, Size overlayPhysicalSize, int offsetX) {
-            int safeMinX, maxAllowedX, y;
+            bool isVertical;
+            int safeMinAxis, maxAllowedAxis, crossPos;
             TaskbarOverlayPlacement failure;
-            if (!TryComputeHorizontalBounds(snap, overlayPhysicalSize, out safeMinX, out maxAllowedX, out y, out failure)) {
+            if (!TryComputeBounds(snap, overlayPhysicalSize, out isVertical, out safeMinAxis, out maxAllowedAxis, out crossPos, out failure)) {
                 return failure;
             }
 
-            int w = Math.Max(1, overlayPhysicalSize.Width);
+            int span = Math.Max(1, isVertical ? overlayPhysicalSize.Height : overlayPhysicalSize.Width);
             int clampedOffset = Math.Max(MinOffsetX, Math.Min(0, offsetX));
-            int x = maxAllowedX + clampedOffset;
-            x = Math.Max(safeMinX, Math.Min(maxAllowedX, x));
+            int pos = maxAllowedAxis + clampedOffset;
+            pos = Math.Max(safeMinAxis, Math.Min(maxAllowedAxis, pos));
 
             bool avoided = false;
             if (snap.OccupiedRects != null && snap.OccupiedRects.Count > 0) {
@@ -430,30 +496,36 @@ namespace AtkBatteryTray {
                     for (int i = 0; i < snap.OccupiedRects.Count; i++) {
                         Rectangle occ = snap.OccupiedRects[i];
                         if (occ.Width <= 0 || occ.Height <= 0) continue;
-                        int leftBound = occ.Left - GapBetweenPluginsPx;
-                        int rightBound = occ.Right + GapBetweenPluginsPx;
-                        if (x < rightBound && (x + w) > leftBound) {
-                            x = occ.Left - GapBetweenPluginsPx - w;
+                        int startBound = (isVertical ? occ.Top : occ.Left) - GapBetweenPluginsPx;
+                        int endBound = (isVertical ? occ.Bottom : occ.Right) + GapBetweenPluginsPx;
+                        if (pos < endBound && (pos + span) > startBound) {
+                            pos = (isVertical ? occ.Top : occ.Left) - GapBetweenPluginsPx - span;
                             avoided = true;
                             hit = true;
                             break;
                         }
                     }
-                    if (!hit || x < safeMinX) break;
+                    if (!hit || pos < safeMinAxis) break;
                 }
-                if (x < safeMinX) {
-                    return Fail("plugin_conflict", "检测到任务栏其他插件占用空间且左侧余量不足，已自动避让隐藏。");
+                if (pos < safeMinAxis) {
+                    return Fail("plugin_conflict", isVertical
+                        ? "检测到侧边任务栏其他插件占用空间且上方余量不足，已自动避让隐藏。"
+                        : "检测到任务栏其他插件占用空间且左侧余量不足，已自动避让隐藏。");
                 }
             }
 
-            string edgeText = snap.TaskbarEdge == TaskbarEnvironmentProbe.EdgeTop ? "顶部" : "底部";
+            string edgeText = snap.TaskbarEdge == TaskbarEnvironmentProbe.EdgeTop ? "顶部"
+                : snap.TaskbarEdge == TaskbarEnvironmentProbe.EdgeLeft ? "左侧"
+                : snap.TaskbarEdge == TaskbarEnvironmentProbe.EdgeRight ? "右侧"
+                : "底部";
+            string anchorText = isVertical ? "通知区上方" : "通知区左侧";
             return new TaskbarOverlayPlacement {
                 CanDisplay = true,
                 StatusCode = avoided ? "ready_avoided" : "ready",
                 StatusMessage = avoided
                     ? "运行正常 · 已自动避让" + edgeText + "任务栏其他插件"
-                    : "运行正常 · 已贴合在主屏" + edgeText + "任务栏通知区左侧（独立无焦点层）",
-                PhysicalLocation = new Point(x, y)
+                    : "运行正常 · 已贴合在主屏" + edgeText + "任务栏" + anchorText + "（独立无焦点层）",
+                PhysicalLocation = isVertical ? new Point(crossPos, pos) : new Point(pos, crossPos)
             };
         }
 
@@ -497,15 +569,33 @@ namespace AtkBatteryTray {
         }
 
         internal static Size ComputeLogicalSize(List<Item> items, bool showIcons) {
+            return ComputeLogicalSize(items, showIcons, false, 56f);
+        }
+
+        internal static Size ComputeLogicalSize(List<Item> items, bool showIcons, bool vertical, float taskbarLogicalThickness) {
             int count = items == null || items.Count == 0 ? 1 : items.Count;
+            if (vertical) {
+                int maxAllowed = Math.Max(26, (int)Math.Floor(taskbarLogicalThickness) - 4);
+                int width = Math.Min(64, Math.Max(26, Math.Min(maxAllowed, (int)Math.Floor(Math.Max(26f, taskbarLogicalThickness)) - 6)));
+                if (width > maxAllowed) width = maxAllowed;
+                int itemH = showIcons ? 42 : 26;
+                int padY = 6;
+                int gap = 4;
+                int height = padY * 2 + count * itemH + Math.Max(0, count - 1) * gap;
+                return new Size(width, height);
+            }
             int itemW = showIcons ? 66 : 46;
             int padX = 8;
-            int gap = 6;
-            int width = padX * 2 + count * itemW + Math.Max(0, count - 1) * gap;
-            return new Size(width, 28);
+            int hGap = 6;
+            int totalW = padX * 2 + count * itemW + Math.Max(0, count - 1) * hGap;
+            return new Size(totalW, 28);
         }
 
         internal static void Paint(Graphics g, SizeF size, List<Item> items, bool showIcons, ThemePalette palette, bool dark) {
+            Paint(g, size, items, showIcons, palette, dark, false);
+        }
+
+        internal static void Paint(Graphics g, SizeF size, List<Item> items, bool showIcons, ThemePalette palette, bool dark, bool vertical) {
             var pill = new RectangleF(0.5f, 0.5f, size.Width - 1f, size.Height - 1f);
             Color bg = VisualDesign.HighContrast
                 ? SystemColors.Window
@@ -518,12 +608,55 @@ namespace AtkBatteryTray {
             using (var pen = new Pen(border, 1f)) g.DrawPath(pen, path);
 
             if (items == null || items.Count == 0) {
-                CompactRenderer.DrawLabel(g, "外设 —", new RectangleF(6, 0, size.Width - 12, size.Height), 11.5f, false, palette.Muted, StringAlignment.Center);
+                CompactRenderer.DrawLabel(g, vertical ? "—" : "外设 —", new RectangleF(4, 0, size.Width - 8, size.Height), vertical ? 11f : 11.5f, false, palette.Muted, StringAlignment.Center);
+                return;
+            }
+
+            if (vertical) {
+                float itemH = showIcons ? 42f : 26f;
+                float gap = 4f;
+                float y = 6f;
+                float fontSize = size.Width < 40f ? 9.5f : (size.Width < 46f ? 10f : 11f);
+                float sideMargin = size.Width < 40f ? 3f : 6f;
+                for (int i = 0; i < items.Count; i++) {
+                    var it = items[i];
+                    Color fg = it.Percent.HasValue
+                        ? (it.Fresh ? ThemePalette.LevelColor(it.Percent, dark) : palette.Muted)
+                        : palette.Muted;
+                    if (VisualDesign.HighContrast) fg = SystemColors.WindowText;
+
+                    float textTop = y;
+                    if (showIcons) {
+                        Color iconFg = VisualDesign.HighContrast ? SystemColors.WindowText : (it.Low ? fg : palette.Foreground);
+                        float iconSize = size.Width < 40f ? 11.5f : 13f;
+                        CompactRenderer.DrawSymbol(g, ControlCenterTokens.SymbolForKind(it.Kind), new RectangleF((size.Width - iconSize) / 2f, y + 2f, iconSize, iconSize), iconFg);
+                        textTop = y + 17f;
+                    }
+
+                    string pct = it.Percent.HasValue ? (it.Charging ? it.Percent.Value + "%+" : it.Percent.Value + "%") : "--";
+                    CompactRenderer.DrawLabel(g, pct, new RectangleF(1f, textTop, size.Width - 2f, 16f), fontSize, true, fg, StringAlignment.Center);
+
+                    float barY = showIcons ? (y + itemH - 5.5f) : (y + itemH - 5f);
+                    var barRect = new RectangleF(sideMargin, barY, Math.Max(14f, size.Width - sideMargin * 2f), 2.5f);
+                    CompactRenderer.Fill(g, barRect, VisualDesign.HighContrast ? SystemColors.ControlDark : palette.Track, 1.25f);
+                    if (it.Percent.HasValue && it.Percent.Value > 0) {
+                        float fillW = barRect.Width * Math.Max(0, Math.Min(100, it.Percent.Value)) / 100f;
+                        if (fillW > 0.5f) CompactRenderer.Fill(g, new RectangleF(barRect.X, barRect.Y, fillW, barRect.Height), fg, 1.25f);
+                    }
+
+                    if (i < items.Count - 1) {
+                        float sepY = y + itemH + gap / 2f;
+                        using (var pen = new Pen(Color.FromArgb(dark ? 70 : 60, palette.Border), 1f)) {
+                            g.DrawLine(pen, 7f, sepY, size.Width - 7f, sepY);
+                        }
+                    }
+                    y += itemH + gap;
+                }
                 return;
             }
 
             float itemW = showIcons ? 66f : 46f;
-            float gap = 6f;
+            float hGap = 6f;
             float x = 8f;
             for (int i = 0; i < items.Count; i++) {
                 var it = items[i];
@@ -553,12 +686,12 @@ namespace AtkBatteryTray {
                 }
 
                 if (i < items.Count - 1) {
-                    float sepX = x + itemW + gap / 2f;
+                    float sepX = x + itemW + hGap / 2f;
                     using (var pen = new Pen(Color.FromArgb(dark ? 70 : 60, palette.Border), 1f)) {
                         g.DrawLine(pen, sepX, 6f, sepX, size.Height - 6f);
                     }
                 }
-                x += itemW + gap;
+                x += itemW + hGap;
             }
         }
     }
@@ -597,10 +730,11 @@ namespace AtkBatteryTray {
         float dpiScale = 1f;
         Point physicalLocation;
         bool overlayVisible;
+        bool isVerticalLayout;
         string lastRenderKey;
         bool pointerDown, dragging;
         Point dragStartScreen;
-        int dragStartX, dragMinX, dragMaxX, dragAnchorMaxX;
+        int dragStartAxis, dragMinAxis, dragMaxAxis, dragAnchorMaxAxis;
 
         internal TaskbarBatteryOverlayForm(TrayContext owner, Func<TaskbarEnvironmentSnapshot> probe = null) {
             this.owner = owner;
@@ -656,7 +790,7 @@ namespace AtkBatteryTray {
                 openPanel.Click += delegate { if (owner != null) owner.ShowDetailsFromOverlay(); };
                 var openCc = new ToolStripMenuItem("打开控制中心 → 显示位置");
                 openCc.Click += delegate { if (owner != null) owner.ShowControlCenter(ControlCenterPage.Placement); };
-                var nudgeLeft = new ToolStripMenuItem("向左避让（-40px）");
+                var nudgeLeft = new ToolStripMenuItem(isVerticalLayout ? "向上避让（-40px）" : "向左避让（-40px）");
                 nudgeLeft.Click += delegate {
                     if (owner == null) return;
                     var p = DeviceSettings.Current;
@@ -713,34 +847,46 @@ namespace AtkBatteryTray {
             pointerDown = true;
             dragging = false;
             dragStartScreen = Cursor.Position;
-            dragStartX = physicalLocation.X;
             var pref = DeviceSettings.Current;
             var cfg = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
-            Size logicalSize = TaskbarOverlayRenderer.ComputeLogicalSize(items, cfg.ShowIcons);
-            Size physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
             TaskbarEnvironmentSnapshot snap = probeFunc();
-            int safeMin, maxAllowed, unusedY;
+            bool vertical = snap != null && TaskbarEnvironmentProbe.IsVerticalEdge(snap.TaskbarEdge);
+            isVerticalLayout = vertical;
+            float thickness = snap != null && snap.TaskbarRect.Width > 0 ? (snap.TaskbarRect.Width / Math.Max(1f, dpiScale)) : 56f;
+            Size logicalSize = TaskbarOverlayRenderer.ComputeLogicalSize(items, cfg.ShowIcons, vertical, thickness);
+            Size physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
+            if (vertical && snap != null && snap.TaskbarRect.Width > 0 && physicalSize.Width > snap.TaskbarRect.Width - 2) {
+                int clampedLogicalW = Math.Max(26, (int)Math.Floor((snap.TaskbarRect.Width - 2) / Math.Max(1f, dpiScale)));
+                logicalSize = new Size(clampedLogicalW, logicalSize.Height);
+                physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
+            }
+            dragStartAxis = vertical ? physicalLocation.Y : physicalLocation.X;
+            bool computedVertical;
+            int safeMin, maxAllowed, unusedCross;
             TaskbarOverlayPlacement unusedFail;
-            if (TaskbarOverlayEvaluator.TryComputeHorizontalBounds(snap, physicalSize, out safeMin, out maxAllowed, out unusedY, out unusedFail)) {
-                dragMinX = Math.Max(safeMin, maxAllowed + TaskbarOverlayEvaluator.MinOffsetX);
-                dragMaxX = maxAllowed;
-                dragAnchorMaxX = maxAllowed;
+            if (TaskbarOverlayEvaluator.TryComputeBounds(snap, physicalSize, out computedVertical, out safeMin, out maxAllowed, out unusedCross, out unusedFail)) {
+                isVerticalLayout = computedVertical;
+                dragStartAxis = computedVertical ? physicalLocation.Y : physicalLocation.X;
+                dragMinAxis = Math.Max(safeMin, maxAllowed + TaskbarOverlayEvaluator.MinOffsetX);
+                dragMaxAxis = maxAllowed;
+                dragAnchorMaxAxis = maxAllowed;
             } else {
-                dragMinX = physicalLocation.X;
-                dragMaxX = physicalLocation.X;
-                dragAnchorMaxX = physicalLocation.X;
+                dragMinAxis = dragStartAxis;
+                dragMaxAxis = dragStartAxis;
+                dragAnchorMaxAxis = dragStartAxis;
             }
             Capture = true;
         }
 
         void HandleMouseMove(object sender, MouseEventArgs e) {
             if (!pointerDown || IsDisposed) return;
-            int dx = Cursor.Position.X - dragStartScreen.X;
-            if (!dragging && Math.Abs(dx) >= 6) dragging = true;
+            int delta = isVerticalLayout ? (Cursor.Position.Y - dragStartScreen.Y) : (Cursor.Position.X - dragStartScreen.X);
+            if (!dragging && Math.Abs(delta) >= 6) dragging = true;
             if (!dragging) return;
-            int nextX = Math.Max(dragMinX, Math.Min(dragMaxX, dragStartX + dx));
-            if (nextX == physicalLocation.X) return;
-            physicalLocation = new Point(nextX, physicalLocation.Y);
+            int nextAxis = Math.Max(dragMinAxis, Math.Min(dragMaxAxis, dragStartAxis + delta));
+            int curAxis = isVerticalLayout ? physicalLocation.Y : physicalLocation.X;
+            if (nextAxis == curAxis) return;
+            physicalLocation = isVerticalLayout ? new Point(physicalLocation.X, nextAxis) : new Point(nextAxis, physicalLocation.Y);
             lastRenderKey = null;
             SetWindowPos(Handle, HWND_TOPMOST, physicalLocation.X, physicalLocation.Y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
         }
@@ -753,7 +899,8 @@ namespace AtkBatteryTray {
                 dragging = false;
                 if (Capture) Capture = false;
                 if (wasDragging) {
-                    int newOffset = Math.Max(TaskbarOverlayEvaluator.MinOffsetX, Math.Min(0, physicalLocation.X - dragAnchorMaxX));
+                    int currentAxis = isVerticalLayout ? physicalLocation.Y : physicalLocation.X;
+                    int newOffset = Math.Max(TaskbarOverlayEvaluator.MinOffsetX, Math.Min(0, currentAxis - dragAnchorMaxAxis));
                     if (owner != null) {
                         var p = DeviceSettings.Current;
                         p.TaskbarOverlay.OffsetX = newOffset;
@@ -789,13 +936,13 @@ namespace AtkBatteryTray {
             EvaluateAndRender();
         }
 
-        static string BuildRenderKey(Point loc, Size logicalSize, float scale, bool dark, string themeStyle, bool showIcons, bool highContrast, List<TaskbarOverlayRenderer.Item> list) {
+        static string BuildRenderKey(Point loc, Size logicalSize, float scale, bool dark, string themeStyle, bool showIcons, bool highContrast, bool vertical, List<TaskbarOverlayRenderer.Item> list) {
             var sb = new System.Text.StringBuilder();
             sb.Append(loc.X).Append(',').Append(loc.Y).Append('|')
               .Append(logicalSize.Width).Append('x').Append(logicalSize.Height).Append('|')
               .Append(Math.Round(scale * 100)).Append('|')
               .Append(dark).Append('|').Append(themeStyle ?? "").Append('|')
-              .Append(showIcons).Append('|').Append(highContrast).Append('|');
+              .Append(showIcons).Append('|').Append(highContrast).Append('|').Append(vertical).Append('|');
             if (list != null) {
                 for (int i = 0; i < list.Count; i++) {
                     var it = list[i];
@@ -811,11 +958,19 @@ namespace AtkBatteryTray {
             var cfg = pref.TaskbarOverlay ?? new TaskbarOverlaySettings();
             cfg.Normalize();
             items = TaskbarOverlayRenderer.CollectItems(owner, cfg.MaxDevices);
-            Size logicalSize = TaskbarOverlayRenderer.ComputeLogicalSize(items, cfg.ShowIcons);
 
             TaskbarEnvironmentSnapshot snap = probeFunc();
             dpiScale = NativeDisplay.ScaleAt(snap != null && snap.TaskbarRect.Width > 0 ? snap.TaskbarRect.Location : Point.Empty);
+            bool vertical = snap != null && TaskbarEnvironmentProbe.IsVerticalEdge(snap.TaskbarEdge);
+            isVerticalLayout = vertical;
+            float thickness = snap != null && snap.TaskbarRect.Width > 0 ? (snap.TaskbarRect.Width / Math.Max(1f, dpiScale)) : 56f;
+            Size logicalSize = TaskbarOverlayRenderer.ComputeLogicalSize(items, cfg.ShowIcons, vertical, thickness);
             Size physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
+            if (vertical && snap != null && snap.TaskbarRect.Width > 0 && physicalSize.Width > snap.TaskbarRect.Width - 2) {
+                int clampedLogicalW = Math.Max(26, (int)Math.Floor((snap.TaskbarRect.Width - 2) / Math.Max(1f, dpiScale)));
+                logicalSize = new Size(clampedLogicalW, logicalSize.Height);
+                physicalSize = LayeredSurface.ComputePhysicalSize(logicalSize, dpiScale);
+            }
 
             string prevStatus = lastPlacement != null ? lastPlacement.StatusCode : null;
             var placement = TaskbarOverlayEvaluator.Evaluate(snap, physicalSize, cfg.OffsetX);
@@ -834,7 +989,7 @@ namespace AtkBatteryTray {
             physicalLocation = placement.PhysicalLocation;
             bool dark = Style.TaskbarDark;
             ThemePalette palette = ThemePalette.Current(dark);
-            string renderKey = BuildRenderKey(physicalLocation, logicalSize, dpiScale, dark, pref.ThemeStyle, cfg.ShowIcons, VisualDesign.HighContrast, items);
+            string renderKey = BuildRenderKey(physicalLocation, logicalSize, dpiScale, dark, pref.ThemeStyle, cfg.ShowIcons, VisualDesign.HighContrast, vertical, items);
 
             if (overlayVisible && Visible && renderKey == lastRenderKey) {
                 return;
@@ -842,7 +997,7 @@ namespace AtkBatteryTray {
 
             // Commit premultiplied pixels & position BEFORE showing to avoid blank flash.
             surface.Commit(Handle, physicalLocation, logicalSize, dpiScale, 255, delegate(Graphics g, SizeF sz) {
-                TaskbarOverlayRenderer.Paint(g, sz, items, cfg.ShowIcons, palette, dark);
+                TaskbarOverlayRenderer.Paint(g, sz, items, cfg.ShowIcons, palette, dark, vertical);
             });
             if (!Visible) ShowWindow(Handle, SW_SHOWNOACTIVATE);
             SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -884,7 +1039,7 @@ namespace AtkBatteryTray {
 
         internal string StatusMessage {
             get {
-                if (disposed || form == null || form.IsDisposed) return "默认关闭 · 开启后在主屏底部或顶部水平任务栏通知区左侧以独立无焦点浮层显示";
+                if (disposed || form == null || form.IsDisposed) return "默认关闭 · 开启后在主屏任务栏通知区旁以独立无焦点浮层显示（支持底部/顶部/左/右侧）";
                 return form.LastPlacement != null ? form.LastPlacement.StatusMessage : "初始化中";
             }
         }

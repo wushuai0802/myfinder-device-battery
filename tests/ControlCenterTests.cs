@@ -229,6 +229,15 @@ static class ControlCenterTests {
             var installRow = form.Controls.Find("InstallLocationSettingRow", true);
             var openDirBtn = form.Controls.Find("OpenInstallDirectoryButton", true);
             Check(installRow.Length == 1 && openDirBtn.Length == 1, "settings page displays install location row and open directory button");
+
+            foreach (string iconStyle in new[] { "badge", "minimal", "device", "number" }) {
+                var pStyle = DeviceSettings.Current;
+                pStyle.TrayIconStyle = iconStyle;
+                f.Owner.SavePreferences(pStyle);
+                form.SelectPage(ControlCenterPage.Placement);
+                Application.DoEvents();
+                Check(DeviceSettings.Current.TrayIconStyle == iconStyle, "placement page renders cleanly with tray icon style " + iconStyle);
+            }
             form.Close();
             Application.DoEvents();
         }

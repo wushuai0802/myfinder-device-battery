@@ -61,6 +61,34 @@ static class TaskbarOverlayTests {
         };
     }
 
+    static TaskbarEnvironmentSnapshot MakeValidLeftBar(int width = 62) {
+        return new TaskbarEnvironmentSnapshot {
+            HasTaskbarWindow = true,
+            TaskbarVisible = true,
+            AutoHideEnabled = false,
+            TaskbarEdge = TaskbarEnvironmentProbe.EdgeLeft,
+            TaskbarRect = new Rectangle(0, 0, width, 1080),
+            HasTrayNotifyRect = true,
+            TrayNotifyRect = new Rectangle(0, 900, width, 180),
+            PrimaryMonitorBounds = new Rectangle(0, 0, 1920, 1080),
+            Obstruction = DisplayObstruction.None
+        };
+    }
+
+    static TaskbarEnvironmentSnapshot MakeValidRightBar(int width = 62) {
+        return new TaskbarEnvironmentSnapshot {
+            HasTaskbarWindow = true,
+            TaskbarVisible = true,
+            AutoHideEnabled = false,
+            TaskbarEdge = TaskbarEnvironmentProbe.EdgeRight,
+            TaskbarRect = new Rectangle(1920 - width, 0, width, 1080),
+            HasTrayNotifyRect = true,
+            TrayNotifyRect = new Rectangle(1920 - width, 900, width, 180),
+            PrimaryMonitorBounds = new Rectangle(0, 0, 1920, 1080),
+            Obstruction = DisplayObstruction.None
+        };
+    }
+
     static void SettingsDefaultsAndNormalization() {
         var b = new AudioBindings();
         Check(b.TaskbarOverlay != null, "TaskbarOverlay defaults non-null");
@@ -129,16 +157,63 @@ static class TaskbarOverlayTests {
         var r2 = TaskbarOverlayEvaluator.Evaluate(s2, overlaySize, 0);
         Check(!r2.CanDisplay && r2.StatusCode == "auto_hide_taskbar", "auto-hide taskbar degrades cleanly");
 
-        // 3. Vertical taskbars (left / right) degrade cleanly; top horizontal taskbar (#1157) is supported
-        var s3Left = MakeValidBottomBar();
-        s3Left.TaskbarEdge = TaskbarEnvironmentProbe.EdgeLeft;
-        var r3Left = TaskbarOverlayEvaluator.Evaluate(s3Left, overlaySize, 0);
-        Check(!r3Left.CanDisplay && r3Left.StatusCode == "non_horizontal_taskbar", "left vertical taskbar degrades cleanly");
+        // 3. Side vertical taskbars (left / right, #1184) and top horizontal taskbar (#1157) are supported; unknown edge degrades cleanly
+        var s3Unknown = MakeValidBottomBar();
+        s3Unknown.TaskbarEdge = -1;
+        var r3Unknown = TaskbarOverlayEvaluator.Evaluate(s3Unknown, overlaySize, 0);
+        Check(!r3Unknown.CanDisplay && r3Unknown.StatusCode == "unsupported_taskbar_edge", "unknown taskbar edge degrades cleanly");
 
-        var s3Right = MakeValidBottomBar();
-        s3Right.TaskbarEdge = TaskbarEnvironmentProbe.EdgeRight;
-        var r3Right = TaskbarOverlayEvaluator.Evaluate(s3Right, overlaySize, 0);
-        Check(!r3Right.CanDisplay && r3Right.StatusCode == "non_horizontal_taskbar", "right vertical taskbar degrades cleanly");
+        var sideItems = new List<TaskbarOverlayRenderer.Item> {
+            new TaskbarOverlayRenderer.Item { Id = "m1", Kind = "mouse", Percent = 78, Fresh = true },
+            new TaskbarOverlayRenderer.Item { Id = "h1", Kind = "headset", Percent = 42, Fresh = true, Charging = true }
+        };
+        Size sideSize = TaskbarOverlayRenderer.ComputeLogicalSize(sideItems, true, true, 62f);
+        Check(sideSize.Width == 56 && sideSize.Height == 100, "side vertical taskbar computes compact adaptive logical size");
+        Size narrowSideSize = TaskbarOverlayRenderer.ComputeLogicalSize(sideItems, true, true, 48f);
+        Check(narrowSideSize.Width == 42 && narrowSideSize.Width <= 48, "narrow 48px side taskbar adapts overlay width cleanly");
+        Size hiDpiNarrow = TaskbarOverlayRenderer.ComputeLogicalSize(sideItems, true, true, 48f / 1.5f);
+        Size hiDpiPhys = LayeredSurface.ComputePhysicalSize(hiDpiNarrow, 1.5f);
+        Check(hiDpiPhys.Width <= 48, "150% DPI narrow 48px side taskbar fits within physical taskbar width");
+        var negMonSide = new TaskbarEnvironmentSnapshot {
+            HasTaskbarWindow = true, TaskbarVisible = true, AutoHideEnabled = false,
+            TaskbarEdge = TaskbarEnvironmentProbe.EdgeLeft,
+            TaskbarRect = new Rectangle(-1920, 0, 62, 1080),
+            HasTrayNotifyRect = true, TrayNotifyRect = new Rectangle(-1920, 900, 62, 180),
+            PrimaryMonitorBounds = new Rectangle(-1920, 0, 1920, 1080),
+            Obstruction = DisplayObstruction.None
+        };
+        var rNegMon = TaskbarOverlayEvaluator.Evaluate(negMonSide, sideSize, 0);
+        Check(rNegMon.CanDisplay && rNegMon.PhysicalLocation.X == -1920 + (62 - sideSize.Width) / 2 && rNegMon.PhysicalLocation.Y == 900 - 10 - sideSize.Height, "negative-coordinate monitor left taskbar positions accurately");
+
+        var s3Left = MakeValidLeftBar(62);
+        var r3Left = TaskbarOverlayEvaluator.Evaluate(s3Left, sideSize, 0);
+        Check(r3Left.CanDisplay && r3Left.StatusCode == "ready", "left vertical taskbar (#1184) is supported");
+        Check(r3Left.PhysicalLocation.X == (62 - sideSize.Width) / 2, "left taskbar horizontally centers overlay inside side bar");
+        Check(r3Left.PhysicalLocation.Y == 900 - 10 - sideSize.Height, "left taskbar anchors overlay 10px above TrayNotifyWnd");
+        Check(r3Left.StatusMessage.Contains("左侧") && r3Left.StatusMessage.Contains("上方"), "left taskbar status message reports left edge above notify area");
+
+        var s3Right = MakeValidRightBar(62);
+        var r3Right = TaskbarOverlayEvaluator.Evaluate(s3Right, sideSize, -30);
+        Check(r3Right.CanDisplay && r3Right.StatusCode == "ready", "right vertical taskbar (#1184) is supported");
+        Check(r3Right.PhysicalLocation.X == (1920 - 62) + (62 - sideSize.Width) / 2, "right taskbar horizontally centers overlay inside right side bar");
+        Check(r3Right.PhysicalLocation.Y == 900 - 10 - sideSize.Height - 30, "right taskbar applies negative offset upward along vertical axis");
+        Check(r3Right.StatusMessage.Contains("右侧"), "right taskbar status message reports right edge");
+
+        // Side taskbar upward avoidance around third-party plugins & insufficient top clearance
+        var s3LeftAvoid = MakeValidLeftBar(62);
+        s3LeftAvoid.OccupiedRects = new List<Rectangle> { new Rectangle(2, 780, 58, 110) };
+        var r3LeftAvoid = TaskbarOverlayEvaluator.Evaluate(s3LeftAvoid, sideSize, 0);
+        Check(r3LeftAvoid.CanDisplay && r3LeftAvoid.StatusCode == "ready_avoided" && r3LeftAvoid.PhysicalLocation.Y == 780 - 8 - sideSize.Height, "side taskbar shifts upward to avoid third-party plugins");
+
+        var s3LeftCrowded = MakeValidLeftBar(62);
+        s3LeftCrowded.OccupiedRects = new List<Rectangle> { new Rectangle(2, 340, 58, 550) };
+        var r3LeftCrowded = TaskbarOverlayEvaluator.Evaluate(s3LeftCrowded, sideSize, 0);
+        Check(!r3LeftCrowded.CanDisplay && r3LeftCrowded.StatusCode == "plugin_conflict", "crowded side taskbar degrades cleanly to plugin_conflict");
+
+        // Side taskbar fullscreen vs maximized-next-to-bar distinction
+        var monBoundsSide = new Rectangle(0, 0, 1920, 1080);
+        Check(!TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(62, 0, 1858, 1080), monBoundsSide, new Rectangle(0, 0, 62, 1080)), "maximized window next to left taskbar does NOT count as fullscreen");
+        Check(TaskbarEnvironmentProbe.IsFullscreenCoveringTaskbar(new Rectangle(0, 0, 1920, 1080), monBoundsSide, new Rectangle(0, 0, 62, 1080)), "fullscreen game covering left taskbar hides overlay");
 
         var s3Top = MakeValidTopBar();
         var r3Top = TaskbarOverlayEvaluator.Evaluate(s3Top, overlaySize, 0);
@@ -357,8 +432,16 @@ static class TaskbarOverlayTests {
 
         Size szIcons = TaskbarOverlayRenderer.ComputeLogicalSize(items, true);
         Size szNums = TaskbarOverlayRenderer.ComputeLogicalSize(items, false);
+        Size szVertIcons = TaskbarOverlayRenderer.ComputeLogicalSize(items, true, true, 62f);
+        Size szVertNums = TaskbarOverlayRenderer.ComputeLogicalSize(items, false, true, 54f);
         var darkPal = ThemePalette.For("graphite", true);
         var lightPal = ThemePalette.For("graphite", false);
+
+        using (var bVertDark = LayeredSurface.RenderToBitmap(szVertIcons, 2f, delegate(Graphics g, SizeF s) { TaskbarOverlayRenderer.Paint(g, s, items, true, darkPal, true, true); }))
+        using (var bVertLight = LayeredSurface.RenderToBitmap(szVertNums, 2f, delegate(Graphics g, SizeF s) { TaskbarOverlayRenderer.Paint(g, s, items, false, lightPal, false, true); })) {
+            Check(bVertDark.Width == szVertIcons.Width * 2 && bVertDark.Height == szVertIcons.Height * 2 && bVertDark.GetPixel(bVertDark.Width / 2, bVertDark.Height / 2).A > 0, "vertical side taskbar overlay renders non-empty dark bitmap");
+            Check(bVertLight.Width == szVertNums.Width * 2 && bVertLight.Height == szVertNums.Height * 2 && bVertLight.GetPixel(bVertLight.Width / 2, bVertLight.Height / 2).A > 0, "vertical side taskbar overlay renders non-empty light bitmap");
+        }
 
         using (var bDarkIcons = LayeredSurface.RenderToBitmap(szIcons, 2f, delegate(Graphics g, SizeF s) { TaskbarOverlayRenderer.Paint(g, s, items, true, darkPal, true); }))
         using (var bDarkNums = LayeredSurface.RenderToBitmap(szNums, 2f, delegate(Graphics g, SizeF s) { TaskbarOverlayRenderer.Paint(g, s, items, false, darkPal, true); }))

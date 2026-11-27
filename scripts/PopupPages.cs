@@ -157,7 +157,7 @@ namespace AtkBatteryTray {
                 var firstGroup=GroupRow("group",TrayConfiguration.FirstName,TrayConfiguration.FirstId,TrayRule(owner,pref.TraySource,pref.TrayDeviceId));firstGroup.Id=600;rows.Add(firstGroup);
                 foreach(var group in pref.TrayGroups){var row=GroupRow("group",group.Name,group.Id,TrayRule(owner,group.Source,group.DeviceId));row.Id=600+rows.Count;rows.Add(row);}
                 var add=GroupRow("add","添加托盘图标",null);add.Enabled=pref.TrayGroups.Count<3;rows.Add(add);
-                rows.Add(Row(224,"图标样式",pref.TrayIconStyle=="device"?"设备图标":"数字"));
+                rows.Add(Row(224,"图标样式",TrayConfiguration.TrayIconStyleLabel(pref.TrayIconStyle)));
                 if(nav.TrayHint){var hint=Info(TrayConfiguration.HiddenIconHint,null);hint.WrapText=true;rows.Add(hint);}
             }else if(nav.Page==PopupPage.TrayGroup){
                 var group=TrayConfiguration.Find(pref,nav.TrayGroupKey);
@@ -215,7 +215,7 @@ namespace AtkBatteryTray {
                 else if(nav.PreferenceAction==223){labels=ThemePalette.Names;first=440;selected=Array.IndexOf(ThemePalette.Keys,ThemePalette.Normalize(pref.ThemeStyle));}
                 else if(nav.PreferenceAction==228){labels=new[]{"标准","较大"};first=460;selected=pref.FontSize=="large"?1:0;}
                 else if(nav.PreferenceAction==229){labels=PanelLayouts.Names;first=470;selected=Array.IndexOf(PanelLayouts.Keys,PanelLayouts.Normalize(pref.PanelLayout));}
-                else if(nav.PreferenceAction==224){labels=new[]{"数字","设备图标"};first=450;selected=pref.TrayIconStyle=="device"?1:0;}
+                else if(nav.PreferenceAction==224){string[] styleOrder={"number","device","badge","minimal"};labels=new[]{"圆形数字","设备图标","圆角白字","纯数字"};first=450;selected=Math.Max(0,Array.IndexOf(styleOrder,TrayConfiguration.NormalizeTrayIconStyle(pref.TrayIconStyle)));}
                 else if(nav.PreferenceAction==211){labels=new[]{"当前使用的设备","最低电量","自动选择有数据的设备","鼠标优先","耳机优先","键盘优先"};first=410;selected=pref.TraySource=="active"?0:pref.TraySource=="lowest"?1:pref.TraySource=="auto"?2:pref.TraySource=="mouse"?3:pref.TraySource=="headset"?4:5;}
                 else if(nav.PreferenceAction==213){labels=new[]{"10%","15%","20%"};first=420;selected=pref.WarningThreshold==10?0:pref.WarningThreshold==15?1:2;}
                 else {labels=new[]{"1分钟","2分钟","5分钟"};first=430;selected=pref.BackgroundSeconds==60?0:pref.BackgroundSeconds==120?1:2;}

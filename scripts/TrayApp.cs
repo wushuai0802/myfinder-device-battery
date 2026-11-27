@@ -378,7 +378,7 @@ namespace AtkBatteryTray {
                     pref.PanelLayout=PanelLayouts.Keys[id-470];navigation.DeviceScroll=0;owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
                 if((id==460||id==461)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==228){pref.FontSize=id==461?"large":"normal";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
-                if((id==450||id==451)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){pref.TrayIconStyle=id==450?"number":"device";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
+                if(id>=450&&id<=453&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){string[] styleOrder={"number","device","badge","minimal"};pref.TrayIconStyle=styleOrder[id-450];owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
                 if(id>=440&&id<440+ThemePalette.Keys.Length&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==223) {
                     pref.ThemeStyle=ThemePalette.Keys[id-440];owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
@@ -1302,7 +1302,7 @@ namespace AtkBatteryTray {
             var presentation=UiState.Tray(preferences.TraySource,mouse,headset);var shown=presentation.Battery;
             if(UseWirelessLayout||preferences.TrayGroups.Count>0||preferences.TraySource=="active"||!String.IsNullOrEmpty(preferences.TrayDeviceId)){presentation=WirelessTray(preferences.TraySource);shown=presentation.Battery;}
             bool dark=Style.Dark;int size=SystemInformation.SmallIconSize.Width;
-            Color background=preferences.TrayIconStyle=="number"?TrayGlyph.NumberFill(shown.Percent,shown.Percent.HasValue&&!shown.Fresh):TrayGlyph.LevelColor(shown.Percent,dark);
+            Color background=TrayGlyph.UpdateBadgeBackground(preferences.TrayIconStyle,shown.Percent,dark,shown.Percent.HasValue&&!shown.Fresh,Style.TaskbarDark);
             UpdateDotColor=UpdateBadge.ColorFor(ThemePalette.Current(dark).Accent,background,Style.TaskbarDark);
             presentation.UpdateColor=UpdateDotColor;presentation.UpdateBadge=updates!=null&&updates.BadgeVisible;
             presentation.Tooltip=UpdateBadge.Tooltip(presentation.Tooltip,updates==null?null:updates.Version);

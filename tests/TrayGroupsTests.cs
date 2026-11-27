@@ -306,6 +306,46 @@ static class TrayGroupsTests {
         var approxCard=Card("approx","mouse",80);approxCard.Battery.Approximate=true;approxCard.Name="Logitech G";
         Check(TraySelection.Present(new List<WirelessCard>{approxCard},approxCard,"设备").Tooltip.Contains("约80%"),"tray tooltip still discloses approximate battery reading");
     }
+    static void TrayIconStyleOptions(){
+        // #1184: support rounded white-digit badge ("badge") and transparent minimal digits ("minimal") alongside "number" and "device".
+        foreach(string style in new[]{"badge","minimal"}){
+            string path=Path.Combine(output,"tray-style-"+style+".json");
+            var pref=new AudioBindings {TrayIconStyle=style};
+            DeviceSettings.SaveBindings(path,pref);
+            var loaded=DeviceSettings.LoadBindings(path);
+            Check(loaded.TrayIconStyle==style,"tray icon style "+style+" persists cleanly");
+        }
+        foreach(int size in new[]{16,20,24,32})foreach(bool dark in new[]{false,true}){
+            using(var circle=TrayGlyph.RenderStyle("number",78,false,dark,false,size,"mouse"))
+            using(var badge=TrayGlyph.RenderStyle("badge",78,false,dark,false,size,"mouse"))
+            using(var minimal=TrayGlyph.RenderStyle("minimal",78,false,dark,false,size,"mouse"))
+            using(var badgeCharge=TrayGlyph.RenderStyle("badge",42,true,dark,false,size,"mouse",false,UpdateBadge.Blue,dark))
+            using(var minimalCharge=TrayGlyph.RenderStyle("minimal",15,true,dark,false,size,"mouse",false,UpdateBadge.Blue,dark)){
+                Check(badge.GetPixel(0,0).A==0&&minimal.GetPixel(0,0).A==0,"corner stays transparent for new tray styles at "+size+"px");
+                Check(minimal.GetPixel(1,1).A==0,"minimal style keeps background transparent");
+                bool badgeDiffers=false,minimalDiffers=false;
+                int badgeOpaque=0,minimalOpaque=0;
+                for(int y=0;y<size;y++)for(int x=0;x<size;x++){
+                    if(badge.GetPixel(x,y).A>20)badgeOpaque++;
+                    if(minimal.GetPixel(x,y).A>20)minimalOpaque++;
+                    if(badge.GetPixel(x,y)!=circle.GetPixel(x,y))badgeDiffers=true;
+                    if(minimal.GetPixel(x,y)!=badge.GetPixel(x,y))minimalDiffers=true;
+                }
+                Check(badgeOpaque>size*size/2&&badgeDiffers,"rounded white-digit badge renders distinct filled badge at "+size+"px");
+                Check(minimalOpaque>10&&minimalOpaque<badgeOpaque&&minimalDiffers,"minimal style renders transparent-background digits at "+size+"px");
+                Check(badgeCharge.Width==size&&minimalCharge.Width==size,"charging + update badge variants render cleanly at "+size+"px");
+            }
+        }
+        using(var f=new Fixture()){
+            f.Page(PopupPage.TrayIcons);
+            f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==224;}));
+            f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==452;}));
+            Check(DeviceSettings.Current.TrayIconStyle=="badge"&&f.Nav.Page==PopupPage.TrayIcons,"popup menu selects badge style (452)");
+            f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==224;}));
+            f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==453;}));
+            Check(DeviceSettings.Current.TrayIconStyle=="minimal"&&f.Nav.Page==PopupPage.TrayIcons,"popup menu selects minimal style (453)");
+        }
+    }
     [STAThread] static int Main(string[] args){
         output=args.Length>0?args[0]:Path.GetDirectoryName(Application.ExecutablePath);
         var previous=DeviceSettings.Current;
@@ -313,6 +353,7 @@ static class TrayGroupsTests {
             Run("configuration contract",Contracts);Run("selection contract",SelectionContract);Run("lifecycle contract",LifecycleContract);Run("device style contract",DeviceStyleContract);Run("preferences entry",PreferencesEntry);
             Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("hidden candidates without extra groups",delegate{HiddenCandidates(false);});Run("hidden candidates with extra groups",delegate{HiddenCandidates(true);});Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
             Run("approximate tray badge omits tiny tilde prefix (#1139)",ApproximateTrayBadgePolish);
+            Run("tray icon style options badge & minimal (#1184)",TrayIconStyleOptions);
             foreach(int size in new[]{16,20,24,32}){int pixels=size;Run("battery bars at "+pixels+"px",delegate{BatteryBars(pixels);});}
             Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}

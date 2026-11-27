@@ -28,8 +28,22 @@ namespace AtkBattery {
             if(value.Length>12)value=value.Substring(0,Char.IsHighSurrogate(value[11])?11:12);
             return value;
         }
+        internal static readonly string[] TrayIconStyleKeys={"number","badge","minimal","device"};
+        internal static readonly string[] TrayIconStyleNames={"圆形数字","圆角白字","纯数字","设备图标"};
+        internal static string NormalizeTrayIconStyle(string style){
+            if(style=="device"||style=="badge"||style=="minimal")return style;
+            return "number";
+        }
+        internal static string TrayIconStyleLabel(string style){
+            switch(NormalizeTrayIconStyle(style)){
+                case "badge": return "圆角白字";
+                case "minimal": return "纯数字";
+                case "device": return "设备图标";
+                default: return "圆形数字";
+            }
+        }
         internal static void Normalize(AudioBindings pref){
-            pref.TrayIconStyle=pref.TrayIconStyle=="device"?"device":"number";
+            pref.TrayIconStyle=NormalizeTrayIconStyle(pref.TrayIconStyle);
             var groups=new List<TrayGroup>();var ids=new HashSet<string>(StringComparer.Ordinal);var members=new HashSet<string>(StringComparer.Ordinal);
             foreach(var group in pref.TrayGroups??new List<TrayGroup>()){
                 if(groups.Count==3)break;

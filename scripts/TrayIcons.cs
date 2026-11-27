@@ -87,7 +87,7 @@ namespace AtkBatteryTray {
             string key=battery.Key+"|"+style+"|"+view.DeviceKind+"|"+dark+"|"+size+"|"+view.UpdateBadge+"|"+(view.UpdateBadge?view.UpdateColor.ToArgb():0)+"|"+taskbarDark;bool changed=key!=lastKey;
             if(changed){
                 Color? badge=view.UpdateBadge?(Color?)view.UpdateColor:null;
-                using(var bitmap=style=="device"?TrayGlyph.RenderDevice(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,view.DeviceKind,badge,taskbarDark):TrayGlyph.Render(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,battery.Approximate,badge,taskbarDark)){
+                using(var bitmap=TrayGlyph.RenderStyle(style,battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,view.DeviceKind,battery.Approximate,badge,taskbarDark)){
                     IntPtr handle=bitmap.GetHicon();Icon next;try{next=(Icon)Icon.FromHandle(handle).Clone();}finally{DestroyIcon(handle);}
                     var old=icon;icon=next;tray.Icon=icon;if(old!=null)old.Dispose();
                 }
