@@ -111,6 +111,9 @@ class LingbaoTests(unittest.TestCase):
                     self.assertEqual((status.name, status.level, status.source, status.kind),
                                      ("Lingbao M1 Pro", 65, "lingbao", "mouse"))
                     self.assertEqual(status.verification_level, "C")
+                    # The literal captures carry the 02/00 pair, i.e. no recent
+                    # mouse traffic: still no connection evidence, and a stale
+                    # pair is never reported as a disconnect either.
                     self.assertFalse(status.charging_known or status.connection_known or status.cached)
                     self.assertIsNone(status.measured_at_utc)
                     self.assertIsNone(status.queried_at_utc)
@@ -129,10 +132,31 @@ class LingbaoTests(unittest.TestCase):
                 self.assertEqual(len(bus.feature_reads), 1)
                 self.assertEqual(bus.opened, bus.closed)
 
-    def test_unproven_header_and_byte21_never_become_extra_state_gates(self):
+    def test_link_state_reads_only_the_documented_pair(self):
+        self.assertIs(L.link_state(reply(**{"3": 0, "21": 1})), True)
+        self.assertIs(L.link_state(reply(**{"3": 2, "21": 0})), False)
+        for pair in ((0, 0), (0, 2), (1, 0), (1, 1), (2, 1), (2, 2), (255, 1), (0, 255)):
+            self.assertIsNone(L.link_state(reply(**{"3": pair[0], "21": pair[1]})), pair)
+        for invalid in (None, True, 33, "x" * 33, [], [0] * 33, reply()[:-1], reply() + [0]):
+            self.assertIsNone(L.link_state(invalid))
+
+    def test_live_link_pair_is_the_only_connection_evidence(self):
+        with fixture([reply(**{"3": 0, "21": 1})]):
+            status, = P().poll()
+            self.assertEqual((status.level, status.online, status.connection_known), (65, True, True))
+            self.assertFalse(status.charging_known)
+        # Any other pair, including the stale one, leaves the connection
+        # unknown: 02/00 also covers a sleeping, out-of-range or switched-off
+        # mouse, so it must never be reported as a disconnect.
+        for pair in ((2, 0), (0, 0), (0, 2), (1, 0), (1, 1), (2, 1), (2, 2), (255, 1), (0, 255)):
+            with self.subTest(pair=pair), fixture([reply(**{"3": pair[0], "21": pair[1]})]):
+                status, = P().poll()
+                self.assertEqual(status.level, 65)
+                self.assertFalse(status.connection_known)
+
+    def test_header_echoes_never_become_state_gates(self):
         for value in (0, 1, 2, 255):
-            frame = reply(**{"1": value, "2": value, "3": value, "4": value, "21": value})
-            with fixture([frame]):
+            with self.subTest(value=value), fixture([reply(**{"1": value, "2": value, "4": value})]):
                 status, = P().poll()
                 self.assertEqual(status.level, 65)
                 self.assertFalse(status.charging_known or status.connection_known)

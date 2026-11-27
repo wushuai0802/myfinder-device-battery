@@ -118,6 +118,18 @@ class LingbaoBridgeTests(unittest.TestCase):
         self.assertEqual(card["queriedAtUtc"], response["checkedAtUtc"])
         self.assertEqual(snapshot["errors"], [])
 
+    def test_child_to_manager_live_link_pair_is_a_known_connection(self):
+        engine = self.engine([])
+        infos = [F.entry()]
+        live = F.reply(level=65, **{"3": 0, "21": 1})
+        with F.fixture([live], infos):
+            response = self.child("receiver-a", infos)
+        self.accept(engine, "receiver-a", response)
+        card, = engine._snapshot()["devices"]
+        self.assertEqual((card["percent"], card["connectionState"]), (65, "connected"))
+        self.assertTrue(card["connectionCheckedAtUtc"])
+        self.assertFalse(card["chargingKnown"])
+
     def test_placeholder_invalid_silent_and_refused_queries_never_refresh_history(self):
         origin = datetime.now(timezone.utc) - timedelta(seconds=30)
         stamps = [(origin + timedelta(seconds=i)).isoformat().replace("+00:00", "Z") for i in range(10)]
