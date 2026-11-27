@@ -76,17 +76,24 @@ class CloudFlightTests(unittest.TestCase):
             self.assertIsNone(P.parse_reply(raw))
 
     def test_unproven_reports_never_open(self):
-        device = FakeDevice(response(3958))
-        info = receiver()
-        del info["input_report_sizes"]
-        with patch.object(P, "hid", types.SimpleNamespace(device=lambda: device)), \
-                patch.object(P.hidlist, "enumerate", return_value=[info]):
-            self.assertEqual(P.HyperXCloudFlightProvider().poll(), [])
-        self.assertEqual(device.opened, [])
+        for mutate in (
+            lambda d: d.pop("input_report_sizes"),
+            lambda d: d.update(input_report_length=20.0),
+            lambda d: d.update(output_report_sizes={"33": 20.0}),
+            lambda d: d.update(input_report_sizes={"33": True}),
+        ):
+            device = FakeDevice(response(3958))
+            info = receiver()
+            mutate(info)
+            with patch.object(P, "hid", types.SimpleNamespace(device=lambda: device)), \
+                    patch.object(P.hidlist, "enumerate", return_value=[info]):
+                self.assertEqual(P.HyperXCloudFlightProvider().poll(), [])
+            self.assertEqual(device.opened, [])
 
     def test_ambiguous_or_unresolved_collections_never_open(self):
         for infos in ([receiver(), receiver()], [receiver(physical="")],
-                      [receiver(physical="collection:unresolved")]):
+                      [receiver(physical="collection:unresolved")],
+                      [receiver(), receiver(page=0x000C, physical="collection:unresolved")]):
             device = FakeDevice(response(3958))
             with patch.object(P, "hid", types.SimpleNamespace(device=lambda: device)), \
                     patch.object(P.hidlist, "enumerate", return_value=infos):

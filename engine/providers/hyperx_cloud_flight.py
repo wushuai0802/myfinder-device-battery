@@ -70,10 +70,12 @@ class HyperXCloudFlightProvider(Provider):
             self._diag.append("Cloud Flight battery collection missing or ambiguous: nothing sent")
             return None
         info = candidates[0]
-        if (info.get("output_report_sizes") != {"33": 20}
-                or info.get("input_report_sizes") != {"33": 20}
-                or info.get("output_report_length") != 20
-                or info.get("input_report_length") != 20):
+        out_len, in_len = info.get("output_report_length"), info.get("input_report_length")
+        out_sizes, in_sizes = info.get("output_report_sizes"), info.get("input_report_sizes")
+        if (type(out_len) is not int or out_len != 20
+                or type(in_len) is not int or in_len != 20
+                or not isinstance(out_sizes, dict) or out_sizes != {"33": 20} or type(out_sizes["33"]) is not int
+                or not isinstance(in_sizes, dict) or in_sizes != {"33": 20} or type(in_sizes["33"]) is not int):
             self._diag.append("Cloud Flight report sizes unproven: nothing sent")
             return None
         return info
@@ -116,15 +118,17 @@ class HyperXCloudFlightProvider(Provider):
         except OSError:
             self._diag.append("Cloud Flight enumeration failed: nothing sent")
             return []
+        matching = [info for info in infos
+                    if info.get("vendor_id") == VID and info.get("product_id") in PIDS]
+        if any(not isinstance(info.get("physical_id"), str)
+               or not info["physical_id"]
+               or info["physical_id"].startswith("collection:")
+               for info in matching):
+            self._diag.append("Cloud Flight physical parent unresolved: nothing sent")
+            return []
         groups = {}
-        for info in infos:
-            if info.get("vendor_id") != VID or info.get("product_id") not in PIDS:
-                continue
-            physical = info.get("physical_id", "")
-            if not isinstance(physical, str) or not physical or physical.startswith("collection:"):
-                self._diag.append("Cloud Flight physical parent unresolved: nothing sent")
-                continue
-            groups.setdefault(physical, []).append(info)
+        for info in matching:
+            groups.setdefault(info["physical_id"], []).append(info)
         out = []
         for physical, mine in groups.items():
             info = self._pick(mine)

@@ -117,10 +117,13 @@ CONTROL_USAGE = (0xFF02, 0x0002)   # the collection the OpenMouse ATK/VXE panel 
 LINK8K_ID = (0x3710, 0x5501)
 FB3E_ID = (0x3554, 0xFB3E)
 FB3E_KEY_PREFIX = "pulsar:3554fb3e:"
+FB49_ID = (0x3554, 0xFB49)
+FB49_KEY_PREFIX = "pulsar:3554fb49:"
 F3_MASTERGT_ID = (0x391D, 0x1A1A)
 F3_MASTERGT_KEY_PREFIX = "pulsar:391d1a1a:"
 STRICT_REPORT8_PREFIXES = {
     FB3E_ID: FB3E_KEY_PREFIX,
+    FB49_ID: FB49_KEY_PREFIX,
     F3_MASTERGT_ID: F3_MASTERGT_KEY_PREFIX,
 }
 # Exact N9 identities use serial/Bolutek, never the broad ATK mouse fallback.
@@ -205,6 +208,7 @@ PIDS: Dict[int, Dict[int, str]] = {
         0xF503: "VGN F1 Moba F503",  # #592 user capture; C / 待实机验证
         0xF506: "VGN F1 MOBA",  # #644; official VGN HUB FF02/report-8 route
         0xFB3E: "VGN 2.4G 接收器 (FB3E)",  # Shared by multiple mouse models, #733 / #802.
+        0xFB49: "VGN DragonFly F2 Ultra+",  # #1217; official VGN HUB vgn-y2 FF02/report-8 receiver; C / 待实机验证
     },
     0x373B: {
         0x1085: "ATK VXE R1 SE+ (2.4 GHz)",
@@ -936,6 +940,18 @@ def parse_fb3e_power(raw):
     return (parsed[0], False) if parsed is not None else None
 
 
+def parse_fb49_power(raw):
+    """VGN HUB vgn-y2 report-8 power reply (accepts payload length 2 or 4, never echo)."""
+    if (not isinstance(raw, (list, tuple, bytes, bytearray)) or len(raw) != PAYLOAD_LEN
+            or any(type(v) is not int or not 0 <= v <= 255 for v in raw)
+            or list(raw) == make_request()
+            or bytes(raw[2:5]) != b"\0\0\0"
+            or raw[5] not in (2, 4)):
+        return None
+    parsed = parse_link8k_power(raw)
+    return (parsed[0], False) if parsed is not None else None
+
+
 def voltage_mv(r) -> Optional[int]:
     if not r or len(r) < VOLTAGE_SLICE[1]:
         return None
@@ -1031,11 +1047,12 @@ class PulsarProvider(Provider):
         return infos[0] if infos else None
 
     def _query(self, path: bytes, parse_reply=parse_power) -> Optional[List[int]]:
+        strict_query = parse_reply in (parse_fb3e_power, parse_fb49_power)
         dev = hid.device()
         try:
             dev.open_path(path)
         except (OSError, IOError) as e:
-            if parse_reply is parse_fb3e_power:
+            if strict_query:
                 try:
                     dev.close()
                 except OSError:
@@ -1048,7 +1065,7 @@ class PulsarProvider(Provider):
             self._drain(dev)
             operation = "write"
             written = dev.write(make_request())
-            if parse_reply is parse_fb3e_power and written != PAYLOAD_LEN:
+            if strict_query and written != PAYLOAD_LEN:
                 self._note_reader("battery query write short/failed")
                 return None
             operation = "read"
@@ -1128,8 +1145,12 @@ class PulsarProvider(Provider):
                         continue
                     key = STRICT_REPORT8_PREFIXES[(vid, pid)] + d["physical_id"]
                     present.add(key)
-                    name = pids[pid]
-                    parse_reply = parse_fb3e_power
+                    if (vid, pid) == FB49_ID:
+                        name = str(d.get("product_string") or "").strip() or pids[pid]
+                        parse_reply = parse_fb49_power
+                    else:
+                        name = pids[pid]
+                        parse_reply = parse_fb3e_power
                 elif link8k:
                     d = self._pick_link8k(mine)
                     if d is not None:

@@ -215,12 +215,15 @@ class BlackSharkPassiveTests(unittest.TestCase):
                          (74, False, "C"))
         self.assertEqual(dev1.writes, [QUERY_REQUEST])
 
-        # Within 60s cooldown: zero opens, zero writes, and returns no fresh reading
-        # so server.py preserves the prior reading as cached without faking freshness.
+        # Within 60s cooldown: zero opens, zero writes, and retains the 74% reading
+        # with its original sample timestamp so server.py neither drops online state
+        # nor enters idle_backoff (#1023 resident host regression).
         now[0] = 120.0
         dev2 = QueryDevice(battery_frame(percent=70, sub=1, argc=1))
         readings2, _ = poll([receiver()], dev2, provider=provider)
-        self.assertEqual(readings2, [])
+        self.assertEqual(len(readings2), 1)
+        self.assertEqual((readings2[0].level, readings2[0].measured_at_utc),
+                         (74, readings1[0].measured_at_utc))
         self.assertEqual(dev2.opened, [])
         self.assertEqual(dev2.writes, [])
         self.assertTrue(any("throttled" in line for line in provider.diagnostics()))

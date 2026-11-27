@@ -263,11 +263,16 @@ namespace AtkBatteryTray {
                 for(int i=nav.Offset;i<Math.Min(choices.Count,nav.Offset+visible);i++)rows.Add(choices[i]);
                 if(nav.Offset>0)rows.Add(Row(7,"上一页"));if(nav.Offset+visible<choices.Count)rows.Add(Row(8,"下一页"));
             }else if(nav.Page==PopupPage.Diagnostics) {
-                rows.Add(Info("版本",AppRuntime.Version));rows.Add(Info("鼠标读取",UiState.Mouse(owner.Current,owner.LastGood,DateTime.UtcNow).Fresh?"已确认":"历史 / 未知"));
+                var wmDiag=!owner.NativeMousePresent&&owner.Current==null&&owner.LastGood==null?owner.PrimaryWirelessMouse():null;
+                bool mouseFresh=wmDiag!=null?WirelessLayout.View(wmDiag).Fresh:UiState.Mouse(owner.Current,owner.LastGood,DateTime.UtcNow).Fresh;
+                string mouseDiagText=mouseFresh?"已确认":(!owner.NativeMousePresent&&owner.Current==null&&owner.LastGood==null&&wmDiag==null&&owner.GenericReady?"未连接鼠标":"历史 / 未知");
+                rows.Add(Info("版本",AppRuntime.Version));rows.Add(Info("鼠标读取",mouseDiagText));
                 rows.Insert(1,Info("软件更新",owner.UpdateStatus));
                 rows.Insert(2,Row(owner.UpdateAvailable?260:261,owner.UpdateAvailable?owner.UpdateStatus:"检查更新",null,owner.UpdateAvailable?"update":"info"));
                 if(!String.IsNullOrEmpty(owner.UpdateFailure))rows.Insert(3,Info("上次更新失败",owner.UpdateFailure));
-                rows.Add(Info("耳机无线",headset?"已确认连接":"未确认连接"));rows.Add(Info("后台同步",pref.BackgroundSeconds+"秒"));
+                var whDiag=!headset?owner.PrimaryWirelessHeadset():null;
+                bool anyHeadset=headset||(whDiag!=null&&whDiag.Online&&whDiag.ConnectionState=="connected");
+                rows.Add(Info("耳机无线",anyHeadset?"已确认连接":"未确认连接"));rows.Add(Info("后台同步",pref.BackgroundSeconds+"秒"));
                 rows.Add(Info("配置状态",DeviceSettings.UsingDefaults?"读取失败，使用默认":"正常"));
                 rows.Add(Info("诊断写入",owner.StorageHealthText));
                 rows.Add(Info("开机启动",StartupState()));rows.Add(Info("通用设备",owner.GenericReady?owner.WirelessDevices.Length+"个":owner.GenericScanning?"正在识别":"尚未就绪"));

@@ -64,23 +64,43 @@ def discover_receiver(*, descriptor=DESCRIPTOR, maximum=65, name=k99.PRODUCT,
     return info, getter.call_count
 
 
+def glw_reply(command, offset, payload):
+    header = [0xAA, command, 0, 0, len(payload), offset & 0xFF, offset >> 8, 0]
+    raw = bytes(header + list(payload))
+    return raw.ljust(64, b"\0")
+
+
+def glw_exchange_frames(percent, charging=False, active=0, slots=(0, 1, 2, 3)):
+    profile = slots[active] if sorted(slots) == [0, 1, 2, 3] else active
+    base = [active, 0, *slots] + [0] * 50
+    config = [0] * 64
+    config[32] = (percent & 0x7F) | (0x80 if charging else 0)
+    return [
+        b"",  # initial _drain() sees empty queue
+        glw_reply(4, 0, base),
+        glw_reply(5, 64 * profile, config[:56]),
+        glw_reply(5, 64 * profile + 56, config[56:]),
+    ]
+
+
 class K99V3Tests(unittest.TestCase):
-    def test_runtime_descriptor_recovers_missing_caps_then_reads_52_percent(self):
+    def test_runtime_descriptor_recovers_missing_caps_then_reads_glw_battery(self):
         info, calls = discover_receiver()
         self.assertEqual(calls, 1)
         self.assertEqual((info["input_report_proof"], info["output_report_proof"]),
                          ("descriptor", "descriptor"))
-        # #1034 gives the reply header and byte 8. Other bytes here are synthetic.
-        reply = bytearray(64)
-        reply[:2] = b"\xaa\x03"
-        reply[8] = 52
         dev = MagicMock()
-        dev.write.return_value, dev.read.return_value = 65, reply
+        dev.write.return_value = 65
+        dev.read.side_effect = glw_exchange_frames(100, charging=False)
         with patch.object(battery_hid.hidlist, "enumerate", return_value=[info]), \
              patch.object(battery_hid.hid, "device", return_value=dev):
             card, = k99.MchoseK99V3Provider().poll()
-        self.assertEqual((card.level, card.charging_known), (52, False))
-        dev.write.assert_called_once_with(k99.make_request())
+        self.assertEqual((card.level, card.charging, card.charging_known), (100, False, True))
+        self.assertEqual([call.args[0] for call in dev.write.call_args_list], [
+            k99.make_request(4, 0, 56),
+            k99.make_request(5, 0, 56),
+            k99.make_request(5, 56, 8),
+        ])
         self.assertEqual(dev.read.call_args.args[0], 64)
 
     def test_wrong_identity_or_maxima_do_not_fetch_descriptor(self):
@@ -106,21 +126,50 @@ class K99V3Tests(unittest.TestCase):
                     self.assertEqual(k99.MchoseK99V3Provider().poll(), [])
                 device.assert_not_called()
 
-    def test_upstream_descriptor_and_both_captured_frames(self):
+    def test_glw_charging_and_profile_slot_indirection(self):
         reports = battery_hid.parse_report_descriptor(DESCRIPTOR)[(1, 0)]
         self.assertEqual(reports, {"input": {"0": 65}, "output": {"0": 65}, "feature": {}})
-        for prefix, expected in (("aa 03 00 38 00 00 00 00 28", 40),
-                                 ("aa 03 01 00 00 00 00 00 64", 100)):
-            with self.subTest(expected=expected):
+        for expected, charging, active, slots, profile in (
+            (85, True, 0, (0, 1, 2, 3), 0),
+            (40, False, 1, (2, 3, 0, 1), 3),
+        ):
+            with self.subTest(expected=expected, charging=charging):
                 dev = MagicMock()
                 dev.write.return_value = 65
-                dev.read.return_value = bytes.fromhex(prefix).ljust(64, b"\0")
+                dev.read.side_effect = glw_exchange_frames(expected, charging=charging, active=active, slots=slots)
                 with patch.object(battery_hid.hidlist, "enumerate", return_value=[collection()]), \
                      patch.object(battery_hid.hid, "device", return_value=dev):
                     card, = k99.MchoseK99V3Provider().poll()
-                dev.write.assert_called_once_with(bytes.fromhex("00 55 03 00 38 38").ljust(65, b"\0"))
+                self.assertEqual([call.args[0] for call in dev.write.call_args_list], [
+                    k99.make_request(4, 0, 56),
+                    k99.make_request(5, 64 * profile, 56),
+                    k99.make_request(5, 64 * profile + 56, 8),
+                ])
                 dev.close.assert_called_once()
-                self.assertEqual((card.level, card.kind, card.charging_known), (expected, "keyboard", False))
+                self.assertEqual((card.level, card.charging, card.kind, card.charging_known),
+                                 (expected, charging, "keyboard", True))
+
+    def test_rejects_legacy_aa03_getinfo_frame_and_out_of_range_percentage(self):
+        legacy_52 = bytearray(64)
+        legacy_52[:2] = b"\xaa\x03"
+        legacy_52[8] = 52
+        dev = MagicMock()
+        dev.write.return_value = 65
+        dev.read.side_effect = [b"", bytes(legacy_52), b""]
+        provider = k99.MchoseK99V3Provider()
+        with patch.object(battery_hid.hidlist, "enumerate", return_value=[collection()]), \
+             patch.object(battery_hid.hid, "device", return_value=dev):
+            self.assertEqual(provider.poll(), [])
+        self.assertIn("rejected battery reply", provider.diagnostics())
+
+        dev2 = MagicMock()
+        dev2.write.return_value = 65
+        dev2.read.side_effect = glw_exchange_frames(101, charging=True)
+        provider2 = k99.MchoseK99V3Provider()
+        with patch.object(battery_hid.hidlist, "enumerate", return_value=[collection()]), \
+             patch.object(battery_hid.hid, "device", return_value=dev2):
+            self.assertEqual(provider2.poll(), [])
+        self.assertIn("rejected GLW percentage outside 0..100", provider2.diagnostics())
 
     def test_shared_pid_and_unproven_collection_never_open(self):
         for rows in ([collection(product_string="MCHOSE G87 V2 2.4G")],
@@ -134,7 +183,7 @@ class K99V3Tests(unittest.TestCase):
                 self.assertEqual(k99.MchoseK99V3Provider().poll(), [])
                 factory.assert_not_called()
 
-    def test_rejects_other_commands_or_invalid_percent(self):
-        for packet in (bytes(64), bytes.fromhex("aa 05").ljust(64, b"\0"),
-                       bytes.fromhex("aa 03"), bytes.fromhex("aa 03").ljust(8, b"\0") + bytes([101]) + bytes(55)):
-            self.assertIsNone(k99.parse_reply(packet))
+    def test_rejects_other_commands_or_invalid_glw_headers(self):
+        for packet in (bytes(64), bytes.fromhex("aa 03 00 38 00 00 00 00 34").ljust(64, b"\0"),
+                       bytes.fromhex("aa 04"), bytes.fromhex("aa 05 00 00 38 00 00 00").ljust(64, b"\0")):
+            self.assertIsNone(k99.parse_reply(packet, 4, 0, 56))

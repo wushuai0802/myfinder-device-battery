@@ -1171,6 +1171,122 @@ class FamilyUiFixTests(unittest.TestCase):
         self.assertEqual([(s.model_source, s.family_probe) for s in statuses], [("family:probe_test", True)])
 
 
+class CooldownAndForceRetryTests(unittest.TestCase):
+    """#1023: active cooldown preserves live reading without wiping cache or triggering backoff; force unlocks retry."""
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+
+    def test_cooldown_preserves_reading_and_original_timestamp_until_next_real_poll(self):
+        import server
+        from test_engine_reliability import FakePool
+        now = [100.0]
+        provider = provider_module.FamiliesProvider(running=lambda names: False, clock=lambda: now[0])
+        engine = server.BatteryEngine(process_factory=FakePool().factory)
+        self.addCleanup(engine.close)
+        physical = collection()["physical_id"]
+        with patch.dict(provider_module._ACTIVE_COOLDOWN_SECONDS, {("xiberia", "battery"): 60.0}):
+            dev1 = FakeDevice([frame("55 65 00 52")])
+            statuses1, _ = poll([collection()], dev1, provider)
+            self.assertEqual(len(statuses1), 1)
+            self.assertEqual((statuses1[0].level, len(dev1.writes)), (82, 1))
+            first_stamp = statuses1[0].measured_at_utc
+            self.assertTrue(first_stamp)
+            engine._accept("families|" + physical, "families", statuses1, first_stamp, physical, candidate_count=1)
+            snap1 = engine._snapshot()["devices"][0]
+            self.assertEqual((snap1["percent"], snap1["online"], snap1["fresh"], snap1["measurementState"]),
+                             (82, True, True, "current"))
+            self.assertEqual(engine.idle_misses, {})
+
+            # Within 60s (e.g. popup open / liveSync at +8s): zero HID I/O, live card & original timestamp preserved.
+            now[0] = 108.0
+            dev2 = FakeDevice([frame("55 65 00 10")])
+            statuses2, _ = poll([collection()], dev2, provider)
+            self.assertEqual((dev2.opened, dev2.writes), ([], []))
+            self.assertEqual(len(statuses2), 1)
+            self.assertEqual((statuses2[0].level, statuses2[0].measured_at_utc), (82, first_stamp))
+            later_iso = "2099-01-01T00:00:00Z"
+            engine._accept("families|" + physical, "families", statuses2, server.utcnow(), physical, candidate_count=1)
+            snap2 = engine._snapshot()["devices"][0]
+            self.assertEqual((snap2["percent"], snap2["online"], snap2["fresh"], snap2["measurementState"],
+                              snap2["measuredAtUtc"], snap2["queriedAtUtc"]),
+                             (82, True, True, "current", first_stamp, first_stamp))
+            self.assertNotEqual(snap2["measuredAtUtc"], later_iso)
+            self.assertEqual(engine.idle_misses, {})
+
+            # After >=60s, device goes silent: real query runs, clears cooldown status, subsequent throttled poll stays empty.
+            now[0] = 161.0
+            dev3 = FakeDevice([])
+            statuses3, _ = poll([collection()], dev3, provider)
+            self.assertEqual((statuses3, len(dev3.writes)), ([], 1))
+            now[0] = 170.0
+            dev4 = FakeDevice([frame("55 65 00 52")])
+            statuses4, _ = poll([collection()], dev4, provider)
+            self.assertEqual((statuses4, dev4.opened), ([], []))
+
+    def test_cooldown_status_pruned_when_receiver_unplugged(self):
+        now = [10.0]
+        provider = provider_module.FamiliesProvider(running=lambda names: False, clock=lambda: now[0])
+        with patch.dict(provider_module._ACTIVE_COOLDOWN_SECONDS, {("xiberia", "battery"): 60.0}):
+            statuses, _ = poll([collection()], FakeDevice([frame("55 65 00 40")]), provider)
+            self.assertEqual(statuses[0].level, 64)
+            self.assertTrue(provider._cooldown_status)
+            empty, _ = poll([], FakeDevice([]), provider)
+            self.assertEqual((empty, provider._cooldown_status, provider._active_cooldown), ([], {}, {}))
+
+    def test_throttled_polls_do_not_burn_trial_rounds_and_force_unlock_is_rate_limited(self):
+        now = [100.0]
+        provider = provider_module.FamiliesProvider(running=lambda names: False, clock=lambda: now[0])
+        unit = families.memory_key(collection()["physical_id"])
+        with patch.dict(provider_module._ACTIVE_COOLDOWN_SECONDS, {("xiberia", "battery"): 60.0}):
+            # Round 1 silent: arms 60s cooldown, rounds == 1.
+            poll([collection()], FakeDevice([]), provider)
+            self.assertEqual(provider.memory.entry("xiberia", unit).rounds, 1)
+            # 5 polls during cooldown (<60s) must NOT advance rounds to 3!
+            for offset in (8.0, 16.0, 24.0, 32.0, 48.0):
+                now[0] = 100.0 + offset
+                poll([collection()], FakeDevice([]), provider)
+            self.assertEqual(provider.memory.entry("xiberia", unit).rounds, 1)
+            # Round 2 runs once cooldown expires (>=60s) and succeeds!
+            now[0] = 161.0
+            statuses, _ = poll([collection()], FakeDevice([frame("55 65 00 58")]), provider)
+            self.assertEqual(statuses[0].level, 88)
+
+        # Force unlock rate-limited to >=30s on non-cooldown families.
+        now2 = [200.0]
+        p2 = provider_module.FamiliesProvider(running=lambda names: False, clock=lambda: now2[0])
+        for _ in range(mem.MAX_TRIAL_ROUNDS):
+            poll([collection()], FakeDevice([]), p2)
+        self.assertEqual(p2.poll(force=False), [])
+        now2[0] = 205.0
+        dev_f1 = FakeDevice([])
+        with patch.object(provider_module.hidlist, "enumerate", side_effect=lambda vid=0: [collection()] if vid == 0x36F9 else []), \
+                patch.object(provider_module.hid, "device", return_value=dev_f1):
+            p2.poll(force=True)
+        self.assertEqual(len(dev_f1.writes), 1)
+        now2[0] = 210.0  # <30s since last force unlock: ignored
+        dev_f2 = FakeDevice([])
+        with patch.object(provider_module.hidlist, "enumerate", side_effect=lambda vid=0: [collection()] if vid == 0x36F9 else []), \
+                patch.object(provider_module.hid, "device", return_value=dev_f2):
+            p2.poll(force=True)
+        self.assertEqual(dev_f2.writes, [])
+
+    def test_retry_polls_shortened_and_force_unlocks_immediately(self):
+        self.assertEqual(mem.RETRY_POLLS, 3)
+        m = mem.ReadMemory()
+        for _ in range(mem.MAX_TRIAL_ROUNDS):
+            self.assertEqual(m.plan("f", "d", ["a"]), ["a"])
+            m.record("f", "d", "a", "silent")
+        self.assertEqual(m.plan("f", "d", ["a"]), [])
+        self.assertEqual(m.plan("f", "d", ["a"], force=True), ["a"])
+        m.record("f", "d", "a", "silent")
+        m.disable("f", "d", True)
+        self.assertEqual(m.plan("f", "d", ["a"], force=True), [])
+        m.disable("f", "d", False)
+        m.record("f", "d", "a", "anomaly")
+        m.record("f", "d", "b", "anomaly")
+        self.assertEqual(m.plan("f", "d", ["a", "b"], force=True), [])
+
 
 if __name__ == "__main__":
     unittest.main()

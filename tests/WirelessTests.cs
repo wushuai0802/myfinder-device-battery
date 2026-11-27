@@ -195,6 +195,7 @@ static class WirelessTests {
             bool exited=false;for(int i=0;i<30&&!exited;i++){try{using(var process=Process.GetProcessById(pid))exited=process.HasExited;}catch(ArgumentException){exited=true;}if(!exited)Thread.Sleep(20);}
             Check(exited,"closing the widget worker leaves no background process");
             ShutdownChecks(fake);
+            WirelessStatusAndDiagnosticsSync();
             Console.WriteLine("PASS "+checks+" universal battery checks; hardware access replaced with fixtures");Console.WriteLine("Universal UI previews: "+output);return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{VisualDesign.HighContrastOverride=null;if(owner!=null)owner.ExitThread();current.SetValue(null,previous);}
@@ -269,6 +270,25 @@ static class WirelessTests {
             rows.Add(new PopupControl {Id=77,DeviceKey="device-a",ActionKey="refresh",Text="同步键盘"});accessible.DoDefaultAction();Check(invoked==77,"accessible actions resolve the same stable device after a reorder");
             tree.GetChild(1).Select(AccessibleSelection.TakeFocus);Check(focus==20,"accessible focus requests select their visual control");
             rows[1].Enabled=false;tree.GetChild(1).DoDefaultAction();Check(invoked==77&&(tree.GetChild(1).State&AccessibleStates.Unavailable)!=0,"disabled controls reject accessible actions");
+        }
+    }
+    static void WirelessStatusAndDiagnosticsSync() {
+        var apply=typeof(TrayContext).GetMethod("ApplyWirelessRead",BindingFlags.Instance|BindingFlags.NonPublic);
+        using(var ctx=new TrayContext(false,delegate(bool include){return new MouseSnapshot();},delegate(int stage){return null;})) {
+            ctx.NativeMousePresent=false;
+            var mouse=Device("m1","mouse",71);mouse.Charging=false;mouse.ConnectionState="connected";mouse.MeasurementState="current";
+            var headset=Device("h1","headset",84);headset.ConnectionState="connected";headset.MeasurementState="current";
+            apply.Invoke(ctx,new object[]{new WirelessSnapshot {Devices=new[]{mouse,headset},NativeMousePresent=false,Complete=true},true,false});
+            string status=ctx.BuildStatusJson();
+            Check(status.Contains("\"liveVerified\":true")&&status.Contains("\"percent\":71")&&status.Contains("\"charging\":false"),"status.json reflects active wireless battery when native mouse is absent");
+            Check(status.Contains("\"completedReads\":1")&&status.Contains("\"detail\":\"\"")&&!status.Contains("Not yet read"),"status.json clears Not yet read and increments completedReads after wireless sync");
+            Check(status.Contains("\"headset\":{\"receiverPresent\":true,\"connectionVerified\":true,\"connected\":true,\"percent\":84,\"detail\":\"\"}"),"status.json reflects connected wireless headset");
+            Check(!status.Contains("Logitech Mouse")&&!status.Contains("Razer Headset"),"status.json does not leak wireless device names");
+            string summary=ctx.DiagnosticSummary();
+            Check(summary.Contains("鼠标：Logitech Mouse 71%")&&summary.Contains("耳机无线：已确认连接")&&!summary.Contains("鼠标读取：Not yet read"),"DiagnosticSummary reflects wireless mouse and connected headset without Not yet read");
+            var diagRows=PopupPages.Build(ctx,new PopupNavigation {Page=PopupPage.Diagnostics,VisibleChoices=100},false);
+            Check(diagRows.Exists(delegate(PopupControl row){return row.Information&&row.Text=="鼠标读取"&&row.Value=="已确认";}),"PopupPage.Diagnostics marks wireless mouse reading confirmed");
+            Check(diagRows.Exists(delegate(PopupControl row){return row.Information&&row.Text=="耳机无线"&&row.Value=="已确认连接";}),"PopupPage.Diagnostics marks wireless headset connected");
         }
     }
 }
