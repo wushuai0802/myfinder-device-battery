@@ -43,11 +43,13 @@ class MchoseByKeyboardBridgeTests(unittest.TestCase):
             self.assertNotIn(P.name, index["partial"])
             rows = [row for row in index["devices"] if row["provider"] == P.name]
             self.assertEqual({(row["vendorId"], row["productId"], row["kind"]) for row in rows},
-                             {(0x3554, 0xFA09, "keyboard"), (0x41E4, 0x2001, "keyboard")})
+                             {(0x3554, 0xFA09, "keyboard"), (0x41E4, 0x2001, "keyboard"),
+                              (0x41E4, 0x2004, "keyboard")})
             self.assertEqual(index["vendors"][P.name], [0x3554, 0x41E4])
             self.assertEqual([row["provider"] for row in index["devices"]
                               if (row["vendorId"], row["productId"]) == (0x3554, 0xFA09)], [P.name])
         rejected = [entry(vendor_id=0x3554, product_id=0x2001),
+                    entry(vendor_id=0x3554, product_id=0x2004),
                     entry(vendor_id=0x41E4, product_id=0xFA09),
                     entry(vendor_id=0x41E4, product_id=0x2201)]
         self.assertEqual(server.recognized_candidate_count(P.name, rejected), 0)
@@ -103,6 +105,35 @@ class Mchose41e4KeyboardBridgeTests(MchoseByKeyboardBridgeTests):
     receiver = dict(vendor_id=0x41E4, product_id=0x2001,
                     product_string="MCHOSE 2.4G Wireless")
     unknown_battery = False
+
+
+class Mchose41e4G98V2BridgeTests(unittest.TestCase):
+    def test_41e4_2004_child_roundtrip_and_candidate_count(self):
+        ff00 = entry("rx-2004", vendor_id=0x41E4, product_id=0x2004,
+                     product_string="MCHOSE 2.4G Wireless", path=b"col06-ff00",
+                     usage_page=0xFF00, usage=0x0001,
+                     input_report_length=0, output_report_length=0,
+                     input_report_sizes={}, output_report_sizes={})
+        ff02 = entry("rx-2004", vendor_id=0x41E4, product_id=0x2004,
+                     product_string="MCHOSE 2.4G Wireless", path=b"col01-ff02",
+                     usage_page=0xFF02, usage=0x0002)
+        infos = [ff00, ff02]
+        self.assertEqual(server.recognized_candidate_count(P.name, infos), 1)
+        request = dict(action="query", sequence=1, provider=P.name,
+                       physicalId="rx-2004", inventory=infos)
+        data = (json.dumps(request, default=wire_encode) + "\n").encode()
+        with fixture([identity("0a0000000018"), reply(80, 0x00)], infos) as bus, \
+                patch.object(server.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data))), \
+                patch.object(server.sys, "stdout", new_callable=io.StringIO) as output:
+            server.reader_child()
+        response = json.loads(output.getvalue())
+        self.assertEqual(response["candidateCount"], 1)
+        self.assertFalse(response.get("errorCode"))
+        self.assertEqual(len(response["statuses"]), 1)
+        self.assertEqual((response["statuses"][0]["name"], response["statuses"][0]["level"]),
+                         ("MCHOSE G98 V2", 80))
+        self.assertEqual(bus.opened, [b"col01-ff02"])
+        self.assertEqual(bus.opened, bus.closed)
 
 
 class SharedFa09BridgeTests(unittest.TestCase):

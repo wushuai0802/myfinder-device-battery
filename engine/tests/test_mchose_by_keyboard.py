@@ -289,11 +289,11 @@ class Mchose41e4KeyboardTests(MchoseByKeyboardTests):
                                  [M.identity_request(), M.make_request()])
 
     def test_other_41e4_pids_and_crossed_vendor_pid_pairs_never_open(self):
-        pairs = [(0x41E4, pid) for pid in (0x2201, 0x2004, 0x2203, 0x1101, 0x1102,
+        pairs = [(0x41E4, pid) for pid in (0x2201, 0x2203, 0x1101, 0x1102,
                                           0x1204, 0x1001, 0x1003, 0x2101, 0xFA09)]
-        pairs.append((0x3554, 0x2001))
+        pairs.extend(((0x3554, 0x2001), (0x3554, 0x2004)))
         for vid, pid in pairs:
-            for page in (0xFF04, 0xFF00, 0xFF01, 0xFF0B):
+            for page in (0xFF04, 0xFF00, 0xFF01, 0xFF02, 0xFF0B):
                 with self.subTest(vid=vid, pid=pid, page=page), self.fixture(
                         [identity(), reply()], [self.entry(vendor_id=vid, product_id=pid,
                                                           usage_page=page)]) as bus:
@@ -325,6 +325,116 @@ class Mchose41e4KeyboardTests(MchoseByKeyboardTests):
                 bus.now = now
                 self.assertEqual(len(provider.poll()), 1)
                 self.assertEqual(len(bus.writes), expected)
+
+
+class Mchose41e4G98V2KeyboardTests(unittest.TestCase):
+    """41E4:2004 (#1142 G98 V2 descriptor): FF00:0001 markers + unique FF02:0002 BY transport."""
+
+    def receiver_inventory(self, physical="receiver-2004", product="MCHOSE 2.4G Wireless"):
+        base = dict(vendor_id=0x41E4, product_id=0x2004, product_string=product,
+                    physical_id=physical)
+        return [
+            # Exact #1142 MI_00 + MI_01 Col01..Col09 layout
+            dict(base, path=b"mi00", usage_page=0x0001, usage=0x0006,
+                 input_report_length=9, output_report_length=2),
+            dict(base, path=b"col01-ff02", usage_page=0xFF02, usage=0x0002,
+                 input_report_length=20, output_report_length=20,
+                 input_report_sizes={"19": 20}, output_report_sizes={"19": 20}),
+            dict(base, path=b"col02", usage_page=0x0001, usage=0x0080, input_report_length=2),
+            dict(base, path=b"col03", usage_page=0x000C, usage=0x0001, input_report_length=3),
+            dict(base, path=b"col04-ff02-01", usage_page=0xFF02, usage=0x0001, input_report_length=4),
+            dict(base, path=b"col05", usage_page=0x0001, usage=0x0006, input_report_length=16),
+            dict(base, path=b"col06-ff00", usage_page=0xFF00, usage=0x0001,
+                 input_report_length=0, output_report_length=0, feature_report_length=6),
+            dict(base, path=b"col07-ff00", usage_page=0xFF00, usage=0x0001,
+                 input_report_length=0, output_report_length=0, feature_report_length=1032),
+            dict(base, path=b"col08-ff01", usage_page=0xFF01, usage=0x0001,
+                 input_report_length=0, output_report_length=0, feature_report_length=8),
+            dict(base, path=b"col09", usage_page=0x0001, usage=0x0002, input_report_length=8),
+        ]
+
+    def test_issue_1142_layout_opens_only_ff02_and_identifies_g98_v2_family(self):
+        for code, expected in (("0a0000000018", "MCHOSE G98 V2"),
+                               ("0a0000000003", "MCHOSE G98 Pro"),
+                               ("0a000000002b", "MCHOSE UT98")):
+            with self.subTest(expected=expected), fixture(
+                    [identity(code), reply(80, 0x10)], self.receiver_inventory()) as bus:
+                status, = P().poll()
+                self.assertEqual((status.name, status.kind, status.level, status.charging),
+                                 (expected, "keyboard", 80, True))
+                self.assertEqual(status.verification_level, "C")
+                self.assertTrue(status.charging_known)
+                self.assertEqual(bus.opened, [b"col01-ff02"])
+                self.assertEqual(bus.opened, bus.closed)
+                self.assertEqual([frame for _, frame in bus.writes],
+                                 [M.identity_request(), M.make_request()])
+
+    def test_unknown_model_on_41e4_2004_never_sends_battery_until_replug(self):
+        provider = P()
+        inv = self.receiver_inventory()
+        with fixture([identity("000000000000"), reply(80)], inv) as bus:
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual([frame for _, frame in bus.writes], [M.identity_request()])
+        with fixture([identity("0a0000000018"), reply(80)], inv) as bus:
+            self.assertEqual(provider.poll(), [])
+            self.assertEqual(bus.writes, [])
+        with fixture([], []):
+            self.assertEqual(provider.poll(), [])
+        with fixture([identity("0a0000000018"), reply(80)], inv) as bus:
+            status, = provider.poll()
+            self.assertEqual((status.name, status.level), ("MCHOSE G98 V2", 80))
+
+    def test_41e4_2004_rejects_missing_marker_ambiguity_names_and_unproven_reports(self):
+        inv = self.receiver_inventory()
+        ff00 = inv[6]
+        ff02 = inv[1]
+        invalid_cases = [
+            # Missing FF00:0001 marker (FF02:0002 alone)
+            [ff02],
+            # FF00:0001 carrying 20B report without FF02:0002
+            [dict(ff00, input_report_length=20, output_report_length=20,
+                  input_report_sizes={"19": 20}, output_report_sizes={"19": 20})],
+            # FF04:0002 instead of FF00:0001 + FF02:0002
+            [dict(ff02, usage_page=0xFF04, usage=0x0002)],
+            # Duplicate FF02:0002 transport
+            [ff00, ff02, dict(ff02, path=b"col01-dup")],
+            # Missing or mismatched physical_id
+            [dict(ff00, physical_id=""), dict(ff02, physical_id="")],
+            [dict(ff00, physical_id="other-receiver"), ff02],
+            # Non-generic product name on transport or any FF00 marker
+            [ff00, dict(ff02, product_string="MCHOSE G98 V2")],
+            [dict(ff00, product_string="MCHOSE G98 V2"), ff02],
+            # Missing/incompatible report proof on FF02:0002
+            [ff00, dict(ff02, input_report_sizes=None)],
+            [ff00, dict(ff02, output_report_sizes={"19": 19})],
+            [ff00, dict(ff02, input_report_sizes={"19": 20, "6": 20})],
+            [ff00, dict(ff02, output_report_length=64)],
+            [ff00, dict(ff02, path=b"")],
+            # Crossed VID:PID (3554:2004)
+            [dict(ff00, vendor_id=0x3554), dict(ff02, vendor_id=0x3554)],
+            # Mixed 2001 + 2004 PIDs under same physical_id
+            [ff00, ff02, entry("receiver-2004", vendor_id=0x41E4, product_id=0x2001,
+                               product_string="MCHOSE 2.4G Wireless")],
+        ]
+        for bad in invalid_cases:
+            with self.subTest(bad=bad), fixture([identity("0a0000000018"), reply(80)], bad) as bus:
+                self.assertEqual(P().poll(), [])
+                self.assertEqual((bus.opened, bus.writes), ([], []))
+
+    def test_41e4_2004_coexists_with_2001_and_fa09(self):
+        fa09 = entry("rx-fa09")
+        m2001 = entry("rx-2001", vendor_id=0x41E4, product_id=0x2001,
+                      product_string="MCHOSE 2.4G Wireless")
+        m2004 = self.receiver_inventory("rx-2004")
+        provider = P()
+        with fixture([identity("0300000001c6"), reply(70),
+                      identity("03000000021c"), reply(60),
+                      identity("0a0000000018"), reply(80)],
+                     [fa09, m2001] + m2004) as bus:
+            statuses = provider.poll()
+        self.assertEqual([(s.name, s.level) for s in statuses],
+                         [("MCHOSE X75 V2", 70), ("MCHOSE G87", 60), ("MCHOSE G98 V2", 80)])
+        self.assertEqual(len(bus.writes), 6)
 
 
 class SharedFa09Tests(unittest.TestCase):
