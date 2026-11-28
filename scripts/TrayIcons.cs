@@ -35,8 +35,10 @@ namespace AtkBatteryTray {
             if(groupName!=null){
                 if(selected==null)tooltip=groupName+"：没有已连接的设备";
                 else {
+                    string name=String.IsNullOrWhiteSpace(selected.Name)?"无线设备":selected.Name;
                     string prefix=groupName+"：",suffix=" "+(battery.Percent.HasValue?(battery.Approximate?"约":"")+battery.Percent+"%":"--")+(battery.Percent.HasValue&&!battery.Fresh?"（历史读数）":battery.Charging?" · 充电中":"");
-                    tooltip=prefix+Fit(selected.Name,63-prefix.Length-suffix.Length)+suffix;
+                    int budget=63-prefix.Length-suffix.Length;
+                    tooltip=budget>0?prefix+Fit(name,budget)+suffix:Fit(prefix+name+suffix,63);
                 }
             }else {
                 var text=new StringBuilder(selected==null?"无线设备":battery.TooltipFor(selected.Name));bool extra=false;

@@ -13,7 +13,8 @@ namespace AtkBattery {
         [DataMember(Order=2)] public string Source="lowest";
         [DataMember(Order=3,EmitDefaultValue=false)] public string DeviceId;
         [DataMember(Order=4)] public List<string> Members=new List<string>();
-        public TrayGroup Clone(){return new TrayGroup {Id=Id,Name=Name,Source=Source,DeviceId=DeviceId,Members=Members==null?new List<string>():new List<string>(Members)};}
+        [DataMember(Order=5,EmitDefaultValue=false)] public string IconStyle;
+        public TrayGroup Clone(){return new TrayGroup {Id=Id,Name=Name,Source=Source,DeviceId=DeviceId,Members=Members==null?new List<string>():new List<string>(Members),IconStyle=IconStyle};}
     }
     internal static class TrayConfiguration {
         internal const string FirstId="g1",FirstName="托盘图标 1";
@@ -28,19 +29,34 @@ namespace AtkBattery {
             if(value.Length>12)value=value.Substring(0,Char.IsHighSurrogate(value[11])?11:12);
             return value;
         }
-        internal static readonly string[] TrayIconStyleKeys={"number","badge","minimal","device"};
-        internal static readonly string[] TrayIconStyleNames={"圆形数字","圆角白字","纯数字","设备图标"};
+        internal static readonly string[] TrayIconStyleKeys={"number","badge","minimal","device_number","device"};
+        internal static readonly string[] TrayIconStyleNames={"圆形数字","圆角白字","纯数字","设备+数字","设备图标"};
+        internal static readonly string[] GroupTrayIconStyleKeys={"","number","badge","minimal","device_number","device"};
+        internal static readonly string[] GroupTrayIconStyleNames={"跟随全局","圆形数字","圆角白字","纯数字","设备+数字","设备图标"};
         internal static string NormalizeTrayIconStyle(string style){
-            if(style=="device"||style=="badge"||style=="minimal")return style;
+            if(style=="device"||style=="badge"||style=="minimal"||style=="device_number")return style;
             return "number";
+        }
+        internal static string NormalizeGroupTrayIconStyle(string style){
+            if(style=="number"||style=="device"||style=="badge"||style=="minimal"||style=="device_number")return style;
+            return null;
+        }
+        internal static string EffectiveGroupTrayIconStyle(AudioBindings pref,TrayGroup group){
+            string groupStyle=group==null?null:NormalizeGroupTrayIconStyle(group.IconStyle);
+            return groupStyle??NormalizeTrayIconStyle(pref==null?null:pref.TrayIconStyle);
         }
         internal static string TrayIconStyleLabel(string style){
             switch(NormalizeTrayIconStyle(style)){
                 case "badge": return "圆角白字";
                 case "minimal": return "纯数字";
+                case "device_number": return "设备+数字";
                 case "device": return "设备图标";
                 default: return "圆形数字";
             }
+        }
+        internal static string GroupTrayIconStyleLabel(string groupStyle,string globalStyle){
+            string normalized=NormalizeGroupTrayIconStyle(groupStyle);
+            return normalized==null?"跟随全局（"+TrayIconStyleLabel(globalStyle)+"）":TrayIconStyleLabel(normalized);
         }
         internal static void Normalize(AudioBindings pref){
             pref.TrayIconStyle=NormalizeTrayIconStyle(pref.TrayIconStyle);
@@ -50,6 +66,7 @@ namespace AtkBattery {
                 if(group==null||!ValidId(group.Id)||group.Id==FirstId||!ids.Add(group.Id))continue;
                 var next=group.Clone();next.Name=CleanName(next.Name,"托盘图标 "+(groups.Count+2));
                 next.Source=next.Source=="active"?"active":"lowest";if(!ValidId(next.DeviceId))next.DeviceId=null;
+                next.IconStyle=NormalizeGroupTrayIconStyle(next.IconStyle);
                 next.Members.Clear();foreach(string id in group.Members??new List<string>()){
                     if(next.Members.Count==64)break;
                     if(ValidId(id)&&members.Add(id))next.Members.Add(id);
@@ -65,7 +82,7 @@ namespace AtkBattery {
             var groups=root["TrayGroups"];
             if(groups!=null&&groups.GetAttribute("type")=="array")foreach(XmlNode node in groups.ChildNodes){
                 var item=node as XmlElement;if(item==null||item.GetAttribute("type")!="object")continue;
-                var group=new TrayGroup {Id=ReadString(item["Id"]),Name=ReadString(item["Name"]),Source=ReadString(item["Source"]),DeviceId=ReadString(item["DeviceId"])};
+                var group=new TrayGroup {Id=ReadString(item["Id"]),Name=ReadString(item["Name"]),Source=ReadString(item["Source"]),DeviceId=ReadString(item["DeviceId"]),IconStyle=ReadString(item["IconStyle"])};
                 var list=item["Members"];if(list!=null&&list.GetAttribute("type")=="array")foreach(XmlNode member in list.ChildNodes){string id=ReadString(member as XmlElement);if(id!=null)group.Members.Add(id);}
                 pref.TrayGroups.Add(group);
             }

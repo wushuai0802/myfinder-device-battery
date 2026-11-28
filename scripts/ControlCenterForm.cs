@@ -1263,6 +1263,12 @@ namespace AtkBatteryTray {
                     } else if (style == "minimal") {
                         var rect = new RectangleF(Width - 120, Height - 30, 26, 20);
                         CompactRenderer.DrawLabel(g, "85", rect, 12.5f, true, TrayGlyph.LevelColor(85, dark), StringAlignment.Center);
+                    } else if (style == "device_number") {
+                        var iconBox = new RectangleF(Width - 115, Height - 34, 14, 10);
+                        CompactRenderer.DrawSymbol(g, "mouse", iconBox, tbFg);
+                        var pill = new RectangleF(Width - 119, Height - 22, 22, 13);
+                        CompactRenderer.Fill(g, pill, TrayGlyph.BadgeFill(85, false), 3.5f);
+                        CompactRenderer.DrawLabel(g, "85", pill, 9.5f, true, Color.White, StringAlignment.Center);
                     } else if (style == "device") {
                         var iconBox = new RectangleF(Width - 117, Height - 31, 18, 13);
                         CompactRenderer.DrawSymbol(g, "mouse", iconBox, tbFg);
@@ -1637,6 +1643,12 @@ namespace AtkBatteryTray {
             sb.Append(currentPage).Append('|').Append(selectedDeviceKey ?? "").Append('|').Append(selectedPlacementCard).Append('|');
             sb.Append(pref.Theme).Append('|').Append(pref.ThemeStyle).Append('|').Append(pref.PanelLayout).Append('|').Append(pref.FontSize).Append('|');
             sb.Append(pref.ReducedMotion).Append('|').Append(pref.HideTrayIcon).Append('|').Append(pref.TrayIconStyle).Append('|').Append(pref.TraySource).Append('|').Append(pref.TrayDeviceId ?? "").Append('|');
+            if (pref.TrayGroups != null) {
+                foreach (var g in pref.TrayGroups) {
+                    if (g == null) continue;
+                    sb.Append("tg:").Append(g.Id ?? "").Append(':').Append(g.Name ?? "").Append(':').Append(g.IconStyle ?? "").Append(';');
+                }
+            }
             sb.Append(pref.LowBatteryNotifications).Append('|').Append(pref.WarningThreshold).Append('|').Append(pref.BackgroundSeconds).Append('|');
             sb.Append(pref.RememberReadings).Append('|').Append(pref.AutoDetectMoreDevices).Append('|').Append(pref.AutoCheckUpdates).Append('|');
             sb.Append(pref.ShowUpdateBadge).Append('|').Append(pref.IncludeBetaUpdates).Append('|').Append(pref.CheckFeedbackReplies).Append('|');
@@ -2401,7 +2413,7 @@ namespace AtkBatteryTray {
                 rows.Add(CreateSettingRow("显示托盘图标", trayToggleDesc, showTrayToggle, false));
 
                 int iconStyleIdx = Math.Max(0, Array.IndexOf(TrayConfiguration.TrayIconStyleKeys, TrayConfiguration.NormalizeTrayIconStyle(pref.TrayIconStyle)));
-                rows.Add(CreateSettingRow("托盘图标样式", "选择圆形数字、圆角白字、纯数字或设备图标，上方示意图实时预览", CreateSegmentedChoices(TrayConfiguration.TrayIconStyleNames, iconStyleIdx, delegate(int idx) {
+                rows.Add(CreateSettingRow("托盘图标样式", "选择圆形数字、圆角白字、纯数字、设备+数字或设备图标，上方示意图实时预览", CreateSegmentedChoices(TrayConfiguration.TrayIconStyleNames, iconStyleIdx, delegate(int idx) {
                     string nextStyle = TrayConfiguration.TrayIconStyleKeys[idx];
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TrayIconStyle = nextStyle; }, delegate {
                         preview.UpdatePreview(palette, dark, selectedPlacementCard, nextStyle);
@@ -2413,6 +2425,24 @@ namespace AtkBatteryTray {
                 rows.Add(CreateSettingRow("主托盘显示规则", String.IsNullOrEmpty(pref.TrayDeviceId) ? "当未固定单台设备时生效" : "当前已固定单台设备，点击任意规则可解除固定", CreateSegmentedChoices(ruleLabels, String.IsNullOrEmpty(pref.TrayDeviceId) ? ruleIdx : -1, delegate(int idx) {
                     UpdatePreferenceInPlace(delegate(AudioBindings p) { p.TraySource = ruleKeys[idx]; p.TrayDeviceId = null; });
                 }), true));
+                if (pref.TrayGroups != null && pref.TrayGroups.Count > 0) {
+                    foreach (var grp in pref.TrayGroups) {
+                        string groupId = grp.Id;
+                        string normalizedGroupStyle = TrayConfiguration.NormalizeGroupTrayIconStyle(grp.IconStyle);
+                        int grpStyleIdx = Math.Max(0, Array.IndexOf(TrayConfiguration.GroupTrayIconStyleKeys, normalizedGroupStyle ?? ""));
+                        string grpSub = "此托盘分组的独立图标样式，设为「跟随全局」则与上方默认样式保持一致";
+                        rows.Add(CreateSettingRow("分组样式 · " + grp.Name, grpSub, CreateSegmentedChoices(TrayConfiguration.GroupTrayIconStyleNames, grpStyleIdx, delegate(int idx) {
+                            string nextGroupKey = TrayConfiguration.GroupTrayIconStyleKeys[idx];
+                            UpdatePreferenceInPlace(delegate(AudioBindings p) {
+                                var target = TrayConfiguration.Find(p, groupId);
+                                if (target != null) target.IconStyle = TrayConfiguration.NormalizeGroupTrayIconStyle(nextGroupKey);
+                            }, delegate {
+                                string previewStyle = String.IsNullOrEmpty(nextGroupKey) ? DeviceSettings.Current.TrayIconStyle : nextGroupKey;
+                                preview.UpdatePreview(palette, dark, selectedPlacementCard, previewStyle);
+                            });
+                        }), true));
+                    }
+                }
             } else if (selectedPlacementCard == 1) {
                 var w = pref.DesktopWidget;
                 var enableToggle = new ControlCenterToggle(palette, dark) { Checked = w.Enabled };

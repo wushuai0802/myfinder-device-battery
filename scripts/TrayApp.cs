@@ -378,7 +378,7 @@ namespace AtkBatteryTray {
                     pref.PanelLayout=PanelLayouts.Keys[id-470];navigation.DeviceScroll=0;owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
                 if((id==460||id==461)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==228){pref.FontSize=id==461?"large":"normal";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
-                if(id>=450&&id<=453&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){string[] styleOrder={"number","device","badge","minimal"};pref.TrayIconStyle=styleOrder[id-450];owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
+                if(id>=450&&id<=454&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){string[] styleOrder={"number","device","badge","minimal","device_number"};pref.TrayIconStyle=styleOrder[id-450];owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
                 if(id>=440&&id<440+ThemePalette.Keys.Length&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==223) {
                     pref.ThemeStyle=ThemePalette.Keys[id-440];owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
@@ -426,6 +426,7 @@ namespace AtkBatteryTray {
             if(action=="tray:rules"){
                 if(navigation.TrayGroupKey==TrayConfiguration.FirstId){navigation.PreferenceAction=211;Go(PopupPage.ChoosePreference);}else Go(PopupPage.TrayRules);return;
             }
+            if(action=="tray:style"){Go(PopupPage.TrayGroupStyle);return;}
             if(action=="tray:members"){Go(PopupPage.TrayMembers);return;}
             if(action=="tray:delete"){Go(PopupPage.ConfirmTrayDelete);return;}
             if(action=="tray:rename"){EditAlias(false,null,control.GroupKey);UpdateLayoutSize();Invalidate();return;}
@@ -437,6 +438,7 @@ namespace AtkBatteryTray {
                 if(action=="tray:member")TrayConfiguration.Move(pref,control.DeviceKey,group.Members.Contains(control.DeviceKey)?TrayConfiguration.FirstId:group.Id);
                 else if(action=="tray:rule"){group.Source=control.TargetToken=="active"?"active":"lowest";group.DeviceId=null;back=true;}
                 else if(action=="tray:group-pin"&&group.Members.Contains(control.DeviceKey)){group.DeviceId=control.DeviceKey;back=true;}
+                else if(action=="tray:group-style"){group.IconStyle=TrayConfiguration.NormalizeGroupTrayIconStyle(control.TargetToken);back=true;}
                 else return;
             }
             owner.SavePreferences(pref);owner.ConfigurationChanged(false);
@@ -799,7 +801,7 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(preferences.IncludeBetaUpdates).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb()).Append('|').Append(preferences.CheckFeedbackReplies).Append('|').Append(owner.FeedbackReplies.Store.Unread);
             visible.Append('|').Append(preferences.AutoDetectMoreDevices).Append('|').Append(owner.IsProbeToggleBusy).Append('|').Append(owner.IsFamilyOpBusy).Append('|').Append(owner.StoppedFamilyDeviceCount).Append('|').Append(owner.EnablingFamilyKey).Append('|').Append(updatedNotice);
             visible.Append('|').Append(preferences.TrayIconStyle).Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint);
-            foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId);foreach(string id in group.Members)visible.Append('|').Append(id);}
+            foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId).Append('|').Append(group.IconStyle??"");foreach(string id in group.Members)visible.Append('|').Append(id);}
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
             if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name).Append('|').Append(device.FormFactor);
             visible.Append('|').Append(owner.DesiredVolume).Append('|').Append(hoverAction).Append('|').Append(pressedAction);
@@ -1325,7 +1327,7 @@ namespace AtkBatteryTray {
                     string previous;groupDeviceKeys.TryGetValue(group.Id,out previous);
                     var selected=TraySelection.Select(members,group.Source,group.DeviceId,activePhysicalId,activeNative,previous,true);
                     groupDeviceKeys[group.Id]=selected==null?null:selected.Id;
-                    trayIcons.For(group.Id).Update(TraySelection.Present(members,selected,group.Name),preferences.TrayIconStyle,dark,size);
+                    trayIcons.For(group.Id).Update(TraySelection.Present(members,selected,group.Name),TrayConfiguration.EffectiveGroupTrayIconStyle(preferences,group),dark,size);
                 }
             }
             if(details!=null&&!details.IsDisposed)details.SyncDevices();

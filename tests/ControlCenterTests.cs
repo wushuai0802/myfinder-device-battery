@@ -230,13 +230,27 @@ static class ControlCenterTests {
             var openDirBtn = form.Controls.Find("OpenInstallDirectoryButton", true);
             Check(installRow.Length == 1 && openDirBtn.Length == 1, "settings page displays install location row and open directory button");
 
-            foreach (string iconStyle in new[] { "badge", "minimal", "device", "number" }) {
+            foreach (string iconStyle in new[] { "badge", "minimal", "device_number", "device", "number" }) {
                 var pStyle = DeviceSettings.Current;
                 pStyle.TrayIconStyle = iconStyle;
                 f.Owner.SavePreferences(pStyle);
                 form.SelectPage(ControlCenterPage.Placement);
                 Application.DoEvents();
                 Check(DeviceSettings.Current.TrayIconStyle == iconStyle, "placement page renders cleanly with tray icon style " + iconStyle);
+            }
+
+            // #1112: per-group icon style rows render cleanly on Placement page when extra tray groups exist.
+            var pGroups = DeviceSettings.Current;
+            var extraGroup = TrayConfiguration.Add(pGroups);
+            extraGroup.Name = "耳机组";
+            extraGroup.IconStyle = "device_number";
+            f.Owner.SavePreferences(pGroups);
+            form.SelectPage(ControlCenterPage.Placement);
+            Application.DoEvents();
+            Check(DeviceSettings.Current.TrayGroups.Count == 1 && DeviceSettings.Current.TrayGroups[0].IconStyle == "device_number", "placement page renders per-group style rows cleanly");
+            using (var bmp = new Bitmap(form.Width, form.Height)) {
+                form.DrawToBitmap(bmp, new Rectangle(0, 0, form.Width, form.Height));
+                Check(bmp.Width >= 820 && bmp.Height >= 560, "placement page with per-group style rows draws cleanly");
             }
             form.Close();
             Application.DoEvents();
