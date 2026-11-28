@@ -22,7 +22,7 @@ namespace AtkBatteryTray {
         public static int CardHeightExpanded {get{return RingLayout?RingGeometry.CardHeight(8):BarGeometry.CardHeight(8);}}
         public static int HeadsetCardHeight {get{return CardHeightNormal;}}
         internal static int FooterTopGap {get{return RingLayout?0:6;}}
-        internal static int FooterCardHeight {get{return LargeFont?38:34;}}
+        internal static int FooterCardHeight {get{return LargeFont?36:32;}}
         public static int FooterHeight {get{return FooterCardHeight+FooterTopGap;}}
         internal static int HeaderHeight {get{return RingLayout?RingGeometry.HeaderHeight:BarGeometry.HeaderHeight;}}
         internal static int DeviceGap {get{return RingLayout?1:CardGap;}}
@@ -118,9 +118,9 @@ namespace AtkBatteryTray {
         internal static float FooterCardTop(float top){return top+FooterTopGap;}
         internal static RectangleF FooterSurfaceRect(float top){return PanelCardRect(FooterCardTop(top),FooterCardHeight);}
         static float FooterButtonTop(float top,float height){var surface=FooterSurfaceRect(top);return (float)Math.Round(surface.Y+(surface.Height-height)/2f);}
-        internal static RectangleF FooterRefreshRect(float top){float w=LargeFont?28f:26f,h=LargeFont?26f:24f;return new RectangleF(6f,FooterButtonTop(top,h),w,h);}
-        internal static RectangleF FooterMoreRect(float top){float w=LargeFont?68f:60f,h=LargeFont?26f:24f;return new RectangleF(PanelWidth-w-7f,FooterButtonTop(top,h),w,h);}
-        internal static RectangleF FooterPageRect(float top,bool next){float s=LargeFont?26f:24f;float moreLeft=FooterMoreRect(top).Left;float x=next?(moreLeft-4f-s):(moreLeft-4f-s-3f-s);return new RectangleF(x,FooterButtonTop(top,s),s,s);}
+        internal static RectangleF FooterRefreshRect(float top){float w=LargeFont?28f:26f,h=LargeFont?24f:22f;return new RectangleF(6f,FooterButtonTop(top,h),w,h);}
+        internal static RectangleF FooterMoreRect(float top){float w=LargeFont?68f:60f,h=LargeFont?24f:22f;return new RectangleF(PanelWidth-w-7f,FooterButtonTop(top,h),w,h);}
+        internal static RectangleF FooterPageRect(float top,bool next){float w=LargeFont?26f:24f,h=LargeFont?24f:22f;float moreLeft=FooterMoreRect(top).Left;float x=next?(moreLeft-4f-w):(moreLeft-4f-w-3f-w);return new RectangleF(x,FooterButtonTop(top,h),w,h);}
         internal static float FooterTextRight(bool paged){return (paged?FooterPageRect(0,false).Left:FooterMoreRect(0).Left)-6f;}
         internal static RectangleF FooterTextRect(float top,float rightLimit){var surface=FooterSurfaceRect(top);float left=FooterRefreshRect(top).Right+4f;return new RectangleF(left,surface.Y+2f,Math.Max(1f,rightLimit-left),Math.Max(1f,surface.Height-4f));}
         public static RectangleF RefreshRectFor(bool headset,DpiConfig dpi){return FooterRefreshRect(FooterRectFor(headset,dpi).Y);}

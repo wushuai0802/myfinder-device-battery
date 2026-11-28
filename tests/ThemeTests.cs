@@ -266,7 +266,7 @@ static class ThemeTests {
     static void Geometry(){
         Check(VisualDesign.PanelWidth==260&&VisualDesign.BatteryBarRect(0).Height==4&&VisualDesign.BatteryDigitSize==19&&VisualDesign.MainCardRadius==10&&VisualDesign.PanelRadius==12,"main geometry changes without changing dialog radius");
         using(var f=new Fixture()){
-            var rows=PopupPages.Build(f.Owner,new PopupNavigation(),true);var expected=new Dictionary<int,RectangleF>{{0,new RectangleF(6,274,26,24)},{1,new RectangleF(193,274,60,24)},{2,new RectangleF(10,6,154,44)},{4,new RectangleF(168,6,80,44)},{200,new RectangleF(10,120,240,44)},{100,new RectangleF(12,180,97,26)},{101,new RectangleF(111,180,97,26)},{102,new RectangleF(216,178,34,30)},{240,new RectangleF(8,236,216,20)},{241,new RectangleF(228,234,28,24)}};
+            var rows=PopupPages.Build(f.Owner,new PopupNavigation(),true);var expected=new Dictionary<int,RectangleF>{{0,new RectangleF(6,274,26,22)},{1,new RectangleF(193,274,60,22)},{2,new RectangleF(10,6,154,44)},{4,new RectangleF(168,6,80,44)},{200,new RectangleF(10,120,240,44)},{100,new RectangleF(12,180,97,26)},{101,new RectangleF(111,180,97,26)},{102,new RectangleF(216,178,34,30)},{240,new RectangleF(8,236,216,20)},{241,new RectangleF(228,234,28,24)}};
             for(int i=0;i<4;i++)expected[10+i]=new RectangleF(12+i*59.5f,66,57.5f,26);
             foreach(var pair in expected){var row=rows.Find(delegate(PopupControl c){return c.Id==pair.Key;});Check(row!=null&&row.Rect==pair.Value,"classic hit region matches the redesigned geometry exactly: "+pair.Key);}
             f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];f.Owner.WirelessDevices=new[]{Device("theme-one","很长很长的设备名称",75)};

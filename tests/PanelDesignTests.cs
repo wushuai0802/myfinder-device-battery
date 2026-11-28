@@ -621,7 +621,7 @@ static class PanelDesignTests {
                 try{using(var image=new Bitmap(layout.Size.Width,layout.Size.Height))using(var g=Graphics.FromImage(image))CompactRenderer.PaintWireless(g,owner,layout,false,new PanelFeedback());}finally{InteractionLayout.Observer=null;}
                 Check(layout.Paged&&layout.Cards.Count==1,"bounded device pages reserve the volume and footer");
                 Check(layout.Size.Height<=maximum,"paged device panel stays within its available height");
-                foreach(int id in new[]{0,1,902,903}){var row=rows.Find(delegate(PopupControl item){return item.Id==id;});var region=regions.Find(delegate(InteractionRegion item){return item.Id==id;});var expectedSize=id==1?new SizeF(font=="large"?68:60,font=="large"?26:24):id==0?new SizeF(font=="large"?28:26,font=="large"?26:24):new SizeF(font=="large"?26:24,font=="large"?26:24);Check(row!=null&&region!=null&&row.Rect==region.Limit&&row.Rect.Size==expectedSize,"pagination, refresh and more pill use their actual drawing rectangles");}
+                foreach(int id in new[]{0,1,902,903}){var row=rows.Find(delegate(PopupControl item){return item.Id==id;});var region=regions.Find(delegate(InteractionRegion item){return item.Id==id;});var expectedSize=id==1?new SizeF(font=="large"?68:60,font=="large"?24:22):id==0?new SizeF(font=="large"?28:26,font=="large"?24:22):new SizeF(font=="large"?26:24,font=="large"?24:22);Check(row!=null&&region!=null&&row.Rect==region.Limit&&row.Rect.Size==expectedSize,"pagination, refresh and more pill use their actual drawing rectangles");}
             }
         }}
     }
@@ -645,7 +645,7 @@ static class PanelDesignTests {
                 Check(!labels.Exists(delegate(DrawnLabel label){return label.Text.StartsWith("系统音量 ·");}),"main volume has no device-name row");
             }}finally{CompactRenderer.LabelObserver=null;}
             Check(VisualDesign.SystemVolumeHeight==(font=="large"?40:36)&&VisualDesign.SystemVolumeHeightFor(true)==(font=="large"?36:32),"expanded and collapsed volume heights follow the design");var mic=VisualDesign.MicrophoneMuteRectFor(owner.Dpi);Check(mic.Width==(font=="large"?38:34),"icon-only microphone is 34/38px wide");
-            Check(VisualDesign.FooterRefreshRect(0).Size==new SizeF(font=="large"?28:26,font=="large"?26:24)&&VisualDesign.FooterMoreRect(0).Size==new SizeF(font=="large"?68:60,font=="large"?26:24),"footer refresh icon and wider more pill follow font sizing");
+            Check(VisualDesign.FooterRefreshRect(0).Size==new SizeF(font=="large"?28:26,font=="large"?24:22)&&VisualDesign.FooterMoreRect(0).Size==new SizeF(font=="large"?68:60,font=="large"?24:22),"footer refresh icon and wider more pill follow font sizing");
             var track=VisualDesign.MainVolumeTrack(VisualDesign.VolumeSliderRect(VisualDesign.SystemVolumeRectFor(true,owner.Dpi)));Check(track.Height==4,"system volume has a four-pixel track");
             foreach(int value in new[]{0,50,100}){
                 owner.Audio.OutputVolumePercent=value;
