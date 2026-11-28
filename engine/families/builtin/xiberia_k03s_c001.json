@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "id": "xiberia_k03s_c001",
+  "name": "XIBERIA K03S Wireless 7.1 (36F9:C001)",
+  "kind": "headset",
+  "verificationLevel": "C",
+  "source": {
+    "project": "MyFinder Issue #1226",
+    "url": "https://github.com/wushuai0802/myfinder-device-battery/issues/1226",
+    "revision": "issue-1226",
+    "license": "Protocol facts only (user hardware verification); matches fifine_ht6 55 65 01 layout",
+    "origin": "Issue #1226 (@wang39512) Windows 11 hardware verification on 36F9:C001 FF90:0001",
+    "evidence": "#1226 verified 36F9:C001 on FF90:0001 (Input 0x55 64B, Constant-only Output 64B): send 55 65 01, reply 55 65 <pct> <state> (79% live). 0x02=discharging 1..100, 0x04=full 100, 0x1A=off/asleep, 0x00/0x03=external power (no percent)."
+  },
+  "devices": [
+    {"vendorId": "36F9", "productId": "C001", "name": "XIBERIA K03S", "productString": "XIBERIA K03S Wireless 7.1"}
+  ],
+  "collections": [
+    {"usagePage": "FF90", "usage": "0001"}
+  ],
+  "reports": {
+    "input": {"id": "55", "length": 64},
+    "output": {"id": "55", "length": 64}
+  },
+  "reads": [
+    {
+      "name": "battery_mchose",
+      "transport": "output",
+      "request": "55 65 01",
+      "timeoutMs": 800,
+      "maxReads": 32,
+      "reply": {
+        "length": 64,
+        "match": [
+          {"at": 0, "eq": "55"},
+          {"at": 1, "eq": "65"}
+        ],
+        "asleep": [
+          {"at": 3, "eq": "1A"}
+        ],
+        "variants": [
+          {
+            "when": [{"at": 3, "eq": "02"}],
+            "percent": {"at": 2, "min": 1, "max": 100}
+          },
+          {
+            "when": [{"at": 3, "eq": "04"}],
+            "percent": {"at": 2, "min": 100, "max": 100}
+          }
+        ]
+      }
+    }
+  ],
+  "standAsideFor": ["xiberia hub.exe", "xiberia x hub.exe"]
+}

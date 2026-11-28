@@ -104,7 +104,7 @@
     {"provider":"steelseries","name":"SteelSeries 已列明鼠标与耳机","kinds":["mouse","headset"],"verificationLevel":"C","source":"engine/providers/steelseries.py"},
     {"provider":"barracuda","name":"Razer Barracuda Pro","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/barracuda.py"},
     {"provider":"asus","name":"ASUS ROG / TUF 已列明鼠标","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/asus.py"},
-    {"provider":"asus_headset","name":"ROG Delta II（棱镜 2）2.4G","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/asus_headset.py","matchScope":"仅 0B05:1AFA 的 FF00:0001 集合，要求逐方向证明 CC 报告长度；获取电量和充电状态；休眠无新读数。待本版实机确认","reference":"engine/upstream-protocols.md#rog-delta-ii-24g"},
+    {"provider":"asus_headset","name":"ROG Delta II（棱镜 2）/ ROG Pelta（2.4G）","kinds":["headset"],"verificationLevel":"C","source":"engine/providers/asus_headset.py","matchScope":"仅 0B05:1AFA（Delta II 2.4G）与 0B05:1B84（ROG Pelta 2.4G）的 FF00:0001 唯一集合，要求匹配 USB 父设备并逐方向证明 CC 报告长度；只发 12 07（电量）与 12 08（充电）两条只读查询，休眠/0xFE 离线无新读数。待本版实机确认","reference":"engine/upstream-protocols.md#rog-delta-ii-24g"},
     {"provider":"asus_azoth","name":"ROG 夜魔原版、魔导士 RX LP、游侠 2 96 无线（OMNI）","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/asus_azoth.py","matchScope":"原版 2.4G 接收器 0B05:1A85 的 MI_01，或 0B05:1ACE 的 MI_02&Col02 键盘通道。仅当 USB 产品名、物理父设备、FF00:0001 集合及双向独立报告长度匹配时读取。OMNI 先从同一接收器 Col01 的逐报告证明接口读取已关联产品编号，确认原版夜魔 1A85、Falchion RX Low Profile 1B06 或 Strix Scope II 96 Wireless 1AB0（PR #123，贡献者实测放电 46%，充电状态暂标未知）后，再从 Col02 发起 12 01 电量查询。分别使用对应百分比字段及充电标记，静默、零值或未知键盘等待下次有效读数。待本版实机验证。","reference":"engine/upstream-protocols.md#rog-azoth-keyboard-battery"},
     {"provider":"asus_omni","name":"ROG OMNI 接收器（鼠标）","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/asus_omni.py","matchScope":"只读候选，待实机验证；仅鼠标；键盘由独立的 asus_azoth 读取器处理；型号名不区分；仅0B05:1ACE（OMNI）和0B05:1AD0（SPEEDNOVA 8K），MI_02&Col03 / FF01:0001，同USB parent唯一目标路径，既有逐ID字节数组证明Input与Output报告03各64字节；最大长度不能代替逐ID证明，不回退其他集合；每轮仅写一次03 12 07加61个零，300ms一次读取、最多4包，不重发；仅64字节03 12 07回显，byte5为1至100、byte10大于0为充电；FF AA、空回复、0及越界无新读数；不查配对表、不发Booster或其他命令，独立parent保留独立卡片；底层传输、冷启动独立查询、休眠/未配对真实回复及设备采样新鲜度未确认","reference":"docs/rog-omni-ghelper.md"},
     {"provider":"gwolves","name":"G-Wolves 已列明型号","kinds":["mouse"],"verificationLevel":"C","source":"engine/providers/gwolves.py"},
@@ -127,7 +127,7 @@
     {"provider":"xinput","name":"Xbox 及兼容 XInput 手柄","kinds":["gamepad"],"verificationLevel":"C","refreshScope":"provider","source":"engine/providers/xinput.py","matchScope":"Windows XInput公开接口，只加载系统xinput1_4.dll，slot 0–3；四档约略电量5/30/65/100%，有线或未知类型不显示百分比，充电未知；维护者曾测Xbox无线适配器slot 0为NIMH/FULL，完整提供者仍待实机复验；蓝牙Xbox优先，按slot升序跳过等量无线档位，启发式不能可靠对应实体手柄","reference":"engine/upstream-protocols.md#windows-xinput-gamepad-battery","precision":"EMPTY/LOW/MEDIUM/FULL是四档估算，不是精确百分比；无设备测量时间"},
     {"provider":"standard_hid","name":"描述符声明的标准HID电量Feature字段","kinds":["mouse","keyboard","device"],"verificationLevel":"C","refreshScope":"provider","source":"engine/standardhid.py","reference":"https://www.usb.org/hid","precision":"依据字段逻辑范围；无充电字段时充电未知"},
     {"provider":"rainyrt","name":"WOB Rainy75 V2（2.4G 接收器 / USB）","kinds":["keyboard"],"verificationLevel":"C","source":"engine/providers/rainyrt.py","matchScope":"仅36B0:3071与36B0:3075的FF60:0061集合，须解析到匹配VID/PID的原生pnp:usb父设备与唯一集合，并由运行时HidP caps或严格原始Report Descriptor证明唯一无编号Input报告0/257字节（含ID槽）；只被动接收每约5秒推送的256字节BE BB帧，绝不写入；帧长00/06/0A/0E字节且以ED结尾，byte3为0至100电量，byte4仅0空闲/1充满/2充电中；首开最多监听1500ms，常开句柄排空取最新，静默保留历史；协议来源官方WOB HUB rainy75v2-wireless-test.html（PR #943），贡献者2.4G实测97%，睡眠/充电中/满电/3075有线与本项目实机待验证","reference":"engine/upstream-protocols.md#wob-rainy75-v2-36b03071--36b03075"},
-    { "provider":"families", "name":"声明式方案族（架构 v2）", "kinds":["headset", "keyboard", "mouse"], "verificationLevel":"C", "source":"engine/providers/families.py", "reference":"docs/design/architecture-v2.md", "matchScope":"仅 engine/families/builtin 中逐项列出的 VID/PID（有产品名的须产品名一致，有接口号的须接口一致），且候选厂商集合在同一物理设备上唯一、按 Windows 报告能力证明了规格书声明的报告 ID 与长度后才发送；只发送规格书中的只读请求（可带只读前置在线查询），按字节、校验和与布局规则校验回复。方案族：XIBERIA（BrimDeck→Voltide→XIBERIA HUB；含 T7 F008、K03S F016、K06S F002 与 T10 F001；36F9:C001 已因官方 X HUB 亦无电量接口降级 D 级停读）、Lofree Flow Lite84（BrimDeck→HaloBattery，05AC:024F 仅产品名 2.4G Wireless Receiver、接口1、FF02 报告08/17）、EWEADN beiyin 接收器（BrimDeck→vigil-watt）、容源接收器 F7 状态查询（BrimDeck→HaloBattery/mousedock/vigil-watt/YesCharge）。西伯利亚 T10 使用型号专属状态查询，机械师 L7 Air 1K（320F:226F）在接收器确认在线后读取电量，雷蛇 BlackShark V3 Pro（1532:0577）在唯一 MI_05 FF14:0001 优先被动接收，静默时按 >=60s 节流发一次只读 0x21 电量查询（不含充电推断），达尔优 2.4G 鼠标接收器（260D:1156，覆盖 CM610 V2 MAX / CM610 MAX / A950 LCD）在 FF02:0002 证明 17 字节 Report 08 并经 08 03 在线门控后读取 08 04 电量与充电状态。均待本项目实机验证。整品牌试读族默认关闭。" }
+    { "provider":"families", "name":"声明式方案族（架构 v2）", "kinds":["headset", "keyboard", "mouse"], "verificationLevel":"C", "source":"engine/providers/families.py", "reference":"docs/design/architecture-v2.md", "matchScope":"仅 engine/families/builtin 中逐项列出的 VID/PID（有产品名的须产品名一致，有接口号的须接口一致），且候选厂商集合在同一物理设备上唯一、按 Windows 报告能力证明了规格书声明的报告 ID 与长度后才发送；只发送规格书中的只读请求（可带只读前置在线查询），按字节、校验和与布局规则校验回复。方案族：XIBERIA（BrimDeck→Voltide→XIBERIA HUB；含 T7 F008、K03S F016、K03S 36F9:C001［用户实机验证，#1226，走 FF90 唯一集合 55 65 01 布局实测 79%，0x02 放电/0x04 满电/0x1A 离线，充电外接电源暂不报电量］、K06S F002 与 T10 F001）、Lofree Flow Lite84（BrimDeck→HaloBattery，05AC:024F 仅产品名 2.4G Wireless Receiver、接口1、FF02 报告08/17）、EWEADN beiyin 接收器（BrimDeck→vigil-watt）、容源接收器 F7 状态查询（BrimDeck→HaloBattery/mousedock/vigil-watt/YesCharge）。西伯利亚 T10 使用型号专属状态查询，机械师 L7 Air 1K（320F:226F）在接收器确认在线后读取电量，雷蛇 BlackShark V3 Pro（1532:0577）在唯一 MI_05 FF14:0001 优先被动接收，静默时按 >=60s 节流发一次只读 0x21 电量查询（不含充电推断），达尔优 2.4G 鼠标接收器（260D:1156，覆盖 CM610 V2 MAX / CM610 MAX / A950 LCD）在 FF02:0002 证明 17 字节 Report 08 并经 08 03 在线门控后读取 08 04 电量与充电状态。均待本项目实机验证。整品牌试读族默认关闭。" }
   ],
   "observedUnsupported": [
     {
@@ -182,33 +182,6 @@
       ],
       "reference": "engine/upstream-protocols.md#xiberia-k03s--k02bs-actions-receiver-10d64801-grade-d-observed-unsupported",
       "notes": "#1107 / #954 / #736 / #789 多位用户与静态取证证实：官方 XIBERIA X HUB V0.3.1.13（及上游 ActHID.dll 分析）仅绑定 VID 36F9 接收器，不识别 10D6:4801；36F9 已知查询均 0 回复，四个集合被动监听 6 秒均 0 帧，且无标准电量页 0x06、蓝牙无 Windows 电量属性。维持 D 级且零发送，待官方新增 PC 协议或公开确凿抓包后再评估。"
-    },
-    {
-      "id": "xiberia_k03s_36f9_c001_observed",
-      "name": "西伯利亚 XIBERIA K03S Wireless 7.1（36F9:C001）",
-      "kind": "headset",
-      "verificationLevel": "D",
-      "compatible": false,
-      "match": {
-        "vendorId": "36F9",
-        "productId": "C001"
-      },
-      "transport": "2.4G 接收器（FF90:0001 / FF82:0001 / FF22:0001）及官方 X HUB 均无 PC 端电量读取接口",
-      "capabilities": [],
-      "observations": [
-        {
-          "connection": "2.4G",
-          "productName": "XIBERIA K03S Wireless 7.1",
-          "usagePage": "FF90",
-          "usage": "0001",
-          "inputBytes": 64,
-          "outputBytes": 64,
-          "reportId": "0x55",
-          "checkedOn": "2026-11-25"
-        }
-      ],
-      "reference": "engine/families/builtin/xiberia.json",
-      "notes": "#1035 用户于 1.4.0-beta.6 及 1.4.1-beta.1（已含 constant-output 证明）实测 FF90:0001 仍无电量返回，且用户实机对照官方 X HUB 亦确认官方软件尚未接入该型号电量读取接口。已移出 xiberia.json 停止无效查询，维持 D 级已观测不支持。"
     },
     {
       "id": "ikf_v11pro_0e6a_0110_observed",

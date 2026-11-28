@@ -294,7 +294,7 @@ class ProviderTests(unittest.TestCase):
 
     def test_zero_send_gates(self):
         cases = {
-            "unlisted pid": [collection(product_id=0xC001)],
+            "unlisted pid": [collection(product_id=0xC002)],
             "wrong product string": [collection(product_string="XIBERIA K03S Pro")],
             "unproven reports": [collection(input_report_sizes=None)],
             "wrong report id": [collection(input_report_sizes={"1": 64}, output_report_sizes={"1": 64})],
@@ -336,11 +336,11 @@ class ProviderTests(unittest.TestCase):
         with patch.object(families, "_families", registry):
             families.set_probe_enabled(False)
             try:
-                self.assertFalse(families.wants_caps(0x36F9, 0xC001, 0xFF90, 0x0001))
-                self.assert_nothing_sent([collection(product_id=0xC001, product_string="")])
+                self.assertFalse(families.wants_caps(0x36F9, 0xC002, 0xFF90, 0x0001))
+                self.assert_nothing_sent([collection(product_id=0xC002, product_string="")])
                 families.set_probe_enabled(True)
-                self.assertTrue(families.wants_caps(0x36F9, 0xC001, 0xFF90, 0x0001))
-                statuses, _ = poll([collection(product_id=0xC001, product_string="")], FakeDevice([frame("55 65 00 3c")]))
+                self.assertTrue(families.wants_caps(0x36F9, 0xC002, 0xFF90, 0x0001))
+                statuses, _ = poll([collection(product_id=0xC002, product_string="")], FakeDevice([frame("55 65 00 3c")]))
                 self.assertEqual(statuses[0].level, 60)
             finally:
                 families.set_probe_enabled(False)
@@ -354,9 +354,55 @@ class IntegrationTests(unittest.TestCase):
 
     def test_topology_asks_for_report_sizes_only_on_family_collections(self):
         self.assertTrue(families.wants_caps(0x36F9, 0xF016, 0xFF90, 0x0001))
-        self.assertFalse(families.wants_caps(0x36F9, 0xC001, 0xFF90, 0x0001))
+        self.assertTrue(families.wants_caps(0x36F9, 0xC001, 0xFF90, 0x0001))
         self.assertFalse(families.wants_caps(0x36F9, 0xF016, 0x0001, 0x0006))
         self.assertFalse(families.wants_caps(0x36F9, 0xC002, 0xFF90, 0x0001))
+
+    def test_xiberia_k03s_c001_mchose_layout_and_constant_output(self):
+        ff90 = collection(
+            product_id=0xC001,
+            product_string="XIBERIA K03S Wireless 7.1",
+            physical_id=r"pnp:usb\vid_36f9&pid_c001\receiver",
+            path=b"c001-ff90",
+            output_report_sizes=None,
+            output_constant_only=True,
+        )
+        ff82 = collection(
+            product_id=0xC001,
+            product_string="XIBERIA K03S Wireless 7.1",
+            usage_page=0xFF82,
+            physical_id=r"pnp:usb\vid_36f9&pid_c001\receiver",
+            path=b"c001-ff82",
+            input_report_sizes={"65": 64},
+            output_report_sizes={"65": 64},
+        )
+        # Runner directly checks battery_mchose variants (55 65 <pct> <state>) in dedicated family
+        fam = families.load()["xiberia_k03s_c001"]
+        self.assertEqual([r.name for r in families.load()["xiberia"].reads], ["battery", "t10_status"])
+        mchose_read = fam.reads[0]
+        dev = FakeDevice([frame("55 65 01 00"), frame("55 65 57 02")])
+        out = runner.run(dev, fam, mchose_read)
+        self.assertEqual((out.kind, out.level, out.charging_known), ("reading", 87, False))
+        self.assertEqual(dev.writes, [bytes.fromhex("55 65 01").ljust(64, b"\0")])
+
+        out_full = runner.run(FakeDevice([frame("55 65 64 04")]), fam, mchose_read)
+        self.assertEqual((out_full.kind, out_full.level), ("reading", 100))
+
+        out_asleep = runner.run(FakeDevice([frame("55 65 00 1A")]), fam, mchose_read)
+        self.assertEqual(out_asleep.kind, "asleep")
+
+        for bad_frame in ("55 65 00 02", "55 65 00 03", "55 65 00 00"):
+            with self.subTest(bad_frame=bad_frame):
+                self.assertEqual(runner.run(FakeDevice([frame(bad_frame)]), fam, mchose_read).kind, "rejected")
+
+        # Full provider poll on C001 opens only FF90 (never FF82) and queries 55 65 01 directly.
+        provider = provider_module.FamiliesProvider(running=lambda names: False)
+        dev_poll = FakeDevice([frame("55 65 4F 02")])
+        statuses, _ = poll([ff82, ff90], dev_poll, provider)
+        self.assertEqual(len(statuses), 1)
+        self.assertEqual((statuses[0].level, statuses[0].kind, statuses[0].verification_level), (79, "headset", "C"))
+        self.assertEqual(dev_poll.opened, [b"c001-ff90"])
+        self.assertEqual(dev_poll.writes, [bytes.fromhex("55 65 01").ljust(64, b"\0")])
 
     def test_family_devices_do_not_overlap_other_readers(self):
         from known_ids import build_index

@@ -25,11 +25,13 @@ _pack: Tuple[Family, ...] = ()
 _probe_enabled = False
 _RECEIVER_PARENTS = {
     ("xiberia", 0x36F9, 0xF001),
+    ("xiberia_k03s_c001", 0x36F9, 0xC001),
     ("machenike_l7_air", 0x320F, 0x226F),
     ("razer_blackshark_v3_pro_rx", 0x1532, 0x0577),
     ("dareu_jm_24g", 0x260D, 0x1156),
 }
 _XIBERIA_FF90_ONLY_PIDS = {0xF002}
+_XIBERIA_CONSTANT_OUTPUT_FAMILIES = frozenset({"xiberia", "xiberia_k03s_c001"})
 
 
 def load(directory: Path = BUILTIN) -> Dict[str, Family]:
@@ -145,7 +147,7 @@ def _xiberia_constant_output_proven(family: Family, info: dict) -> bool:
     output value/button caps when firmware marks Output 0x55 as Constant, whereas
     FF82:0001 exposes report 0x41 = 64B. Restricted strictly to listed xiberia FF90:0001.
     """
-    if (family.id != "xiberia"
+    if (family.id not in _XIBERIA_CONSTANT_OUTPUT_FAMILIES
             or (info.get("usage_page"), info.get("usage")) != (0xFF90, 0x0001)
             or family.input_report is None or family.output_report is None
             or (family.input_report.report_id, family.input_report.length) != (0x55, 64)
@@ -210,7 +212,7 @@ def select(infos: List[dict]):
         if not matches:
             continue
         proved = [(d, i) for d, i in matches if proven(family, i) and i.get("path")]
-        if (len(proved) == 1 and family.id == "xiberia"
+        if (len(proved) == 1 and family.id in _XIBERIA_CONSTANT_OUTPUT_FAMILIES
                 and _xiberia_constant_output_proven(family, proved[0][1])):
             pid = proved[0][0].product_id
             ff90_rows = [row for row in infos
