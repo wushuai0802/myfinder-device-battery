@@ -4822,3 +4822,16 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 ### iKF-V11 Pro (7.1) (`0E6A:0110`, Grade D Observed Unsupported)
 
 - Two independent detailed diagnostics (`#781`, `#1208`) confirm `0E6A:0110` `"iKF-V11 Pro (7.1)"` exposes only USB Audio (`MI_00`) and standard Consumer Control (`000C:0001`) with zero vendor HID collections and no Windows Bluetooth battery/GATT property; official `hub.ikeepfun.com` binds only VID `38B1`. Recorded as Grade D `observedUnsupported` strictly scoped to `"iKF-V11 Pro (7.1)"` so unrelated `0E6A:0110` devices (such as `AULA-G7`) are unaffected. [Issue #781](https://github.com/wushuai0802/myfinder-device-battery/issues/781) · [Issue #1208](https://github.com/wushuai0802/myfinder-device-battery/issues/1208)
+
+
+## XIBERIA K03S 2.4G (`36F9:C001`, `#1226` User Hardware Verification)
+
+- **Source & Hardware Confirmation (`engine/families/builtin/xiberia_k03s_c001.json`, Grade C — 用户实机验证，#1226)**:
+  - Reporter (`@wang39512`, follow-up to `#1035`) verified `36F9:C001` (`"XIBERIA K03S Wireless 7.1"`) on real Windows 11 hardware via `FF90:0001` (`0x55` 64-byte Input + Constant-only 64-byte Output, `_xiberia_constant_output_proven`, isolated in dedicated family `xiberia_k03s_c001` so `55 65 01` is never sent to `F008/F016/F002/F001` and `FF82:0001` is never opened).
+  - Sending `55 65 01` (zero-padded to 64B, matching `fifine_ht6`) returns `55 65 <percent> <state>` (`79%` observed live; also explains `#528`'s `87%` reading): `state == 0x02` discharging (`1..100`, rejecting zero placeholder), `0x04` full (`100`), `0x1A` off/asleep, while `0x00`/`0x03` (external power/charging) carry no percentage and are safely ignored. Removed former Grade-D `observedUnsupported` entry. [Issue #1226](https://github.com/wushuai0802/myfinder-device-battery/issues/1226)
+
+## ASUS ROG Pelta 2.4G (`0B05:1B84`)
+
+- **Source & Protocol Facts (`engine/providers/asus_headset.py`, Grade C)**:
+  - Corroborated independently across `seerge/g-helper` (local `.ai/evidence/g-helper/0bda6b55317f/app/Peripherals/Headset/Models/Pelta.cs` & `AsusHeadset.cs`, `0B05:1B84`) and `OthrineTM/pelta-control` (`5c690c1ea1bea18cc557da4df4bcb773a1b71086`, `pelta/device.py`, reverse-engineered from ASUS `AacAudioHal` `C_A501_Protocol`), plus `#1225` Windows diagnostic showing `0B05:1B84 "ROG PELTA (2.4GHz)"` with unique `FF00:0001` (`0B05:1B82` USB-C held pending Windows collection diagnostics).
+  - Uses the exact same ASUS GearLink report `0xCC` read-only exchange as ROG Delta II (`0B05:1AFA`): `CC 12 07 00 00 ...` returns percentage at byte 6 (`0xFE` when offline, safely rejected by `<= 100`), and `CC 12 08 00 00 ...` returns charging flag at byte 5 (`0`/`1`). Requires resolved matching USB parent and proven `0xCC` input/output report sizes on `FF00:0001`. Pending real-hardware confirmation on MyFinder. [Issue #1225](https://github.com/wushuai0802/myfinder-device-battery/issues/1225)

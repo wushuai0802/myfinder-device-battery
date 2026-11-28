@@ -1,20 +1,25 @@
-"""Grade-C ROG Delta II headset candidate, pending project hardware validation.
+"""Grade-C ROG Delta II & ROG Pelta headset reader, pending project hardware validation.
 
 Protocol facts only. ASUS GearLink "pattern 2" as recorded by dvalfrid/rigstats
 (MIT), `sensor-sidecar/Control/Lighting/AsusHeadsetDevice.cs` and
-`Control/Lighting/Battery.cs`, whose Delta II (0x1AFA) read is verified on
-hardware; and the unsolicited report layout in mbekkelund/rog-delta-ii issue #1
-(MIT). No upstream implementation is copied, imported or executed.
+`Control/Lighting/Battery.cs` (Delta II 0x1AFA verified on hardware), the
+unsolicited report layout in mbekkelund/rog-delta-ii issue #1 (MIT), plus
+ROG Pelta (0B05:1B84 2.4 GHz dongle / 0B05:1B82 USB-C) corroborated across
+seerge/g-helper `Pelta.cs`/`AsusHeadset.cs` and OthrineTM/pelta-control
+`pelta/device.py` (reverse-engineered from ASUS AacAudioHal C_A501_Protocol).
+No upstream implementation is copied, imported or executed.
 
 Reports use ID 0xCC on the vendor collection FF00:0001. A get frame is
     CC 12 <key> 00 00 <zeros>
 with 0x12 = get. Battery is key 07 and the reply repeats `CC 12 07`; the
-percentage is byte 6 (indexes include the report ID). Charging is key 08 and
+percentage is byte 6 (indexes include the report ID; Pelta uses 0xFE when
+offline/unavailable, which > 100 rejects safely). Charging is key 08 and
 byte 5 of that reply is 1 while the cable is connected. Only these two reads
 are sent: no lighting, sidetone, EQ, microphone, pairing, reset or firmware
 command. A reply of 0 % without charging is treated as standby, not as empty.
 """
 import math
+import re
 import time
 
 try:
@@ -26,7 +31,10 @@ from . import hidlist
 from .base import DeviceStatus, Provider
 
 VID = 0x0B05
-PIDS = {0x1AFA: "ROG Delta II"}
+PIDS = {
+    0x1AFA: "ROG Delta II",
+    0x1B84: "ROG Pelta",
+}
 COLLECTION = (0xFF00, 0x0001)
 REPORT_ID = 0xCC
 GET = 0x12
@@ -41,6 +49,16 @@ MAX_READS = 8                     # Per key; the shared deadline still bounds al
 READ_TIMEOUT_MS = 500
 QUERY_SECONDS = 2.0
 USB_PARENT = "pnp:usb\\vid_0b05&pid_1afa\\"
+
+
+def _valid_usb_parent(physical, pid):
+    if not isinstance(physical, str):
+        return False
+    return re.fullmatch(
+        rf"pnp:usb\\vid_0b05&pid_{pid:04x}(?:&rev_[0-9a-f]{{4}})?\\[^\\\s]+",
+        physical,
+        re.I | re.ASCII,
+    ) is not None
 
 
 def make_request(key, length):
@@ -197,16 +215,16 @@ class AsusHeadsetProvider(Provider):
         groups = {}
         for info in inventory:
             if (any(type(info.get(field)) is not int for field in ("vendor_id", "product_id"))
-                    or (info["vendor_id"], info["product_id"]) != (VID, 0x1AFA)):
+                    or info["vendor_id"] != VID or info["product_id"] not in PIDS):
                 continue                       # other ASUS collections are not this model
+            pid = info["product_id"]
             physical = info.get("physical_id")
-            if (not isinstance(physical, str) or not physical.lower().startswith(USB_PARENT)
-                    or not physical[len(USB_PARENT):] or "\\" in physical[len(USB_PARENT):]):
+            if not _valid_usb_parent(physical, pid):
                 self._diag.append("DELTA II USB parent unproven; not opened")
                 continue
-            groups.setdefault(physical, []).append(info)
+            groups.setdefault((physical, pid), []).append(info)
         result = []
-        for physical, infos in groups.items():
+        for (physical, pid), infos in groups.items():
             info = self._pick(infos)
             if info is None:
                 continue
@@ -221,7 +239,7 @@ class AsusHeadsetProvider(Provider):
                 if reading is not None:
                     level, charging, charging_known = reading
                     result.append(DeviceStatus(
-                        key=f"{self.name}:{physical}", name=PIDS[0x1AFA], level=level,
+                        key=f"{self.name}:{physical}", name=PIDS[pid], level=level,
                         charging=charging, source=self.name, kind="headset",
                         physical_id=physical, connection_known=True,
                         charging_known=charging_known, verification_level="C"))

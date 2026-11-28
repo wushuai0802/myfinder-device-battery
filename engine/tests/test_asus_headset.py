@@ -188,7 +188,7 @@ class PollTests(unittest.TestCase):
         self.assertIn("DELTA II query write failed; no retry", provider.diagnostics())
 
     def test_unproven_or_incompatible_reports_never_open(self):
-        changes = [dict(product_id=pid) for pid in (0x1ACE, 0x1D41, 0x1E6B, 0x1B82, 0x1B84)]
+        changes = [dict(product_id=pid) for pid in (0x1ACE, 0x1D41, 0x1E6B, 0x1B82, 0x1B85)]
         changes += [dict(vendor_id=0x0B06), dict(usage_page=0xFF13), dict(usage_page=0x000C),
                     dict(usage=2), dict(path=b""), dict(physical_id=""),
                     dict(physical_id="collection:dongle"),
@@ -243,6 +243,31 @@ class PollTests(unittest.TestCase):
         self.assertEqual(bus.opened, [])
         self.assertEqual(bus.writes, [])
         self.assertEqual(provider.diagnostics(), [])
+
+    def test_rog_pelta_24g_shares_gearlink_cc_query(self):
+        parent = r"pnp:usb\vid_0b05&pid_1b84\pelta-1"
+        ff00 = entry(product_id=0x1B84, physical_id=parent, path=b"pelta-1b84-ff00",
+                     product_string="ROG PELTA (2.4GHz)")
+        ff07 = entry(product_id=0x1B84, physical_id=parent, usage_page=0xFF07, usage=0x0212,
+                     path=b"pelta-1b84-ff07", product_string="ROG PELTA (2.4GHz)")
+        with fixture([battery(78), charging(1)], [ff07, ff00]) as bus:
+            status, = P().poll()
+        self.assertEqual((status.name, status.level, status.charging, status.charging_known, status.kind),
+                         ("ROG Pelta", 78, True, True, "headset"))
+        self.assertEqual(bus.opened, [ff00["path"]])
+        self.assertEqual([w[1] for w in bus.writes], [BATTERY_REQUEST, CHARGING_REQUEST])
+
+        # Pelta 0xFE offline/unavailable battery code is safely rejected
+        with fixture([battery(0xFE), charging(0)], [ff00]) as bus:
+            self.assertEqual(P().poll(), [])
+        self.assertEqual(len(bus.writes), 1)
+
+        # Mismatched USB parent PID is never opened
+        bad_parent = entry(product_id=0x1B84, physical_id=r"pnp:usb\vid_0b05&pid_1afa\wrong",
+                           path=b"pelta-wrong")
+        with fixture([battery(78), charging(0)], [bad_parent]) as bus:
+            self.assertEqual(P().poll(), [])
+        self.assertEqual(bus.opened, [])
 
 
 if __name__ == "__main__":
