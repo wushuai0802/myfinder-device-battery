@@ -84,7 +84,7 @@ class KillJob:
 
 
 class ReaderProcess:
-    def __init__(self, command=None):
+    def __init__(self, command=None, wakeup=None):
         self.command = command or [sys.executable, "-I", "-B", str(Path(__file__).with_name("server.py")), "--reader-child"]
         self.process = None
         self.job = None
@@ -93,9 +93,16 @@ class ReaderProcess:
         self.pending = None
         self.serial = 0
         self.quarantined = False
+        self._wakeup = wakeup
+
+    def attach_wakeup(self, event):
+        self._wakeup = event
+
+    def pending_deadline(self):
+        return self.pending[1] if self.pending is not None else None
 
     @staticmethod
-    def _pump(stream, target):
+    def _pump(stream, target, wakeup=None):
         try:
             while True:
                 line = stream.readline(MAX_LINE + 1)
@@ -103,8 +110,12 @@ class ReaderProcess:
                     break
                 if len(line) > MAX_LINE:
                     target.put_nowait(IsolationError("invalid_response"))
+                    if wakeup is not None:
+                        wakeup.set()
                     return
                 target.put_nowait(line)
+                if wakeup is not None:
+                    wakeup.set()
         except (OSError, ValueError, queue.Full):
             pass
         finally:
@@ -112,6 +123,8 @@ class ReaderProcess:
                 target.put_nowait(None)
             except queue.Full:
                 pass
+            if wakeup is not None:
+                wakeup.set()
 
     def _ensure(self):
         if self.quarantined and self.process is not None and self.process.poll() is None:
@@ -127,7 +140,7 @@ class ReaderProcess:
             # No query is sent until its lifetime is bound to this private job.
             self.job = KillJob(self.process)
             self.queue = queue.Queue(maxsize=4)
-            self.reader = threading.Thread(target=self._pump, args=(self.process.stdout, self.queue), daemon=True)
+            self.reader = threading.Thread(target=self._pump, args=(self.process.stdout, self.queue, self._wakeup), daemon=True)
             self.reader.start()
         except Exception:
             self.close()

@@ -186,6 +186,28 @@ static class LocalApiTests {
                         if (line.StartsWith("data: ", StringComparison.Ordinal) && line.Contains("\"percent\":47")) { gotUpdate = true; break; }
                     }
                     Check(gotUpdate, "SSE pushes live snapshot update on battery change");
+                    // While SSE subscriber stays open on its dedicated thread, RPC calls still succeed without slot starvation.
+                    string concurrentPing = PostRpc(port, token, "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"ping\"}", out status);
+                    Check(status == 200 && concurrentPing.Contains("\"ok\":true"), "RPC succeeds while SSE subscriber is active");
+                }
+            }
+
+            // Buffered multi-chunk header + body delivery succeeds cleanly.
+            using (var chunkClient = new TcpClient()) {
+                chunkClient.Connect(IPAddress.Loopback, port);
+                chunkClient.ReceiveTimeout = 4000;
+                using (var ns = chunkClient.GetStream()) {
+                    string bodyStr = "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"ping\"}";
+                    string headStr = "POST /rpc HTTP/1.1\r\nHost: 127.0.0.1:" + port + "\r\nAuthorization: Bearer " + token + "\r\nContent-Length: " + bodyStr.Length + "\r\nConnection: close\r\n\r\n";
+                    byte[] hBytes = Encoding.ASCII.GetBytes(headStr);
+                    ns.Write(hBytes, 0, 15); ns.Flush(); Thread.Sleep(20);
+                    ns.Write(hBytes, 15, hBytes.Length - 15); ns.Flush(); Thread.Sleep(20);
+                    byte[] bBytes = Encoding.UTF8.GetBytes(bodyStr);
+                    ns.Write(bBytes, 0, bBytes.Length); ns.Flush();
+                    using (var rdr = new StreamReader(ns, Encoding.UTF8)) {
+                        string resp = rdr.ReadToEnd();
+                        Check(resp.Contains("200 OK") && resp.Contains("\"ok\":true"), "buffered HTTP reader reassembles split headers and body");
+                    }
                 }
             }
 
