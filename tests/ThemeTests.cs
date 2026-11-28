@@ -266,7 +266,7 @@ static class ThemeTests {
     static void Geometry(){
         Check(VisualDesign.PanelWidth==260&&VisualDesign.BatteryBarRect(0).Height==4&&VisualDesign.BatteryDigitSize==19&&VisualDesign.MainCardRadius==10&&VisualDesign.PanelRadius==12,"main geometry changes without changing dialog radius");
         using(var f=new Fixture()){
-            var rows=PopupPages.Build(f.Owner,new PopupNavigation(),true);var expected=new Dictionary<int,RectangleF>{{0,new RectangleF(8,265,28,28)},{1,new RectangleF(226,265,28,28)},{2,new RectangleF(10,6,154,44)},{4,new RectangleF(168,6,80,44)},{200,new RectangleF(10,120,240,44)},{100,new RectangleF(12,180,97,26)},{101,new RectangleF(111,180,97,26)},{102,new RectangleF(216,178,34,30)},{240,new RectangleF(8,236,216,20)},{241,new RectangleF(228,234,28,24)}};
+            var rows=PopupPages.Build(f.Owner,new PopupNavigation(),true);var expected=new Dictionary<int,RectangleF>{{0,new RectangleF(6,274,26,22)},{1,new RectangleF(193,274,60,22)},{2,new RectangleF(10,6,154,44)},{4,new RectangleF(168,6,80,44)},{200,new RectangleF(10,120,240,44)},{100,new RectangleF(12,180,97,26)},{101,new RectangleF(111,180,97,26)},{102,new RectangleF(216,178,34,30)},{240,new RectangleF(8,236,216,20)},{241,new RectangleF(228,234,28,24)}};
             for(int i=0;i<4;i++)expected[10+i]=new RectangleF(12+i*59.5f,66,57.5f,26);
             foreach(var pair in expected){var row=rows.Find(delegate(PopupControl c){return c.Id==pair.Key;});Check(row!=null&&row.Rect==pair.Value,"classic hit region matches the redesigned geometry exactly: "+pair.Key);}
             f.Owner.GenericReady=true;f.Owner.NativeMousePresent=false;f.Owner.Audio.Devices=new AudioDeviceChoice[0];f.Owner.WirelessDevices=new[]{Device("theme-one","很长很长的设备名称",75)};
@@ -343,8 +343,10 @@ static class ThemeTests {
             using(var card=RenderPanel(new Size(260,96),1,delegate(Graphics g){CompactRenderer.DrawSurface(g,new RectangleF(.5f,.5f,259,95),dark);}))Check(card.GetPixel(80,20).ToArgb()==p.Card.ToArgb()&&card.GetPixel(80,70).ToArgb()==p.Card.ToArgb(),"flat exact card fill");
             using(var main=RenderPanel(VisualDesign.PanelSizeFor(true,f.Owner.Dpi),1,delegate(Graphics g){CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,dark,null,f.Owner.Audio);}))Check(main.GetPixel(78,71).ToArgb()==p.SegmentFill.ToArgb()&&main.GetPixel(100,90).ToArgb()==p.Accent.ToArgb(),"neutral floating selected segment and 12px accent pip");
             using(var image=new Bitmap(1,1))using(var g=Graphics.FromImage(image)){
-                var status=VisualDesign.FooterTextRect(0,208);
-                Check(status==new RectangleF(39,3,175,24)&&status.Right<VisualDesign.FooterMoreRect(0).Left,"plain status text is bounded between its icon buttons");
+                var status=VisualDesign.FooterTextRect(0,VisualDesign.FooterTextRight(false));
+                Check(status.Left>VisualDesign.FooterRefreshRect(0).Right&&status.Right<VisualDesign.FooterMoreRect(0).Left,"footer status text sits cleanly between refresh icon and more menu pill");
+                var pagedStatus=VisualDesign.FooterTextRect(0,VisualDesign.FooterTextRight(true));
+                Check(pagedStatus.Left>VisualDesign.FooterRefreshRect(0).Right&&pagedStatus.Right<VisualDesign.FooterPageRect(0,false).Left,"paged footer status text sits cleanly before pagination buttons");
             }
             var rows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=223},false);
             foreach(var row in rows)if(row.Id!=6)Check(!String.IsNullOrEmpty(row.PaletteKey),"each style choice carries its two-color swatch");

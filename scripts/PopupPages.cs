@@ -519,7 +519,7 @@ namespace AtkBatteryTray {
             return rows;
         }
         internal const int DismissReaderNotice=263;
-        internal static float WirelessFooterWidth(WirelessLayout layout){return VisualDesign.PanelWidth-(layout.Paged?114:52);}
+        internal static float WirelessFooterWidth(WirelessLayout layout){return VisualDesign.FooterTextRight(layout.Paged);}
         internal static RectangleF ReaderNoticeLink(WirelessLayout layout){return VisualDesign.FooterTextRect(layout.Footer,WirelessFooterWidth(layout));}
         internal static RectangleF ReaderNoticeButton(WirelessLayout layout){return new RectangleF(VisualDesign.PanelWidth-66,layout.Footer+VisualDesign.FooterHeight,58,WirelessLayout.ReaderNoticeHeight);}
         static void AddReaderNotice(List<PopupControl> rows,TrayContext owner,WirelessLayout layout){

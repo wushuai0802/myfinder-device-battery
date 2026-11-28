@@ -21,14 +21,17 @@ static class CardsFeedbackTests {
     }
     static void CheckFooter(TrayContext owner,string text,bool failure){
         var layout=WirelessLayout.Build(owner,0,1000);
+        float textRight=PopupPages.WirelessFooterWidth(layout);
+        var surface=VisualDesign.FooterSurfaceRect(layout.Footer);
         foreach(bool dark in new[]{false,true})using(var actual=new Bitmap(layout.Size.Width,layout.Size.Height))using(var expected=new Bitmap(layout.Size.Width,layout.Size.Height))using(var opposite=new Bitmap(layout.Size.Width,layout.Size.Height)){
             using(var g=Graphics.FromImage(actual))CompactRenderer.PaintWireless(g,owner,layout,dark,new PanelFeedback());
             foreach(bool wrongStyle in new[]{false,true})using(var g=Graphics.FromImage(wrongStyle?opposite:expected)){
                 g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                typeof(CompactRenderer).GetMethod("DrawSync",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{g,text,layout.Footer,208f,dark,wrongStyle?!failure:failure,new PanelFeedback()});
+                typeof(CompactRenderer).GetMethod("DrawFooterCard",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{g,layout.Footer,dark,layout.ReaderNotice});
+                typeof(CompactRenderer).GetMethod("DrawSync",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{g,text,layout.Footer,textRight,dark,wrongStyle?!failure:failure,new PanelFeedback()});
             }
             bool matches=true,styleDiffers=false;
-            for(int y=(int)layout.Footer+3;y<(int)layout.Footer+27;y++)for(int x=8;x<216;x++){
+            for(int y=(int)surface.Top+2;y<(int)surface.Bottom-2;y++)for(int x=6;x<(int)textRight;x++){
                 if(actual.GetPixel(x,y)!=expected.GetPixel(x,y))matches=false;
                 if(expected.GetPixel(x,y)!=opposite.GetPixel(x,y))styleDiffers=true;
             }
