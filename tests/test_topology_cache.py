@@ -2149,6 +2149,46 @@ class HyperXStingerCoreDescriptorTests(unittest.TestCase):
         case.hid.HidD_SetFeature.assert_not_called()
 
 
+class VgnV4KeyboardDescriptorTests(unittest.TestCase):
+    def test_only_ff60_521_feature_proof_is_published_and_cached(self):
+        case = DescriptorCacheTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        v4_path = r"\\?\hid#vid_391d&pid_2a03&mi_03#synthetic"
+        other_path = r"\\?\hid#vid_391d&pid_2a03&mi_01#synthetic"
+        case.identities[v4_path] = (0x391D, 0x2A03)
+        case.identities[other_path] = (0x391D, 0x2A03)
+        pages = {v4_path: (0xFF60, 0x0061), other_path: (0xFF00, 1)}
+        current = {"path": v4_path}
+        orig_open = case.kernel.CreateFileW.side_effect
+
+        def track_open(path, *args, **kwargs):
+            current["path"] = path
+            return orig_open(path, *args, **kwargs) if orig_open else 1
+
+        def caps(data, pointer):
+            value = ctypes.cast(pointer, ctypes.POINTER(Caps)).contents
+            value.page, value.usage = pages[current["path"]]
+            value.feature, value.fv = 521, 1
+            return 0x00110000
+
+        def fields(report_type, fields_, count, data):
+            self.assertEqual(report_type, 2)
+            fields_[0].report, fields_[0].bits, fields_[0].count = 0, 8, 520
+            return 0x00110000
+
+        case.kernel.CreateFileW.side_effect = track_open
+        case.hid.HidP_GetCaps.side_effect = caps
+        case.hid.HidP_GetValueCaps.side_effect = fields
+        infos = case.scan([v4_path, other_path])
+        by_path = {row["path"]: row for row in infos}
+        self.assertEqual(by_path[v4_path.encode()]["feature_report_sizes"], {"0": 521})
+        self.assertNotIn("feature_report_sizes", by_path[other_path.encode()])
+        self.assertIn(v4_path, case.cache)
+        case.hid.HidD_GetFeature.assert_not_called()
+        case.hid.HidD_SetFeature.assert_not_called()
+
+
 class AsusOmniDescriptorTests(unittest.TestCase):
     """Synthetic OMNI caps prove each direction before query-handle access."""
     path = r"\\?\hid#vid_0b05&pid_1ace&mi_02&col03#synthetic-omni"

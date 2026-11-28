@@ -4835,3 +4835,16 @@ This Actions Semiconductor (`VID 0x10D6`, `PID 0x4801`) 2.4 GHz headset receiver
 - **Source & Protocol Facts (`engine/providers/asus_headset.py`, Grade C)**:
   - Corroborated independently across `seerge/g-helper` (local `.ai/evidence/g-helper/0bda6b55317f/app/Peripherals/Headset/Models/Pelta.cs` & `AsusHeadset.cs`, `0B05:1B84`) and `OthrineTM/pelta-control` (`5c690c1ea1bea18cc557da4df4bcb773a1b71086`, `pelta/device.py`, reverse-engineered from ASUS `AacAudioHal` `C_A501_Protocol`), plus `#1225` Windows diagnostic showing `0B05:1B84 "ROG PELTA (2.4GHz)"` with unique `FF00:0001` (`0B05:1B82` USB-C held pending Windows collection diagnostics).
   - Uses the exact same ASUS GearLink report `0xCC` read-only exchange as ROG Delta II (`0B05:1AFA`): `CC 12 07 00 00 ...` returns percentage at byte 6 (`0xFE` when offline, safely rejected by `<= 100`), and `CC 12 08 00 00 ...` returns charging flag at byte 5 (`0`/`1`). Requires resolved matching USB parent and proven `0xCC` input/output report sizes on `FF00:0001`. Pending real-hardware confirmation on MyFinder. [Issue #1225](https://github.com/wushuai0802/myfinder-device-battery/issues/1225)
+
+
+## VGN V98Pro V4 / TIMI (`391D:2A03` `bykeyboard` 521B Feature)
+
+- **Source & Protocol (`engine/providers/vgn_v4_keyboard.py`, Grade C)**:
+  - Derived from official VGN HUB bundle (`.ai/evidence/vgnhub/index-ZngoA_qG.js`, `customDeviceType: "bykeyboard"`, `vendorId: 0x391D`, `usagePage: 0xFF60`, `usage: 0x0061`, `reportId: 0`): 2.4G receivers `391D:2A03` (`VGN V98Pro V4`, `#530`), `2A04`, `2A0A` (`TIMI`), and wired `200B`, `200C`, `201C` (`TIMI`).
+  - Requires resolved matching `pnp:usb\vid_391d&pid_<pid>\...` parent, unique `FF60:0061` collection, and runtime descriptor proof (`topology.py`) of unnumbered Feature report `0` at 521 bytes (`{"0": 521}`, 1-byte Windows report-ID slot + 520-byte WebHID Feature payload).
+  - Sends one read-only `getBattery()` Feature report (`00 87 00 00 01 00 02 00` zero-padded to 521 bytes, no write retry), waits 60 ms, reads `GetFeature(0, 521)`, validates `raw[0] == 0` and `raw[1] == 0x87`, rejects request echoes and zero placeholders, and reads `1..100%` from `raw[9]` (WebHID `A.getUint8(8)`). Official `getBattery()` does not invoke `parseChargingState()`, so `charging_known = False` pending `#530` real-hardware feedback. [Issue #530](https://github.com/wushuai0802/myfinder-device-battery/issues/530)
+
+## ASUS ROG Azoth Extreme / SE & Strix Scope II 96 RX via OMNI (`0B05:1ACE`, `#1232`)
+
+- **Source & Protocol (`engine/providers/asus_azoth.py`, Grade C)**:
+  - Corroborated by local `seerge/g-helper` (`PeripheralsProvider.cs`, `Azoth.cs`, `StrixScopeII.cs`, `AsusKeyboard.cs`): OMNI paired-model IDs `0x1B42` (`ROG Azoth Extreme`, `#1232`), `0x1CF1` (`ROG Azoth Extreme SE`), and `0x1B7A` (`ROG Strix Scope II 96 RX Wireless`) inherit `AzothOmni` / `StrixScopeII96WirelessOmni` on `0B05:1ACE` (`MI_02&Col02`, report `0x02`, 64 bytes), querying `02 12 01` with percentage at `reply[6]`. Gated behind `Col01` `01 A0` paired-PID confirmation; charging stays `charging_known = False` (`_UNVERIFIED_CHARGING_NAMES`) until verified on hardware with charger toggled. [Issue #1232](https://github.com/wushuai0802/myfinder-device-battery/issues/1232)

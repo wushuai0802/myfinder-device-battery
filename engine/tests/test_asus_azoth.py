@@ -121,6 +121,22 @@ class AsusAzothProviderTests(unittest.TestCase):
         self.assertEqual(keyboard.writes, [bytes([2, 0x12, 1]).ljust(64, b'\0')])
         self.assertTrue(ident.closed and keyboard.closed)
 
+    def test_omni_azoth_extreme_se_and_scope_rx_use_offset_6_and_unverified_charging(self):
+        for model_pid, name in (
+            (0x1B42, "ROG Azoth Extreme"),
+            (0x1CF1, "ROG Azoth Extreme SE"),
+            (0x1B7A, "ROG Strix Scope II 96 RX Wireless"),
+        ):
+            with self.subTest(model_pid=model_pid):
+                ident = FakeDevice([slots(model_pid, 0x1C0E)])
+                keyboard = FakeDevice([reply(OMNI, 84, 1)])
+                cards, _, _ = run([make(OMNI), identity_port()], [ident, keyboard])
+                self.assertEqual(
+                    [(c.name, c.level, c.charging, c.charging_known) for c in cards],
+                    [(name, 84, False, False)],
+                )
+                self.assertTrue(ident.closed and keyboard.closed)
+
     def test_unproven_identity_or_power_port_sends_nothing(self):
         for ports in ([make(OMNI)], [make(OMNI), identity_port(input_report_proof=None)],
                       [make(OMNI, input_report_sizes={"3":64}), identity_port()],

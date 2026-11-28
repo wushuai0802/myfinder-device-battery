@@ -12,8 +12,16 @@ KEYBOARDS = {
     0x1A85: "ROG Azoth",
     0x1B06: "ROG Falchion RX Low Profile",
     0x1AB0: "ROG Strix Scope II 96 Wireless",
+    0x1B7A: "ROG Strix Scope II 96 RX Wireless",
+    0x1B42: "ROG Azoth Extreme",
+    0x1CF1: "ROG Azoth Extreme SE",
 }
-_UNVERIFIED_CHARGING_NAMES = frozenset({KEYBOARDS[0x1AB0]})
+_UNVERIFIED_CHARGING_NAMES = frozenset({
+    KEYBOARDS[0x1AB0],
+    KEYBOARDS[0x1B7A],
+    KEYBOARDS[0x1B42],
+    KEYBOARDS[0x1CF1],
+})
 _PRODUCTS = {0x1A85: "ROG AZOTH", 0x1ACE: "ROG OMNI RECEIVER"}
 _MOUSE_PIDS = {0x1C0E, 0x1A94, 0x1B68, 0x1B69, 0x1B1A, 0x1B18,
                0x1AD7, 0x1B65, 0x1A68, 0x1A6A, 0x1A72}
