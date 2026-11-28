@@ -17,6 +17,8 @@ jobs:
           python-version: '3.14'
       - name: Validate device-pack source and complete snapshot (no private key)
         run: python -I -B scripts/validate_device_pack.py
+      - name: Run static hygiene and version alignment gate
+        run: python -I -B tools/check_code_hygiene.py
       - name: Run device protocol fixtures without hidapi
         run: python -I -B -m unittest discover -s ./engine/tests -q
       - name: Run engine bridge regressions without hidapi
@@ -58,6 +60,7 @@ jobs:
             ${{ runner.temp }}/device-battery-release/*/package-manifest.json
             ${{ runner.temp }}/device-battery-release/*/engine/dependencies.lock.json
             ${{ runner.temp }}/device-battery-build/appearance-preview.png
+            ${{ runner.temp }}/device-battery-build/*.pdb
             ${{ runner.temp }}/device-battery-package-smoke/**/package-smoke-result.json
             ${{ runner.temp }}/device-battery-performance/*.json
             ${{ runner.temp }}/device-battery-performance/*.csv

@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 
@@ -54,14 +56,47 @@ namespace AtkBattery {
                 return read.Wait(1000)&&process.ExitCode==0&&read.Result=="stable";
             }
         }
+        static readonly string[] HelperScriptNames={"Apply-Update.ps1","Update.Common.ps1","Install.Common.ps1","Manifest.Common.ps1"};
+        internal static void VerifyInstalledHelperScripts(string installRoot,string scriptsDirectory=null){
+            string manifestPath=Path.Combine(installRoot,"package-manifest.json");
+            if(!File.Exists(manifestPath))return;
+            UpdatePaths.NoLinks(manifestPath);
+            var manifest=UpdateJson.ReadFile<UpdateManifest>(manifestPath,2097152);
+            if(manifest==null||manifest.Files==null)throw new InvalidDataException("Installed package manifest is invalid.");
+            var byPath=new Dictionary<string,UpdateManifestFile>(StringComparer.OrdinalIgnoreCase);
+            foreach(var entry in manifest.Files)if(entry!=null&&!String.IsNullOrEmpty(entry.Path))byPath[entry.Path]=entry;
+            string verifyDir=String.IsNullOrWhiteSpace(scriptsDirectory)?Path.Combine(installRoot,"scripts"):scriptsDirectory;
+            UpdatePaths.NoLinks(verifyDir);
+            foreach(string name in HelperScriptNames){
+                string relative="scripts/"+name;
+                UpdateManifestFile expected;
+                if(!byPath.TryGetValue(relative,out expected))throw new InvalidDataException("Installed manifest omits required update helper script.");
+                string target=Path.Combine(verifyDir,name);
+                UpdatePaths.NoLinks(target);
+                if(!File.Exists(target)||new FileInfo(target).Length!=expected.Length||!UpdatePackageVerifier.HashFile(target).Equals(expected.Sha256,StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Installed update helper script failed integrity check.");
+            }
+        }
+        static void CreateProtectedDirectory(string directory){
+            UpdatePaths.NoLinks(directory);
+            var security=new DirectorySecurity();
+            security.SetAccessRuleProtection(true,false);
+            var user=WindowsIdentity.GetCurrent().User;
+            security.AddAccessRule(new FileSystemAccessRule(user,FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
+            Directory.CreateDirectory(directory,security);
+        }
         public void Start(PreparedUpdate update){
             string target=String.IsNullOrWhiteSpace(update.InstallDirectory)?root:UpdateInstallPaths.ValidateTargetOrThrow(update.InstallDirectory,root,dataDirectory,true);
-            string helper=Path.Combine(update.WorkDirectory,"helper");Directory.CreateDirectory(helper);
-            // The currently installed helper survives the replacement. The downloaded installer is
-            // executed only after the old binary independently re-verifies the signature and ZIP.
-            foreach(string name in new[]{"Apply-Update.ps1","Update.Common.ps1","Install.Common.ps1","Manifest.Common.ps1"}){
+            UpdatePaths.NoLinks(update.WorkDirectory);
+            string helper=Path.Combine(update.WorkDirectory,"helper");
+            CreateProtectedDirectory(helper);
+            // The currently installed helper survives the replacement. Copy into the
+            // user-only ACL helper directory first, then verify hashes of the exact
+            // copied scripts before launching PowerShell (eliminating copy->verify TOCTOU).
+            foreach(string name in HelperScriptNames){
                 string source=Path.Combine(root,"scripts",name);UpdatePaths.NoLinks(source);File.Copy(source,Path.Combine(helper,name),false);
             }
+            VerifyInstalledHelperScripts(root,helper);
             using(var parent=Process.GetCurrentProcess()){
                 var args=new List<string>{"-ExecutablePath",executable,"-DataDirectory",dataDirectory,"-Version",update.Version,"-WorkDirectory",update.WorkDirectory,"-ParentId",parent.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),"-ParentStartUtc",parent.StartTime.ToUniversalTime().ToString("o")};
                 if(!UpdateInstallPaths.IsSameDirectory(target,root)){args.Add("-TargetInstallDirectory");args.Add(target);}

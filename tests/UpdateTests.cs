@@ -56,13 +56,16 @@ static class UpdateTests {
             }
         }
     }
-    sealed class Http:IUpdateTransport {
+    sealed class Http:IConditionalUpdateTransport {
         internal readonly Queue<UpdateResponse> Responses=new Queue<UpdateResponse>();
         internal readonly List<Uri> Requests=new List<Uri>();
+        internal readonly List<string> SentETags=new List<string>();
+        internal readonly List<bool> SentCompressed=new List<bool>();
         internal bool Timeout;
         internal WebExceptionStatus? Failure;
-        public UpdateResponse Get(Uri uri,CancellationToken token){token.ThrowIfCancellationRequested();Requests.Add(uri);if(Timeout||Failure.HasValue)throw new WebException("fixture network failure",Failure??WebExceptionStatus.Timeout);return Responses.Dequeue();}
-        internal void Reply(string text,int status=200,string location=null,long length=-1,string retry=null,string remaining=null,string reset=null){Responses.Enqueue(new UpdateResponse(status,new MemoryStream(Encoding.UTF8.GetBytes(text)),length,location,retry,remaining,reset));}
+        public UpdateResponse Get(Uri uri,CancellationToken token){return Get(uri,null,false,token);}
+        public UpdateResponse Get(Uri uri,string ifNoneMatch,bool acceptCompressed,CancellationToken token){token.ThrowIfCancellationRequested();Requests.Add(uri);SentETags.Add(ifNoneMatch);SentCompressed.Add(acceptCompressed);if(Timeout||Failure.HasValue)throw new WebException("fixture network failure",Failure??WebExceptionStatus.Timeout);return Responses.Dequeue();}
+        internal void Reply(string text,int status=200,string location=null,long length=-1,string retry=null,string remaining=null,string reset=null,string etag=null){Responses.Enqueue(new UpdateResponse(status,new MemoryStream(Encoding.UTF8.GetBytes(text)),length,location,retry,remaining,reset,etag));}
         internal void Bytes(byte[] bytes){Responses.Enqueue(new UpdateResponse(200,new MemoryStream(bytes),bytes.Length,null,null));}
     }
     sealed class Installer:IUpdateInstaller {
@@ -386,6 +389,52 @@ static class UpdateTests {
         var sanitized=DeviceSettings.LoadBindings(prefFile);
         Check(sanitized.Theme=="dark"&&sanitized.UpdateInstallDirectory==null,"malformed UpdateInstallDirectory type is dropped without discarding other settings");
     }
+    static void ConditionalCatalogAndDynamicSpace(string root){
+        var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);
+        string statePath=Path.Combine(root,"etag-stable.json");
+        var http=new Http();
+        // Stable channel calls /releases/latest and parses a single JSON release object + ETag.
+        http.Reply(UpdateJson.Text(Release("1.4.2")),200,null,-1,null,null,null,"W/\"stable-v142\"");
+        var checker=new UpdateChecker(http,statePath,"1.4.0",now.AddDays(-1));
+        var found=checker.Check(true,true,now);
+        Check(found!=null&&found.Version=="1.4.2","stable channel parses single /releases/latest object");
+        Check(http.Requests[0].AbsoluteUri==UpdateTrust.ApiUrl+"/latest","stable channel queries /releases/latest to avoid >100 page truncation");
+        Check(http.SentETags[0]==null&&http.SentCompressed[0],"first catalog fetch requests compression without ETag");
+
+        // Second check sends persisted If-None-Match and preserves cached release on 304 without quota burn.
+        http.Reply("",304,null,0,null,null,null,"W/\"stable-v142\"");
+        var cached=checker.Check(true,true,now.AddHours(6));
+        Check(cached!=null&&cached.Version=="1.4.2"&&checker.ErrorCode==null,"304 Not Modified returns cached release cleanly");
+        Check(http.SentETags[1]=="W/\"stable-v142\"","second check sends persisted If-None-Match");
+
+        // Switching to beta channel switches endpoint (?per_page=30) and invalidates stable ETag.
+        checker.IncludeBeta=delegate{return true;};
+        http.Reply(UpdateJson.Text(new[]{Release("1.4.3-beta.1",true)}),200,null,-1,null,null,null,"\"beta-v143b1\"");
+        var betaFound=checker.Check(false,true,now.AddHours(7));
+        Check(betaFound!=null&&betaFound.Version=="1.4.3-beta.1","beta channel selects latest beta from compact list");
+        Check(http.Requests[2].AbsoluteUri==UpdateTrust.ApiUrl+"?per_page=30","beta channel uses compact per_page=30 feed");
+        Check(http.SentETags[2]==null,"switching channel does not send prior endpoint ETag");
+
+        // Dynamic space check: 14.3 MB release on same drive requires ~656 MiB (far below legacy 2.66 GiB cap).
+        var required=UpdateDownload.RequiredSpaceBytes(Path.Combine(root,"u"),Path.Combine(root,"t"),Path.Combine(root,"i"),14286978);
+        long total=required.Values.Sum();
+        Check(total>=500L*1024*1024&&total<=800L*1024*1024,"dynamic space reservation for 14.3 MB ZIP is realistic (~656 MiB, got "+total+")");
+
+        // Helper script manifest integrity check catches tampering before PowerShell launch.
+        string instRoot=Path.Combine(root,"helper-integrity");
+        Directory.CreateDirectory(Path.Combine(instRoot,"scripts"));
+        var rows=new List<string>();
+        foreach(string name in new[]{"Apply-Update.ps1","Update.Common.ps1","Install.Common.ps1","Manifest.Common.ps1"}){
+            byte[] content=Encoding.UTF8.GetBytes("# "+name);
+            File.WriteAllBytes(Path.Combine(instRoot,"scripts",name),content);
+            rows.Add("{\"path\":\"scripts/"+name+"\",\"length\":"+content.Length+",\"sha256\":\""+Hash(content)+"\"}");
+        }
+        File.WriteAllText(Path.Combine(instRoot,"package-manifest.json"),"{\"schema\":1,\"appId\":\"myfinder-device-battery\",\"version\":\"1.4.1\",\"configSchema\":1,\"engineSchema\":2,\"files\":["+String.Join(",",rows)+"]}");
+        UpdateProcess.VerifyInstalledHelperScripts(instRoot);
+        Check(true,"intact installed helper scripts pass manifest integrity check");
+        File.WriteAllText(Path.Combine(instRoot,"scripts","Apply-Update.ps1"),"# tampered");
+        Reject(()=>UpdateProcess.VerifyInstalledHelperScripts(instRoot),"tampered installed helper script is refused before launch");
+    }
     [STAThread] static int Main(string[] args){
         string root=Path.Combine(Path.GetFullPath(args[0]),"update-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try {
@@ -530,6 +579,7 @@ static class UpdateTests {
             Check(new UpdateProcess(portableExe,portableData).IsStable(CancellationToken.None),"stable decision reuses real installer with BOM and case-insensitive receipt");
             PlainReleaseNotes();
             CustomInstallPathValidationAndUi(root);
+            ConditionalCatalogAndDynamicSpace(root);
             using(var dialog=new UpdateDialog(Release("1.3.6"),true)){
                 var notes=dialog.Controls.Find("ReleaseNotes",true).Single() as TextBoxBase;Check(notes!=null&&notes.ReadOnly&&notes.Multiline&&notes.Text.Contains("<script>bad()</script>"),"malicious release notes shown as literal text by a native edit control");
                 dialog.Opacity=0;dialog.ShowInTaskbar=false;dialog.Show();Application.DoEvents();

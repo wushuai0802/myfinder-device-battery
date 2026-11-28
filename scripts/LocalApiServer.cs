@@ -188,14 +188,10 @@ namespace AtkBatteryTray {
         }
 
         internal static void WriteProtectedSessionFile(string path, int port, string token) {
+            UpdatePaths.NoLinks(path);
             string dir = Path.GetDirectoryName(path);
             if (!String.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            if (File.Exists(path)) {
-                var attrs = File.GetAttributes(path);
-                if ((attrs & FileAttributes.ReparsePoint) != 0) {
-                    throw new IOException("Refusing to write session file through reparse point.");
-                }
-            }
+            UpdatePaths.NoLinks(path);
             TryDeleteSessionFile(path);
 
             var security = new FileSecurity();
@@ -315,7 +311,7 @@ namespace AtkBatteryTray {
                 }
 
                 if (method == "GET" && pathOnly == "/events") {
-                    keepOpenForSse = RunSseLoop(client, stream);
+                    keepOpenForSse = StartSseClient(client, stream);
                     return;
                 }
 
@@ -339,7 +335,7 @@ namespace AtkBatteryTray {
             }
         }
 
-        bool RunSseLoop(TcpClient tcp, NetworkStream stream) {
+        bool StartSseClient(TcpClient tcp, NetworkStream stream) {
             var sse = new SseClient(tcp, stream);
             string initial = null;
             bool accepted = false;
@@ -355,6 +351,23 @@ namespace AtkBatteryTray {
                 sse.Dispose();
                 return false;
             }
+            // Dedicated lightweight background thread keeps long-lived SSE subscribers
+            // off the .NET ThreadPool and isolated from RPC connection slots.
+            try {
+                var sseThread = new Thread(new ThreadStart(delegate { PumpSseClient(sse, stream, initial); })) {
+                    IsBackground = true,
+                    Name = "MyFinderLocalApiSse"
+                };
+                sseThread.Start();
+                return true;
+            } catch (Exception) {
+                lock (stateGate) sseClients.Remove(sse);
+                sse.Dispose();
+                return false;
+            }
+        }
+
+        void PumpSseClient(SseClient sse, NetworkStream stream, string initial) {
             try {
                 byte[] headerBytes = Encoding.ASCII.GetBytes(
                     "HTTP/1.1 200 OK\r\n" +
@@ -384,7 +397,6 @@ namespace AtkBatteryTray {
                 lock (stateGate) sseClients.Remove(sse);
                 sse.Dispose();
             }
-            return true;
         }
 
         string HandleJsonRpc(byte[] body) {
@@ -461,10 +473,26 @@ namespace AtkBatteryTray {
         static bool ReadHttpRequest(NetworkStream stream, out string method, out string target, out Dictionary<string, string> headers, out byte[] body, out string error) {
             method = null; target = null; headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); body = new byte[0]; error = null;
             var duplicates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Enforce an absolute total deadline across headers + body (prevents Slowloris)
+            // and buffer header reads to avoid per-byte kernel recv() syscalls.
+            var deadline = Stopwatch.StartNew();
+            byte[] readBuf = new byte[4096];
+            int bufPos = 0, bufLen = 0;
+            Func<int> readNextByte = delegate {
+                if (bufPos < bufLen) return readBuf[bufPos++];
+                int remaining = ReadTimeoutMs - (int)deadline.ElapsedMilliseconds;
+                if (remaining <= 0) return -2;
+                stream.ReadTimeout = remaining;
+                bufPos = 0;
+                bufLen = stream.Read(readBuf, 0, readBuf.Length);
+                if (bufLen <= 0) return -1;
+                return readBuf[bufPos++];
+            };
             using (var headerBuf = new MemoryStream()) {
                 int matched = 0;
                 while (headerBuf.Length < MaxHeaderBytes) {
-                    int b = stream.ReadByte();
+                    int b = readNextByte();
+                    if (b == -2) { error = "request_timeout"; return false; }
                     if (b < 0) { error = "eof"; return false; }
                     headerBuf.WriteByte((byte)b);
                     if ((matched == 0 || matched == 2) && b == '\r') matched++;
@@ -514,7 +542,17 @@ namespace AtkBatteryTray {
             if (contentLength > 0) {
                 body = new byte[contentLength];
                 int offset = 0;
+                int buffered = bufLen - bufPos;
+                if (buffered > 0) {
+                    int take = Math.Min(buffered, contentLength);
+                    Buffer.BlockCopy(readBuf, bufPos, body, 0, take);
+                    bufPos += take;
+                    offset += take;
+                }
                 while (offset < contentLength) {
+                    int remaining = ReadTimeoutMs - (int)deadline.ElapsedMilliseconds;
+                    if (remaining <= 0) { error = "request_timeout"; return false; }
+                    stream.ReadTimeout = remaining;
                     int read = stream.Read(body, offset, contentLength - offset);
                     if (read <= 0) { error = "truncated_body"; return false; }
                     offset += read;

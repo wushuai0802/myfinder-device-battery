@@ -15,12 +15,30 @@ import logging
 import math
 import re
 import sys
+import threading
 import time
 from collections import Counter
 from dataclasses import asdict, replace
 from datetime import datetime, timezone, timedelta
 
+_REAL_SLEEP = time.sleep
+
 from device_pack import EMPTY_PACK, load_pack, parse_pack
+from diagnostics_projection import (
+    A5V2_FAILURE_REASONS,
+    ASUS_OMNI_DIAGNOSTICS,
+    CHERRY_DIAGNOSTICS,
+    FA6X_DIAGNOSTICS,
+    LINGBAO_DIAGNOSTICS,
+    PROJECTED_DIAGNOSTIC_PROVIDERS,
+    READER_DIAGNOSTIC_LIMIT,
+    READER_HEALTH_LIMIT,
+    ZHUAUDIO_DIAGNOSTICS,
+    apply_reader_diagnostics,
+    fa6x_diagnostic_summary,
+    filter_provider_diagnostics,
+    reader_health_summary,
+)
 
 PROVIDERS = (
     ("asus_azoth", "AsusAzothProvider"), ("mchose_g3v2", "MchoseG3V2Provider"),
@@ -157,85 +175,6 @@ IDLE_BACKOFF_AFTER = 2
 IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt", "inphic", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
 NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "vgn_kc2", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "inphic", "ajazz_ak980"}
 READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "vgn_kc2", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_k99v3", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_cloud_flight", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse", "lunafury"}
-A5V2_FAILURE_REASONS = frozenset({
-    "A5V2 topology_unproven",
-    "A5V2 collection_ambiguous",
-    "A5V2 feature_unproven",
-    "A5V2 set_failed",
-    "A5V2 no_stable_reply",
-    "A5V2 io_failed",
-})
-READER_DIAGNOSTIC_LIMIT = 1024  # Full diagnostic in engine JSON.
-READER_HEALTH_LIMIT = 48  # Existing desktop ReaderHealth.ErrorCode bound.
-FA6X_DIAGNOSTICS = {
-    "missing or ambiguous passive input collection; not opened": "passive input collection missing or ambiguous",
-    "input report 03 length unproven; not opened": "input report 03 length unproven",
-    "no battery notification; no new measurement": "no valid battery notification",
-    "USB parent unproven; collection uniqueness unknown; not opened": "USB parent unproven",
-    "enumeration failed; retaining history": "enumeration failed; retaining history",
-    "input read failed; no new measurement": "input read failed; no new measurement",
-    "HID handle close failed": "HID handle close failed",
-    "legacy FA65 companion missing or ambiguous; not opened": "legacy FA65 companion missing or ambiguous",
-    "legacy FA65 state collection missing or ambiguous; not opened": "legacy FA65 state input missing or ambiguous",
-    "legacy FA65 physical parent unproven; not opened": "legacy FA65 physical parent unproven",
-    "legacy FA65 release unproven; not opened": "legacy FA65 release unproven",
-    "legacy FA65 collection path unproven; not opened": "legacy FA65 collection path unproven",
-}
-CHERRY_DIAGNOSTICS = {
-    "report IDs/lengths unknown or incompatible: nothing sent": "report sizes unproven",
-    "single report 04/64 not proven: nothing sent": "single report 04/64 unproven",
-    "unverified CHERRY interface/product: nothing sent": "CHERRY interface/product unverified",
-    "physical parent unresolved; uniqueness unknown: nothing sent": "physical parent unresolved",
-    "missing or ambiguous eligible collection: nothing sent": "collection missing or ambiguous",
-    "enumeration failed: nothing sent": "enumeration failed",
-    "battery I/O failed; connection unknown": "battery I/O failed",
-    "short/failed battery query write; no retry": "battery query write short/failed",
-    "rejected input report length": "input report length rejected",
-    "rejected battery reply": "battery reply rejected",
-    "no valid reply within deadline/read limit; connection unknown": "no valid battery reply",
-    "HID handle close failed": "HID handle close failed",
-}
-LINGBAO_DIAGNOSTICS = {
-    "HID handle close failed": "HID handle close failed",
-    "HID backend unavailable": "HID backend unavailable",
-    "enumeration failed": "enumeration failed",
-    "physical parent unproven; not opened": "physical parent unproven",
-    "collection missing or ambiguous; not opened": "collection missing or ambiguous",
-    "identity/interface unverified; not opened": "identity/interface unverified",
-    "collection path unproven; not opened": "collection path unproven",
-    "Feature 0F/33 unproven; not opened": "Feature 0F/33 unproven",
-    "battery I/O failed": "battery I/O failed",
-    "charging placeholder; no new reading": "charging placeholder; no new reading",
-    "invalid battery reply; no new reading": "invalid battery reply; no new reading",
-}
-ASUS_OMNI_DIAGNOSTICS = {
-    "OMNI identity mismatch; not opened": "OMNI identity mismatch",
-    "OMNI collection mismatch; not opened": "OMNI collection mismatch",
-    "OMNI USB parent unproven; not opened": "OMNI USB parent unproven",
-    "OMNI collection ambiguous; not opened": "OMNI collection ambiguous",
-    "OMNI report 03/64 unproven; not opened": "OMNI report 03/64 unproven",
-    "OMNI open failed": "OMNI open failed",
-    "OMNI battery query write failed; no retry": "OMNI battery query write failed; no retry",
-    "OMNI input read failed": "OMNI input read failed",
-    "OMNI no echo within read limit": "OMNI no echo within read limit",
-    "OMNI device error FF AA": "OMNI device error FF AA",
-    "OMNI empty reply or asleep; no new reading": "OMNI empty reply or asleep; no new reading",
-    "OMNI zero battery; no new reading": "OMNI zero battery; no new reading",
-    "OMNI battery out of range": "OMNI battery out of range",
-    "OMNI HID backend unavailable": "OMNI HID backend unavailable",
-    "OMNI enumeration failed": "OMNI enumeration failed",
-    "OMNI HID handle close failed": "OMNI HID handle close failed",
-}
-ZHUAUDIO_DIAGNOSTICS = frozenset({
-    "ZG4 collection missing or ambiguous", "ZG4 parent/path unproven",
-    "ZG4 interface/product unverified", "ZG4 CE/CD byte reports unproven",
-    "ZG4 all 256 FE sequences unresolved",
-    "ZG4 query already pending", "ZG4 inventory invalid",
-    "ZG4 write short/failed; no retry", "ZG4 no valid reply within limits",
-    "ZG4 headset disconnected", "ZG4 input rejected",
-    "ZG4 parent unresolved", "ZG4 enumeration failed", "ZG4 battery I/O failed",
-    "HID handle close failed",
-})
 DPI_PROVIDERS = {
     "logitech": (0x046D,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710),
@@ -253,77 +192,13 @@ if _family_dpi.vendor_ids():
     DPI_PROVIDERS["families"] = _family_dpi.vendor_ids()
 
 
-def fa6x_diagnostic_summary(line):
-    """Accept only fixed FA6x reasons and the bounded numeric proof grammar."""
-    if not isinstance(line, str) or len(line) > READER_DIAGNOSTIC_LIMIT:
-        return None
-    if line in FA6X_DIAGNOSTICS:
-        return FA6X_DIAGNOSTICS[line]
-    from battery_hid import DESCRIPTOR_FAILURES
-    reasons = "|".join(re.escape(reason) for reason in sorted(DESCRIPTOR_FAILURES | {"unknown"}))
-    proof = (r"(?:; proof=(?:caps|descriptor)|; proof=caps\+descriptor failed; descriptor=(?:"
-             + reasons + r"))?")
-    entry = r"(?:out|in|feature):(?:[0-9A-F]{2}/[0-9]{1,4}|\+[0-9]{1,3}|none|unknown)"
-    if re.fullmatch(r"input report 03 length unproven" + proof + r"; declared="
-                    + entry + r"(?:," + entry + r"){2,29}; not opened", line) is None:
-        return None
-    return reader_health_summary(line)
-
-
 def reader_diagnostics(provider):
     # These new readers emit only bounded, protocol-owned messages (no paths,
     # serials, product strings or raw exception text). Do not expose legacy logs.
     if provider.name not in READER_DIAGNOSTICS:
         return []
     lines = provider.reader_diagnostics() if provider.name in ("mchose", "pulsar") else provider.diagnostics()
-    if provider.name == "zhuaudio":
-        lines = [line for line in lines if isinstance(line, str) and line in ZHUAUDIO_DIAGNOSTICS]
-    if provider.name == "cherry":
-        lines = [reason for line in lines if isinstance(line, str)
-                 for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
-    if provider.name == "fa6x_passive":
-        lines = [line for line in lines if fa6x_diagnostic_summary(line) is not None]
-    if provider.name == "lingbao":
-        lines = [line for line in lines if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
-    if provider.name == "asus_omni":
-        lines = [line for line in lines if isinstance(line, str) and line in ASUS_OMNI_DIAGNOSTICS]
-    if provider.name == "mchose_headset":
-        # Expose only fixed firmware reasons, never this legacy reader's
-        # raw I/O exceptions or packet log.
-        for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未知，按原方式查询"):
-            if any(line.strip() == reason for line in lines):
-                return [reason]
-        return []
-    return lines if len(lines) <= 16 else lines[:6] + lines[-10:]
-
-
-def reader_health_summary(value):
-    """Fit the existing desktop bound; keep full details in diagnostics JSON."""
-    text = str(value)
-    if len(text) <= READER_HEALTH_LIMIT:
-        return text
-    failure = re.match(r"(?:(input|output|feature) )?report ([0-9A-F]{2}) (?:length )?unproven;", text)
-    declared = re.search(r"; declared=([^;]+)", text)
-    if failure and declared:
-        direction, report_id = failure.groups()
-        label = {"input": "in:", "output": "out:", "feature": "feature:", None: ""}[direction]
-        prefix = label + report_id + " unproven;declared="
-        entries = declared.group(1).split(",")
-        # Show one declaration per direction before spending space on extras.
-        first = [next((item for item in entries if item.startswith(d + ":")), None)
-                 for d in ("out", "in", "feature")]
-        entries = [item for item in first if item is not None] + [item for item in entries if item not in first]
-        for count in range(len(entries), -1, -1):
-            summary = prefix + ",".join(entries[:count] + (["..."] if count < len(entries) else []))
-            if len(summary) <= READER_HEALTH_LIMIT:
-                return summary
-    # Retain whole reason clauses, never half a word or report declaration.
-    clauses = text.split("; ")
-    for count in range(len(clauses), 0, -1):
-        summary = "; ".join(clauses[:count] + (["..."] if count < len(clauses) else []))
-        if len(summary) <= READER_HEALTH_LIMIT:
-            return summary
-    return "reader unavailable; details in engine JSON"
+    return filter_provider_diagnostics(provider.name, lines)
 
 
 def utcnow():
@@ -947,7 +822,12 @@ class BatteryEngine:
         self._bluetooth_empty_polls = 0
         self._bluetooth_paths = None
         self._bluetooth_slot = None
+        self._wakeup = threading.Event()
         self.children = [(process_factory or ReaderProcess)(), (process_factory or ReaderProcess)()]
+        self._event_wakeup = all(hasattr(child, "attach_wakeup") for child in self.children)
+        if self._event_wakeup:
+            for child in self.children:
+                child.attach_wakeup(self._wakeup)
         self.native_mouse = None
         if self._direct and not include_native:
             original = hidlist.enumerate
@@ -1114,7 +994,7 @@ class BatteryEngine:
         # reader state, retries and the errors list must not treat it as failure.
         for item in health:
             summary = item.pop("diagnosticSummary", "")
-            if item["provider"] in ("mchose_by_keyboard", "mchose_glw_keyboard", "mchose_k99v3", "mchose_qhw_keyboard", "mchose_headset", "atk_headset", "vgn_kc2", "am_infinity_97", "mchose", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive", "rainyrt", "inphic", "ajazz_ak980", "cherry", "cherry_mw5500", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "lunafury") and summary and not item.get("errorCode"):
+            if item["provider"] in PROJECTED_DIAGNOSTIC_PROVIDERS and summary and not item.get("errorCode"):
                 item["errorCode"] = summary
         if complete and unadapted_inventory is not None:
             self.unadapted = unadapted_devices(unadapted_inventory, self.previous)
@@ -1173,187 +1053,15 @@ class BatteryEngine:
                                    "state": "ok" if measured else "unavailable" if physical and candidate_count > 0 else "unsupported" if physical else "no_devices", "deviceCount": len(group),
                                    "reason": "" if measured else "no_measurement" if candidate_count > 0 else "no_declared_battery" if name == "standard_hid" else "no_matched_model" if physical else "no_device",
                                    "scope": "device" if physical else "provider", "checkedAtUtc": now}
-        if name in READER_DIAGNOSTICS and isinstance(diagnostics, (list, tuple)):
-            if name == "zhuaudio":
-                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in ZHUAUDIO_DIAGNOSTICS]
-                if not measured and diagnostics:
-                    self.health[reader_key]["diagnosticSummary"] = diagnostics[0]
-            if name == "cherry":
-                diagnostics = [reason for line in diagnostics if isinstance(line, str)
-                               for reason in CHERRY_DIAGNOSTICS if line == reason or line.startswith(reason + ";")]
-                if not measured:
-                    for reason, summary in CHERRY_DIAGNOSTICS.items():
-                        if reason in diagnostics:
-                            self.health[reader_key]["diagnosticSummary"] = summary
-                            break
-            if name == "fa6x_passive":
-                diagnostics = [line for line in diagnostics if fa6x_diagnostic_summary(line) is not None]
-                if not measured and diagnostics:
-                    self.health[reader_key]["diagnosticSummary"] = fa6x_diagnostic_summary(diagnostics[0])
-            if name == "lingbao":
-                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in LINGBAO_DIAGNOSTICS]
-                for reason, summary in LINGBAO_DIAGNOSTICS.items():
-                    if reason in diagnostics:
-                        self.health[reader_key]["diagnosticSummary"] = summary
-                        break
-            if name == "asus_omni":
-                diagnostics = [line for line in diagnostics if isinstance(line, str) and line in ASUS_OMNI_DIAGNOSTICS]
-                if diagnostics and not measured:
-                    self.health[reader_key]["diagnosticSummary"] = ASUS_OMNI_DIAGNOSTICS[diagnostics[0]]
-            self.health[reader_key]["diagnostics"] = [str(line)[:READER_DIAGNOSTIC_LIMIT] for line in diagnostics[-16:]]
-            if name == "mchose":
-                # V3-only / K7ULTRA protocol-owned failures outrank identity/proof notes
-                # when no reading is present; bounded A5V2 failure reasons still project
-                # even when another MCHOSE mouse on the same machine reports ok.
-                if not measured:
-                    for line in diagnostics:
-                        if isinstance(line, str) and line.startswith((
-                                "V3 missing or ambiguous FF01:0001 collection;",
-                                "V3 collection path unresolved;",
-                                "V3 input report 4D/64 length unproven;",
-                                "V3 output report 4D/64 length unproven;",
-                                "V3 power query write failed or short;",
-                                "V3 power I/O failed;",
-                                "no valid V3 power reply;")):
-                            if "; declared=" in line and line.startswith("V3 "):
-                                compact = line[len("V3 "):].replace(
-                                    " report 4D/64 length unproven;", " report 4D length unproven;", 1)
-                                self.health[reader_key]["diagnosticSummary"] = reader_health_summary(compact)
-                            else:
-                                self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line.split(";", 1)[0])
-                            break
-                        if isinstance(line, str) and (
-                                (line.startswith("K7ULTRA ") and line != "K7ULTRA stable_reply_C_pending_hardware")
-                                or (line.startswith("A5ULTRA ") and line != "A5ULTRA stable_reply_C_pending_hardware")):
-                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line)
-                            break
-                if "diagnosticSummary" not in self.health[reader_key]:
-                    for line in diagnostics:
-                        if isinstance(line, str) and line in A5V2_FAILURE_REASONS:
-                            self.health[reader_key]["diagnosticSummary"] = line
-                            break
-            if name == "pulsar":
-                # A cached card can keep the existing health state ok while this
-                # poll has no reading. Project its safe result without a failure.
-                for line in reversed(diagnostics):
-                    if line != "valid battery reply":
-                        self.health[reader_key]["diagnosticSummary"] = reader_health_summary(line)
-                        break
-            if name == "mchose_headset" and not measured:
-                for reason in ("接收器固件低于 0008，官方驱动也不支持电量", "接收器固件版本未知，按原方式查询"):
-                    if reason in diagnostics:
-                        self.health[reader_key]["diagnosticSummary"] = reason
-                        break
-            if name in ("rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "inphic", "ajazz_ak980", "moondrop", "hyperx_cloud_flight", "hyperx_flight_s", "hyperx_stinger_core", "cherry_mw5500", "lunafury") and not measured and diagnostics:
-                # These readers emit only fixed text, numeric descriptor sizes and
-                # input report IDs/lengths. No paths, payloads or exceptions.
-                self.health[reader_key]["diagnosticSummary"] = reader_health_summary(diagnostics[0])
-            if name == "mchose_by_keyboard" and not measured:
-                # Feedback needs a short, fixed reason. Keep it separate from
-                # errorCode, which would also populate snapshot errors.
-                for messages, summary in (
-                    (("report IDs/lengths unknown or incompatible: nothing sent",
-                      "single byte-array report not proven: nothing sent"), "report sizes unproven"),
-                    (("unrecognized wireless receiver name: nothing sent",), "receiver name unrecognized"),
-                    (("physical parent unresolved; uniqueness unknown: nothing sent",), "physical parent unresolved"),
-                    (("missing or ambiguous eligible collection: nothing sent",), "collection missing or ambiguous"),
-                    (("battery I/O failed; connection unknown",), "battery I/O failed"),
-                ):
-                    if any(line == message or line.startswith(message + ";")
-                           for message in messages for line in diagnostics if isinstance(line, str)):
-                        self.health[reader_key]["diagnosticSummary"] = summary
-                        break
-            if name in ("atk_headset", "vgn_kc2", "mchose_k99v3") and not measured:
-                # BatteryHidProvider emits fixed reasons and numeric report proof.
-                # Project only known reasons, prioritizing them over the trailing
-                # no-valid-reply note. Never copy arbitrary text into feedback.
-                for message, summary in (
-                    ("report IDs/lengths unknown or incompatible: nothing sent", "report sizes unproven"),
-                    ("physical parent unresolved; uniqueness unknown: nothing sent", "physical parent unresolved"),
-                    ("missing or ambiguous eligible collection: nothing sent", "collection missing or ambiguous"),
-                    ("enumeration failed: nothing sent", "enumeration failed"),
-                    ("battery I/O failed; connection unknown", "battery I/O failed"),
-                    ("short/failed battery query write; no retry", "battery query write short/failed"),
-                    ("device asleep/offline; no new reading; connection unknown", "device asleep/offline"),
-                    ("invalid GLW active profile; no automatic repair", "GLW active profile invalid"),
-                    ("rejected GLW percentage outside 0..100", "GLW percentage out of range"),
-                    ("rejected input report length", "input report length rejected"),
-                    ("rejected battery reply", "battery reply rejected"),
-                    ("no valid reply within deadline/read limit; connection unknown", "no valid battery reply"),
-                    ("HID handle close failed", "HID handle close failed"),
-                ):
-                    if any(line == message or line.startswith(message + ";")
-                           for line in diagnostics if isinstance(line, str)):
-                        self.health[reader_key]["diagnosticSummary"] = summary
-                        break
-            if name == "am_infinity_97" and not measured:
-                for line in diagnostics:
-                    if not isinstance(line, str):
-                        continue
-                    if line.startswith("numbered OUT 6 / IN 7 report (62 bytes) unproven: nothing sent"):
-                        if "; declared=" in line:
-                            declared = line[line.index("; declared="):]
-                            self.health[reader_key]["diagnosticSummary"] = reader_health_summary(
-                                "report 06 unproven" + declared)
-                        else:
-                            self.health[reader_key]["diagnosticSummary"] = "report sizes unproven"
-                        break
-                else:
-                    for message, summary in (
-                        ("target USB parent unresolved; uniqueness unknown: nothing sent", "physical parent unresolved"),
-                        ("ambiguous target collection: nothing sent", "collection ambiguous"),
-                        ("product string/path unproven: nothing sent", "product or path unproven"),
-                        ("input queue did not drain within bounds: nothing sent", "input queue did not drain"),
-                        ("short/failed battery query write; no retry", "battery query write short/failed"),
-                        ("battery I/O failed; connection unknown", "battery I/O failed"),
-                        ("receiver reports no mouse; level unavailable", "receiver reports no mouse"),
-                        ("battery answer rejected (out of range or malformed)", "battery reply rejected"),
-                        ("no valid battery answer within bounds", "no valid battery reply"),
-                        ("enumeration failed; retaining history", "enumeration failed"),
-                        ("HID handle close failed", "HID handle close failed"),
-                    ):
-                        if any(line == message or line.startswith(message + ";")
-                               for line in diagnostics if isinstance(line, str)):
-                            if message == "no valid battery answer within bounds":
-                                matched = next(
-                                    line for line in diagnostics
-                                    if isinstance(line, str) and (line == message or line.startswith(message + ";"))
-                                )
-                                if matched.startswith(message + "; seen="):
-                                    summary = reader_health_summary(
-                                        "no valid battery reply" + matched[len(message):]
-                                    )
-                            self.health[reader_key]["diagnosticSummary"] = summary
-                            break
-            if name in ("mchose_glw_keyboard", "mchose_qhw_keyboard") and not measured:
-                for message, summary in (
-                    ("exact product name mismatch or missing: nothing sent", "product name mismatch"),
-                    ("input/output descriptor lengths unknown or incompatible: nothing sent", "report sizes unproven"),
-                    ("report IDs unknown, ambiguous or incompatible: nothing sent", "report IDs unproven"),
-                    ("missing or ambiguous eligible collection: nothing sent", "collection missing or ambiguous"),
-                    ("missing collection path: nothing sent", "collection path unresolved"),
-                    ("physical parent unresolved; collection uniqueness unknown: nothing sent", "physical parent unresolved"),
-                    ("enumeration failed: nothing sent", "enumeration failed"),
-                    ("hidapi unavailable: nothing sent", "hidapi unavailable"),
-                    ("battery I/O failed; no measurement, connection unknown", "battery I/O failed"),
-                    ("short/failed output write; no retry", "battery query write short/failed"),
-                    ("rejected input report length", "input report length rejected"),
-                    ("rejected input report ID", "input report ID rejected"),
-                    ("no valid reply within deadline/read limit; connection unknown", "no valid battery reply"),
-                    ("HID handle close failed", "HID handle close failed"),
-                ):
-                    if any(line == message or line.startswith(message + ";")
-                           for line in diagnostics if isinstance(line, str)):
-                        self.health[reader_key]["diagnosticSummary"] = summary
-                        break
-        # The feedback UI already displays errorCode (up to 48 characters).
-        # Never export the provider's legacy log, raw exceptions or HID identity.
-        if (name == "razer" and not any(s.online for s in statuses)
-                and isinstance(failure_code, str)
-                and re.fullmatch(r"razer_(?:no_reply|no_usable_interface|interfaces_cooling_down|"
-                                 r"enumerate_failed|open_failed|send_failed|get_failed|short_reply|"
-                                 r"busy_timeout|device_timeout_04|foreign_reply|reply_status_[0-9a-f]{2})", failure_code)):
-            self.health[reader_key]["errorCode"] = failure_code
+        if name in READER_DIAGNOSTICS or name == "razer":
+            apply_reader_diagnostics(
+                self.health[reader_key],
+                name,
+                measured,
+                diagnostics if name in READER_DIAGNOSTICS else None,
+                statuses,
+                failure_code=failure_code,
+            )
 
     def _idle_backoff(self, reader_key, name, physical, candidate_count, statuses):
         measured = any(s.online and not s.cached and s.level is not None for s in statuses)
@@ -1388,18 +1096,41 @@ class BatteryEngine:
             if device_id in group:
                 group[device_id] = dict(group[device_id], dpi=dpi)
 
+    def _wait_for_readers(self, next_deadline):
+        if not self._event_wakeup or time.sleep is not _REAL_SLEEP:
+            time.sleep(0.01)
+            return
+        remaining = next_deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        self._wakeup.wait(min(1.0, remaining))
+
+    def _next_reader_deadline(self, round_deadline, slots):
+        earliest = round_deadline
+        for slot in slots:
+            getter = getattr(self.children[slot], "pending_deadline", None)
+            if getter is None:
+                continue
+            child_deadline = getter()
+            if isinstance(child_deadline, (int, float)) and child_deadline < earliest:
+                earliest = child_deadline
+        return earliest
+
     def _single_reader(self, slot, command, budget):
         from isolation import IsolationError
         child = self.children[slot]
+        deadline = time.monotonic() + budget
         try:
             child.start(self._reader_command(command), budget)
             while True:
+                if self._event_wakeup:
+                    self._wakeup.clear()
                 result = child.result()
                 if result is not None:
                     if not isinstance(result, dict):
                         raise IsolationError("invalid_response")
                     return result
-                time.sleep(.01)
+                self._wait_for_readers(self._next_reader_deadline(deadline, (slot,)))
         except Exception:
             child.close()
             raise
@@ -1617,6 +1348,8 @@ class BatteryEngine:
             if self._bluetooth_slot is None and physical_id is None and (not device_id or target_name == "bluetooth"):
                 pending.append(("query", "bluetooth", "", {"action": "query", "provider": "bluetooth"}, 14))
         while pending or active or wait_bluetooth and self._bluetooth_slot is not None:
+            if self._event_wakeup:
+                self._wakeup.clear()
             # Choose tasks before slots so affinity cannot let a new query
             # overtake an eligible query deferred from the previous round.
             for item in sorted(pending, key=lambda item: (item[0] == "query", task_key(item) not in priority)):
@@ -1830,7 +1563,10 @@ class BatteryEngine:
                         self._failure(task_key(item), item[1], "round_budget")
                 break
             if pending or active or wait_bluetooth and self._bluetooth_slot is not None:
-                time.sleep(0.01)
+                watched = list(active)
+                if self._bluetooth_slot is not None and self._bluetooth_slot not in watched:
+                    watched.append(self._bluetooth_slot)
+                self._wait_for_readers(self._next_reader_deadline(deadline, watched))
         return self._snapshot(request_id, generation, unadapted_inventory=full_inventory)
 
 

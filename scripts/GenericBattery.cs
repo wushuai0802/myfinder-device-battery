@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -255,8 +256,61 @@ namespace AtkBattery {
         readonly Func<bool> isSystemShuttingDown;
         readonly object lifecycle=new object();
         readonly object query=new object();
+        sealed class StdoutFrame {
+            internal readonly string Line;
+            internal readonly Exception Error;
+            internal readonly bool Eof;
+            internal StdoutFrame(string line,Exception error,bool eof){Line=line;Error=error;Eof=eof;}
+        }
+        sealed class ProcessStdoutPump:IDisposable {
+            readonly BlockingCollection<StdoutFrame> queue=new BlockingCollection<StdoutFrame>(128);
+            readonly CancellationTokenSource stop=new CancellationTokenSource();
+            readonly Thread thread;
+            volatile bool closed;
+            internal ProcessStdoutPump(StreamReader reader){
+                thread=new Thread(new ThreadStart(delegate{
+                    try{
+                        while(!closed){
+                            string line=AppRuntime.ReadLineBounded(reader,524288);
+                            if(line==null){TryPost(new StdoutFrame(null,null,true));break;}
+                            if(!TryPost(new StdoutFrame(line,null,false)))break;
+                        }
+                    }catch(Exception ex){
+                        TryPost(new StdoutFrame(null,ex,true));
+                    }finally{
+                        CompleteQueue();
+                    }
+                })) {IsBackground=true,Name="MyFinderEngineStdout"};
+                thread.Start();
+            }
+            void CompleteQueue(){
+                try{queue.CompleteAdding();}
+                catch(ObjectDisposedException){return;}
+                catch(InvalidOperationException){return;}
+            }
+            bool TryPost(StdoutFrame frame){
+                try{if(closed||queue.IsAddingCompleted)return false;queue.Add(frame,stop.Token);return true;}
+                catch(Exception){return false;}
+            }
+            internal bool TryTake(int timeoutMilliseconds,CancellationToken token,out StdoutFrame frame){
+                frame=null;
+                try{return queue.TryTake(out frame,Math.Max(1,timeoutMilliseconds),token);}
+                catch(ObjectDisposedException){frame=new StdoutFrame(null,null,true);return true;}
+                catch(InvalidOperationException){frame=new StdoutFrame(null,null,true);return true;}
+            }
+            public void Dispose(){
+                closed=true;
+                try{stop.Cancel();}
+                catch(ObjectDisposedException){return;}
+                CompleteQueue();
+                try{if(thread.Join(200)){queue.Dispose();stop.Dispose();}}
+                catch(ThreadStateException){return;}
+                catch(ObjectDisposedException){return;}
+            }
+        }
         int generation;long sequence;
         Process process;
+        ProcessStdoutPump stdoutPump;
         IntPtr job;
         bool disposed,quarantined;
         volatile bool shuttingDown;
@@ -309,6 +363,7 @@ namespace AtkBattery {
             if(job!=IntPtr.Zero){var limits=new ExtendedLimits();limits.Basic.Flags=0x2000;
                 if(!SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(ExtendedLimits)))||!AssignProcessToJobObject(job,process.Handle)){Stop();throw new IOException("Reader process lifetime protection failed.");}}
             else{Stop();throw new IOException("Reader process lifetime protection failed.");}
+            stdoutPump=new ProcessStdoutPump(process.StandardOutput);
             generation++;
             if(lease!=null){
                 try{var ready=ReadyCore(process,loadedPackVersion,20000,CancellationToken.None);packManager.SetLoaded(loadedPackVersion,ready.DevicePack.Disabled==null?0:ready.DevicePack.Disabled.Length);}
@@ -389,14 +444,16 @@ namespace AtkBattery {
         }
         FamilyMemoryResult ReceiveFamilyMemory(Process child,long request,int currentGeneration,int timeoutMilliseconds=0){
             int budget=timeoutMilliseconds>0?timeoutMilliseconds:queryBudget;
-            var clock=Stopwatch.StartNew();var reader=child.StandardOutput;
+            var clock=Stopwatch.StartNew();
+            ProcessStdoutPump pump;lock(lifecycle)pump=process==child?stdoutPump:null;
+            if(pump==null){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};}
             for(int frames=0;frames<128;frames++){
                 int remaining=Math.Max(1,budget-(int)clock.ElapsedMilliseconds);
-                var line=Task.Factory.StartNew(delegate{return AppRuntime.ReadLineBounded(reader,524288);});
-                if(!line.Wait(remaining)){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="timeout"};}
-                if(line.Result==null){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};}
+                StdoutFrame frame;
+                if(!pump.TryTake(remaining,CancellationToken.None,out frame)){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="timeout"};}
+                if(frame==null||frame.Error!=null||frame.Eof||frame.Line==null){Stop();return new FamilyMemoryResult {Ok=false,ErrorCode="engine_not_ready"};}
                 FamilyMemoryResult parsed;bool matches;
-                if(!TryParseFamilyMemoryReply(line.Result,request,currentGeneration,out parsed,out matches)||!matches){
+                if(!TryParseFamilyMemoryReply(frame.Line,request,currentGeneration,out parsed,out matches)||!matches){
                     if(clock.ElapsedMilliseconds>=budget)break;
                     continue;
                 }
@@ -477,11 +534,14 @@ namespace AtkBattery {
         }}
         WirelessSnapshot Receive(Process child,long request,int currentGeneration,Action<WirelessSnapshot> progress,WirelessDpiResult write,int timeoutMilliseconds=0,CancellationToken token=default(CancellationToken),string expectedProvider=null){
             int budget=timeoutMilliseconds>0?timeoutMilliseconds:queryBudget;
-            var clock=Stopwatch.StartNew();var reader=child.StandardOutput;
+            var clock=Stopwatch.StartNew();
+            ProcessStdoutPump pump;lock(lifecycle)pump=process==child?stdoutPump:null;
+            if(pump==null){Stop();return write==null?new WirelessSnapshot {Error="读取组件已重置，请重新同步。"}:DpiFailure(write,"读取组件已重置，DPI结果未确认。",true);}
             for(int frames=0;frames<128;frames++){
-                var line=Task.Factory.StartNew(delegate{return AppRuntime.ReadLineBounded(reader,524288);});
-                if(!line.Wait(Math.Max(1,budget-(int)clock.ElapsedMilliseconds),token)){Stop();return write==null?new WirelessSnapshot {Error="设备读取超时，保留最近数据。"}:DpiFailure(write,"DPI响应超时，结果未确认；未自动重试。",true);}
-                var snapshot=Parse(line.Result);
+                StdoutFrame frame;
+                if(!pump.TryTake(Math.Max(1,budget-(int)clock.ElapsedMilliseconds),token,out frame)){Stop();return write==null?new WirelessSnapshot {Error="设备读取超时，保留最近数据。"}:DpiFailure(write,"DPI响应超时，结果未确认；未自动重试。",true);}
+                if(frame!=null&&frame.Error!=null){Stop();throw frame.Error;}
+                var snapshot=Parse(frame==null||frame.Eof?null:frame.Line);
                 if(!String.IsNullOrEmpty(snapshot.Error)){Stop();return write==null?snapshot:DpiFailure(write,"DPI返回结果无效，结果未确认。",true);}
                 if(snapshot.Schema==1){if(write!=null){Stop();return DpiFailure(write,"DPI返回结果不能核对，结果未确认。",true);}snapshot.Complete=true;RememberDpi(snapshot,child,currentGeneration);return snapshot;}
                 if(snapshot.RequestId!=request||snapshot.Generation!=currentGeneration)continue;
@@ -595,10 +655,12 @@ namespace AtkBattery {
         }
         bool Stop() {lock(lifecycle){
             dpiLeases.Clear();
+            var pump=stdoutPump;stdoutPump=null;
             if(process!=null){try{process.StandardInput.Close();}catch(InvalidOperationException){}catch(IOException){} }
             if(job!=IntPtr.Zero){CloseHandle(job);job=IntPtr.Zero;}
             if(process!=null){bool confirmed=false;try{confirmed=terminate(process);}catch(InvalidOperationException){}catch(System.ComponentModel.Win32Exception){}
-                if(!confirmed){quarantined=true;return false;}process.Dispose();process=null;}
+                if(!confirmed){if(pump!=null)pump.Dispose();quarantined=true;return false;}process.Dispose();process=null;}
+            if(pump!=null)pump.Dispose();
             quarantined=false;return true;
         }}
         public void Dispose(){lock(lifecycle){disposed=true;Stop();}}

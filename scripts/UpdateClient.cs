@@ -10,6 +10,7 @@ using System.Threading;
 
 namespace AtkBattery {
     internal interface IUpdateTransport {UpdateResponse Get(Uri uri,CancellationToken token);}
+    internal interface IConditionalUpdateTransport:IUpdateTransport {UpdateResponse Get(Uri uri,string ifNoneMatch,bool acceptCompressed,CancellationToken token);}
     internal enum UpdateBackoffScope {Catalog,Asset}
     internal sealed class UpdateBackoffInfo {
         internal readonly DateTime UntilUtc;internal readonly string Source;internal readonly int FailureCount;
@@ -17,27 +18,37 @@ namespace AtkBattery {
         internal bool Waiting(DateTime now){return UntilUtc>now;}
     }
     internal sealed class UpdateResponse:IDisposable {
-        internal readonly int Status;internal readonly Stream Body;internal readonly long Length;internal readonly string Location,RetryAfter,RateLimitRemaining,RateLimitReset;
+        internal readonly int Status;internal readonly Stream Body;internal readonly long Length;internal readonly string Location,RetryAfter,RateLimitRemaining,RateLimitReset,ETag;
         readonly Action close;
-        internal UpdateResponse(int status,Stream body,long length,string location,string retryAfter,Action dispose=null):this(status,body,length,location,retryAfter,null,null,dispose){}
-        internal UpdateResponse(int status,Stream body,long length,string location,string retryAfter,string remaining,string reset,Action dispose=null){Status=status;Body=body;Length=length;Location=location;RetryAfter=retryAfter;RateLimitRemaining=remaining;RateLimitReset=reset;close=dispose;}
+        internal UpdateResponse(int status,Stream body,long length,string location,string retryAfter,Action dispose=null):this(status,body,length,location,retryAfter,null,null,null,dispose){}
+        internal UpdateResponse(int status,Stream body,long length,string location,string retryAfter,string remaining,string reset,Action dispose=null):this(status,body,length,location,retryAfter,remaining,reset,null,dispose){}
+        internal UpdateResponse(int status,Stream body,long length,string location,string retryAfter,string remaining,string reset,string etag,Action dispose=null){Status=status;Body=body;Length=length;Location=location;RetryAfter=retryAfter;RateLimitRemaining=remaining;RateLimitReset=reset;ETag=etag;close=dispose;}
         public void Dispose(){try{if(Body!=null)Body.Dispose();}finally{if(close!=null)close();}}
     }
-    internal sealed class UpdateHttp:IUpdateTransport {
+    internal sealed class UpdateHttp:IConditionalUpdateTransport {
         readonly string userAgent;readonly int timeout;
         internal UpdateHttp(string version,int timeoutMilliseconds=30000){userAgent="MyFinderDeviceBattery/"+UpdateVersion.Parse(version);timeout=timeoutMilliseconds;}
-        public UpdateResponse Get(Uri uri,CancellationToken token){
+        internal static bool IsSafeETag(string value){
+            if(String.IsNullOrWhiteSpace(value))return false;
+            string trimmed=value.Trim();
+            if(trimmed.Length==0||trimmed.Length>256)return false;
+            for(int i=0;i<trimmed.Length;i++){char c=trimmed[i];if(c<0x21||c>0x7E)return false;}
+            return true;
+        }
+        public UpdateResponse Get(Uri uri,CancellationToken token){return Get(uri,null,false,token);}
+        public UpdateResponse Get(Uri uri,string ifNoneMatch,bool acceptCompressed,CancellationToken token){
             // Framework 4.7.2 is the application's existing minimum. Restrict this client to TLS 1.2.
             ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
             ServicePointManager.CheckCertificateRevocationList=true;
             var request=(HttpWebRequest)WebRequest.Create(uri);request.Method="GET";request.UserAgent=userAgent;
             request.AllowAutoRedirect=false;request.Timeout=timeout;request.ReadWriteTimeout=timeout;request.UseDefaultCredentials=false;request.Credentials=null;
-            request.AutomaticDecompression=DecompressionMethods.None;
+            request.AutomaticDecompression=acceptCompressed?(DecompressionMethods.GZip|DecompressionMethods.Deflate):DecompressionMethods.None;
+            if(IsSafeETag(ifNoneMatch))request.Headers[HttpRequestHeader.IfNoneMatch]=ifNoneMatch.Trim();
             var registration=token.Register(request.Abort);
             try {
                 token.ThrowIfCancellationRequested();HttpWebResponse response;
                 try{response=(HttpWebResponse)request.GetResponse();}catch(WebException error){response=error.Response as HttpWebResponse;if(response==null)throw;}
-                return new UpdateResponse((int)response.StatusCode,response.GetResponseStream(),response.ContentLength,response.Headers["Location"],response.Headers["Retry-After"],response.Headers["X-RateLimit-Remaining"],response.Headers["X-RateLimit-Reset"],delegate{response.Dispose();registration.Dispose();});
+                return new UpdateResponse((int)response.StatusCode,response.GetResponseStream(),response.ContentLength,response.Headers["Location"],response.Headers["Retry-After"],response.Headers["X-RateLimit-Remaining"],response.Headers["X-RateLimit-Reset"],response.Headers["ETag"],delegate{response.Dispose();registration.Dispose();});
             }catch{registration.Dispose();throw;}
         }
     }
@@ -51,27 +62,34 @@ namespace AtkBattery {
         internal static void ValidateUri(Uri uri,bool redirect){
             if(uri==null||!uri.IsAbsoluteUri||uri.Scheme!=Uri.UriSchemeHttps||uri.Port!=443||uri.UserInfo.Length!=0||uri.Fragment.Length!=0||!(DownloadHosts.Contains(uri.IdnHost)||!redirect&&uri.AbsoluteUri.StartsWith(UpdateTrust.ApiUrl,StringComparison.Ordinal)&&uri.Host=="api.github.com"))throw new InvalidDataException("Update URL or redirect is not allowed.");
         }
-        internal static byte[] Fetch(IUpdateTransport transport,Uri uri,long limit,CancellationToken token,Action<long,long> progress,Func<TimeSpan> clock=null){using(var output=new MemoryStream()){Transfer(transport,uri,output,limit,token,progress,false,clock);return output.ToArray();}}
+        internal static byte[] Fetch(IUpdateTransport transport,Uri uri,long limit,CancellationToken token,Action<long,long> progress,Func<TimeSpan> clock=null){bool unusedNotModified;string unusedEtag;using(var output=new MemoryStream()){Transfer(transport,uri,output,limit,token,progress,false,clock,null,false,out unusedNotModified,out unusedEtag);return output.ToArray();}}
+        internal static byte[] FetchConditional(IUpdateTransport transport,Uri uri,long limit,string ifNoneMatch,CancellationToken token,out bool notModified,out string etag,Func<TimeSpan> clock=null){using(var output=new MemoryStream()){Transfer(transport,uri,output,limit,token,null,false,clock,ifNoneMatch,true,out notModified,out etag);return notModified?null:output.ToArray();}}
         internal static void Download(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,Func<TimeSpan> clock=null){
-            Transfer(transport,uri,output,limit,token,progress,true,clock);
+            bool unusedNotModified;string unusedEtag;
+            Transfer(transport,uri,output,limit,token,progress,true,clock,null,false,out unusedNotModified,out unusedEtag);
         }
-        static void Transfer(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,bool download,Func<TimeSpan> clock){
-            try{DownloadCore(transport,uri,output,limit,token,progress,download,clock);}catch(Exception){token.ThrowIfCancellationRequested();throw;}
+        static void Transfer(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,bool download,Func<TimeSpan> clock,string ifNoneMatch,bool acceptCompressed,out bool notModified,out string etag){
+            try{DownloadCore(transport,uri,output,limit,token,progress,download,clock,ifNoneMatch,acceptCompressed,out notModified,out etag);}catch(Exception){token.ThrowIfCancellationRequested();throw;}
         }
         static void CheckTimeout(TimeSpan elapsed,TimeSpan idle,bool download){
             if(download?elapsed.TotalMinutes>=30:elapsed.TotalSeconds>120)throw new TimeoutException("Update download timed out.");
             if(download&&idle.TotalSeconds>=30)throw new TimeoutException("Update download stalled.");
         }
-        static void DownloadCore(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,bool download,Func<TimeSpan> clock){
+        static void DownloadCore(IUpdateTransport transport,Uri uri,Stream output,long limit,CancellationToken token,Action<long,long> progress,bool download,Func<TimeSpan> clock,string ifNoneMatch,bool acceptCompressed,out bool notModified,out string etag){
+            notModified=false;etag=null;
             var stopwatch=Stopwatch.StartNew();if(clock==null)clock=delegate{return stopwatch.Elapsed;};
             var started=clock();var lastData=started;
             Action checkTimeout=delegate{var now=clock();CheckTimeout(now-started,now-lastData,download);};
+            var conditional=transport as IConditionalUpdateTransport;
             for(int redirects=0;;redirects++){
                 token.ThrowIfCancellationRequested();ValidateUri(uri,redirects!=0);checkTimeout();
-                using(var response=transport.Get(uri,token)){
+                using(var response=conditional!=null?conditional.Get(uri,redirects==0?ifNoneMatch:null,acceptCompressed&&!download,token):transport.Get(uri,token)){
                     token.ThrowIfCancellationRequested();checkTimeout();
                     if(response.Status==301||response.Status==302||response.Status==303||response.Status==307||response.Status==308){
                         Uri next;if(redirects>=5||String.IsNullOrEmpty(response.Location)||!Uri.TryCreate(uri,response.Location,out next))throw new InvalidDataException("Invalid update redirect.");ValidateUri(next,true);uri=next;continue;
+                    }
+                    if(!download&&response.Status==304){
+                        notModified=true;etag=response.ETag;return;
                     }
                     if(response.Status!=200)throw new UpdateHttpFailure(response.Status,response.RetryAfter,response.RateLimitRemaining,response.RateLimitReset);
                     if(response.Length>limit)throw new InvalidDataException("Update download exceeds its limit.");
@@ -84,7 +102,7 @@ namespace AtkBattery {
                         token.ThrowIfCancellationRequested();checkTimeout();if(read==0)break;lastData=clock();
                         count+=read;if(count>limit)throw new InvalidDataException("Update download exceeds its limit.");output.Write(buffer,0,read);if(progress!=null)progress(count,response.Length);
                     }
-                    token.ThrowIfCancellationRequested();if(response.Length>=0&&response.Length!=count)throw new InvalidDataException("Truncated update download.");return;
+                    token.ThrowIfCancellationRequested();if(response.Length>=0&&response.Length!=count)throw new InvalidDataException("Truncated update download.");etag=response.ETag;return;
                 }
             }
         }
@@ -103,7 +121,9 @@ namespace AtkBattery {
         [DataMember(EmitDefaultValue=false)] public string CatalogBackoffSource;
         [DataMember(EmitDefaultValue=false)] public string AssetBackoffSource;
         [DataMember(EmitDefaultValue=false)] public bool CatalogRetryPending;
-        [OnDeserializing] void Defaults(StreamingContext context){LastCheckUtc=NotBeforeUtc=CatalogNotBeforeUtc=AssetNotBeforeUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);CatalogFailureCount=AssetFailureCount=0;CatalogBackoffSource=AssetBackoffSource=null;}
+        [DataMember(EmitDefaultValue=false)] public string CatalogETag;
+        [DataMember(EmitDefaultValue=false)] public string CatalogEndpoint;
+        [OnDeserializing] void Defaults(StreamingContext context){LastCheckUtc=NotBeforeUtc=CatalogNotBeforeUtc=AssetNotBeforeUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);CatalogFailureCount=AssetFailureCount=0;CatalogBackoffSource=AssetBackoffSource=CatalogETag=CatalogEndpoint=null;}
     }
     internal static class UpdateSchedule {
         internal static readonly TimeSpan NormalInterval=TimeSpan.FromHours(6);
@@ -163,15 +183,38 @@ namespace AtkBattery {
                 try{Save();}catch(Exception){ErrorCode="update_state_write_failed";return null;}
             }
             try {
-                var bytes=UpdateNetwork.Fetch(transport,new Uri(UpdateTrust.ApiUrl+"?per_page=100"),2097152,token,null);
-                var releases=UpdateJson.Read<UpdateRelease[]>(bytes);UpdateRelease candidate;
-                bool? betas=Betas;lock(gate)candidate=UpdateCatalog.Select(releases,current,state.SkippedVersion,betas);
+                bool? betas=Betas;
+                UpdateVersion installedVersion;
+                bool useBetaFeed=betas??(UpdateVersion.TryParse(current,out installedVersion)&&installedVersion.IsBeta);
+                // Stable channel queries /releases/latest (immune to >100 release page-1 truncation);
+                // beta channel queries a compact recent page. Both reuse persisted ETag for zero-quota 304 checks.
+                string endpoint=useBetaFeed?(UpdateTrust.ApiUrl+"?per_page=30"):(UpdateTrust.ApiUrl+"/latest");
+                string priorETag=null;
+                lock(gate){if(String.Equals(state.CatalogEndpoint,endpoint,StringComparison.Ordinal)&&UpdateHttp.IsSafeETag(state.CatalogETag))priorETag=state.CatalogETag;}
+                bool notModified;string nextETag;
+                var bytes=UpdateNetwork.FetchConditional(transport,new Uri(endpoint),2097152,priorETag,token,out notModified,out nextETag);
+                if(notModified){
+                    lock(gate){
+                        if(UpdateHttp.IsSafeETag(nextETag))state.CatalogETag=nextETag.Trim();
+                        state.CatalogEndpoint=endpoint;
+                        Clear(UpdateBackoffScope.Catalog);
+                        Save();
+                    }
+                    ErrorCode=null;return CachedRelease;
+                }
+                var releases=ParseCatalogReleases(bytes);UpdateRelease candidate;
+                lock(gate)candidate=UpdateCatalog.Select(releases,current,state.SkippedVersion,betas);
                 if(candidate!=null){
                     var assets=UpdateCatalog.ValidateAssets(candidate,candidate.Version);
                     // Bound the cached metadata just like the dialog notes; retain only required assets.
                     candidate=new UpdateRelease {Tag=candidate.Tag,Prerelease=candidate.Prerelease,Body=UpdateText.Notes(candidate.Body),Assets=new List<UpdateAsset>(assets.Values).ToArray()};
                 }
-                lock(gate){state.AvailableRelease=candidate;Clear(UpdateBackoffScope.Catalog);Save();}ErrorCode=null;return candidate;
+                lock(gate){
+                    state.AvailableRelease=candidate;
+                    state.CatalogEndpoint=endpoint;
+                    state.CatalogETag=UpdateHttp.IsSafeETag(nextETag)?nextETag.Trim():null;
+                    Clear(UpdateBackoffScope.Catalog);Save();
+                }ErrorCode=null;return candidate;
             }catch(UpdateHttpFailure error){
                 ErrorCode="update_http_"+error.Status;
                 if(error.Status==403||error.Status==429)lock(gate){ApplyBackoff(UpdateBackoffScope.Catalog,error,now);try{Save();}catch(Exception){}}
@@ -234,8 +277,18 @@ namespace AtkBattery {
         internal bool MarkNotified(string version){lock(gate){if(state.SkippedVersion==version)return false;UpdateVersion previous;if(UpdateVersion.TryParse(state.NotifiedVersion,out previous)&&UpdateVersion.Parse(version).CompareTo(previous)<=0)return false;state.NotifiedVersion=version;Save();return true;}}
         // The cache holds one release chosen under the previous beta choice; let the next
         // automatic check run now (still honouring any server back-off).
-        internal void ForgetLastCheck(){lock(gate){state.LastCheckUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);try{Save();}catch(Exception){}}}
-        internal void Skip(string version){UpdateVersion.Parse(version);lock(gate){state.SkippedVersion=version;Save();}}
+        internal void ForgetLastCheck(){lock(gate){state.LastCheckUtc=DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);state.CatalogETag=null;state.CatalogEndpoint=null;try{Save();}catch(Exception){}}}
+        static UpdateRelease[] ParseCatalogReleases(byte[] bytes){
+            if(bytes==null||bytes.Length==0)return new UpdateRelease[0];
+            int start=bytes.Length>=3&&bytes[0]==0xEF&&bytes[1]==0xBB&&bytes[2]==0xBF?3:0;
+            while(start<bytes.Length&&(bytes[start]==' '||bytes[start]=='\t'||bytes[start]=='\r'||bytes[start]=='\n'))start++;
+            if(start<bytes.Length&&bytes[start]=='{'){
+                var single=UpdateJson.Read<UpdateRelease>(bytes);
+                return single==null?new UpdateRelease[0]:new[]{single};
+            }
+            return UpdateJson.Read<UpdateRelease[]>(bytes)??new UpdateRelease[0];
+        }
+        internal void Skip(string version){UpdateVersion.Parse(version);lock(gate){state.SkippedVersion=version;state.CatalogETag=null;state.CatalogEndpoint=null;Save();}}
     }
     internal interface IUpdateInstaller {
         bool IsStable(CancellationToken token);
@@ -254,21 +307,35 @@ namespace AtkBattery {
         // This seam does not exist in the shipped binary. Tests never need the release private key.
         internal void InstallForTests(UpdateRelease release,CancellationToken token,Action<long,long> progress,string key,Action commit=null){InstallSigned(release,token,progress,key,commit);}
 #endif
-        void CheckSpace(){
+        internal static Dictionary<string,long> RequiredSpaceBytes(string updatesDirectory,string tempDirectory,string installDirectory,long zipAssetSize){
             var required=new Dictionary<string,long>(StringComparer.OrdinalIgnoreCase);
+            long zipBytes=Math.Max(16L*1024*1024,Math.Min(UpdateTrust.MaxDownloadBytes,zipAssetSize>0?zipAssetSize:UpdateTrust.MaxDownloadBytes));
+            long unpacked=Math.Min(UpdateTrust.MaxExpandedBytes,Math.Max(128L*1024*1024,zipBytes*5));
             Action<string,long> reserve=delegate(string directory,long bytes){UpdatePaths.NoLinks(directory);string drive=Path.GetPathRoot(Path.GetFullPath(directory));long old;required.TryGetValue(drive,out old);required[drive]=old+bytes;};
             // ZIP + two independent extractions; installer candidate + rollback copies in TEMP;
-            // and destination growth. Sum reservations when these directories share a volume.
-            reserve(UpdatesDirectory,UpdateTrust.MaxDownloadBytes+UpdateTrust.MaxExpandedBytes*2);
-            reserve(Path.GetTempPath(),UpdateTrust.MaxExpandedBytes*2);reserve(installDirectory,UpdateTrust.MaxExpandedBytes);
-            foreach(var entry in required)if(new DriveInfo(entry.Key).AvailableFreeSpace<entry.Value)throw new IOException("Insufficient free space for a transactional update.");
+            // and destination growth, sized from the signed asset instead of worst-case hard caps.
+            reserve(updatesDirectory,zipBytes+unpacked*2);
+            reserve(tempDirectory,unpacked*2);
+            reserve(installDirectory,unpacked);
+            return required;
+        }
+        void CheckSpace(long zipAssetSize){
+            var required=RequiredSpaceBytes(UpdatesDirectory,Path.GetTempPath(),installDirectory,zipAssetSize);
+            foreach(var entry in required){
+                long available=new DriveInfo(entry.Key).AvailableFreeSpace;
+                if(available<entry.Value){
+                    long needMb=(entry.Value+1048575)/1048576;
+                    long freeMb=available/1048576;
+                    throw new IOException("磁盘 "+entry.Key+" 可用空间不足（更新约需 "+needMb.ToString(CultureInfo.InvariantCulture)+" MB，当前可用 "+freeMb.ToString(CultureInfo.InvariantCulture)+" MB）。");
+                }
+            }
         }
         void InstallSigned(UpdateRelease release,CancellationToken token,Action<long,long> progress,string key,Action commit){
             token.ThrowIfCancellationRequested();if(!installer.IsStable(token))throw new InvalidOperationException("Portable copies cannot be updated in place.");
             string version=release.Version;var targetVersion=UpdateVersion.Parse(version);var installedVersion=UpdateVersion.Parse(current);
             if(targetVersion.CompareTo(installedVersion)<=0||!(AllowBeta??installedVersion.IsBeta)&&(release.Prerelease||targetVersion.IsBeta))throw new InvalidDataException("Update downgrade or channel mismatch refused.");
             var assets=UpdateCatalog.ValidateAssets(release,version);
-            CheckSpace();
+            CheckSpace(assets[UpdateTrust.ZipName(version)].Size);
             string versionDirectory=UpdatePaths.Resolve(UpdatesDirectory,version);UpdatePaths.NoLinks(versionDirectory);
             Directory.CreateDirectory(versionDirectory);string work=Path.Combine(versionDirectory,"run-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(work);bool handedOff=false;
             try {

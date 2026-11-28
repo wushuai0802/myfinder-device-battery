@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Manifest.Common.ps1')
 $release=Read-DeviceBatteryRelease $projectRoot
+$expectedAssembly=($release.version.Split('-')[0]+'.0')
+if($release.assemblyVersion -cne $expectedAssembly){throw ('release.json assemblyVersion ('+$release.assemblyVersion+') must match version base ('+$expectedAssembly+').')}
 $buildOutput = if ($OutputDirectory) { $OutputDirectory } else { Join-Path $projectRoot 'outputs' }
 $compiler = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'Windows .NET Framework compiler is unavailable.' }
@@ -16,7 +18,7 @@ $settingsSource = Join-Path $PSScriptRoot 'DeviceSettings.cs'
 $iconRelative = 'assets/app-icon.ico'
 $iconPath = Join-Path $projectRoot $iconRelative
 if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw 'The application icon is missing. Restore assets/app-icon.ico or rebuild it with tools/Build-AppIcon.cjs.' }
-& $compiler /nologo /target:exe /platform:x64 /optimize+ "/out:$(Join-Path $buildOutput 'AtkBatteryProbe.exe')" $hidSource (Join-Path $PSScriptRoot 'Probe.cs') (Join-Path $PSScriptRoot 'Tests.cs')
+& $compiler /nologo /target:exe /platform:x64 /optimize+ /debug:pdbonly "/out:$(Join-Path $buildOutput 'AtkBatteryProbe.exe')" $hidSource (Join-Path $PSScriptRoot 'Probe.cs') (Join-Path $PSScriptRoot 'Tests.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Probe build failed.' }
 $assembly=Join-Path $buildOutput 'AssemblyInfo.generated.cs'
 $metadata=@'
@@ -32,7 +34,7 @@ using System.Reflection;
 $uiSources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
 $uiSources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
 $uiSources+=('/resource:'+(Join-Path $projectRoot 'engine\device_pack_schema.json')+',DevicePackSchema')
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ "/win32icon:$iconPath" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $uiSources $assembly
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ /debug:pdbonly "/win32icon:$iconPath" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $uiSources $assembly
 if ($LASTEXITCODE -ne 0) { throw 'Tray build failed.' }
 & (Join-Path $buildOutput 'AtkBatteryProbe.exe') --self-test
 if ($LASTEXITCODE -ne 0) { throw 'Offline tests failed.' }
