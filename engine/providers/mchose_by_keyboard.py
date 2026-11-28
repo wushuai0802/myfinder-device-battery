@@ -1,4 +1,4 @@
-"""BY reads for shared 3554:FA09; model-gated BY for 41E4:2001.
+"""BY reads for shared 3554:FA09; model-gated BY for 41E4:2001 and 41E4:2004.
 
 Protocol facts independently implemented from M HUB / VGN HUB, not vendor code.
 See upstream-protocols.md for framing, identification and untested limits.
@@ -12,6 +12,7 @@ VID = 0x3554
 PIDS = {
     (0x3554, 0xFA09): "2.4G 无线键盘（3554:FA09）",
     (0x41E4, 0x2001): "MCHOSE BY keyboard (model identification required)",
+    (0x41E4, 0x2004): "MCHOSE BY keyboard (model identification required)",
 }
 RECEIVER_NAMES = frozenset(("2.4G Wireless Receiver", "MCHOSE 2.4G Wireless"))
 
@@ -117,10 +118,53 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
                 del cache[key]
         return result
 
+    def _is_proven_by(self, item):
+        return (bool(item.get("path"))
+                and all(type(item.get(d + "_report_length")) is int
+                        and item[d + "_report_length"] == 20
+                        and item.get(d + "_report_sizes") == {"19": 20}
+                        and type(item[d + "_report_sizes"]["19"]) is int
+                        for d in ("input", "output")))
+
+    def _pick_ua_2004(self, receiver):
+        # M HUB's ua predicate filters 41E4:2004 on usagePage FF00 (MI_01),
+        # then sends wireless report 0x13 (20 B) which Windows routes to
+        # sibling FF02:0002 (#1142 descriptor: Col01 FF02:0002 in/out 13=20,
+        # Col06/07 FF00:0001 feature-only). Require FF00:0001 marker(s) and a
+        # unique proven FF02:0002 transport on the same non-empty physical receiver.
+        markers = [item for item in receiver
+                   if (item.get("usage_page"), item.get("usage")) == (0xFF00, 1)]
+        ff02 = [item for item in receiver
+                if (item.get("usage_page"), item.get("usage")) == (0xFF02, 2)]
+        if not markers or len(ff02) != 1 or not ff02[0].get("path"):
+            self._diag.append("missing or ambiguous eligible collection: nothing sent")
+            return None
+        info = ff02[0]
+        physical = info.get("physical_id")
+        if not physical or any(item.get("physical_id") != physical for item in markers):
+            self._diag.append("missing or ambiguous eligible collection: nothing sent")
+            return None
+        self._key = (physical, info.get("path"))
+        self._seen.add(self._key)
+        if (info.get("product_string") not in RECEIVER_NAMES
+                or any(item.get("product_string") not in RECEIVER_NAMES for item in markers)):
+            self._diag.append("unrecognized wireless receiver name: nothing sent")
+            return None
+        if not self._is_proven_by(info):
+            self._diag.append("single byte-array report not proven: nothing sent")
+            return None
+        return info
+
     def _pick(self, infos):
         receiver = [info for info in infos
                       if info.get("vendor_id") == self.vid
                       and info.get("product_id") in self.pids]
+        pids = {info.get("product_id") for info in receiver}
+        if len(pids) > 1:
+            self._diag.append("missing or ambiguous eligible collection: nothing sent")
+            return None
+        if self.vid == 0x41E4 and pids == {0x2004}:
+            return self._pick_ua_2004(receiver)
         candidates = [info for info in receiver
                       if (info.get("usage_page"), info.get("usage")) == self.collection]
         # M HUB filters a WebHID device containing FF04, then sends report 13.
@@ -131,14 +175,9 @@ class MchoseByKeyboardProvider(H.BatteryHidProvider):
             return None
         info = candidates[0]
         by = [item for item in receiver
-              if item.get("path")
-              and (item.get("usage_page"), item.get("usage")) in (self.collection, (0xFF02, 2))
+              if (item.get("usage_page"), item.get("usage")) in (self.collection, (0xFF02, 2))
               and (item.get("usage_page") == self.collection[0] or item.get("physical_id"))
-              and all(type(item.get(d + "_report_length")) is int
-                      and item[d + "_report_length"] == 20
-                      and item.get(d + "_report_sizes") == {"19": 20}
-                      and type(item[d + "_report_sizes"]["19"]) is int
-                      for d in ("input", "output"))]
+              and self._is_proven_by(item)]
         if len(by) > 1:
             self._diag.append("missing or ambiguous eligible collection: nothing sent")
             return None
