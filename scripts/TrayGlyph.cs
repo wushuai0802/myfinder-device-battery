@@ -26,16 +26,95 @@ namespace AtkBatteryTray {
         internal static Color UpdateBadgeBackground(string style,int? percent,bool dark,bool stale,bool taskbarDark){
             string normalized=AtkBattery.TrayConfiguration.NormalizeTrayIconStyle(style);
             if(normalized=="badge")return BadgeFill(percent,stale);
-            if(normalized=="minimal")return taskbarDark?Color.FromArgb(24,27,32):Color.FromArgb(242,244,248);
+            if(normalized=="minimal"||normalized=="device_number")return taskbarDark?Color.FromArgb(24,27,32):Color.FromArgb(242,244,248);
             if(normalized=="device")return LevelColor(percent,dark);
             return NumberFill(percent,stale);
         }
         public static Bitmap RenderStyle(string style,int? percent,bool charge,bool dark,bool stale,int size,string kind,bool approximate=false,Color? updateBadge=null,bool? taskbarDark=null){
             string normalized=AtkBattery.TrayConfiguration.NormalizeTrayIconStyle(style);
             if(normalized=="device")return RenderDevice(percent,charge,dark,stale,size,kind,updateBadge,taskbarDark);
+            if(normalized=="device_number")return RenderDeviceNumber(percent,charge,dark,stale,size,kind,approximate,updateBadge,taskbarDark);
             if(normalized=="badge")return RenderBadge(percent,charge,dark,stale,size,approximate,updateBadge,taskbarDark);
             if(normalized=="minimal")return RenderMinimal(percent,charge,dark,stale,size,approximate,updateBadge,taskbarDark);
             return Render(percent,charge,dark,stale,size,approximate,updateBadge,taskbarDark);
+        }
+        public static Bitmap RenderDeviceNumber(int? percent,bool charge,bool dark,bool stale,int size,string kind,bool approximate=false,Color? updateBadge=null,bool? taskbarDark=null){
+            size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
+            bool effectiveDark=taskbarDark??dark;
+            using(var large=new Bitmap(canvas,canvas,PixelFormat.Format32bppPArgb)){
+                using(var g=Graphics.FromImage(large)){
+                    g.Clear(Color.Transparent);g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;
+                    g.ScaleTransform(canvas/32f,canvas/32f);
+                    Color gray=LevelColor(null,effectiveDark);
+                    Color foreground=VisualDesign.HighContrast?SystemColors.WindowText:(effectiveDark?Color.FromArgb(244,246,248):Color.FromArgb(26,34,44));
+                    Color symbol=percent.HasValue&&!stale?foreground:gray;
+
+                    if(updateBadge.HasValue&&charge){
+                        var symState=g.Save();
+                        g.TranslateTransform(16.0f,6.8f);
+                        g.ScaleTransform(0.76f,0.88f);
+                        g.TranslateTransform(-16.0f,-6.8f);
+                        DrawMiniDeviceSymbol(g,kind,symbol);
+                        g.Restore(symState);
+                    }else{
+                        float shiftX=updateBadge.HasValue?-3.2f:(charge?-1.8f:0f);
+                        g.TranslateTransform(shiftX,0f);
+                        DrawMiniDeviceSymbol(g,kind,symbol);
+                        g.TranslateTransform(-shiftX,0f);
+                    }
+
+                    if(charge){
+                        float boltShift=updateBadge.HasValue?-23.2f:0f;
+                        g.TranslateTransform(boltShift,0f);
+                        using(var marker=new SolidBrush(VisualDesign.HighContrast?SystemColors.Window:Color.FromArgb(18,24,32)))g.FillEllipse(marker,24.6f,0.8f,6.4f,9.2f);
+                        PointF[] bolt={new PointF(28.8f,1.8f),new PointF(25.9f,5.6f),new PointF(27.8f,5.6f),new PointF(26.9f,9.0f),new PointF(29.9f,4.6f),new PointF(28.1f,4.6f)};
+                        using(var brush=new SolidBrush(VisualDesign.HighContrast?SystemColors.WindowText:(percent.HasValue&&!stale?Color.White:gray)))g.FillPolygon(brush,bolt);
+                        g.TranslateTransform(-boltShift,0f);
+                    }
+
+                    Color pillFill=BadgeFill(percent,stale);
+                    Color digitFg=VisualDesign.HighContrast?SystemColors.WindowText:Color.White;
+                    using(var pill=VisualDesign.RoundRect(1.0f,14.2f,30.0f,16.8f,4.8f)){
+                        using(var fillBrush=new SolidBrush(pillFill))g.FillPath(fillBrush,pill);
+                        using(var edge=new Pen(VisualDesign.HighContrast?SystemColors.WindowText:Color.FromArgb(48,Color.White),0.75f))g.DrawPath(edge,pill);
+                    }
+                    DrawDigits(g,percent.HasValue?percent.Value.ToString():"--",false,digitFg,Color.Transparent,13.6f,12.0f,24.8f,26.2f,22.8f,16.0f);
+                }
+                var result=new Bitmap(size,size,PixelFormat.Format32bppPArgb);
+                using(var g=Graphics.FromImage(result))using(var attributes=new ImageAttributes()){
+                    g.CompositingMode=CompositingMode.SourceCopy;g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;
+                    attributes.SetWrapMode(WrapMode.TileFlipXY);g.DrawImage(large,new Rectangle(0,0,size,size),0,0,canvas,canvas,GraphicsUnit.Pixel,attributes);
+                }
+                result.SetPixel(0,0,Color.Transparent);result.SetPixel(size-1,0,Color.Transparent);
+                result.SetPixel(0,size-1,Color.Transparent);result.SetPixel(size-1,size-1,Color.Transparent);
+                if(updateBadge.HasValue)UpdateBadge.Paint(result,updateBadge.Value,effectiveDark);
+                return result;
+            }
+        }
+        static void DrawMiniDeviceSymbol(Graphics g,string kind,Color color){
+            using(var pen=new Pen(color,2.0f){StartCap=LineCap.Round,EndCap=LineCap.Round,LineJoin=LineJoin.Round})
+            using(var fill=new SolidBrush(color)){
+                if(kind=="mouse"){
+                    using(var body=VisualDesign.RoundRect(11.4f,1.0f,9.2f,11.6f,4.4f))g.DrawPath(pen,body);
+                    g.DrawLine(pen,16.0f,3.2f,16.0f,6.4f);
+                }else if(kind=="headset"){
+                    g.DrawArc(pen,9.2f,1.3f,13.6f,11.4f,180,180);
+                    using(var left=VisualDesign.RoundRect(8.2f,6.2f,3.6f,6.0f,1.6f))g.FillPath(fill,left);
+                    using(var right=VisualDesign.RoundRect(20.2f,6.2f,3.6f,6.0f,1.6f))g.FillPath(fill,right);
+                }else if(kind=="keyboard"){
+                    using(var body=VisualDesign.RoundRect(6.2f,2.0f,19.6f,9.8f,2.2f))g.DrawPath(pen,body);
+                    g.FillEllipse(fill,9.2f,4.4f,2.0f,2.0f);g.FillEllipse(fill,13.2f,4.4f,2.0f,2.0f);g.FillEllipse(fill,17.2f,4.4f,2.0f,2.0f);g.FillEllipse(fill,21.2f,4.4f,2.0f,2.0f);
+                    g.DrawLine(pen,10.6f,9.1f,21.4f,9.1f);
+                }else if(kind=="gamepad"){
+                    using(var body=VisualDesign.RoundRect(6.8f,2.0f,18.4f,9.6f,4.4f))g.DrawPath(pen,body);
+                    g.DrawLine(pen,9.6f,6.8f,13.4f,6.8f);g.DrawLine(pen,11.5f,4.9f,11.5f,8.7f);
+                    g.FillEllipse(fill,18.0f,4.8f,2.1f,2.1f);g.FillEllipse(fill,20.4f,6.9f,2.1f,2.1f);
+                }else{
+                    using(var body=VisualDesign.RoundRect(9.8f,1.6f,12.4f,10.4f,2.6f))g.DrawPath(pen,body);
+                    g.DrawLine(pen,13.0f,5.0f,19.0f,5.0f);
+                    g.FillEllipse(fill,14.8f,7.4f,2.4f,2.4f);
+                }
+            }
         }
         public static Bitmap RenderBadge(int? percent,bool charge,bool dark,bool stale,int size,bool approximate=false,Color? updateBadge=null,bool? taskbarDark=null){
             size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
@@ -182,11 +261,12 @@ namespace AtkBatteryTray {
                 return result;
             }
         }
-        static void DrawDigits(Graphics g,string text,bool charge,Color fg,Color halo,float twoDigitHeight=18.2f,float threeDigitHeight=16.5f,float twoDigitWidth=24.4f,float threeDigitWidth=23f) {
+        static void DrawDigits(Graphics g,string text,bool charge,Color fg,Color halo,float twoDigitHeight=18.2f,float threeDigitHeight=16.5f,float twoDigitWidth=24.4f,float threeDigitWidth=23f,float centerY=16.2f,float? centerX=null) {
             if(text=="--") {
                 using(var pen=new Pen(fg,2.3f)) {
                     pen.StartCap=LineCap.Round;pen.EndCap=LineCap.Round;
-                    g.DrawLine(pen,9.5f,16.2f,13.5f,16.2f);g.DrawLine(pen,18.5f,16.2f,22.5f,16.2f);
+                    float dashCx=centerX??16f;
+                    g.DrawLine(pen,dashCx-6.5f,centerY,dashCx-2.5f,centerY);g.DrawLine(pen,dashCx+2.5f,centerY,dashCx+6.5f,centerY);
                 }
                 return;
             }
@@ -199,9 +279,9 @@ namespace AtkBatteryTray {
                 float targetHeight=text.Length>=3?threeDigitHeight:twoDigitHeight;
                 float sy=targetHeight/bounds.Height;
                 float sx=Math.Min(sy,(text.Length>=3?threeDigitWidth:twoDigitWidth)/bounds.Width);
-                float cx=charge?14.8f:16f;
+                float cx=centerX??(charge?14.8f:16f);
                 using(var matrix=new Matrix()) {
-                    matrix.Translate(cx,16.2f);matrix.Scale(sx,sy);matrix.Translate(-bounds.X-bounds.Width/2f,-bounds.Y-bounds.Height/2f);path.Transform(matrix);
+                    matrix.Translate(cx,centerY);matrix.Scale(sx,sy);matrix.Translate(-bounds.X-bounds.Width/2f,-bounds.Y-bounds.Height/2f);path.Transform(matrix);
                 }
                 using(var brush=new SolidBrush(fg))g.FillPath(brush,path);
             }

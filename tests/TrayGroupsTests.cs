@@ -344,7 +344,155 @@ static class TrayGroupsTests {
             f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==224;}));
             f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==453;}));
             Check(DeviceSettings.Current.TrayIconStyle=="minimal"&&f.Nav.Page==PopupPage.TrayIcons,"popup menu selects minimal style (453)");
+            f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==224;}));
+            f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==454;}));
+            Check(DeviceSettings.Current.TrayIconStyle=="device_number"&&f.Nav.Page==PopupPage.TrayIcons,"popup menu selects device_number combo style (454)");
         }
+    }
+    static void DeviceNumberComboAndPerGroupStyles(){
+        // #1112: combo "device_number" style + per-group IconStyle override + tooltip safety.
+        string path=Path.Combine(output,"tray-1112-roundtrip.json");
+        var pref=new AudioBindings {TrayIconStyle="device_number"};
+        var headsetGroup=TrayConfiguration.Add(pref);headsetGroup.Name="耳机组";headsetGroup.IconStyle="badge";
+        var kbGroup=TrayConfiguration.Add(pref);kbGroup.Name="键盘组";kbGroup.IconStyle=null;
+        DeviceSettings.SaveBindings(path,pref);
+        string rawJson=File.ReadAllText(path);
+        Check(rawJson.Contains("\"IconStyle\":\"badge\""),"explicit group IconStyle persists to JSON");
+        var loaded=DeviceSettings.LoadBindings(path);
+        Check(loaded.TrayIconStyle=="device_number","global device_number style survives round trip");
+        Check(loaded.TrayGroups.Count==2&&loaded.TrayGroups[0].IconStyle=="badge"&&loaded.TrayGroups[1].IconStyle==null,"per-group IconStyle and null inheritance survive round trip");
+        Check(TrayConfiguration.EffectiveGroupTrayIconStyle(loaded,loaded.TrayGroups[0])=="badge","group override beats global style");
+        Check(TrayConfiguration.EffectiveGroupTrayIconStyle(loaded,loaded.TrayGroups[1])=="device_number","null group style inherits global style");
+
+        // Malformed JSON IconStyle must degrade cleanly to null without dropping the group or legacy settings.
+        var malformed=Load(",\"TrayGroups\":[{\"Id\":\"g2\",\"Name\":\"耳机\",\"IconStyle\":\"unknown_future\",\"Members\":[\"h1\"]},{\"Id\":\"g3\",\"Name\":\"键盘\",\"IconStyle\":123,\"Members\":[\"k1\"]}],\"TrayIconStyle\":\"device_number\"");
+        Kept(malformed);
+        Check(malformed.TrayIconStyle=="device_number"&&malformed.TrayGroups.Count==2&&malformed.TrayGroups[0].IconStyle==null&&malformed.TrayGroups[1].IconStyle==null,"invalid or non-string group IconStyle degrades cleanly to inherit");
+
+        // Verify distinct top device silhouettes and bottom numeric pill across sizes and themes.
+        VisualDesign.HighContrastOverride=false;
+        foreach(int size in new[]{16,20,24,32})foreach(bool dark in new[]{false,true}){
+            using(var mouse79=TrayGlyph.RenderStyle("device_number",79,false,dark,false,size,"mouse",false,null,dark))
+            using(var headset79=TrayGlyph.RenderStyle("device_number",79,false,dark,false,size,"headset",false,null,dark))
+            using(var keyboard79=TrayGlyph.RenderStyle("device_number",79,false,dark,false,size,"keyboard",false,null,dark))
+            using(var gamepad79=TrayGlyph.RenderStyle("device_number",79,false,dark,false,size,"gamepad",false,null,dark))
+            using(var mouse100=TrayGlyph.RenderStyle("device_number",100,false,dark,false,size,"mouse",false,null,dark))
+            using(var badge79=TrayGlyph.RenderStyle("badge",79,false,dark,false,size,"mouse",false,null,dark))
+            using(var device79=TrayGlyph.RenderStyle("device",79,false,dark,false,size,"mouse",false,null,dark))
+            using(var chargeUpdate=TrayGlyph.RenderStyle("device_number",42,true,dark,false,size,"keyboard",false,UpdateBadge.Blue,dark)){
+                Check(mouse79.Width==size&&mouse79.Height==size&&chargeUpdate.Width==size,"device_number renders exact native size "+size+"px");
+                Check(mouse79.GetPixel(0,0).A==0&&mouse79.GetPixel(size-1,size-1).A==0,"device_number keeps transparent corners at "+size+"px");
+                Check(chargeUpdate.GetPixel(size-2,1).A>200,"device_number preserves update badge dot when charging + update badge coexist at "+size+"px");
+                int splitY=(int)Math.Floor(size*0.44);
+                bool mouseVsHeadsetTop=false,mouseVsKbTop=false,mouseVsPadTop=false,pct79Vs100Bottom=false,diffBadge=false,diffDevice=false;
+                for(int y=0;y<size;y++)for(int x=0;x<size;x++){
+                    Color m79=mouse79.GetPixel(x,y);
+                    if(y<splitY){
+                        if(m79!=headset79.GetPixel(x,y))mouseVsHeadsetTop=true;
+                        if(m79!=keyboard79.GetPixel(x,y))mouseVsKbTop=true;
+                        if(m79!=gamepad79.GetPixel(x,y))mouseVsPadTop=true;
+                    }else{
+                        if(m79!=mouse100.GetPixel(x,y))pct79Vs100Bottom=true;
+                    }
+                    if(m79!=badge79.GetPixel(x,y))diffBadge=true;
+                    if(m79!=device79.GetPixel(x,y))diffDevice=true;
+                }
+                Check(mouseVsHeadsetTop&&mouseVsKbTop&&mouseVsPadTop,"top silhouette distinguishes mouse/headset/keyboard/gamepad at "+size+"px");
+                Check(pct79Vs100Bottom,"bottom numeric pill reflects battery value change (79 vs 100) at "+size+"px");
+                Check(diffBadge&&diffDevice,"device_number is visually distinct from badge and device styles at "+size+"px");
+            }
+        }
+
+        // Render showcase sheet for visual pixel inspection across 16/20/24/32px dark & light taskbars.
+        using(var sheet=new Bitmap(760,340,PixelFormat.Format32bppArgb)){
+            using(var g=Graphics.FromImage(sheet)){
+                g.Clear(Color.FromArgb(24,26,30));
+                g.InterpolationMode=System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                string[] kinds={"mouse","headset","keyboard","gamepad","device"};
+                int?[] levels={79,100,42,15,null};
+                bool[] charges={false,false,true,false,false};
+                int[] sizes={16,20,24,32};
+                using(var font=new Font("Segoe UI",11f,FontStyle.Regular,GraphicsUnit.Pixel))
+                using(var darkBar=new SolidBrush(Color.FromArgb(28,30,36)))
+                using(var lightBar=new SolidBrush(Color.FromArgb(240,242,246)))
+                using(var white=new SolidBrush(Color.White))
+                using(var ink=new SolidBrush(Color.FromArgb(24,28,34))){
+                    for(int row=0;row<2;row++){
+                        bool dark=row==0;
+                        int baseY=14+row*160;
+                        g.FillRectangle(dark?darkBar:lightBar,12,baseY,736,148);
+                        g.DrawString(dark?"Dark Taskbar (1:1 + 3x zoom)":"Light Taskbar (1:1 + 3x zoom)",font,dark?white:ink,20,baseY+6);
+                        for(int s=0;s<sizes.Length;s++){
+                            int px=sizes[s];
+                            int x0=20+s*182;
+                            g.DrawString(px+"px",font,dark?white:ink,x0,baseY+24);
+                            for(int k=0;k<kinds.Length;k++){
+                                using(var bmp=TrayGlyph.RenderDeviceNumber(levels[k],charges[k],dark,false,px,kinds[k],false,k==0&&s==3?(Color?)UpdateBadge.Blue:null,dark)){
+                                    g.DrawImage(bmp,x0+k*34,baseY+42,px,px);
+                                    g.DrawImage(bmp,x0+k*34,baseY+82,32,32);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            string shot=Path.Combine(output,"tray-device-number-showcase.png");
+            sheet.Save(shot,ImageFormat.Png);
+            Check(File.Exists(shot)&&new FileInfo(shot).Length>2000,"rendered device_number visual showcase PNG");
+        }
+
+        // Popup navigation + live multi-icon style differentiation + tooltip 63-char guard.
+        using(var f=new Fixture()){
+            var p=DeviceSettings.Current;
+            p.TrayIconStyle="badge";
+            var grp=TrayConfiguration.Add(p);grp.Name="耳机组";
+            TrayConfiguration.Move(p,"headset",grp.Id);
+            DeviceSettings.UseTransientConfiguration(p);
+            f.Owner.ConfigurationChanged(false);
+
+            f.Page(PopupPage.TrayIcons);
+            f.Click(f.Find("tray:group",grp.Id));
+            var styleRow=f.Find("tray:style",grp.Id);
+            Check(styleRow.Value.StartsWith("跟随全局"),"group page shows inherited icon style by default");
+            f.Click(styleRow);
+            Check(f.Nav.Page==PopupPage.TrayGroupStyle&&PopupPages.Title(f.Nav)=="分组图标样式","opens per-group icon style picker");
+
+            // Check layout bounds & unique keys on TrayGroupStyle page.
+            var styleRows=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.TrayGroupStyle,TrayGroupKey=grp.Id,VisibleChoices=10},false);
+            var styleSize=PopupPages.SizeFor(styleRows);
+            var keys=new HashSet<string>();var ids=new HashSet<int>();
+            foreach(var r in styleRows){
+                Check(r.Rect.Left>=0&&r.Rect.Right<=styleSize.Width&&r.Rect.Bottom<=styleSize.Height-28,"TrayGroupStyle row fits panel");
+                Check(keys.Add(r.StableKey),"TrayGroupStyle row has unique stable key: "+r.StableKey);
+                if(r.Id>=0)Check(ids.Add(r.Id),"TrayGroupStyle row has unique focus ID");
+            }
+
+            // Pick "device_number" specifically for grp.
+            var comboChoice=f.Rows().Find(delegate(PopupControl row){return row.ActionKey=="tray:group-style"&&row.TargetToken=="device_number";});
+            Check(comboChoice!=null,"TrayGroupStyle contains device_number option");
+            f.Click(comboChoice);
+            Check(f.Nav.Page==PopupPage.TrayGroup&&TrayConfiguration.Find(DeviceSettings.Current,grp.Id).IconStyle=="device_number","per-group style persists device_number and navigates back");
+
+            // Verify live TrayIconSet passed different styles to First ("badge") vs grp ("device_number").
+            var icons=(TrayIconSet)Field(f.Owner,"trayIcons");
+            string firstKey=(string)Field(icons.First,"lastKey");
+            string groupKey=(string)Field(icons.For(grp.Id),"lastKey");
+            Check(firstKey.Contains("|badge|")&&groupKey.Contains("|device_number|"),"primary and extra tray icons render with independent styles");
+
+            // Reset back to inherit ("跟随全局").
+            f.Click(f.Find("tray:style",grp.Id));
+            var inheritChoice=f.Rows().Find(delegate(PopupControl row){return row.ActionKey=="tray:group-style"&&row.TargetToken=="";});
+            f.Click(inheritChoice);
+            Check(TrayConfiguration.Find(DeviceSettings.Current,grp.Id).IconStyle==null,"selecting inherit clears per-group IconStyle");
+            string groupKeyAfter=(string)Field(icons.For(grp.Id),"lastKey");
+            Check(groupKeyAfter.Contains("|badge|"),"clearing per-group override immediately reverts extra icon to global style");
+        }
+
+        // Tooltip safety guard under extreme long group name + stale suffix + blank device name.
+        var longCard=Card("blank-name","mouse",88,false);longCard.Name="   ";
+        var safeTip=TraySelection.Present(new List<WirelessCard>{longCard},longCard,"十二字符的托盘分组名称测试");
+        Check(safeTip.Tooltip.Length<=63&&safeTip.Tooltip.Contains("无线设备"),"blank device name falls back cleanly within 63-char tooltip limit");
     }
     [STAThread] static int Main(string[] args){
         output=args.Length>0?args[0]:Path.GetDirectoryName(Application.ExecutablePath);
@@ -354,6 +502,7 @@ static class TrayGroupsTests {
             Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("hidden candidates without extra groups",delegate{HiddenCandidates(false);});Run("hidden candidates with extra groups",delegate{HiddenCandidates(true);});Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
             Run("approximate tray badge omits tiny tilde prefix (#1139)",ApproximateTrayBadgePolish);
             Run("tray icon style options badge & minimal (#1184)",TrayIconStyleOptions);
+            Run("device+number combo style and per-group tray styles (#1112)",DeviceNumberComboAndPerGroupStyles);
             foreach(int size in new[]{16,20,24,32}){int pixels=size;Run("battery bars at "+pixels+"px",delegate{BatteryBars(pixels);});}
             Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
