@@ -60,6 +60,7 @@ PROVIDERS = (
     ("cherry", "CherryProvider"),
     ("lingbao", "LingbaoProvider"),
     ("vgn_beiying", "VgnBeiyingProvider"),
+    ("vgn_v4_keyboard", "VgnV4KeyboardProvider"),
     ("vgn_dragonfly3", "VgnDragonfly3Provider"),
     ("vgn_ry_ms", "VgnRyMsProvider"),
     ("vgn_kc2", "VgnKc2Provider"),
@@ -125,6 +126,7 @@ PROVIDER_VIDS = {
     "hyperx_stinger_core": (0x03F0, 0x0951),
     "lingbao": (0x088D,),
     "vgn_beiying": (0x258A, 0x391D),
+    "vgn_v4_keyboard": (0x391D,),
     "vgn_dragonfly3": (0x391D,), "vgn_ry_ms": (0x391D,), "vgn_kc2": (0x391D,), "ninjutso_legacy": (0x1915,),
     "ajazz_aj179_nlp": (0x7768,),
     "ajazz_ak980": (0x0C45,),
@@ -173,8 +175,8 @@ SYSTEM_PROVIDERS = frozenset({"bluetooth", "xinput"})
 IDLE_BACKOFF_SECONDS = (60, 120, 300)
 IDLE_BACKOFF_AFTER = 2
 IDLE_BACKOFF_EXEMPT = frozenset({"rapoo", "rapoo_mt560", "rapoo_vt9", "fa6x_passive", "rainyrt", "inphic", "jbl", "eweadn_x23", "standard_hid"}) | SYSTEM_PROVIDERS
-NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "vgn_kc2", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "inphic", "ajazz_ak980"}
-READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "vgn_kc2", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_k99v3", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_cloud_flight", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse", "lunafury"}
+NO_CHARGING_EVIDENCE = {"delux", "vgn_ry_ms", "vgn_kc2", "vgn_v4_keyboard", "bluetooth", "xinput", "standard_hid", "lofree", "keychron", "am_infinity", "astro", "xiaomi_mouse", "rapoo_vt9", "hyperx_flight_s", "inphic", "ajazz_ak980"}
+READER_DIAGNOSTICS = {"families", "betop", "sony_inzone", "delux", "vgn_ry_ms", "vgn_kc2", "vgn_v4_keyboard", "ajazz_aj179_nlp", "ajazz_ak980", "am_infinity_97", "inphic", "mchose_qhw_keyboard", "mchose_glw_keyboard", "mchose_k99v3", "mchose_by_keyboard", "mchose_headset", "atk_headset", "vgn_keyboard", "vgn_keyboard_wired", "vgn_beiying", "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "mchose", "eweadn_s9pro", "valkyrie", "pulsar", "fa6x_passive", "rainyrt", "cherry", "cherry_mw5500", "hyperx_cloud_flight", "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "xiaomi_mouse", "lunafury"}
 DPI_PROVIDERS = {
     "logitech": (0x046D,),
     "pulsar": (0x3554, 0x373B, 0x3770, 0x3710),
@@ -732,7 +734,7 @@ def recognized_candidate_count(name, inventory, device_pack=EMPTY_PACK):
                     if module.is_candidate_info(d)})
     if name in ("moondrop", "valkyrie", "asus_omni", "sony_inzone", "asus_headset", "veekos_shine60",
                 "weikav_nut75", "eweadn_x23", "eweadn_x87", "mchose_g3v2", "asus_azoth", "rainyrt",
-                "inphic", "xiaomi_mouse", "lunafury", "rapoo_vt9", "hyperx_cloud_flight", "hyperx_flight_s", "cherry_mw5500", "vgn_kc2"):
+                "inphic", "xiaomi_mouse", "lunafury", "rapoo_vt9", "hyperx_cloud_flight", "hyperx_flight_s", "cherry_mw5500", "vgn_kc2", "vgn_v4_keyboard"):
         return len({(d.get("vendor_id"), d.get("product_id")) for d in inventory
                     if d.get("vendor_id") == module.VID and d.get("product_id") in module.PIDS})
     if name in ("mchose_headset", "mchose_by_keyboard", "vgn_beiying", "betop", "hyperx_stinger_core"):

@@ -65,6 +65,7 @@ TABLES = {
     "aula_mouse": ("PIDS",), "aula_keyboard": ("PIDS",),
     "lingbao": ("PIDS",),
     "vgn_beiying": ("PIDS",),
+    "vgn_v4_keyboard": ("PIDS",),
     "rapoo": ("PIDS",),
     "rapoo_mt560": ("PIDS",),
     "rapoo_vt9": ("PIDS",),

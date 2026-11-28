@@ -93,7 +93,7 @@ ZHUAUDIO_DIAGNOSTICS = frozenset({
 # ReaderHealth.errorCode when no real errorCode is set.
 PROJECTED_DIAGNOSTIC_PROVIDERS = frozenset({
     "mchose_by_keyboard", "mchose_glw_keyboard", "mchose_k99v3", "mchose_qhw_keyboard",
-    "mchose_headset", "atk_headset", "vgn_kc2", "am_infinity_97", "mchose",
+    "mchose_headset", "atk_headset", "vgn_kc2", "vgn_v4_keyboard", "am_infinity_97", "mchose",
     "rapoo", "rapoo_mt560", "rapoo_vt9", "moondrop", "pulsar", "fa6x_passive",
     "rainyrt", "inphic", "ajazz_ak980", "cherry", "cherry_mw5500",
     "hyperx_flight_s", "hyperx_stinger_core", "lingbao", "zhuaudio", "asus_omni", "lunafury",
@@ -102,7 +102,7 @@ PROJECTED_DIAGNOSTIC_PROVIDERS = frozenset({
 FIXED_FIRST_DIAGNOSTIC_PROVIDERS = frozenset({
     "rapoo", "rapoo_mt560", "rapoo_vt9", "rainyrt", "inphic", "ajazz_ak980",
     "moondrop", "hyperx_cloud_flight", "hyperx_flight_s", "hyperx_stinger_core",
-    "cherry_mw5500", "lunafury",
+    "cherry_mw5500", "lunafury", "vgn_v4_keyboard",
 })
 
 _MCHOSE_HEADSET_REASONS = (
