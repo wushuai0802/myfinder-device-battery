@@ -4,7 +4,9 @@
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
-当前源码版本 **1.4.1-beta.6**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+当前源码版本 **1.4.1-beta.7**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
+
+1.4.1-beta.7 恢复西伯利亚 K03S 2.4G（`36F9:C001`，#1226，独立声明式方案族，用户实机验证）并新增华硕 ROG Pelta 2.4G（`0B05:1B84`，#1225，C 级待实机验证）的只读电量候选；同步完成一轮系统性工程与安全加固（PR #1231）：更新检查新增 `ETag / If-None-Match` 304 缓存、稳定通道 `/releases/latest` 防百条截断与动态磁盘空间预检（同盘约 656 MB 替代 2.66 GB）、更新助手独占 ACL 与清单哈希校验、引擎读线程与本地 API SSE 离池及 5 秒总超时防护、Python 引擎事件驱动唤醒替代 100 Hz 轮询，并同步对齐程序集版本号与 PDB/CI 质量门禁。
 
 1.4.1-beta.6 新增普通版 HyperX Cloud Flight Wireless（`0951:16C4`/`1723`，#1213 / 社区 PR #1214）与 VGN 蜻蜓 DragonFly F2 Ultra+（`3554:FB49`，#1217）的 C 级只读电量候选；修复雷蛇 BlackShark V3 Pro 等 `families` 节流设备在常驻宿主下的冷却期掉线与长退避问题（#1023）、迈从 MCHOSE K99 V3 2.4G（`3837:3033`，#1050/#1220）固定显示 `52%` 的协议偏移偏差（切换为官方 GLW 配置块电量与充电读取），并同步无原生鼠标场景下的 `status.json` 与诊断无线状态展示（#530）。
 
