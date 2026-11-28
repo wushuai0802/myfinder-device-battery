@@ -621,7 +621,7 @@ static class PanelDesignTests {
                 try{using(var image=new Bitmap(layout.Size.Width,layout.Size.Height))using(var g=Graphics.FromImage(image))CompactRenderer.PaintWireless(g,owner,layout,false,new PanelFeedback());}finally{InteractionLayout.Observer=null;}
                 Check(layout.Paged&&layout.Cards.Count==1,"bounded device pages reserve the volume and footer");
                 Check(layout.Size.Height<=maximum,"paged device panel stays within its available height");
-                foreach(int id in new[]{0,1,902,903}){var row=rows.Find(delegate(PopupControl item){return item.Id==id;});var region=regions.Find(delegate(InteractionRegion item){return item.Id==id;});Check(row!=null&&region!=null&&row.Rect==region.Limit&&row.Rect.Size==new SizeF(28,28),"pagination, refresh and more use their actual 28x28 drawing rectangles");}
+                foreach(int id in new[]{0,1,902,903}){var row=rows.Find(delegate(PopupControl item){return item.Id==id;});var region=regions.Find(delegate(InteractionRegion item){return item.Id==id;});var expectedSize=id==1?new SizeF(font=="large"?68:60,font=="large"?26:24):id==0?new SizeF(font=="large"?28:26,font=="large"?26:24):new SizeF(font=="large"?26:24,font=="large"?26:24);Check(row!=null&&region!=null&&row.Rect==region.Limit&&row.Rect.Size==expectedSize,"pagination, refresh and more pill use their actual drawing rectangles");}
             }
         }}
     }
@@ -638,10 +638,14 @@ static class PanelDesignTests {
         foreach(string font in new[]{"normal","large"}){Mode(font);using(var fixture=new Fixture()){
             var owner=fixture.Owner;var labels=new List<DrawnLabel>();CompactRenderer.LabelObserver=labels.Add;
             try{using(var image=Render(owner,false,false,new PanelFeedback())){
-                var footer=VisualDesign.FooterRectFor(true,owner.Dpi);Check(image.GetPixel(45,(int)footer.Top+3).A==0,"footer has no input-like background");Check(!labels.Exists(delegate(DrawnLabel label){return label.Text.StartsWith("系统音量 ·");}),"main volume has no device-name row");
+                var footer=VisualDesign.FooterRectFor(true,owner.Dpi);var footerSurface=VisualDesign.FooterSurfaceRect(footer.Top);var moreRect=VisualDesign.FooterMoreRect(footer.Top);
+                Check(image.GetPixel(45,(int)footerSurface.Top+4).A==255,"footer sits on an opaque card surface legible over any wallpaper");
+                Check(image.GetPixel((int)moreRect.X+4,(int)moreRect.Y+4).ToArgb()!=ThemePalette.Current(false).Card.ToArgb(),"more menu pill has a visible resting surface distinct from the footer card");
+                Check(labels.Exists(delegate(DrawnLabel label){return label.Text=="更多";}),"more menu pill displays an explicit label");
+                Check(!labels.Exists(delegate(DrawnLabel label){return label.Text.StartsWith("系统音量 ·");}),"main volume has no device-name row");
             }}finally{CompactRenderer.LabelObserver=null;}
             Check(VisualDesign.SystemVolumeHeight==(font=="large"?40:36)&&VisualDesign.SystemVolumeHeightFor(true)==(font=="large"?36:32),"expanded and collapsed volume heights follow the design");var mic=VisualDesign.MicrophoneMuteRectFor(owner.Dpi);Check(mic.Width==(font=="large"?38:34),"icon-only microphone is 34/38px wide");
-            Check(VisualDesign.FooterRefreshRect(0).Size==new SizeF(28,28)&&VisualDesign.FooterMoreRect(0).Size==new SizeF(28,28),"footer icon buttons stay 28x28 in both fonts");
+            Check(VisualDesign.FooterRefreshRect(0).Size==new SizeF(font=="large"?28:26,font=="large"?26:24)&&VisualDesign.FooterMoreRect(0).Size==new SizeF(font=="large"?68:60,font=="large"?26:24),"footer refresh icon and wider more pill follow font sizing");
             var track=VisualDesign.MainVolumeTrack(VisualDesign.VolumeSliderRect(VisualDesign.SystemVolumeRectFor(true,owner.Dpi)));Check(track.Height==4,"system volume has a four-pixel track");
             foreach(int value in new[]{0,50,100}){
                 owner.Audio.OutputVolumePercent=value;

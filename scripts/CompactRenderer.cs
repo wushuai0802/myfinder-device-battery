@@ -444,7 +444,7 @@ namespace AtkBatteryTray {
             RingSeparator(g,volume.Top,dark);SystemVolume(g,volume,audio,dark,feedback,false);g.Restore(saved);
             string failure=feedback.DpiFailure??feedback.AudioFailure;
             string status=!String.IsNullOrEmpty(failure)?failure:feedback.ManualRefreshing?"正在同步…":feedback.ShowPendingHints&&feedback.PendingStage>=0?"DPI等待确认…":feedback.ShowPendingHints&&!String.IsNullOrEmpty(feedback.PendingOutput)?"音源等待确认…":mouse.Percent.HasValue&&!mouse.Fresh?"上次确认 "+mouse.TimeText:visible&&ear.Percent.HasValue&&!ear.Fresh?"耳机上次 "+ear.TimeText:UiState.SyncText(mouse,DateTime.UtcNow);
-            float footer=volume.Bottom+VisualDesign.MainFooterGap;DrawSync(g,status,footer,VisualDesign.PanelWidth-52,dark,!String.IsNullOrEmpty(failure),feedback);DrawMore(g,footer,dark,feedback);
+            float footer=volume.Bottom+VisualDesign.MainFooterGap;DrawFooterCard(g,footer,dark);DrawSync(g,status,footer,VisualDesign.FooterTextRight(false),dark,!String.IsNullOrEmpty(failure),feedback);DrawMore(g,footer,dark,feedback);
         }
         static void WirelessDpiControls(Graphics g,TrayContext owner,WirelessCard card,int index,bool dark,PanelFeedback feedback,WirelessLayout layout=null) {
             int count=WirelessLayout.DpiStageCount(card.Device);if(count==0)return;
@@ -513,7 +513,7 @@ namespace AtkBatteryTray {
             var layout=GridLayout.Native(current,lastGood,dpi,headset,audio);PaintGridContent(g,layout,dpi,audio,VisualDesign.AudioCardFor(headset,audio),dark,feedback,null,batteryProgress);
             var mouse=UiState.Mouse(current,lastGood,DateTime.UtcNow);string failure=feedback.DpiFailure??feedback.AudioFailure;
             string status=failure??(feedback.ManualRefreshing?"正在同步…":feedback.ShowPendingHints&&feedback.PendingStage>=0?"DPI等待确认…":feedback.ShowPendingHints&&!String.IsNullOrEmpty(feedback.PendingOutput)?"音源等待确认…":mouse.Percent.HasValue&&!mouse.Fresh?"上次确认 "+mouse.TimeText:UiState.SyncText(mouse,DateTime.UtcNow));
-            DrawSync(g,status,layout.Footer,VisualDesign.PanelWidth-52,dark,!String.IsNullOrEmpty(failure),feedback);DrawMore(g,layout.Footer,dark,feedback);
+            DrawFooterCard(g,layout.Footer,dark);DrawSync(g,status,layout.Footer,VisualDesign.FooterTextRight(false),dark,!String.IsNullOrEmpty(failure),feedback);DrawMore(g,layout.Footer,dark,feedback);
         }
         static void PaintRingWireless(Graphics g,TrayContext owner,WirelessLayout layout,bool dark,PanelFeedback feedback,float batteryProgress) {
             feedback=feedback??new PanelFeedback();var saved=BeginRingPanel(g,layout.VolumeRect.Bottom,dark);
@@ -572,7 +572,8 @@ namespace AtkBatteryTray {
             else if(mouse.Percent.HasValue&&!mouse.Fresh)status="上次确认 "+mouse.TimeText;
             else if(visible&&ear.Percent.HasValue&&!ear.Fresh)status="耳机上次 "+ear.TimeText;
             else status=UiState.SyncText(mouse,now);
-            DrawSync(g,status,footer,panelWidth-52,dark,!String.IsNullOrEmpty(failure),feedback);
+            DrawFooterCard(g,footer,dark);
+            DrawSync(g,status,footer,VisualDesign.FooterTextRight(false),dark,!String.IsNullOrEmpty(failure),feedback);
             DrawMore(g,footer,dark,feedback);
         }
         internal static void PaintWireless(Graphics g,TrayContext owner,WirelessLayout layout,bool dark,PanelFeedback feedback,float batteryProgress=1) {
@@ -613,8 +614,15 @@ namespace AtkBatteryTray {
             if(layout.HasVolume)SystemVolume(g,layout.VolumeRect,owner.Audio,dark,feedback);
             WirelessFooter(g,owner,layout,dark,feedback);
         }
+        static void DrawFooterCard(Graphics g,float top,bool dark,bool includeReaderNotice=false) {
+            float cardTop=VisualDesign.FooterCardTop(top);
+            float cardHeight=VisualDesign.FooterCardHeight+(includeReaderNotice?WirelessLayout.ReaderNoticeHeight:0);
+            DrawPanelCard(g,cardTop,cardHeight,dark,null);
+            if(includeReaderNotice)RingSeparator(g,top+VisualDesign.FooterHeight,dark);
+        }
         static void WirelessFooter(Graphics g,TrayContext owner,WirelessLayout layout,bool dark,PanelFeedback feedback) {
             float top=layout.Footer;float width=PopupPages.WirelessFooterWidth(layout);
+            DrawFooterCard(g,top,dark,layout.ReaderNotice);
             string status=feedback.ManualRefreshing?"正在同步…":layout.All[0].Id=="empty"?owner.GenericScanning?"正在识别设备…":"暂无可读取电量的设备":layout.Paged?(layout.Start+1)+"–"+layout.End+" / "+layout.All.Count+" 台设备":"已识别 "+layout.All.Count+" 台设备";
             var failure=feedback.DpiFailure??feedback.AudioFailure??(!String.IsNullOrEmpty(owner.GenericError)?(owner.GenericHealthSummary??"读取器暂不可用"):null);
             if(layout.ReaderNotice){
@@ -636,12 +644,51 @@ namespace AtkBatteryTray {
             DrawMore(g,top,dark,feedback);
         }
         static void DrawMore(Graphics g,float top,bool dark,PanelFeedback feedback){
-            FooterButton(g,VisualDesign.FooterMoreRect(top),top,"more",1,feedback,dark,Fg(dark));
+            var rect=VisualDesign.FooterMoreRect(top);
+            var palette=ThemePalette.Current(dark);
+            bool hovered=feedback!=null&&feedback.HoverAction==1;
+            bool pressed=feedback!=null&&feedback.PressedAction==1;
+            bool active=hovered||pressed;
+            Color pillFill;
+            Color pillBorder;
+            if(VisualDesign.HighContrast){
+                pillFill=active?SystemColors.Highlight:SystemColors.Window;
+                pillBorder=SystemColors.WindowText;
+            }else{
+                pillFill=palette.Track;
+                if(active){
+                    var overlay=palette.Interaction(pressed);
+                    pillFill=ThemePalette.Blend(pillFill,overlay,overlay.A);
+                }
+                pillBorder=Color.FromArgb(dark?48:36,palette.Foreground);
+            }
+            Fill(g,rect,pillFill,7f);
+            using(var shape=VisualDesign.RoundRect(rect.X+.5f,rect.Y+.5f,rect.Width-1f,rect.Height-1f,7f))
+            using(var pen=new Pen(pillBorder,1f))g.DrawPath(pen,shape);
+
+            Color fg=VisualDesign.HighContrast&&active?palette.SelectedForeground:Fg(dark);
+            float cardTop=VisualDesign.FooterCardTop(top);
+            var card=new RectangleF(0,cardTop,VisualDesign.PanelWidth,VisualDesign.FooterCardHeight);
+            InteractionLayout.Paint(g,card,rect,1,feedback,dark,false,delegate{
+                float dotSize=VisualDesign.LargeFont?2.6f:2.3f;
+                float dotStep=VisualDesign.LargeFont?4.8f:4.2f;
+                float dotX=rect.X+(VisualDesign.LargeFont?9f:8f);
+                float dotY=rect.Y+(rect.Height-dotSize)/2f;
+                var dotsBounds=new RectangleF(dotX,dotY,dotStep*2f+dotSize,dotSize);
+                if(InteractionLayout.Measuring){
+                    InteractionLayout.Include(dotsBounds);
+                }else{
+                    using(var brush=new SolidBrush(fg))for(int i=0;i<3;i++)g.FillEllipse(brush,dotX+i*dotStep,dotY,dotSize,dotSize);
+                }
+                float labelX=dotsBounds.Right+(VisualDesign.LargeFont?5f:4f);
+                DrawLabel(g,"更多",new RectangleF(labelX,rect.Y,Math.Max(1f,rect.Right-labelX-4f),rect.Height),VisualDesign.SubtitleFontSize,false,fg,StringAlignment.Near,StringTrimming.None);
+            },false,1);
         }
         static void FooterButton(Graphics g,RectangleF rect,float top,string icon,int action,PanelFeedback feedback,bool dark,Color color) {
             bool active=feedback!=null&&(feedback.HoverAction==action||feedback.PressedAction==action);
             if(active)Fill(g,rect,ThemePalette.Current(dark).SegmentHover,7);
-            InteractionLayout.Paint(g,new RectangleF(0,top,VisualDesign.PanelWidth,VisualDesign.FooterHeight),rect,action,feedback,dark,false,delegate{
+            float cardTop=VisualDesign.FooterCardTop(top);
+            InteractionLayout.Paint(g,new RectangleF(0,cardTop,VisualDesign.PanelWidth,VisualDesign.FooterCardHeight),rect,action,feedback,dark,false,delegate{
                 DrawSymbol(g,icon,VisualDesign.CenteredRect(rect,14,14),VisualDesign.HighContrast&&active?ThemePalette.Current(dark).SelectedForeground:color);
             },false,1);
         }

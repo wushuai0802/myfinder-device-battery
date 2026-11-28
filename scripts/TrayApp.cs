@@ -593,18 +593,20 @@ namespace AtkBatteryTray {
         }
         void UpdateFallbackRegion() {
             Region mask;
-            int panelWidth=VisualDesign.PanelWidth,footerHeight=VisualDesign.FooterHeight;
+            int panelWidth=VisualDesign.PanelWidth;
             if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout){
                 mask=new Region();mask.MakeEmpty();var layout=MainWireless();foreach(var card in layout.Cards)using(var shape=Style.Round(card.Tile,VisualDesign.MainCardRadius))mask.Union(shape);
-                using(var shape=Style.Round(layout.Grid.Controls,VisualDesign.MainCardRadius))mask.Union(shape);mask.Union(new RectangleF(0,layout.Footer,panelWidth,footerHeight));
+                using(var shape=Style.Round(layout.Grid.Controls,VisualDesign.MainCardRadius))mask.Union(shape);
+                using(var shape=Style.Round(new RectangleF(0,VisualDesign.FooterCardTop(layout.Footer),panelWidth,VisualDesign.FooterCardHeight+(layout.ReaderNotice?WirelessLayout.ReaderNoticeHeight:0)),VisualDesign.MainCardRadius))mask.Union(shape);
             }else if(navigation.Page==PopupPage.Main&&VisualDesign.RingLayout) {
                 float bottom=owner.UseWirelessLayout?MainWireless().VolumeRect.Bottom:VisualDesign.MouseCardHeight(owner.Dpi)+VisualDesign.SecondCardStep*headsetProgress+VisualDesign.DeviceGap+VisualDesign.CurrentSystemVolumeHeight;
                 using(var shape=Style.Round(new RectangleF(0,0,panelWidth,bottom),14))mask=new Region(shape);
-                mask.Union(new RectangleF(0,bottom+VisualDesign.MainFooterGap,panelWidth,footerHeight));
+                bool notice=owner.UseWirelessLayout&&MainWireless().ReaderNotice;
+                using(var shape=Style.Round(new RectangleF(0,VisualDesign.FooterCardTop(bottom+VisualDesign.MainFooterGap),panelWidth,VisualDesign.FooterCardHeight+(notice?WirelessLayout.ReaderNoticeHeight:0)),VisualDesign.MainCardRadius))mask.Union(shape);
             }else if(navigation.Page==PopupPage.Main&&owner.UseWirelessLayout) {
                 mask=new Region();mask.MakeEmpty();var layout=MainWireless();foreach(var card in layout.Cards)using(var shape=Style.Round(new RectangleF(0,card.Top,panelWidth,card.Height),VisualDesign.MainCardRadius))mask.Union(shape);
                 if(layout.HasVolume)using(var shape=Style.Round(layout.VolumeRect,VisualDesign.MainCardRadius))mask.Union(shape);
-                mask.Union(new RectangleF(0,layout.Footer,panelWidth,footerHeight));
+                using(var shape=Style.Round(new RectangleF(0,VisualDesign.FooterCardTop(layout.Footer),panelWidth,VisualDesign.FooterCardHeight+(layout.ReaderNotice?WirelessLayout.ReaderNoticeHeight:0)),VisualDesign.MainCardRadius))mask.Union(shape);
             }else{
             int mouse=VisualDesign.MouseCardHeight(owner.Dpi),headsetTop=mouse+8;
             using(var shape=Style.Round(new RectangleF(0,0,targetSize.Width,navigation.Page==PopupPage.Main?mouse:targetSize.Height),navigation.Page==PopupPage.Main?VisualDesign.MainCardRadius:VisualDesign.PanelRadius))mask=new Region(shape);
@@ -613,7 +615,7 @@ namespace AtkBatteryTray {
                 if(headsetProgress>0f)using(var shape=Style.Round(new RectangleF(0,headsetTop,targetSize.Width,height),Math.Min(VisualDesign.MainCardRadius,height/2)))mask.Union(shape);
                 float volumeTop=mouse+VisualDesign.SecondCardStep*headsetProgress+VisualDesign.CardGap;
                 using(var shape=Style.Round(new RectangleF(0,volumeTop,targetSize.Width,VisualDesign.CurrentSystemVolumeHeight),VisualDesign.MainCardRadius))mask.Union(shape);
-                mask.Union(new RectangleF(0,volumeTop+VisualDesign.CurrentSystemVolumeHeight,targetSize.Width,footerHeight));
+                using(var shape=Style.Round(new RectangleF(0,VisualDesign.FooterCardTop(volumeTop+VisualDesign.CurrentSystemVolumeHeight),targetSize.Width,VisualDesign.FooterCardHeight),VisualDesign.MainCardRadius))mask.Union(shape);
             }
             }
             using(var transform=new Matrix()){transform.Scale(dpiScale,dpiScale);mask.Transform(transform);}

@@ -319,10 +319,11 @@ static class UiFeedbackTests {
     static void PagingAndClassicTray(){
         using(var f=new Fixture()){
             f.Owner.NativeMousePresent=false;f.Owner.GenericReady=true;f.Owner.WirelessDevices=new[]{Mouse(A,PhysA,71),Mouse(B,PhysB,42)};
-            var expanded=WirelessLayout.Build(f.Owner,0,212);Check(expanded.Paged&&expanded.Cards.Count==1,"expanded volume reserves room when paging");
-            var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);var collapsed=WirelessLayout.Build(f.Owner,0,212);
-            Check(!collapsed.Paged&&collapsed.Cards.Count==2&&collapsed.Size.Height<=212&&collapsed.Footer==collapsed.VolumeRect.Bottom,"collapsed volume releases room for the next card without moving the footer into it");
-            var next=WirelessLayout.Build(f.Owner,expanded.End,212);Check(next.Start==1&&next.Cards[0].Id==B,"scroll offset remains usable after collapse");
+            int budget=2*(VisualDesign.GenericCardHeight+VisualDesign.DeviceGap)+VisualDesign.SystemVolumeHeightFor(true)+VisualDesign.MainFooterGap+VisualDesign.FooterHeight+2;
+            var expanded=WirelessLayout.Build(f.Owner,0,budget);Check(expanded.Paged&&expanded.Cards.Count==1,"expanded volume reserves room when paging");
+            var pref=DeviceSettings.Current;Collapsed(pref,true);DeviceSettings.UseTransientConfiguration(pref);var collapsed=WirelessLayout.Build(f.Owner,0,budget);
+            Check(!collapsed.Paged&&collapsed.Cards.Count==2&&collapsed.Size.Height<=budget&&collapsed.Footer==collapsed.VolumeRect.Bottom,"collapsed volume releases room for the next card without moving the footer into it");
+            var next=WirelessLayout.Build(f.Owner,expanded.End,budget);Check(next.Start==1&&next.Cards[0].Id==B,"scroll offset remains usable after collapse");
             f.Owner.NativeMousePresent=true;f.Owner.GenericReady=false;f.Owner.WirelessDevices=new WirelessDevice[0];pref.TraySource="active";DeviceSettings.UseTransientConfiguration(pref);Call(f.Owner,"UpdateIcon");
             Check(!f.Owner.UseWirelessLayout&&(string)Field(f.Owner,"trayDeviceKey")=="native:mouse","classic layout uses the same nonempty active fallback");
             f.Activity(PhysA,true);Check((string)Field(f.Owner,"trayDeviceKey")=="native:mouse","classic native activity keeps its own card");

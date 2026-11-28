@@ -21,7 +21,9 @@ namespace AtkBatteryTray {
         public static int CardHeightNormal {get{return RingLayout?RingGeometry.CardHeight(4):BarGeometry.CardHeight(4);}}
         public static int CardHeightExpanded {get{return RingLayout?RingGeometry.CardHeight(8):BarGeometry.CardHeight(8);}}
         public static int HeadsetCardHeight {get{return CardHeightNormal;}}
-        public static int FooterHeight {get{return LargeFont?36:30;}}
+        internal static int FooterTopGap {get{return RingLayout?0:6;}}
+        internal static int FooterCardHeight {get{return LargeFont?38:34;}}
+        public static int FooterHeight {get{return FooterCardHeight+FooterTopGap;}}
         internal static int HeaderHeight {get{return RingLayout?RingGeometry.HeaderHeight:BarGeometry.HeaderHeight;}}
         internal static int DeviceGap {get{return RingLayout?1:CardGap;}}
         internal static int MainFooterGap {get{return RingLayout?8:0;}}
@@ -113,10 +115,14 @@ namespace AtkBatteryTray {
         public static RectangleF HeadsetMeterRectFor(DpiConfig dpi){return HeaderMeterHitRect(MouseCardHeight(dpi)+DeviceGap);}
         public static RectangleF SystemVolumeRectFor(bool headset,DpiConfig dpi){return GridLayout?AtkBatteryTray.GridLayout.Native(headset,dpi).VolumeRect:new RectangleF(0,MouseCardHeight(dpi)+(headset?SecondCardStep:0)+DeviceGap,PanelWidth,CurrentSystemVolumeHeight);}
         public static RectangleF FooterRectFor(bool headset,DpiConfig dpi){return new RectangleF(0,GridLayout?AtkBatteryTray.GridLayout.Native(headset,dpi).Footer:SystemVolumeRectFor(headset,dpi).Bottom+MainFooterGap,PanelWidth,FooterHeight);}
-        internal static RectangleF FooterRefreshRect(float top){return new RectangleF(8,top+(FooterHeight-28)/2,28,28);}
-        internal static RectangleF FooterMoreRect(float top){return new RectangleF(PanelWidth-34,top+(FooterHeight-28)/2,28,28);}
-        internal static RectangleF FooterTextRect(float top,float maximumWidth){return new RectangleF(39,top+3,Math.Max(1,maximumWidth-33),FooterHeight-6);}
-        internal static RectangleF FooterPageRect(float top,bool next){return new RectangleF(PanelWidth-(next?68:102),top+(FooterHeight-28)/2,28,28);}
+        internal static float FooterCardTop(float top){return top+FooterTopGap;}
+        internal static RectangleF FooterSurfaceRect(float top){return PanelCardRect(FooterCardTop(top),FooterCardHeight);}
+        static float FooterButtonTop(float top,float height){var surface=FooterSurfaceRect(top);return (float)Math.Round(surface.Y+(surface.Height-height)/2f);}
+        internal static RectangleF FooterRefreshRect(float top){float w=LargeFont?28f:26f,h=LargeFont?26f:24f;return new RectangleF(6f,FooterButtonTop(top,h),w,h);}
+        internal static RectangleF FooterMoreRect(float top){float w=LargeFont?68f:60f,h=LargeFont?26f:24f;return new RectangleF(PanelWidth-w-7f,FooterButtonTop(top,h),w,h);}
+        internal static RectangleF FooterPageRect(float top,bool next){float s=LargeFont?26f:24f;float moreLeft=FooterMoreRect(top).Left;float x=next?(moreLeft-4f-s):(moreLeft-4f-s-3f-s);return new RectangleF(x,FooterButtonTop(top,s),s,s);}
+        internal static float FooterTextRight(bool paged){return (paged?FooterPageRect(0,false).Left:FooterMoreRect(0).Left)-6f;}
+        internal static RectangleF FooterTextRect(float top,float rightLimit){var surface=FooterSurfaceRect(top);float left=FooterRefreshRect(top).Right+4f;return new RectangleF(left,surface.Y+2f,Math.Max(1f,rightLimit-left),Math.Max(1f,surface.Height-4f));}
         public static RectangleF RefreshRectFor(bool headset,DpiConfig dpi){return FooterRefreshRect(FooterRectFor(headset,dpi).Y);}
         public static RectangleF MoreRectFor(bool headset,DpiConfig dpi){return FooterMoreRect(FooterRectFor(headset,dpi).Y);}
         public static RectangleF RefreshRect {get{return RefreshRectFor(false,null);}}
