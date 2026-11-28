@@ -149,6 +149,14 @@ V3_PIDS = {
 # answered the read-only 4D power query (40 %, not charging). Only this exact model
 # name and declaration may use the Windows report confirmation.
 V3_WINDOWS_REPORT_PIDS = (V3_PID, 0x1014)
+V3_WINDOWS_REPORT_PRODUCTS = frozenset({
+    "MCHOSE A7 V3",
+    "MCHOSE A7 V3 Pro",
+    "MCHOSE A7 V3 Pro+",
+    "MCHOSE A7 V3 Ultra",
+    "MCHOSE A7 V3 Ultra+",
+    "MCHOSE A7 V3-X",
+})
 V3_USAGE = (0xFF01, 0x0001)
 V3_ALTERNATE_USAGE = (0xFF0B, 0x00C4)  # 1018 only; actual #493 placement unknown.
 V3_REPORT_ID, V3_REPORT_LEN = 0x4D, 64  # includes the report ID; body is 63 bytes
@@ -324,13 +332,12 @@ def make_v3_request() -> bytes:
 
 
 def v3_ultra_windows_report_candidate(info):
-    """Match the supported Ultra+/Pro layout whose reconstructed descriptor repeats Input 4D."""
+    """Match supported A7 V3 family receivers whose reconstructed descriptor repeats Input 4D."""
     if ((info.get("vendor_id"), info.get("product_id"))
             not in tuple((V3_VID, pid) for pid in V3_WINDOWS_REPORT_PIDS)
             or (info.get("usage_page"), info.get("usage")) != V3_USAGE
             or info.get("interface_number") != 2
-            or (info.get("product_string") or "").strip()
-            not in (V3_PIDS[0x1014], "MCHOSE A7 V3 Pro")
+            or (info.get("product_string") or "").strip() not in V3_WINDOWS_REPORT_PRODUCTS
             or (info.get("input_report_length"), info.get("output_report_length"))
             != (V3_REPORT_LEN, V3_REPORT_LEN)
             or info.get("report_descriptor_error") != "collection maximum mismatch"):

@@ -467,10 +467,18 @@ class V3ProtocolTests(unittest.TestCase):
                     declared_report_sizes={"input": {"17": 41, "77": 127, "19": 21},
                                            "output": {"77": 64, "19": 41}},
                     v3_windows_report_confirmed=True)
-        self.assertTrue(M.v3_ultra_windows_report_candidate(info))
-        self.assertTrue(M.v3_ultra_windows_report_candidate(
-            dict(info, product_string="MCHOSE A7 V3 Pro")))
-        for other in (dict(info, product_string="MCHOSE A7 V3 Pro+"),
+        for product_name in (
+            "MCHOSE A7 V3",
+            "MCHOSE A7 V3 Pro",
+            "MCHOSE A7 V3 Pro+",
+            "MCHOSE A7 V3 Ultra",
+            "MCHOSE A7 V3 Ultra+",
+            "MCHOSE A7 V3-X",
+        ):
+            with self.subTest(product_name=product_name):
+                self.assertTrue(M.v3_ultra_windows_report_candidate(
+                    dict(info, product_string=product_name)))
+        for other in (dict(info, product_string="MCHOSE V7 Pro"),
                       dict(info, product_string="MCHOSE K7 V2 Ultra+"),
                       dict(info, product_id=0x1016),
                       dict(info, product_id=0x101D),

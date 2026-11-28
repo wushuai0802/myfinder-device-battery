@@ -160,9 +160,17 @@ class ProofFallback2Tests(unittest.TestCase):
                 diagnostic = self.assert_reader([decoded], accepted=accepted)
                 self.assertIn("Windows input/output report 4D/64 confirmed" if accepted
                               else "length unproven", diagnostic)
-        # A same-PID product with the same reconstruction still uses the normal gates.
+        # Standard A7 V3 on 1018 also recovers once Windows confirms both directions.
         self.case.cache.clear()
-        self.case.products[path] = "MCHOSE A7 V3 Pro+"
+        self.case.products[path] = "MCHOSE A7 V3"
+        initialize.reset_mock()
+        info = self.scan(path)
+        self.assertTrue(info.get("v3_windows_report_confirmed", False))
+        self.assertIn("Windows input/output report 4D/64 confirmed", self.assert_reader([info], accepted=True))
+
+        # Unrelated same-PID products with the same reconstruction still use the normal gates.
+        self.case.cache.clear()
+        self.case.products[path] = "MCHOSE K7 V2 Ultra+"
         initialize.reset_mock()
         info = self.scan(path)
         initialize.assert_not_called()
@@ -192,7 +200,7 @@ class ProofFallback2Tests(unittest.TestCase):
                               else "length unproven", diagnostic)
         # Other 1014 product names and non-eligible PIDs (e.g. 1016) never invoke the exception.
         self.case.cache.clear()
-        self.case.products[path] = "MCHOSE A7 V3 Pro+"
+        self.case.products[path] = "MCHOSE K7 V2 Ultra+"
         initialize.reset_mock()
         info = self.scan(path)
         initialize.assert_not_called()
